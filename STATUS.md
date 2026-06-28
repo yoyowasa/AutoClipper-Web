@@ -11,6 +11,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - GitHub Actions backend ruff F401 修正完了。
 - Docker Desktop 導入と docker compose 起動検証完了。
 - Task 17 Runtime verification and real video E2E hardening の実装完了。
+- Task 18 Real sample video E2E validation の実装完了。
 - 初期 FastAPI backend data model / API routes の実装完了。
 - RQ worker と real AutoClipper pipeline の実装完了。
 - Next.js frontend upload flow の実装完了。
@@ -55,6 +56,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 2026-06-28: `OPENAI_API_KEY` を backend / worker コンテナへ渡す docker compose 設定を追加。
 - 2026-06-28: Docker Desktop を導入し、`docker compose up -d --build` で backend / frontend / redis / worker 起動を確認。
 - 2026-06-28: `scripts/smoke_runtime.py` と runtime README を追加し、Docker runtime / ffmpeg / ffprobe / shared storage smoke を実装。
+- 2026-06-28: `scripts/generate_sample_video.py` と `scripts/e2e_sample_video.py` を追加し、synthetic MP4 の real runtime E2E 導線を実装。
 
 ## 修正履歴
 
@@ -908,3 +910,45 @@ docker compose runtime、backend/worker の処理バイナリ、共有DB/storage
 ### 未解決事項
 
 - 実サンプル動画を使った完了job E2Eは未実施。tone-only smoke video は upload/probe 用で、speech transcript によるclip生成保証用ではない。
+
+## 2026-06-28 Task 18 Real sample video E2E validation
+
+### 目的
+
+小さい synthetic MP4 を生成し、docker compose runtime 上で upload / job / worker / render / download / ffprobe まで再現できるE2E検証導線を作る。
+
+### 変更ファイル
+
+- `backend/app/jobs/runner.py`
+- `backend/tests/test_real_pipeline.py`
+- `scripts/generate_sample_video.py`
+- `scripts/e2e_sample_video.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `e2eFixtureTranscript` job setting を追加。明示指定時だけ synthetic video 用 transcript を使う。
+- production default は通常 transcription のまま。quality gate は変更なし。
+- `scripts/generate_sample_video.py` で runtime backend container の `ffmpeg` を使い、25秒の test pattern + sine audio MP4 を生成。
+- `scripts/e2e_sample_video.py` で API upload、job作成、polling、output MP4/ZIP download、worker container `ffprobe` を実行。
+- README に real sample video E2E 手順、出力場所、synthetic audio の制約を追記。
+
+### 検証結果
+
+- `.\.venv\Scripts\python -m py_compile .\scripts\smoke_runtime.py .\scripts\generate_sample_video.py .\scripts\e2e_sample_video.py`: passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_real_pipeline.py`: 6 passed, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 90 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `npm --workspace frontend run build`: passed。
+- `.\.venv\Scripts\python .\scripts\generate_sample_video.py`: `320,180,10/1`、`25.000000`。
+- `.\.venv\Scripts\python .\scripts\e2e_sample_video.py`: E2E PASSED。worker `ffprobe` で downloaded MP4 `1080,1920`。
+- `.\.venv\Scripts\python .\scripts\e2e_sample_video.py --start`: E2E PASSED。`docker compose up -d --build` 後、backend `/health`、frontend、upload、job completed、MP4/ZIP download、worker `ffprobe` `1080,1920` を確認。
+- `docker compose ps` via Docker Desktop path: backend healthy、frontend / worker / redis Up。
+- `git diff --check`: whitespace errorなし。
+
+### 未解決事項
+
+- 実話者音声を含むサンプル動画での full transcription E2E は未実施。

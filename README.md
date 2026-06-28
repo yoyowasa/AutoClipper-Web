@@ -169,6 +169,61 @@ curl.exe http://localhost:8000/api/jobs/JOB_ID_FROM_CREATE/results
 
 For a full real-content E2E, use a short video that has audible speech. A generated tone-only smoke video is useful for upload/probe checks, but may not produce usable clips because candidate generation depends on transcript and speech features.
 
+## Real Sample Video E2E
+
+Start the runtime:
+
+```powershell
+docker compose up -d --build
+```
+
+Generate a reproducible 25 second MP4 with a video test pattern and sine wave audio:
+
+```powershell
+python scripts/generate_sample_video.py
+```
+
+Generated file:
+
+```text
+storage/temp/e2e_sample.mp4
+```
+
+Run the API E2E path:
+
+```powershell
+python scripts/e2e_sample_video.py
+```
+
+Or start compose and run the E2E in one command:
+
+```powershell
+python scripts/e2e_sample_video.py --start
+```
+
+The script verifies:
+
+- backend `/health`
+- frontend reachability
+- docker compose services
+- sample MP4 generation through runtime `ffmpeg`
+- upload through `POST /api/videos/upload`
+- job creation through `POST /api/jobs`
+- worker status polling until `completed` or a clear expected failure
+- MP4 download
+- ZIP download
+- downloaded MP4 probing through worker `ffprobe`
+
+Because the generated sample has sine audio but no real speech, the E2E script creates the job with `e2eFixtureTranscript=true`. This setting is for reproducible runtime validation only. It is disabled by default and does not change production quality gates.
+
+E2E outputs:
+
+```text
+storage/outputs/{job_id}
+storage/temp/e2e_download.mp4
+storage/temp/e2e_download.zip
+```
+
 ## Storage
 
 Host paths:

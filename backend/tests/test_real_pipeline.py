@@ -272,6 +272,93 @@ def test_real_pipeline_openai_failure_falls_back_to_rule_scoring(client: TestCli
     assert any("openai_fallback_rule_score" in item["risk_flags"] for item in scored_payload)
 
 
+def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "e2eFixtureTranscript": True,
+                "normalClipCount": 0,
+                "shortCount": 1,
+                "shortMinDuration": 20,
+                "shortMaxDuration": 25,
+                "shortStepSeconds": 5,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+                "useOpenAIScoring": False,
+                "burnSubtitles": False,
+                "normalizeAudio": False,
+                "shortLayout": "center_crop",
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fail_if_transcribed(_wav_path: str | Path) -> list[TranscriptSegment]:
+        raise AssertionError("fixture transcript mode must not call the transcriber")
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=25.0,
+            width=320,
+            height=180,
+            fps=10.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=fail_if_transcribed,
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=25.0)],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        short_renderer=fake_render,
+    )
+
+    visited_statuses = run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    assert visited_statuses == SUCCESS_STATUSES[1:]
+    status_response = client.get(f"/api/jobs/{created['jobId']}")
+    assert status_response.json()["status"] == "completed"
+
+    results_response = client.get(f"/api/jobs/{created['jobId']}/results")
+    results = results_response.json()
+    assert results["normalClips"] == []
+    assert len(results["shorts"]) == 1
+    assert client.get(results["shorts"][0]["downloadUrl"]).content.startswith(b"rendered short_")
+
+    transcript_payload = json.loads(
+        (storage.outputs / created["jobId"] / "transcript_segments.json").read_text(encoding="utf-8")
+    )
+    assert transcript_payload[0]["text"].startswith("Why automation mistakes matter before launch.")
+    assert not (storage.temp / created["jobId"]).exists()
+
+
 def test_real_pipeline_marks_failed_without_unhandled_exception_when_no_output_is_usable(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",

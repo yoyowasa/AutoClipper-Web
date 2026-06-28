@@ -78,6 +78,33 @@ def _default_transcribe_audio(wav_path: str | Path) -> list[TranscriptSegment]:
     return FasterWhisperTranscriptionEngine().transcribe(wav_path)
 
 
+def _truthy_setting(settings: dict[str, Any], key: str) -> bool:
+    value = settings.get(key)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _e2e_fixture_transcript_enabled(settings: dict[str, Any]) -> bool:
+    return _truthy_setting(settings, "e2eFixtureTranscript")
+
+
+def _e2e_fixture_transcript(duration: float) -> list[TranscriptSegment]:
+    end = round(max(duration, 0.001), 3)
+    return [
+        TranscriptSegment(
+            start=0.0,
+            end=end,
+            text=(
+                "Why automation mistakes matter before launch. "
+                "How teams can fix the process with a clear checklist. "
+                "The final lesson is to measure progress every week."
+            ),
+            confidence=1.0,
+        )
+    ]
+
+
 def _default_detect_silence(wav_path: str | Path, duration: float | None) -> list[SilenceSegment]:
     return detect_silence(wav_path, audio_duration=duration)
 
@@ -449,13 +476,16 @@ def run_autoclipper_job(
 
             _set_status(db, job, "transcribing")
             visited_statuses.append("transcribing")
-            try:
-                transcript_segments = transcribe_audio(audio_path)
-            except Exception as exc:
-                raise PipelineExpectedError(
-                    "transcription_failed",
-                    f"Could not transcribe audio: {exc}",
-                ) from exc
+            if _e2e_fixture_transcript_enabled(settings):
+                transcript_segments = _e2e_fixture_transcript(duration)
+            else:
+                try:
+                    transcript_segments = transcribe_audio(audio_path)
+                except Exception as exc:
+                    raise PipelineExpectedError(
+                        "transcription_failed",
+                        f"Could not transcribe audio: {exc}",
+                    ) from exc
             transcript_path = write_transcript_segments(transcript_segments, transcript_output_path(job_dir))
             metadata_files.append(transcript_path)
             if not transcript_segments:
