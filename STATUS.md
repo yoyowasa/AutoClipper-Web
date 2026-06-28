@@ -7,7 +7,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 ## 現在状態
 
 - Task 01 Repository scaffold の実装完了。
-- Git repository 初期化と GitHub remote 接続作業中。
+- Git repository 初期化と GitHub remote 接続完了。
 - 初期 FastAPI backend data model / API routes の実装完了。
 - RQ worker と real AutoClipper pipeline の実装完了。
 - Next.js frontend upload flow の実装完了。
@@ -28,7 +28,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 
 ## 実装履歴
 
-- 2026-06-28: GitHub repo 初期化準備として `.gitignore` に `*.tsbuildinfo` を追加。
+- 2026-06-28: GitHub repo 初期化、remote接続、初回pushを実施。`.gitignore` に `*.tsbuildinfo` を追加。
 - 2026-06-28: Next.js + TypeScript + Tailwind frontend scaffold を作成。
 - 2026-06-28: FastAPI backend scaffold と `/health` / `/api/health` を作成。
 - 2026-06-28: `docker-compose.yml` に backend / frontend / redis を定義。
@@ -786,12 +786,16 @@ CI設計とCodex運用ルールをrepoへ反映し、PR単位で backend / front
 - 空の `.git` ディレクトリを `git init` で正規のGit repositoryへ初期化。
 - `frontend/tsconfig.tsbuildinfo` を生成物として扱うため、`.gitignore` に `*.tsbuildinfo` を追加。
 - 初回commitでは既存実装一式を対象にし、`.env`、`.venv`、`node_modules`、`.next`、runtime storage出力は除外する方針。
+- branch を `main` に変更し、`origin` を `https://github.com/yoyowasa/AutoClipper-Web.git` に設定。
+- `main` を `origin/main` へpush。
 
 ### 検証結果
 
 - `git init`: 成功。
 - `git check-ignore -v .env node_modules frontend/.next .venv`: ignore確認済み。
+- `git commit -m "Initial commit"`: 成功。commit `07af24d`。
+- `git push -u origin main`: 成功。
 
 ### 未解決事項
 
-- 初回commit / remote設定 / push はこのセクション追記後に実施予定。
+- なし。
