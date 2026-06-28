@@ -2,7 +2,7 @@ import json
 import struct
 import wave
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Sequence
 
 from pydantic import BaseModel, Field
 

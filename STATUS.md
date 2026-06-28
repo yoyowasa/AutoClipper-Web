@@ -8,6 +8,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 
 - Task 01 Repository scaffold の実装完了。
 - Git repository 初期化と GitHub remote 接続完了。
+- GitHub Actions backend ruff F401 修正完了。
 - 初期 FastAPI backend data model / API routes の実装完了。
 - RQ worker と real AutoClipper pipeline の実装完了。
 - Next.js frontend upload flow の実装完了。
@@ -53,6 +54,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 
 ## 修正履歴
 
+- 2026-06-28: GitHub Actions backend ruff F401 failure を修正。
 - 2026-06-28: Git 初回commit対象から TypeScript incremental build artifact を除外。
 - 2026-06-28: `OPENAI_API_KEY` が `.env` にある前提で、`docker-compose.yml` の backend / worker environment に `${OPENAI_API_KEY}` を追加。
 
@@ -799,3 +801,32 @@ CI設計とCodex運用ルールをrepoへ反映し、PR単位で backend / front
 ### 未解決事項
 
 - なし。
+
+## 2026-06-28 CI ruff F401 fix
+
+### 目的
+
+GitHub Actions backend job の `ruff check .` で検出された F401 unused import を修正する。
+
+### 変更ファイル
+
+- `backend/app/audio/volume_features.py`
+- `backend/app/render/render_short.py`
+- `backend/app/video/black_screen.py`
+- `STATUS.md`
+
+### 実装内容
+
+- `typing.Any` の未使用importを削除。
+- `build_center_crop_filter` は既存 import 互換を維持するため、内部alias + thin wrapper に変更。
+
+### 検証結果
+
+- `.\.venv\Scripts\python -m pytest .\backend`: 89 passed, 1 skipped, 1 warning。
+- `.\.venv\Scripts\python -m py_compile .\backend\app\audio\volume_features.py .\backend\app\render\render_short.py .\backend\app\video\black_screen.py`: passed。
+- `git diff --check`: whitespace errorなし。
+- local `ruff check .`: Windows application control policy により実行不可のため、GitHub Actionsで確認予定。
+
+### 未解決事項
+
+- local ruff 実行は Windows application control policy で未検証。

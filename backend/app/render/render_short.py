@@ -15,7 +15,7 @@ from app.models import ExportItem, Job
 from app.render.crop_strategy import (
     CropLayout,
     CropStrategy,
-    build_center_crop_filter,
+    build_center_crop_filter as _build_center_crop_filter,
     build_crop_filter,
     strategy_order,
 )
@@ -42,6 +42,10 @@ class ShortRenderFailure:
 class ShortRenderBatchResult:
     exports: list[ExportItem]
     failures: list[ShortRenderFailure]
+
+
+def build_center_crop_filter(subtitle_path: str | Path | None = None) -> str:
+    return _build_center_crop_filter(subtitle_path)
 
 
 ShortCommandRunner = Callable[[list[str]], None]
