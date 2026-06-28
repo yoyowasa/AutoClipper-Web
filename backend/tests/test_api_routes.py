@@ -143,6 +143,7 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["shortMinDuration"] == 20.0
         assert job.settings_json["shortMaxDuration"] == 75.0
         assert job.settings_json["selectionPolicy"] == "fill_requested"
+        assert job.settings_json["crossTypeOverlapDedupe"] is False
         assert job.settings_json["openaiCandidateLimit"] == 40
         assert job.settings_json["openaiModel"] == "gpt-5.5"
         assert job.settings_json["openaiFallbackToRuleScore"] is True
@@ -166,6 +167,7 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "shortMinDuration": 15,
                 "shortMaxDuration": 45,
                 "selectionPolicy": "strict_quality",
+                "crossTypeOverlapDedupe": True,
                 "useOpenAIScoring": True,
                 "openaiCandidateLimit": 7,
                 "openaiModel": "gpt-test",
@@ -185,6 +187,7 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["shortMinDuration"] == 15.0
         assert job.settings_json["shortMaxDuration"] == 45.0
         assert job.settings_json["selectionPolicy"] == "strict_quality"
+        assert job.settings_json["crossTypeOverlapDedupe"] is True
         assert job.settings_json["useOpenAIScoring"] is True
         assert job.settings_json["openaiCandidateLimit"] == 7
         assert job.settings_json["openaiModel"] == "gpt-test"
@@ -221,6 +224,7 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["shortMinDuration"]["default"] == 20.0
     assert properties["shortMaxDuration"]["default"] == 75.0
     assert properties["selectionPolicy"]["default"] == "fill_requested"
+    assert properties["crossTypeOverlapDedupe"]["default"] is False
     assert properties["openaiCandidateLimit"]["default"] == 40
     assert properties["openaiModel"]["default"] == "gpt-5.5"
     assert properties["openaiFallbackToRuleScore"]["default"] is True

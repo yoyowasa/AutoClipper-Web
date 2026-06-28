@@ -26,6 +26,7 @@ export type ClipSettings = {
   shortMinDuration: number;
   shortMaxDuration: number;
   selectionPolicy: "fill_requested" | "strict_quality";
+  crossTypeOverlapDedupe: boolean;
   burnSubtitles: boolean;
   shortLayout: "auto" | "center_crop" | "blur_background";
 };

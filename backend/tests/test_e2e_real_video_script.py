@@ -191,7 +191,10 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
                 "normal_candidates": 12,
                 "hard_gate_passed_count": 35,
                 "hard_gate_rejected_count": 7,
+                "requested_normal_count": 2,
+                "requested_short_count": 3,
                 "selected_below_threshold_backfill_count": 2,
+                "time_cluster_count": {"normal": 4, "short": 6},
             }
         ),
         encoding="utf-8",
@@ -199,15 +202,24 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
     (tmp_path / "selected_clips_summary.json").write_text(
         json.dumps(
             {
+                "requested_normal_count": 2,
+                "requested_short_count": 3,
                 "selected_normal_count": 1,
                 "selected_short_count": 2,
                 "selected_below_threshold_backfill_count": 1,
+                "overlap_relaxed_count": 1,
+                "high_overlap_rejected_by_type": {"normal": 8},
+                "cross_type_overlap_rejected_count": 0,
+                "unfilled_requested_counts": {"normal": 1, "short": 1},
+                "unfilled_reason_counts": {"normal": {"high_overlap": 8}},
+                "time_cluster_count": {"normal": 4, "short": 6},
+                "selected_clusters": {"normal": [0], "short": [1, 2]},
             }
         ),
         encoding="utf-8",
     )
     (tmp_path / "rejection_summary.json").write_text(
-        json.dumps({"render_failure_count": 1}),
+        json.dumps({"render_failure_count": 1, "high_overlap_rejected_by_type": {"short": 1}}),
         encoding="utf-8",
     )
     (tmp_path / "download.zip").write_bytes(b"zip-bytes")
@@ -223,9 +235,21 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
         "normal_candidates_count": 12,
         "hard_gate_passed_count": 35,
         "hard_gate_rejected_count": 7,
+        "requested_normal_count": 2,
         "selected_normal_count": 1,
+        "requested_short_count": 3,
         "selected_short_count": 2,
+        "selected_normal_ratio": "1/2",
+        "selected_short_ratio": "2/3",
         "backfilled_count": 1,
+        "overlap_relaxed_count": 1,
+        "overlap_relaxation_used": True,
+        "high_overlap_rejected_by_type": {"normal": 8},
+        "cross_type_overlap_rejected_count": 0,
+        "unfilled_requested_counts": {"normal": 1, "short": 1},
+        "unfilled_reason_counts": {"normal": {"high_overlap": 8}},
+        "time_cluster_count": {"normal": 4, "short": 6},
+        "selected_clusters": {"normal": [0], "short": [1, 2]},
         "render_failures_count": 1,
         "zip_size_bytes": 9,
     }

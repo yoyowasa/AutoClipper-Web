@@ -160,6 +160,123 @@ def test_selection_refills_rejected_candidates_and_separates_types() -> None:
     }
 
 
+def test_normal_and_short_do_not_block_each_other_by_overlap_by_default() -> None:
+    candidates = [
+        make_candidate("normal", "normal", 0.0, 120.0, "Complete normal clip.", final_score=90.0),
+        make_candidate("short", "short", 10.0, 50.0, "Complete short clip.", final_score=88.0),
+    ]
+
+    selection = select_candidates(
+        candidates,
+        settings={
+            "normalClipCount": 1,
+            "shortCount": 1,
+            "maxOverlapRatio": 0.5,
+            "minFinalScore": 60.0,
+        },
+    )
+
+    assert [candidate.id for candidate in selection.normal_clips] == ["normal"]
+    assert [candidate.id for candidate in selection.shorts] == ["short"]
+    assert selection.cross_type_overlap_dedupe is False
+    assert selection.cross_type_overlap_rejected_count == 0
+
+
+def test_cross_type_overlap_dedupe_can_block_cross_type_candidates() -> None:
+    candidates = [
+        make_candidate("normal", "normal", 0.0, 120.0, "Complete normal clip.", final_score=90.0),
+        make_candidate("short", "short", 10.0, 50.0, "Complete short clip.", final_score=88.0),
+    ]
+
+    selection = select_candidates(
+        candidates,
+        settings={
+            "normalClipCount": 1,
+            "shortCount": 1,
+            "maxOverlapRatio": 0.5,
+            "minFinalScore": 60.0,
+            "crossTypeOverlapDedupe": True,
+        },
+    )
+
+    assert [candidate.id for candidate in selection.normal_clips] == ["normal"]
+    assert selection.shorts == []
+    assert selection.cross_type_overlap_dedupe is True
+    assert selection.cross_type_overlap_rejected_count == 1
+    assert selection.rejected_candidates[0].reasons == ["cross_type_high_overlap"]
+
+
+def test_fill_requested_relaxes_overlap_when_needed() -> None:
+    candidates = [
+        make_candidate("normal_best", "normal", 0.0, 120.0, "Complete normal one.", final_score=92.0),
+        make_candidate("normal_overlap", "normal", 5.0, 125.0, "Complete normal two.", final_score=91.0),
+    ]
+
+    selection = select_candidates(
+        candidates,
+        settings={
+            "normalClipCount": 2,
+            "shortCount": 0,
+            "maxOverlapRatio": 0.8,
+            "minFinalScore": 60.0,
+        },
+    )
+
+    assert [candidate.id for candidate in selection.normal_clips] == ["normal_best", "normal_overlap"]
+    relaxed = selection.normal_clips[1]
+    assert relaxed.selection_reason == "backfill_overlap_relaxed"
+    assert relaxed.overlap_relaxed is True
+    assert relaxed.overlap_ratio_used is not None
+    assert relaxed.overlap_ratio_used >= 0.8
+    assert selection.overlap_relaxed_count == 1
+    assert selection.unfilled_requested_counts["normal"] == 0
+
+
+def test_strict_quality_does_not_relax_overlap() -> None:
+    candidates = [
+        make_candidate("normal_best", "normal", 0.0, 120.0, "Complete normal one.", final_score=92.0),
+        make_candidate("normal_overlap", "normal", 5.0, 125.0, "Complete normal two.", final_score=91.0),
+    ]
+
+    selection = select_candidates(
+        candidates,
+        settings={
+            "normalClipCount": 2,
+            "shortCount": 0,
+            "maxOverlapRatio": 0.8,
+            "minFinalScore": 60.0,
+            "selectionPolicy": "strict_quality",
+        },
+    )
+
+    assert [candidate.id for candidate in selection.normal_clips] == ["normal_best"]
+    assert selection.overlap_relaxed_count == 0
+    assert selection.unfilled_requested_counts["normal"] == 1
+    assert selection.rejected_candidates[0].candidate_id == "normal_overlap"
+    assert selection.rejected_candidates[0].reasons == ["high_overlap"]
+
+
+def test_fill_requested_keeps_hard_gate_failures_rejected() -> None:
+    candidates = [
+        make_candidate("empty", "normal", 0.0, 120.0, "", final_score=95.0),
+        make_candidate("valid", "normal", 130.0, 250.0, "Complete valid normal clip.", final_score=80.0),
+    ]
+
+    selection = select_candidates(
+        candidates,
+        settings={
+            "normalClipCount": 2,
+            "shortCount": 0,
+            "minFinalScore": 60.0,
+        },
+    )
+
+    assert [candidate.id for candidate in selection.normal_clips] == ["valid"]
+    assert selection.rejected_candidates[0].candidate_id == "empty"
+    assert "no_transcript_text" in selection.rejected_candidates[0].reasons
+    assert selection.hard_gate_rejected_count == 1
+
+
 def test_selection_does_not_fail_when_individual_candidates_fail() -> None:
     candidates = [
         make_candidate("model_rejected", "short", 0.0, 40.0, "Rejected by model.", final_score=95.0, should_use=False),

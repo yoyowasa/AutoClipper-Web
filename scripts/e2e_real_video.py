@@ -326,6 +326,10 @@ def pipeline_metrics(output_dir: Path) -> dict[str, Any]:
     selected = read_summary(output_dir, "selected_clips_summary.json")
     rejections = read_summary(output_dir, "rejection_summary.json")
     zip_path = output_dir / "download.zip"
+    requested_normal = selected.get("requested_normal_count", candidates.get("requested_normal_count"))
+    selected_normal = selected.get("selected_normal_count")
+    requested_short = selected.get("requested_short_count", candidates.get("requested_short_count"))
+    selected_short = selected.get("selected_short_count")
     return {
         "video_duration": video_metadata.get("duration"),
         "transcript_segment_count": transcript.get("segment_count"),
@@ -335,15 +339,44 @@ def pipeline_metrics(output_dir: Path) -> dict[str, Any]:
         "normal_candidates_count": candidates.get("normal_candidates"),
         "hard_gate_passed_count": candidates.get("hard_gate_passed_count"),
         "hard_gate_rejected_count": candidates.get("hard_gate_rejected_count"),
-        "selected_normal_count": selected.get("selected_normal_count"),
-        "selected_short_count": selected.get("selected_short_count"),
+        "requested_normal_count": requested_normal,
+        "selected_normal_count": selected_normal,
+        "requested_short_count": requested_short,
+        "selected_short_count": selected_short,
+        "selected_normal_ratio": _ratio(selected_normal, requested_normal),
+        "selected_short_ratio": _ratio(selected_short, requested_short),
         "backfilled_count": selected.get(
             "selected_below_threshold_backfill_count",
             candidates.get("selected_below_threshold_backfill_count"),
         ),
+        "overlap_relaxed_count": selected.get("overlap_relaxed_count", candidates.get("overlap_relaxed_count")),
+        "overlap_relaxation_used": bool(selected.get("overlap_relaxed_count", 0)),
+        "high_overlap_rejected_by_type": selected.get(
+            "high_overlap_rejected_by_type",
+            rejections.get("high_overlap_rejected_by_type", {}),
+        ),
+        "cross_type_overlap_rejected_count": selected.get(
+            "cross_type_overlap_rejected_count",
+            rejections.get("cross_type_overlap_rejected_count"),
+        ),
+        "unfilled_requested_counts": selected.get("unfilled_requested_counts", {}),
+        "unfilled_reason_counts": selected.get("unfilled_reason_counts", {}),
+        "time_cluster_count": selected.get("time_cluster_count", candidates.get("time_cluster_count", {})),
+        "selected_clusters": selected.get("selected_clusters", candidates.get("selected_clusters", {})),
         "render_failures_count": rejections.get("render_failure_count"),
         "zip_size_bytes": zip_path.stat().st_size if zip_path.is_file() else None,
     }
+
+
+def _ratio(selected: Any, requested: Any) -> str:
+    try:
+        selected_int = int(selected)
+        requested_int = int(requested)
+    except (TypeError, ValueError):
+        return "n/a"
+    if requested_int <= 0:
+        return "n/a"
+    return f"{selected_int}/{requested_int}"
 
 
 def print_pipeline_metrics(metrics: dict[str, Any]) -> None:
@@ -356,9 +389,27 @@ def print_pipeline_metrics(metrics: dict[str, Any]) -> None:
     print(f"  normal_candidates_count={metrics.get('normal_candidates_count')}")
     print(f"  hard_gate_passed_count={metrics.get('hard_gate_passed_count')}")
     print(f"  hard_gate_rejected_count={metrics.get('hard_gate_rejected_count')}")
-    print(f"  selected_normal_count={metrics.get('selected_normal_count')}")
-    print(f"  selected_short_count={metrics.get('selected_short_count')}")
+    print(
+        "  selected_normal_count="
+        f"{metrics.get('selected_normal_count')} "
+        f"requested={metrics.get('requested_normal_count')} "
+        f"ratio={metrics.get('selected_normal_ratio')}"
+    )
+    print(
+        "  selected_short_count="
+        f"{metrics.get('selected_short_count')} "
+        f"requested={metrics.get('requested_short_count')} "
+        f"ratio={metrics.get('selected_short_ratio')}"
+    )
     print(f"  backfilled_count={metrics.get('backfilled_count')}")
+    print(f"  overlap_relaxed_count={metrics.get('overlap_relaxed_count')}")
+    print(f"  overlap_relaxation_used={metrics.get('overlap_relaxation_used')}")
+    print(f"  high_overlap_rejected_by_type={metrics.get('high_overlap_rejected_by_type')}")
+    print(f"  cross_type_overlap_rejected_count={metrics.get('cross_type_overlap_rejected_count')}")
+    print(f"  time_cluster_count={metrics.get('time_cluster_count')}")
+    print(f"  selected_clusters={metrics.get('selected_clusters')}")
+    print(f"  unfilled_requested_counts={metrics.get('unfilled_requested_counts')}")
+    print(f"  unfilled_reason_counts={metrics.get('unfilled_reason_counts')}")
     print(f"  render_failures_count={metrics.get('render_failures_count')}")
     print(f"  zip_size_bytes={metrics.get('zip_size_bytes')}")
 

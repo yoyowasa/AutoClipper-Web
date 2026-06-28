@@ -60,6 +60,7 @@ class JobSettings(BaseModel):
     normalize_audio: bool = Field(default=False, alias="normalizeAudio")
     short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
     selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
+    cross_type_overlap_dedupe: bool = Field(default=False, alias="crossTypeOverlapDedupe")
     use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")
     openai_candidate_limit: int = Field(default=40, ge=0, alias="openaiCandidateLimit")
     openai_model: str = Field(default="gpt-5.5", min_length=1, alias="openaiModel")

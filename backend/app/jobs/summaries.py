@@ -87,6 +87,9 @@ def _candidate_summary_item(candidate: Candidate) -> dict[str, Any]:
         "below_quality_threshold": candidate.below_quality_threshold,
         "quality_warning": candidate.quality_warning,
         "selection_reason": candidate.selection_reason,
+        "overlap_relaxed": candidate.overlap_relaxed,
+        "overlap_ratio_used": _round(candidate.overlap_ratio_used),
+        "time_cluster": candidate.time_cluster,
     }
 
 
@@ -178,10 +181,23 @@ def build_candidate_summary(
         "candidates_with_transcript_text": sum(1 for candidate in candidates if candidate.transcript_text.strip()),
         "hard_gate_passed_count": selection.hard_gate_passed_count if selection is not None else 0,
         "hard_gate_rejected_count": selection.hard_gate_rejected_count if selection is not None else 0,
+        "requested_normal_count": selection.requested_normal_count if selection is not None else 0,
+        "selected_normal_count": len(selection.normal_clips) if selection is not None else 0,
+        "requested_short_count": selection.requested_short_count if selection is not None else 0,
+        "selected_short_count": len(selection.shorts) if selection is not None else 0,
+        "normal_hard_gate_passed_count": selection.normal_hard_gate_passed_count if selection is not None else 0,
+        "short_hard_gate_passed_count": selection.short_hard_gate_passed_count if selection is not None else 0,
         "selected_above_threshold_count": selection.selected_above_threshold_count if selection is not None else 0,
         "selected_below_threshold_backfill_count": (
             selection.selected_below_threshold_backfill_count if selection is not None else 0
         ),
+        "overlap_relaxed_count": selection.overlap_relaxed_count if selection is not None else 0,
+        "high_overlap_rejected_by_type": selection.high_overlap_rejected_by_type if selection is not None else {},
+        "cross_type_overlap_rejected_count": selection.cross_type_overlap_rejected_count if selection is not None else 0,
+        "time_cluster_count": selection.time_cluster_count if selection is not None else {},
+        "selected_clusters": selection.selected_clusters if selection is not None else {},
+        "unfilled_requested_counts": selection.unfilled_requested_counts if selection is not None else {},
+        "unfilled_reason_counts": selection.unfilled_reason_counts if selection is not None else {},
         "min_duration": duration_stats["min"],
         "max_duration": duration_stats["max"],
         "avg_duration": duration_stats["avg"],
@@ -236,9 +252,15 @@ def build_rejection_summary(
     rejections = list(selection.rejected_candidates if selection is not None else [])
     rejection_reasons: Counter[str] = Counter()
     rejected_by_type: Counter[str] = Counter()
+    high_overlap_by_type: Counter[str] = Counter()
+    cross_type_overlap_rejected_count = 0
     for rejection in rejections:
         rejected_by_type[str(rejection.type)] += 1
         rejection_reasons.update(rejection.reasons)
+        if "high_overlap" in rejection.reasons:
+            high_overlap_by_type[str(rejection.type)] += 1
+        if "cross_type_high_overlap" in rejection.reasons:
+            cross_type_overlap_rejected_count += 1
 
     render_failures = _render_failures(normal_result, short_result)
     render_failures_by_type = Counter(failure["type"] for failure in render_failures)
@@ -248,6 +270,8 @@ def build_rejection_summary(
         "total_rejected": len(rejections),
         "rejected_by_type": dict(sorted(rejected_by_type.items())),
         "rejected_by_reason": dict(sorted(rejection_reasons.items())),
+        "high_overlap_rejected_by_type": dict(sorted(high_overlap_by_type.items())),
+        "cross_type_overlap_rejected_count": cross_type_overlap_rejected_count,
         "rejected_candidate_ids": [rejection.candidate_id for rejection in rejections],
         "candidate_rejections": [
             {
@@ -290,6 +314,9 @@ def _selected_item(candidate: Candidate, output_paths: dict[str, dict[str, str |
         "below_quality_threshold": candidate.below_quality_threshold,
         "quality_warning": candidate.quality_warning,
         "selection_reason": candidate.selection_reason,
+        "overlap_relaxed": candidate.overlap_relaxed,
+        "overlap_ratio_used": _round(candidate.overlap_ratio_used),
+        "time_cluster": candidate.time_cluster,
         "output_paths": output_paths.get(candidate.id, {}),
     }
 
@@ -305,10 +332,22 @@ def build_selected_clips_summary(
     return {
         "selected_normal_count": len(normal),
         "selected_short_count": len(shorts),
+        "requested_normal_count": selection.requested_normal_count if selection is not None else 0,
+        "requested_short_count": selection.requested_short_count if selection is not None else 0,
+        "normal_hard_gate_passed_count": selection.normal_hard_gate_passed_count if selection is not None else 0,
+        "short_hard_gate_passed_count": selection.short_hard_gate_passed_count if selection is not None else 0,
         "selected_above_threshold_count": selection.selected_above_threshold_count if selection is not None else 0,
         "selected_below_threshold_backfill_count": (
             selection.selected_below_threshold_backfill_count if selection is not None else 0
         ),
+        "overlap_relaxed_count": selection.overlap_relaxed_count if selection is not None else 0,
+        "high_overlap_rejected_by_type": selection.high_overlap_rejected_by_type if selection is not None else {},
+        "cross_type_overlap_dedupe": selection.cross_type_overlap_dedupe if selection is not None else False,
+        "cross_type_overlap_rejected_count": selection.cross_type_overlap_rejected_count if selection is not None else 0,
+        "time_cluster_count": selection.time_cluster_count if selection is not None else {},
+        "selected_clusters": selection.selected_clusters if selection is not None else {},
+        "unfilled_requested_counts": selection.unfilled_requested_counts if selection is not None else {},
+        "unfilled_reason_counts": selection.unfilled_reason_counts if selection is not None else {},
         "selected_ids": [candidate.id for candidate in selected],
         "selected_durations": {candidate.id: _round(candidate.duration) for candidate in selected},
         "selected_scores": {candidate.id: _round(_score(candidate)) for candidate in selected},

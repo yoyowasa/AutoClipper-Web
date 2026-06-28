@@ -415,6 +415,7 @@ Troubleshooting:
     "shortMinDuration": 20,
     "shortMaxDuration": 75,
     "selectionPolicy": "fill_requested",
+    "crossTypeOverlapDedupe": false,
     "useOpenAIScoring": false,
     "openaiCandidateLimit": 40,
     "openaiModel": "gpt-5.5",
@@ -430,6 +431,7 @@ Production-safe defaults remain:
 - `shortMinDuration`: `20`
 - `shortMaxDuration`: `75`
 - `selectionPolicy`: `fill_requested`
+- `crossTypeOverlapDedupe`: `false`
 - `useOpenAIScoring`: `false`
 - `openaiCandidateLimit`: `40`
 - `openaiModel`: `gpt-5.5`
@@ -439,8 +441,11 @@ For development and E2E checks with shorter spoken videos, set `normalMinDuratio
 
 Selection policy:
 
-- `fill_requested`: default. Hard gates still reject unusable candidates, but low `final_score` is used as ranking, not as a hard rejection. If the requested count is not filled by candidates above `minFinalScore`, the worker backfills from hard-gate-passing candidates and marks each selected clip with `below_quality_threshold=true`, `quality_warning=below_min_final_score`, and `selection_reason=backfill_below_quality_threshold`.
+- `fill_requested`: default. Hard gates still reject unusable candidates, but low `final_score` is used as ranking, not as a hard rejection. Selection runs in phases: first candidates above `minFinalScore`, then below-threshold hard-gate-passing backfill, then overlap-relaxed backfill only if the requested count is still unfilled. Overlap-relaxed clips are marked with `selection_reason=backfill_overlap_relaxed`, `overlap_relaxed=true`, and `overlap_ratio_used`.
 - `strict_quality`: preserves strict behavior. Candidates below `minFinalScore` are rejected, so a job may complete analysis with zero selected outputs.
+- Normal clips deduplicate against normal clips. Shorts deduplicate against shorts. By default, normal and short outputs do not block each other by overlap because they serve different formats.
+- Set `crossTypeOverlapDedupe=true` only when you explicitly want normal and short selections to block each other by timeline overlap.
+- Long-video selection prefers time diversity. Candidates are bucketed into timeline clusters, and the selector takes the best candidate per cluster before taking additional candidates from the same cluster.
 
 ## Generation Diagnostics
 
@@ -454,10 +459,10 @@ Summary files:
 
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
-- `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
+- `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
 - `openai_scoring_summary.json`: model, candidates sent, successful scores, failed scores, fallback scores, average latency, text length proxy, total API calls.
-- `rejection_summary.json`: quality gate rejection counts and render failure counts.
-- `selected_clips_summary.json`: selected normal/short counts, selected IDs, durations, scores, quality warnings, selection reasons, output paths.
+- `rejection_summary.json`: quality gate rejection counts, high-overlap counts by type, cross-type overlap counts, and render failure counts.
+- `selected_clips_summary.json`: requested/selected normal/short counts, unfilled counts, selected IDs, durations, scores, quality warnings, selection reasons, overlap relaxation flags, timeline clusters, and output paths.
 
 The E2E scripts print these summaries:
 

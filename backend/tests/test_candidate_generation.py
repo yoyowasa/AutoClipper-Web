@@ -127,6 +127,33 @@ def test_generate_normal_candidates_can_use_shorter_configured_duration() -> Non
     assert all(candidate.type == "normal" for candidate in configured_candidates)
 
 
+def test_candidate_limit_is_spread_across_timeline() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=float(start), end=float(start + 20), text=f"segment {start}")
+        for start in range(0, 1800, 30)
+    ]
+    silence_segments = [
+        SilenceSegment(start=float(start + 20), end=float(start + 30), duration=10.0)
+        for start in range(0, 1770, 30)
+    ]
+
+    candidates = generate_normal_candidates(
+        transcript_segments=transcript_segments,
+        scene_segments=[SceneSegment(start=0.0, end=1800.0)],
+        silence_segments=silence_segments,
+        settings={
+            "normalMinDuration": 90,
+            "normalMaxDuration": 180,
+            "normalStepSeconds": 30,
+            "maxCandidates": 30,
+        },
+    )
+
+    assert len(candidates) == 30
+    assert max(candidate.start for candidate in candidates) > 1200
+    assert min(candidate.start for candidate in candidates) == 0.0
+
+
 def test_generate_short_candidates_avoid_cutting_inside_speech_when_possible() -> None:
     transcript_segments = [TranscriptSegment(start=10.0, end=50.0, text="single speech block")]
     candidates = generate_short_candidates(

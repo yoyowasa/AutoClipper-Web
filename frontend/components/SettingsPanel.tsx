@@ -18,6 +18,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   shortMinDuration: 20,
   shortMaxDuration: 75,
   selectionPolicy: "fill_requested",
+  crossTypeOverlapDedupe: false,
   burnSubtitles: true,
   shortLayout: "auto"
 };

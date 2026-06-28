@@ -1483,3 +1483,114 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - 30分 E2E では `normalCount=2` を要求したが、high overlap 除外により selected normal は `1`。short は `3` 生成済み。pipeline failure ではないが、通常切り抜き本数をより満たす調整は今後の品質調整対象。
 - いくつかの短時間 phase は polling 間隔内で通過するため `n/a` になる場合がある。
+
+## 2026-06-29 Task 27 Improve selection count fulfillment and overlap diversity
+
+### 目的
+
+30分 E2E で `normalCount=2` に対して normal が1本しか選ばれなかった問題を修正する。hard gate は維持し、normal / short は default で独立 selection とし、overlap / diversity diagnostics を増やす。
+
+### 変更ファイル
+
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/candidates/select_candidates.py`
+- `backend/app/jobs/summaries.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_api_routes.py`
+- `backend/tests/test_candidate_generation.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `backend/tests/test_quality_gate_and_selection.py`
+- `frontend/components/SettingsPanel.tsx`
+- `frontend/lib/types.ts`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- selection overlap audit:
+  - 既存実装は normal と short を別々に selection しており、default では cross-type overlap はブロックしていなかった。
+  - 30分 job の旧 `normal_candidates.json` は `1200` 件あったが `start_max=5.1s`、`end_max=602.76s` で、candidate cap が冒頭に偏っていた。
+- candidate generation の `max_candidates` 切り詰めを時系列分散に変更。
+- `crossTypeOverlapDedupe` setting を追加。default `false`。
+- `fill_requested` selection を Phase A/B/C に分割。
+  - Phase A: above `minFinalScore`。
+  - Phase B: below score threshold backfill。
+  - Phase C: count 不足時のみ overlap threshold を段階緩和。
+- overlap relaxed selected clip に以下を保存。
+  - `selection_reason=backfill_overlap_relaxed`
+  - `overlap_relaxed=true`
+  - `overlap_ratio_used`
+- hard gates は維持。
+  - no transcript
+  - invalid duration
+  - too much silence
+  - too little speech
+  - incomplete sentence
+  - model rejected
+- timeline cluster diversity を追加。
+  - type 別に time cluster を作る。
+  - 各 cluster の上位候補を優先してから同 cluster の2巡目を選ぶ。
+- diagnostics を拡張。
+  - requested / selected count
+  - normal / short hard-gate passed count
+  - high overlap rejected count by type
+  - cross-type overlap rejection count
+  - time cluster count
+  - selected clusters
+  - unfilled requested counts
+  - unfilled reason counts
+  - overlap relaxed count
+- `scripts/e2e_real_video.py` に selected/requested ratio、high overlap by type、unfilled、overlap relaxation を出力。
+- README に selectionPolicy / overlap / cross-type dedupe の説明を追記。
+
+### 検証結果
+
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_quality_gate_and_selection.py .\backend\tests\test_candidate_generation.py .\backend\tests\test_e2e_real_video_script.py .\backend\tests\test_api_routes.py`: 45 passed, 1 warning。
+- `.\.venv\Scripts\python -m pytest .\backend`: 122 passed, 1 skipped, 1 warning。
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_real_video.py .\scripts\e2e_summary.py`: passed。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run build`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `docker compose up -d --build`: passed after adding Docker Desktop resources path to this PowerShell session.
+- synthetic E2E: `.\.venv\Scripts\python .\scripts\e2e_sample_video.py`: E2E PASSED。job `job_2e3fc97230fe4225bb108b1abfb7c597`。
+- short real-video low_cost E2E:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Desktop\bandicam 2026-06-28 23-06-52-866.mp4' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --mode low_cost --timeout 1800`
+  - result: REAL VIDEO E2E PASSED
+  - job `job_359d215ed73c444b96cc1f1d92616814`
+- 10-minute real-video low_cost E2E:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video '<spoken mp4>' --normal-count 1 --short-count 1 --normal-min-duration 90 --normal-max-duration 600 --short-min-duration 20 --short-max-duration 75 --selection-policy fill_requested --mode low_cost --timeout 3600`
+  - result: REAL VIDEO E2E PASSED
+  - job `job_6102aa6b924d4458b78b93c8225d5b92`
+  - selected: normal `1/1`, short `1/1`
+  - render failures: `0`
+- 30-minute real-video low_cost E2E:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video '<30min spoken mp4>' --validation-profile 30min`
+  - result: REAL VIDEO E2E PASSED
+  - job `job_37089f0d82d84ce5a5e4076ed83f2d77`
+  - video duration: `1820.735583`
+  - transcript: `1245` segments, `15068` chars
+  - candidates: total `2400`, normal `1200`, short `1200`
+  - hard gate: passed `2400`, rejected `0`
+  - selected: normal `2/2`, short `3/3`, backfilled `0`
+  - high overlap rejected by type: normal `78`, short `114`
+  - time clusters: normal `6`, short `9`
+  - selected clusters: normal `[2, 4]`, short `[1, 2, 3]`
+  - overlap relaxed: `0`
+  - render failures: `0`
+  - ZIP size: `59639101` bytes
+  - normal outputs: `1280x720`, durations `103.236467s`, `98.14805s`
+  - short outputs: `1080x1920`, durations `69.668917s`, `58.425033s`, `61.061s`
+  - total runtime: `417.656s`
+- OpenAI path validation:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Desktop\bandicam 2026-06-28 23-06-52-866.mp4' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --mode high_quality --use-openai-scoring true --openai-candidate-limit 1 --timeout 1800`
+  - result: REAL VIDEO E2E PASSED
+  - job `job_9e69814f87a64a34a106e8c1d8f08ff3`
+  - `openai_scoring_summary.json`: model `gpt-5.5`、sent `1`、success `1`、failed `0`、fallback `0`
+
+### 未解決事項
+
+- selection quality tuning は未実施。今回の修正は count fulfillment / overlap diagnostics / timeline diversity に限定。
+- frontend typecheck は `.next/types` 未生成状態では失敗する場合があるため、local では `npm --workspace frontend run build` 後に再実行して passed を確認した。CI は build job で typecheck も実行する。

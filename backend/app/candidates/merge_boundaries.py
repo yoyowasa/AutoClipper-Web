@@ -33,6 +33,9 @@ class Candidate(BaseModel):
     below_quality_threshold: bool | None = None
     quality_warning: str | None = None
     selection_reason: str | None = None
+    overlap_relaxed: bool | None = None
+    overlap_ratio_used: float | None = Field(default=None, ge=0)
+    time_cluster: int | None = None
 
     @model_validator(mode="after")
     def validate_range(self) -> "Candidate":
@@ -220,6 +223,31 @@ def deduplicate_candidates(candidates: Sequence[Candidate]) -> list[Candidate]:
     return sorted(by_key.values(), key=lambda item: (item.start, item.duration, item.type, item.id))
 
 
+def limit_candidates_by_timeline(candidates: Sequence[Candidate], max_candidates: int) -> list[Candidate]:
+    ordered = sorted(candidates, key=lambda item: (item.start, item.duration, item.type, item.id))
+    if len(ordered) <= max_candidates:
+        return ordered
+
+    min_start = min(candidate.start for candidate in ordered)
+    max_end = max(candidate.end for candidate in ordered)
+    span = max(max_end - min_start, 1.0)
+    bucket_count = min(max_candidates, max(1, int(span // 60) + 1))
+    buckets: list[list[Candidate]] = [[] for _ in range(bucket_count)]
+    for candidate in ordered:
+        index = int(((candidate.start - min_start) / span) * bucket_count)
+        buckets[min(index, bucket_count - 1)].append(candidate)
+
+    limited: list[Candidate] = []
+    while len(limited) < max_candidates and any(buckets):
+        for bucket in buckets:
+            if not bucket:
+                continue
+            limited.append(bucket.pop(0))
+            if len(limited) >= max_candidates:
+                break
+    return sorted(limited, key=lambda item: (item.start, item.duration, item.type, item.id))
+
+
 def _duration_targets(min_duration: float, max_duration: float, step_seconds: float) -> list[float]:
     targets = {float(min_duration), float(max_duration)}
     current = float(min_duration)
@@ -313,7 +341,7 @@ def generate_window_candidates(
             if candidate is not None:
                 candidates.append(candidate)
 
-    return deduplicate_candidates(candidates)[:max_candidates]
+    return limit_candidates_by_timeline(deduplicate_candidates(candidates), max_candidates)
 
 
 def candidates_to_jsonable(candidates: Sequence[Candidate]) -> list[dict[str, Any]]:

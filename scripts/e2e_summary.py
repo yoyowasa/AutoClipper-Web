@@ -49,7 +49,10 @@ def summary_line(filename: str, payload: Any) -> str:
             f"short={_value(payload, 'short_candidates')} "
             f"with_text={_value(payload, 'candidates_with_transcript_text')} "
             f"hard_passed={_value(payload, 'hard_gate_passed_count')} "
+            f"normal_selected={_value(payload, 'selected_normal_count')}/{_value(payload, 'requested_normal_count')} "
+            f"short_selected={_value(payload, 'selected_short_count')}/{_value(payload, 'requested_short_count')} "
             f"backfill={_value(payload, 'selected_below_threshold_backfill_count')} "
+            f"overlap_relaxed={_value(payload, 'overlap_relaxed_count')} "
             f"avg_duration={_value(payload, 'avg_duration')} "
             f"avg_final_score={_value(payload, 'avg_final_score')}"
         )
@@ -57,6 +60,7 @@ def summary_line(filename: str, payload: Any) -> str:
         return (
             f"rejected={_value(payload, 'total_rejected')} "
             f"by_reason={_value(payload, 'rejected_by_reason')} "
+            f"high_overlap_by_type={_value(payload, 'high_overlap_rejected_by_type')} "
             f"render_failures={_value(payload, 'render_failure_count')}"
         )
     if filename == "openai_scoring_summary.json":
@@ -74,9 +78,11 @@ def summary_line(filename: str, payload: Any) -> str:
         if isinstance(selected_ids, list) and len(selected_ids) > 5:
             selected_ids = [*selected_ids[:5], "..."]
         return (
-            f"normal={_value(payload, 'selected_normal_count')} "
-            f"short={_value(payload, 'selected_short_count')} "
+            f"normal={_value(payload, 'selected_normal_count')}/{_value(payload, 'requested_normal_count')} "
+            f"short={_value(payload, 'selected_short_count')}/{_value(payload, 'requested_short_count')} "
             f"backfill={_value(payload, 'selected_below_threshold_backfill_count')} "
+            f"overlap_relaxed={_value(payload, 'overlap_relaxed_count')} "
+            f"unfilled={_value(payload, 'unfilled_requested_counts')} "
             f"ids={selected_ids}"
         )
     return ", ".join(f"{key}={value}" for key, value in sorted(payload.items())[:6])
