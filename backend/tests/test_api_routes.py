@@ -138,6 +138,74 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job is not None
         assert job.video_id == upload["videoId"]
         assert job.settings_json["mode"] == "high_quality"
+        assert job.settings_json["normalMinDuration"] == 90.0
+        assert job.settings_json["normalMaxDuration"] == 600.0
+        assert job.settings_json["shortMinDuration"] == 20.0
+        assert job.settings_json["shortMaxDuration"] == 75.0
+
+
+def test_create_job_persists_advanced_duration_settings(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+                "normalMinDuration": 20,
+                "normalMaxDuration": 60,
+                "shortMinDuration": 15,
+                "shortMaxDuration": 45,
+                "minFinalScore": 0,
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    created = response.json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        assert job.settings_json["normalMinDuration"] == 20.0
+        assert job.settings_json["normalMaxDuration"] == 60.0
+        assert job.settings_json["shortMinDuration"] == 15.0
+        assert job.settings_json["shortMaxDuration"] == 45.0
+        assert job.settings_json["minFinalScore"] == 0
+
+
+def test_create_job_rejects_invalid_duration_ranges(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalMinDuration": 60,
+                "normalMaxDuration": 20,
+            },
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> None:
+    payload = client.get("/openapi.json").json()
+    properties = payload["components"]["schemas"]["JobSettings"]["properties"]
+
+    assert properties["normalMinDuration"]["default"] == 90.0
+    assert properties["normalMaxDuration"]["default"] == 600.0
+    assert properties["shortMinDuration"]["default"] == 20.0
+    assert properties["shortMaxDuration"]["default"] == 75.0
 
 
 def test_results_zip_download_and_export_download(client: TestClient) -> None:

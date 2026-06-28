@@ -258,6 +258,17 @@ python scripts/e2e_real_video.py `
   --timeout 1800
 ```
 
+For a shorter spoken sample, request normal clip generation below the default 90 seconds:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_60s_sample.mp4 `
+  --normal-count 1 `
+  --short-count 0 `
+  --normal-min-duration 20 `
+  --normal-max-duration 60
+```
+
 The script:
 
 - uploads through `POST /api/videos/upload`
@@ -298,6 +309,33 @@ Troubleshooting:
 - `render failure`: check `render_failures.json` and `docker compose logs worker`.
 - First run can be slow because faster-whisper may download the model.
 - Use `--short-count 1 --normal-count 0` for a shorter first real run on a 1 minute sample.
+
+## Job Settings
+
+`POST /api/jobs` accepts advanced duration settings in `settings`:
+
+```json
+{
+  "videoId": "vid_example",
+  "settings": {
+    "normalClipCount": 1,
+    "shortCount": 1,
+    "normalMinDuration": 90,
+    "normalMaxDuration": 600,
+    "shortMinDuration": 20,
+    "shortMaxDuration": 75
+  }
+}
+```
+
+Production-safe defaults remain:
+
+- `normalMinDuration`: `90`
+- `normalMaxDuration`: `600`
+- `shortMinDuration`: `20`
+- `shortMaxDuration`: `75`
+
+For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.
 
 ## Generation Diagnostics
 

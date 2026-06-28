@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 JobStatus = Literal[
@@ -22,6 +22,9 @@ JobStatus = Literal[
 ]
 
 ExportType = Literal["normal", "short"]
+ClipMode = Literal["low_cost", "fast", "high_quality"]
+ClipProfile = Literal["auto", "talk", "gameplay", "lecture"]
+ShortLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
 
 
 class VideoRead(BaseModel):
@@ -43,9 +46,35 @@ class VideoUploadResponse(BaseModel):
     filename: str
 
 
+class JobSettings(BaseModel):
+    mode: ClipMode = "high_quality"
+    profile: ClipProfile = "auto"
+    normal_clip_count: int = Field(default=2, ge=0, alias="normalClipCount")
+    short_count: int = Field(default=3, ge=0, alias="shortCount")
+    normal_min_duration: float = Field(default=90.0, gt=0, alias="normalMinDuration")
+    normal_max_duration: float = Field(default=600.0, gt=0, alias="normalMaxDuration")
+    short_min_duration: float = Field(default=20.0, gt=0, alias="shortMinDuration")
+    short_max_duration: float = Field(default=75.0, gt=0, alias="shortMaxDuration")
+    burn_subtitles: bool = Field(default=True, alias="burnSubtitles")
+    normalize_audio: bool = Field(default=False, alias="normalizeAudio")
+    short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
+    use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")
+    e2e_fixture_transcript: bool = Field(default=False, alias="e2eFixtureTranscript")
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    @model_validator(mode="after")
+    def validate_duration_ranges(self) -> "JobSettings":
+        if self.normal_max_duration < self.normal_min_duration:
+            raise ValueError("normalMaxDuration must be >= normalMinDuration")
+        if self.short_max_duration < self.short_min_duration:
+            raise ValueError("shortMaxDuration must be >= shortMinDuration")
+        return self
+
+
 class JobCreateRequest(BaseModel):
     video_id: str = Field(alias="videoId")
-    settings: dict[str, Any] = Field(default_factory=dict)
+    settings: JobSettings = Field(default_factory=JobSettings)
 
 
 class JobCreateResponse(BaseModel):

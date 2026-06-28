@@ -96,6 +96,37 @@ def test_generate_normal_candidates_default_duration_bounds() -> None:
     assert_candidate_shape(candidates[0])
 
 
+def test_generate_normal_candidates_can_use_shorter_configured_duration() -> None:
+    transcript_segments = [
+        TranscriptSegment(
+            start=0.0,
+            end=60.0,
+            text="why automation teams need a complete launch checklist before publishing a video workflow",
+        )
+    ]
+    scene_segments = [SceneSegment(start=0.0, end=60.0)]
+
+    default_candidates = generate_normal_candidates(
+        transcript_segments=transcript_segments,
+        scene_segments=scene_segments,
+        silence_segments=[],
+    )
+    configured_candidates = generate_normal_candidates(
+        transcript_segments=transcript_segments,
+        scene_segments=scene_segments,
+        silence_segments=[],
+        settings={
+            "normalMinDuration": 20,
+            "normalMaxDuration": 60,
+        },
+    )
+
+    assert default_candidates == []
+    assert configured_candidates
+    assert all(20.0 <= candidate.duration <= 60.0 for candidate in configured_candidates)
+    assert all(candidate.type == "normal" for candidate in configured_candidates)
+
+
 def test_generate_short_candidates_avoid_cutting_inside_speech_when_possible() -> None:
     transcript_segments = [TranscriptSegment(start=10.0, end=50.0, text="single speech block")]
     candidates = generate_short_candidates(

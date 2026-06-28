@@ -80,6 +80,16 @@ def fake_transcript() -> list[TranscriptSegment]:
     ]
 
 
+def short_spoken_transcript() -> list[TranscriptSegment]:
+    text = (
+        "why automation teams should test every upload before launch. "
+        "how a simple checklist catches broken audio and missing output files. "
+        "the important lesson is to keep the workflow measurable and repeatable. "
+        "before publishing the final result, confirm the transcript, candidates, render, and download."
+    )
+    return [TranscriptSegment(start=0.0, end=60.0, text=text)]
+
+
 def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",
@@ -233,6 +243,88 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "selected_clips.json" in names
     assert "transcript_summary.json" in names
     assert "selected_clips_summary.json" in names
+
+
+def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_duration_settings(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 0,
+                "normalMinDuration": 20,
+                "normalMaxDuration": 60,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+                "useOpenAIScoring": False,
+                "burnSubtitles": False,
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=60.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=lambda _path: short_spoken_transcript(),
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=60.0)],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        normal_renderer=fake_render,
+        short_renderer=fake_render,
+    )
+
+    visited_statuses = run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    assert visited_statuses == SUCCESS_STATUSES[1:]
+    results_response = client.get(f"/api/jobs/{created['jobId']}/results")
+    assert results_response.status_code == 200
+    results = results_response.json()
+    assert len(results["normalClips"]) == 1
+    assert results["shorts"] == []
+    assert results["normalClips"][0]["duration"] == 60.0
+
+    job_dir = storage.outputs / created["jobId"]
+    candidate_summary = json.loads((job_dir / "candidate_summary.json").read_text(encoding="utf-8"))
+    assert candidate_summary["normal_candidates"] > 0
+    selected_summary = json.loads((job_dir / "selected_clips_summary.json").read_text(encoding="utf-8"))
+    assert selected_summary["selected_normal_count"] == 1
+    assert selected_summary["selected_short_count"] == 0
 
 
 def test_real_pipeline_openai_failure_falls_back_to_rule_scoring(client: TestClient) -> None:

@@ -42,6 +42,13 @@ def non_negative_int(value: str) -> int:
     return parsed
 
 
+def positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be > 0")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a real spoken-video E2E without fixture transcript.")
     parser.add_argument("--video", type=Path, required=True, help="Path to an MP4 with clear spoken audio.")
@@ -53,6 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", default="talk", choices=["auto", "talk", "gameplay", "lecture"])
     parser.add_argument("--burn-subtitles", nargs="?", const=True, default=True, type=parse_bool)
     parser.add_argument("--no-burn-subtitles", dest="burn_subtitles", action="store_false")
+    parser.add_argument("--normal-min-duration", type=positive_float, default=90.0)
+    parser.add_argument("--normal-max-duration", type=positive_float, default=600.0)
+    parser.add_argument("--short-min-duration", type=positive_float, default=20.0)
+    parser.add_argument("--short-max-duration", type=positive_float, default=75.0)
     return parser
 
 
@@ -69,12 +80,21 @@ def resolve_input_video(video_path: Path) -> Path:
 
 
 def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
+    if args.normal_max_duration < args.normal_min_duration:
+        raise RuntimeError("normal-max-duration must be >= normal-min-duration")
+    if args.short_max_duration < args.short_min_duration:
+        raise RuntimeError("short-max-duration must be >= short-min-duration")
+
     use_openai_scoring = args.mode == "high_quality"
     return {
         "mode": args.mode,
         "profile": args.profile,
         "normalClipCount": args.normal_count,
         "shortCount": args.short_count,
+        "normalMinDuration": args.normal_min_duration,
+        "normalMaxDuration": args.normal_max_duration,
+        "shortMinDuration": args.short_min_duration,
+        "shortMaxDuration": args.short_max_duration,
         "burnSubtitles": bool(args.burn_subtitles),
         "shortLayout": "auto",
         "useOpenAIScoring": use_openai_scoring,

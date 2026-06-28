@@ -13,6 +13,10 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   profile: "auto",
   normalClipCount: 2,
   shortCount: 3,
+  normalMinDuration: 90,
+  normalMaxDuration: 600,
+  shortMinDuration: 20,
+  shortMaxDuration: 75,
   burnSubtitles: true,
   shortLayout: "auto"
 };
@@ -127,6 +131,85 @@ export function SettingsPanel({
           />
           <span className="text-sm font-medium text-neutral-700">Burn subtitles</span>
         </label>
+
+        <details className="md:col-span-2">
+          <summary className="cursor-pointer text-sm font-medium text-neutral-700">
+            Advanced durations
+          </summary>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">Normal min seconds</span>
+              <input
+                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                disabled={disabled}
+                min={1}
+                step={5}
+                type="number"
+                value={settings.normalMinDuration}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    normalMinDuration: Number(event.target.value)
+                  })
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">Normal max seconds</span>
+              <input
+                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                disabled={disabled}
+                min={1}
+                step={5}
+                type="number"
+                value={settings.normalMaxDuration}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    normalMaxDuration: Number(event.target.value)
+                  })
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">Short min seconds</span>
+              <input
+                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                disabled={disabled}
+                min={1}
+                step={5}
+                type="number"
+                value={settings.shortMinDuration}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    shortMinDuration: Number(event.target.value)
+                  })
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">Short max seconds</span>
+              <input
+                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                disabled={disabled}
+                min={1}
+                step={5}
+                type="number"
+                value={settings.shortMaxDuration}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    shortMaxDuration: Number(event.target.value)
+                  })
+                }
+              />
+            </label>
+          </div>
+        </details>
       </div>
     </section>
   );

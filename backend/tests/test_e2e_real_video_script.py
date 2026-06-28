@@ -23,6 +23,10 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.mode == "low_cost"
     assert args.profile == "talk"
     assert args.burn_subtitles is True
+    assert args.normal_min_duration == 90.0
+    assert args.normal_max_duration == 600.0
+    assert args.short_min_duration == 20.0
+    assert args.short_max_duration == 75.0
 
     false_args = script.parse_args(["--video", "spoken.mp4", "--burn-subtitles", "false"])
     assert false_args.burn_subtitles is False
@@ -44,6 +48,14 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "low_cost",
             "--profile",
             "talk",
+            "--normal-min-duration",
+            "20",
+            "--normal-max-duration",
+            "60",
+            "--short-min-duration",
+            "15",
+            "--short-max-duration",
+            "45",
             "--no-burn-subtitles",
         ]
     )
@@ -53,11 +65,21 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["useOpenAIScoring"] is False
     assert settings["normalClipCount"] == 2
     assert settings["shortCount"] == 0
+    assert settings["normalMinDuration"] == 20.0
+    assert settings["normalMaxDuration"] == 60.0
+    assert settings["shortMinDuration"] == 15.0
+    assert settings["shortMaxDuration"] == 45.0
     assert settings["burnSubtitles"] is False
     assert settings["profile"] == "talk"
 
     high_quality_args = script.parse_args(["--video", "spoken.mp4", "--mode", "high_quality"])
     assert script.build_job_settings(high_quality_args)["useOpenAIScoring"] is True
+
+    invalid_args = script.parse_args(
+        ["--video", "spoken.mp4", "--normal-min-duration", "60", "--normal-max-duration", "20"]
+    )
+    with pytest.raises(RuntimeError, match="normal-max-duration"):
+        script.build_job_settings(invalid_args)
 
 
 def test_resolve_input_video_requires_existing_file(tmp_path: Path) -> None:

@@ -21,6 +21,10 @@ export type ClipSettings = {
   profile: "auto" | "talk" | "gameplay" | "lecture";
   normalClipCount: number;
   shortCount: number;
+  normalMinDuration: number;
+  normalMaxDuration: number;
+  shortMinDuration: number;
+  shortMaxDuration: number;
   burnSubtitles: boolean;
   shortLayout: "auto" | "center_crop" | "blur_background";
 };

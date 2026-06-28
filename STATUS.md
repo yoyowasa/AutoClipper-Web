@@ -15,6 +15,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - Task 19 Real spoken-video E2E without fixture transcript の実装完了。
 - Task 20 Add early failure for silent or unusable audio の実装完了。
 - Task 21 Add generation diagnostic summaries の実装完了。
+- Task 22 Make normal clip duration settings configurable from UI/API の実装完了。
 - 初期 FastAPI backend data model / API routes の実装完了。
 - RQ worker と real AutoClipper pipeline の実装完了。
 - Next.js frontend upload flow の実装完了。
@@ -63,6 +64,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 2026-06-28: `scripts/e2e_real_video.py` を追加し、ユーザー supplied spoken video の faster-whisper E2E 導線を実装。
 - 2026-06-28: silent / unusable audio と unusable transcript の早期失敗を worker pipeline に追加。
 - 2026-06-28: completed / failed job の generation diagnostic summary JSON 出力を追加。
+- 2026-06-28: normal / short duration settings を API schema、UI、E2E script から指定可能にした。
 
 ## 修正履歴
 
@@ -1086,3 +1088,49 @@ completed / failed job ごとに生成診断 summary JSON を `storage/outputs/{
 ### 未解決事項
 
 - Task 21 では実話者動画 E2E は未再実行。summary 出力は unit / pipeline tests と synthetic docker E2E で確認済み。
+
+## 2026-06-28 Task 22 Make normal clip duration settings configurable from UI/API
+
+### 目的
+
+短めの動画でも明示設定時に normal clip を生成できるよう、normal / short duration settings を API schema と UI から指定可能にする。
+
+### 変更ファイル
+
+- `backend/app/schemas.py`
+- `backend/app/api/jobs.py`
+- `backend/tests/test_api_routes.py`
+- `backend/tests/test_candidate_generation.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `frontend/lib/types.ts`
+- `frontend/components/SettingsPanel.tsx`
+- `scripts/e2e_real_video.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `JobSettings` Pydantic schema を追加し、`normalMinDuration`、`normalMaxDuration`、`shortMinDuration`、`shortMaxDuration` を OpenAPI に露出。
+- duration default は `normalMinDuration=90`、`normalMaxDuration=600`、`shortMinDuration=20`、`shortMaxDuration=75` のまま維持。
+- `settings_json` 保存時に alias 名の JSON に正規化。
+- 既存の追加設定は `extra=allow` で維持。
+- frontend `ClipSettings` と `SettingsPanel` に advanced duration inputs を追加。
+- `scripts/e2e_real_video.py` に `--normal-min-duration` / `--normal-max-duration` / `--short-min-duration` / `--short-max-duration` を追加。
+- 60秒相当の spoken fake pipeline で `normalMinDuration=20` / `normalMaxDuration=60` の normal clip 生成を検証。
+
+### 検証結果
+
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_real_video.py`: passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_api_routes.py .\backend\tests\test_candidate_generation.py .\backend\tests\test_real_pipeline.py .\backend\tests\test_e2e_real_video_script.py`: 34 passed, 1 warning。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_api_routes.py`: 12 passed, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 103 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `npm --workspace frontend run build`: passed。
+- `.\.venv\Scripts\python .\scripts\e2e_sample_video.py --start`: E2E PASSED。job `job_9091a2fc976142958ec606e1f55ebc93`。
+
+### 未解決事項
+
+- 実話者60秒動画での runtime E2E は未実施。60秒 normal clip 生成は fake dependency pipeline test で確認済み。

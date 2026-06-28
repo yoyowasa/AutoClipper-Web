@@ -105,7 +105,7 @@ def create_job(
         status="queued",
         progress=5,
         current_step="Queued",
-        settings_json=request.settings,
+        settings_json=request.settings.model_dump(by_alias=True, mode="json"),
     )
     db.add(job)
     db.commit()
