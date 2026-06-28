@@ -9,6 +9,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - Task 01 Repository scaffold の実装完了。
 - Git repository 初期化と GitHub remote 接続完了。
 - GitHub Actions backend ruff F401 修正完了。
+- Docker Desktop 導入と docker compose 起動検証完了。
 - 初期 FastAPI backend data model / API routes の実装完了。
 - RQ worker と real AutoClipper pipeline の実装完了。
 - Next.js frontend upload flow の実装完了。
@@ -51,6 +52,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 2026-06-28: known failure error codes、upload validation、temp cleanup、OpenAI fallback、failed UI表示を追加。
 - 2026-06-28: GitHub Actions CI、backend ruff、frontend build、Codex運用ルールを追加。
 - 2026-06-28: `OPENAI_API_KEY` を backend / worker コンテナへ渡す docker compose 設定を追加。
+- 2026-06-28: Docker Desktop を導入し、`docker compose up -d --build` で backend / frontend / redis / worker 起動を確認。
 
 ## 修正履歴
 
@@ -64,7 +66,6 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 
 ## 未解決事項
 
-- Docker Compose 起動検証は未実施。理由: この環境で `docker` コマンド未検出。
 - `npm audit --omit=dev` は Next.js 最新 `16.2.9` 内包 PostCSS 由来の moderate 警告あり。現時点で通常更新では解消不可。
 
 ## 更新ルール
@@ -832,3 +833,35 @@ GitHub Actions backend job の `ruff check .` で検出された F401 unused imp
 ### 未解決事項
 
 - local ruff 実行は Windows application control policy で未検証。CI上ではpassed。
+
+## 2026-06-28 Docker Desktop install and compose verification
+
+### 目的
+
+Windows環境へDocker Desktopを導入し、AutoClipper Web の docker compose 起動条件を実機で確認する。
+
+### 変更ファイル
+
+- `STATUS.md`
+
+### 実施内容
+
+- Docker Desktop 4.78.0 を導入。
+- WSL / VirtualMachinePlatform を有効化。
+- Docker Desktop を起動し、`docker-desktop` WSL distro の起動を確認。
+- `docker compose up -d --build` を実行。
+
+### 検証結果
+
+- `docker --version`: Docker 29.5.3。
+- `docker compose version`: Docker Compose v5.1.4。
+- `docker info`: `server=29.5.3 os=linux`。
+- `docker compose up -d --build`: success。
+- `docker compose ps`: backend / frontend / redis / worker が `Up`。
+- backend container health: `healthy`。
+- `http://localhost:8000/health`: `{"status":"ok"}`。
+- `http://localhost:3000`: HTTP 200、AutoClipper page content確認。
+
+### 未解決事項
+
+- 実サンプル動画を使ったworker E2Eは未実施。
