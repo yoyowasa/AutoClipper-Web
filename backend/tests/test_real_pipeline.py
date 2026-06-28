@@ -465,6 +465,146 @@ def test_real_pipeline_marks_failed_for_missing_audio_without_unhandled_exceptio
     assert not (storage.temp / created["jobId"]).exists()
 
 
+def test_real_pipeline_fails_silent_audio_before_transcription_and_candidates(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fail_if_transcribed(_wav_path: str | Path) -> list[TranscriptSegment]:
+        raise AssertionError("silent audio must fail before transcription")
+
+    def fail_if_scene_detected(_input_path: str | Path) -> list[SceneSegment]:
+        raise AssertionError("silent audio must fail before scene detection")
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=120.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=fail_if_transcribed,
+        detect_scenes=fail_if_scene_detected,
+        detect_silence=lambda _path, _duration: [SilenceSegment(start=0.0, end=120.0, duration=120.0)],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.0,
+        ),
+        detect_black_screen=lambda _path: [],
+    )
+
+    visited_statuses = run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    status_response = client.get(f"/api/jobs/{created['jobId']}")
+    payload = status_response.json()
+    assert visited_statuses == ["probing", "extracting_audio"]
+    assert payload["status"] == "failed"
+    assert payload["error"]["code"] == "audio_silent_or_unusable"
+    assert payload["details"]["duration"] == 120.0
+    assert payload["details"]["silence_ratio"] == 1.0
+    assert payload["details"]["speech_seconds"] == 0.0
+    assert payload["details"]["speech_density"] == 0.0
+    assert payload["details"]["volume_peak"] == 0.0
+    job_dir = storage.outputs / created["jobId"]
+    assert (job_dir / "audio_features.json").is_file()
+    assert not (job_dir / "transcript_segments.json").exists()
+    assert not (job_dir / "candidates.json").exists()
+    assert not (storage.temp / created["jobId"]).exists()
+
+
+def test_real_pipeline_fails_unusable_transcript_before_candidates(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fail_if_scene_detected(_input_path: str | Path) -> list[SceneSegment]:
+        raise AssertionError("unusable transcript must fail before scene detection")
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=120.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=lambda _path: [
+            TranscriptSegment(start=0.0, end=10.0, text="You You You You You", confidence=0.95),
+            TranscriptSegment(start=10.0, end=20.0, text="You You You You You", confidence=0.95),
+        ],
+        detect_scenes=fail_if_scene_detected,
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+    )
+
+    visited_statuses = run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    status_response = client.get(f"/api/jobs/{created['jobId']}")
+    payload = status_response.json()
+    assert visited_statuses == ["probing", "extracting_audio", "transcribing"]
+    assert payload["status"] == "failed"
+    assert payload["error"]["code"] == "transcript_unusable"
+    assert "repeated_low_information_text" in payload["error"]["message"]
+    assert payload["details"]["segment_count"] == 2
+    assert payload["details"]["total_speech_duration"] == 20.0
+    assert payload["details"]["average_confidence"] == 0.95
+    job_dir = storage.outputs / created["jobId"]
+    assert (job_dir / "transcript_segments.json").is_file()
+    assert not (job_dir / "candidates.json").exists()
+    assert not (storage.temp / created["jobId"]).exists()
+
+
 def test_real_pipeline_marks_failed_when_no_candidates_found(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",
@@ -495,7 +635,13 @@ def test_real_pipeline_marks_failed_when_no_candidates_found(client: TestClient)
             has_audio=True,
         ),
         extract_audio=fake_extract,
-        transcribe_audio=lambda _path: [TranscriptSegment(start=0.0, end=10.0, text="too short")],
+        transcribe_audio=lambda _path: [
+            TranscriptSegment(
+                start=0.0,
+                end=10.0,
+                text="this transcript is usable but the video is too short for candidates",
+            )
+        ],
         detect_scenes=lambda _path: [SceneSegment(start=0.0, end=10.0)],
         detect_silence=lambda _path, _duration: [],
         compute_audio_features=lambda _path, duration, segments: build_audio_features(

@@ -1,3 +1,7 @@
+import json
+from pathlib import Path
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
@@ -41,6 +45,50 @@ def _result_item(export: ExportItem) -> ResultExportItem:
     )
 
 
+def _read_json_if_exists(path: Path) -> Any:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    output_dir = paths.job_outputs(job.id)
+    audio_features = _read_json_if_exists(output_dir / "audio_features.json")
+    if isinstance(audio_features, dict):
+        for key in ("duration", "silence_ratio", "speech_seconds", "speech_density", "volume_peak"):
+            if key in audio_features:
+                details[key] = audio_features[key]
+
+    transcript_segments = _read_json_if_exists(output_dir / "transcript_segments.json")
+    if isinstance(transcript_segments, list):
+        texts = [
+            str(segment.get("text", "")).strip()
+            for segment in transcript_segments
+            if isinstance(segment, dict)
+        ]
+        confidences = [
+            float(segment["confidence"])
+            for segment in transcript_segments
+            if isinstance(segment, dict) and segment.get("confidence") is not None
+        ]
+        speech_duration = sum(
+            max(0.0, float(segment.get("end", 0.0)) - float(segment.get("start", 0.0)))
+            for segment in transcript_segments
+            if isinstance(segment, dict) and str(segment.get("text", "")).strip()
+        )
+        details["segment_count"] = len(transcript_segments)
+        details["total_text_length"] = len(" ".join(text for text in texts if text).strip())
+        details["total_speech_duration"] = round(speech_duration, 6)
+        if confidences:
+            details["average_confidence"] = round(sum(confidences) / len(confidences), 6)
+
+    return details
+
+
 @router.post("", response_model=JobCreateResponse, status_code=status.HTTP_201_CREATED)
 def create_job(
     request: JobCreateRequest,
@@ -68,7 +116,11 @@ def create_job(
 
 
 @router.get("/{job_id}", response_model=JobStatusResponse)
-def get_job_status(job_id: str, db: Session = Depends(get_db)) -> JobStatusResponse:
+def get_job_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> JobStatusResponse:
     job = _get_job_or_404(db, job_id)
     error = None
     if job.error_code or job.error_message:
@@ -79,7 +131,7 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)) -> JobStatusRespo
         status=job.status,
         progress=job.progress,
         currentStep=job.current_step,
-        details={},
+        details=_job_details(job, paths),
         error=error,
     )
 

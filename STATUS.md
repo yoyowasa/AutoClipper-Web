@@ -13,6 +13,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - Task 17 Runtime verification and real video E2E hardening の実装完了。
 - Task 18 Real sample video E2E validation の実装完了。
 - Task 19 Real spoken-video E2E without fixture transcript の実装完了。
+- Task 20 Add early failure for silent or unusable audio の実装完了。
 - 初期 FastAPI backend data model / API routes の実装完了。
 - RQ worker と real AutoClipper pipeline の実装完了。
 - Next.js frontend upload flow の実装完了。
@@ -59,6 +60,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 2026-06-28: `scripts/smoke_runtime.py` と runtime README を追加し、Docker runtime / ffmpeg / ffprobe / shared storage smoke を実装。
 - 2026-06-28: `scripts/generate_sample_video.py` と `scripts/e2e_sample_video.py` を追加し、synthetic MP4 の real runtime E2E 導線を実装。
 - 2026-06-28: `scripts/e2e_real_video.py` を追加し、ユーザー supplied spoken video の faster-whisper E2E 導線を実装。
+- 2026-06-28: silent / unusable audio と unusable transcript の早期失敗を worker pipeline に追加。
 
 ## 修正履歴
 
@@ -993,3 +995,46 @@ docker compose runtime、backend/worker の処理バイナリ、共有DB/storage
 ### 未解決事項
 
 - 実話者動画ファイルは未指定のため、`scripts/e2e_real_video.py --video ...` による実 faster-whisper runtime E2E は未実施。
+
+## 2026-06-28 Task 20 Add early failure for silent or unusable audio
+
+### 目的
+
+silent / unusable audio または unusable transcript を candidate generation 前に止め、明確な error code と診断値を返す。
+
+### 変更ファイル
+
+- `backend/app/jobs/runner.py`
+- `backend/app/api/jobs.py`
+- `backend/tests/test_real_pipeline.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- audio extraction 後、transcription 前に silence detection と audio feature analysis を実行。
+- `volume_peak`、`silence_ratio`、`speech_seconds`、`speech_density` から near-silent / unusable audio を判定。
+- unusable audio は `audio_silent_or_unusable` で failed にする。
+- transcript 後、candidate generation 前に transcript usability を判定。
+- `segment_count == 0`、total text length不足、speech duration不足、confidence低すぎ、repeated low-information text を `transcript_unusable` にする。
+- `GET /api/jobs/{job_id}` の `details` に artifact 由来の `duration`、`silence_ratio`、`speech_seconds`、`speech_density`、`volume_peak`、transcript diagnostics を返す。
+- `e2eFixtureTranscript` の挙動は維持。quality gate / score threshold は変更なし。
+- README troubleshooting に `audio_silent_or_unusable` / `transcript_unusable` を追記。
+
+### 検証結果
+
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_real_pipeline.py`: 8 passed, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 97 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run build`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `.\.venv\Scripts\python .\scripts\e2e_sample_video.py --start`: E2E PASSED。worker `ffprobe` で downloaded MP4 `1080,1920`。
+- `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video .\storage\uploads\vid_2b24c19c2dbc44be893c812491b9ef62.mp4 --normal-count 0 --short-count 1 --timeout 1800`: REAL VIDEO E2E PASSED。transcript 11 segments / 324 chars、short `1080x1920`。
+- generated silent MP4 `storage/temp/e2e_silent.mp4`: expected failure。`audio_silent_or_unusable`、diagnostics `duration=25.0`、`silence_ratio=1.0`、`speech_density=0.0`、`speech_seconds=0.0`、`volume_peak=0.0`。
+- `GET /api/jobs/job_652fa07557174bd3add86e1ca4171b71`: failed response の `details` に `duration`、`silence_ratio`、`speech_seconds`、`speech_density`、`volume_peak` を確認。
+- silent job `job_652fa07557174bd3add86e1ca4171b71`: `candidates.json` absent。candidate generation 前に停止。
+
+### 未解決事項
+
+- 閾値は現時点の保守的な初期値。多様な実動画で false positive / false negative が出る場合は実測値で調整する。

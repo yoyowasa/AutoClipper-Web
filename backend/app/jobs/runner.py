@@ -1,5 +1,7 @@
 import json
+import re
 import shutil
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +54,27 @@ DetectSilence = Callable[[str | Path, float | None], list[SilenceSegment]]
 ComputeAudioFeatures = Callable[[str | Path, float, Sequence[SilenceSegment]], AudioFeatures]
 DetectBlackScreen = Callable[[str | Path], list[BlackScreenSegment]]
 
+MIN_AUDIO_VOLUME_PEAK = 0.005
+MAX_AUDIO_SILENCE_RATIO = 0.98
+MIN_AUDIO_SPEECH_SECONDS = 1.0
+MIN_AUDIO_SPEECH_DENSITY = 0.02
+
+MIN_TRANSCRIPT_TEXT_LENGTH = 20
+MIN_TRANSCRIPT_SPEECH_SECONDS = 3.0
+MIN_AVERAGE_TRANSCRIPT_CONFIDENCE = 0.25
+LOW_INFORMATION_WORDS = {
+    "ah",
+    "hmm",
+    "mm",
+    "music",
+    "thank",
+    "thanks",
+    "uh",
+    "um",
+    "you",
+    "yeah",
+}
+
 
 @dataclass(frozen=True)
 class AutoClipperPipelineDependencies:
@@ -68,10 +91,11 @@ class AutoClipperPipelineDependencies:
 
 
 class PipelineExpectedError(Exception):
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = details or {}
 
 
 def _default_transcribe_audio(wav_path: str | Path) -> list[TranscriptSegment]:
@@ -109,6 +133,12 @@ def _default_detect_silence(wav_path: str | Path, duration: float | None) -> lis
     return detect_silence(wav_path, audio_duration=duration)
 
 
+def _format_diagnostic_message(message: str, details: dict[str, Any]) -> str:
+    if not details:
+        return message
+    return f"{message} Diagnostics: {json.dumps(details, sort_keys=True)}"
+
+
 def _set_status(db: Session, job: Job, status: str) -> None:
     job.status = status
     job.progress = PROGRESS_MAP[status]
@@ -120,7 +150,7 @@ def _set_status(db: Session, job: Job, status: str) -> None:
     db.refresh(job)
 
 
-def _fail_job(db: Session, job_id: str, code: str, message: str) -> None:
+def _fail_job(db: Session, job_id: str, code: str, message: str, details: dict[str, Any] | None = None) -> None:
     job = db.get(Job, job_id)
     if job is None:
         return
@@ -128,7 +158,7 @@ def _fail_job(db: Session, job_id: str, code: str, message: str) -> None:
     job.progress = PROGRESS_MAP["failed"]
     job.current_step = CURRENT_STEP_MAP["failed"]
     job.error_code = code
-    job.error_message = message
+    job.error_message = _format_diagnostic_message(message, details or {})
     db.commit()
 
 
@@ -199,6 +229,108 @@ def _safe_audio_features(
             silent_seconds=0.0,
             speech_seconds=max(duration, 0.0),
         )
+
+
+def _audio_diagnostics(audio_features: AudioFeatures) -> dict[str, float]:
+    return {
+        "duration": round(audio_features.duration, 6),
+        "silence_ratio": round(audio_features.silence_ratio, 6),
+        "speech_seconds": round(audio_features.speech_seconds, 6),
+        "speech_density": round(audio_features.speech_density, 6),
+        "volume_peak": round(audio_features.volume_peak, 6),
+    }
+
+
+def _audio_is_silent_or_unusable(audio_features: AudioFeatures) -> bool:
+    if audio_features.duration <= 0:
+        return True
+    if audio_features.volume_peak <= MIN_AUDIO_VOLUME_PEAK:
+        return True
+    if (
+        audio_features.silence_ratio >= MAX_AUDIO_SILENCE_RATIO
+        and audio_features.speech_seconds <= MIN_AUDIO_SPEECH_SECONDS
+    ):
+        return True
+    return (
+        audio_features.speech_density <= MIN_AUDIO_SPEECH_DENSITY
+        and audio_features.speech_seconds <= MIN_AUDIO_SPEECH_SECONDS
+    )
+
+
+def _raise_if_audio_unusable(audio_features: AudioFeatures) -> None:
+    if not _audio_is_silent_or_unusable(audio_features):
+        return
+    details = _audio_diagnostics(audio_features)
+    raise PipelineExpectedError(
+        "audio_silent_or_unusable",
+        "Audio is silent or too weak for reliable transcription.",
+        details=details,
+    )
+
+
+def _transcript_text(segments: Sequence[TranscriptSegment]) -> str:
+    return " ".join(segment.text.strip() for segment in segments if segment.text.strip()).strip()
+
+
+def _transcript_speech_duration(segments: Sequence[TranscriptSegment]) -> float:
+    return sum(max(0.0, segment.end - segment.start) for segment in segments if segment.text.strip())
+
+
+def _average_transcript_confidence(segments: Sequence[TranscriptSegment]) -> float | None:
+    values = [segment.confidence for segment in segments if segment.confidence is not None]
+    if not values:
+        return None
+    return sum(values) / len(values)
+
+
+def _transcript_has_repeated_low_information_text(text: str) -> bool:
+    words = re.findall(r"[A-Za-z0-9']+", text.lower())
+    if len(words) < 5:
+        return False
+    counts = Counter(words)
+    word, count = counts.most_common(1)[0]
+    return word in LOW_INFORMATION_WORDS and count / len(words) >= 0.8
+
+
+def _transcript_diagnostics(segments: Sequence[TranscriptSegment]) -> dict[str, Any]:
+    text = _transcript_text(segments)
+    average_confidence = _average_transcript_confidence(segments)
+    details: dict[str, Any] = {
+        "segment_count": len(segments),
+        "total_text_length": len(text),
+        "total_speech_duration": round(_transcript_speech_duration(segments), 6),
+    }
+    if average_confidence is not None:
+        details["average_confidence"] = round(average_confidence, 6)
+    return details
+
+
+def _raise_if_transcript_unusable(segments: Sequence[TranscriptSegment]) -> None:
+    details = _transcript_diagnostics(segments)
+    text = _transcript_text(segments)
+    average_confidence = _average_transcript_confidence(segments)
+    reasons: list[str] = []
+
+    if not segments:
+        reasons.append("segment_count_zero")
+    if len(text) < MIN_TRANSCRIPT_TEXT_LENGTH:
+        reasons.append("total_text_length_too_low")
+    if _transcript_speech_duration(segments) < MIN_TRANSCRIPT_SPEECH_SECONDS:
+        reasons.append("total_speech_duration_too_low")
+    if average_confidence is not None and average_confidence < MIN_AVERAGE_TRANSCRIPT_CONFIDENCE:
+        reasons.append("average_confidence_too_low")
+    if _transcript_has_repeated_low_information_text(text):
+        reasons.append("repeated_low_information_text")
+
+    if not reasons:
+        return
+
+    details["reasons"] = reasons
+    raise PipelineExpectedError(
+        "transcript_unusable",
+        "Transcription did not produce usable speech text.",
+        details=details,
+    )
 
 
 def _safe_visual_quality(
@@ -474,6 +606,19 @@ def run_autoclipper_job(
                     f"Could not extract audio: {exc}",
                 ) from exc
 
+            silence_segments = _safe_silence_detection(audio_path, duration, detect_silence_for_audio)
+            silence_path = write_silence_segments(silence_segments, silence_output_path(job_dir))
+            metadata_files.append(silence_path)
+            audio_features = _safe_audio_features(
+                audio_path,
+                duration,
+                silence_segments,
+                deps.compute_audio_features,
+            )
+            audio_features_path = write_audio_features(audio_features, audio_features_output_path(job_dir))
+            metadata_files.append(audio_features_path)
+            _raise_if_audio_unusable(audio_features)
+
             _set_status(db, job, "transcribing")
             visited_statuses.append("transcribing")
             if _e2e_fixture_transcript_enabled(settings):
@@ -488,28 +633,13 @@ def run_autoclipper_job(
                     ) from exc
             transcript_path = write_transcript_segments(transcript_segments, transcript_output_path(job_dir))
             metadata_files.append(transcript_path)
-            if not transcript_segments:
-                raise PipelineExpectedError(
-                    "transcription_empty",
-                    "Transcription produced no usable speech segments.",
-                )
+            _raise_if_transcript_unusable(transcript_segments)
 
             _set_status(db, job, "detecting_scenes")
             visited_statuses.append("detecting_scenes")
             scene_segments = _safe_scene_detection(input_path, duration, deps.detect_scenes)
             scene_path = write_scene_segments(scene_segments, scene_output_path(job_dir))
             metadata_files.append(scene_path)
-            silence_segments = _safe_silence_detection(audio_path, duration, detect_silence_for_audio)
-            silence_path = write_silence_segments(silence_segments, silence_output_path(job_dir))
-            metadata_files.append(silence_path)
-            audio_features = _safe_audio_features(
-                audio_path,
-                duration,
-                silence_segments,
-                deps.compute_audio_features,
-            )
-            audio_features_path = write_audio_features(audio_features, audio_features_output_path(job_dir))
-            metadata_files.append(audio_features_path)
             visual_quality = _safe_visual_quality(input_path, duration, deps.detect_black_screen)
             visual_quality_path = write_visual_quality(visual_quality, visual_quality_output_path(job_dir))
             metadata_files.append(visual_quality_path)
@@ -623,7 +753,7 @@ def run_autoclipper_job(
             _set_status(db, job, "completed")
             visited_statuses.append("completed")
         except PipelineExpectedError as exc:
-            _fail_job(db, job_id, exc.code, exc.message)
+            _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
         except Exception as exc:
             _fail_job(db, job_id, "pipeline_failed", str(exc))
             raise

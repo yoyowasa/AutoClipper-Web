@@ -284,6 +284,8 @@ storage/temp/e2e_real_{job_id}_*.mp4
 
 Troubleshooting:
 
+- `audio_silent_or_unusable`: the audio track is silent, near-silent, or has too little measurable speech.
+- `transcript_unusable`: faster-whisper ran, but the transcript was empty, too short, too low confidence, or repeated low-information text.
 - `transcription_empty`: use a clearer spoken sample with audible voice.
 - `no_candidates_found`: use a longer sample, ideally at least 90 seconds if normal clips are requested.
 - `quality gate rejection`: check `selected_clips.json` rejection reasons; the transcript may be too sparse or low scoring.
