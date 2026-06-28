@@ -266,7 +266,8 @@ python scripts/e2e_real_video.py `
   --normal-count 1 `
   --short-count 0 `
   --normal-min-duration 20 `
-  --normal-max-duration 60
+  --normal-max-duration 60 `
+  --selection-policy fill_requested
 ```
 
 The script:
@@ -305,7 +306,7 @@ Troubleshooting:
 - `transcript_unusable`: faster-whisper ran, but the transcript was empty, too short, too low confidence, or repeated low-information text.
 - `transcription_empty`: use a clearer spoken sample with audible voice.
 - `no_candidates_found`: use a longer sample, ideally at least 90 seconds if normal clips are requested.
-- `quality gate rejection`: check `selected_clips.json` rejection reasons; the transcript may be too sparse or low scoring.
+- `quality gate rejection`: check `selected_clips.json` and `rejection_summary.json`; in `strict_quality` mode, low scores can intentionally leave selected outputs at zero.
 - `render failure`: check `render_failures.json` and `docker compose logs worker`.
 - First run can be slow because faster-whisper may download the model.
 - Use `--short-count 1 --normal-count 0` for a shorter first real run on a 1 minute sample.
@@ -323,7 +324,8 @@ Troubleshooting:
     "normalMinDuration": 90,
     "normalMaxDuration": 600,
     "shortMinDuration": 20,
-    "shortMaxDuration": 75
+    "shortMaxDuration": 75,
+    "selectionPolicy": "fill_requested"
   }
 }
 ```
@@ -334,8 +336,14 @@ Production-safe defaults remain:
 - `normalMaxDuration`: `600`
 - `shortMinDuration`: `20`
 - `shortMaxDuration`: `75`
+- `selectionPolicy`: `fill_requested`
 
 For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.
+
+Selection policy:
+
+- `fill_requested`: default. Hard gates still reject unusable candidates, but low `final_score` is used as ranking, not as a hard rejection. If the requested count is not filled by candidates above `minFinalScore`, the worker backfills from hard-gate-passing candidates and marks each selected clip with `below_quality_threshold=true`, `quality_warning=below_min_final_score`, and `selection_reason=backfill_below_quality_threshold`.
+- `strict_quality`: preserves strict behavior. Candidates below `minFinalScore` are rejected, so a job may complete analysis with zero selected outputs.
 
 ## Generation Diagnostics
 
@@ -349,9 +357,9 @@ Summary files:
 
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
-- `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, duration stats, rule/final score stats.
+- `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
 - `rejection_summary.json`: quality gate rejection counts and render failure counts.
-- `selected_clips_summary.json`: selected normal/short counts, selected IDs, durations, scores, output paths.
+- `selected_clips_summary.json`: selected normal/short counts, selected IDs, durations, scores, quality warnings, selection reasons, output paths.
 
 The E2E scripts print these summaries:
 

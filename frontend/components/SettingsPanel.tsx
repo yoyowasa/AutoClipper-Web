@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   normalMaxDuration: 600,
   shortMinDuration: 20,
   shortMaxDuration: 75,
+  selectionPolicy: "fill_requested",
   burnSubtitles: true,
   shortLayout: "auto"
 };
@@ -137,6 +138,24 @@ export function SettingsPanel({
             Advanced durations
           </summary>
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">Selection policy</span>
+              <select
+                className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+                disabled={disabled}
+                value={settings.selectionPolicy}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    selectionPolicy: event.target.value as ClipSettings["selectionPolicy"]
+                  })
+                }
+              >
+                <option value="fill_requested">Fill requested</option>
+                <option value="strict_quality">Strict quality</option>
+              </select>
+            </label>
+
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium text-neutral-700">Normal min seconds</span>
               <input

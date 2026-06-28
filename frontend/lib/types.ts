@@ -25,6 +25,7 @@ export type ClipSettings = {
   normalMaxDuration: number;
   shortMinDuration: number;
   shortMaxDuration: number;
+  selectionPolicy: "fill_requested" | "strict_quality";
   burnSubtitles: boolean;
   shortLayout: "auto" | "center_crop" | "blur_background";
 };

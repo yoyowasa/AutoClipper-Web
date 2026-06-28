@@ -52,11 +52,40 @@ def _stats(values: Sequence[float]) -> dict[str, float | None]:
     }
 
 
+def _percentile(values: Sequence[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return _round(ordered[0])
+    position = (len(ordered) - 1) * percentile
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    if lower == upper:
+        return _round(ordered[lower])
+    weight = position - lower
+    return _round((ordered[lower] * (1 - weight)) + (ordered[upper] * weight))
+
+
 def _score(candidate: Candidate) -> float | None:
     for value in (candidate.final_score, candidate.ai_score, candidate.rule_score):
         if value is not None:
             return float(value)
     return None
+
+
+def _candidate_summary_item(candidate: Candidate) -> dict[str, Any]:
+    return {
+        "id": candidate.id,
+        "type": candidate.type,
+        "duration": _round(candidate.duration),
+        "rule_score": _round(candidate.rule_score),
+        "final_score": _round(_score(candidate)),
+        "hard_gate_passed": candidate.hard_gate_passed,
+        "below_quality_threshold": candidate.below_quality_threshold,
+        "quality_warning": candidate.quality_warning,
+        "selection_reason": candidate.selection_reason,
+    }
 
 
 def _transcript_text(segments: Sequence[TranscriptSegment]) -> str:
@@ -122,21 +151,35 @@ def build_candidate_summary(
     normal_candidates: Sequence[Candidate] | None,
     short_candidates: Sequence[Candidate] | None,
     scored_candidates: Sequence[Candidate] | None,
+    selection: CandidateSelection | None = None,
 ) -> dict[str, Any]:
     generated = [*(normal_candidates or []), *(short_candidates or [])]
     candidates = list(scored_candidates or generated)
+    selected = [*(selection.normal_clips if selection is not None else []), *(selection.shorts if selection is not None else [])]
     duration_stats = _stats([float(candidate.duration) for candidate in candidates])
     rule_score_stats = _stats(
         [float(candidate.rule_score) for candidate in candidates if candidate.rule_score is not None]
     )
-    final_score_stats = _stats(
-        [float(candidate.final_score) for candidate in candidates if candidate.final_score is not None]
-    )
+    final_scores = [float(score) for candidate in candidates if (score := _score(candidate)) is not None]
+    final_score_stats = _stats(final_scores)
+    rejection_counter: Counter[str] = Counter()
+    rejected_ids_by_reason: dict[str, list[str]] = {}
+    if selection is not None:
+        for rejection in selection.rejected_candidates:
+            for reason in rejection.reasons:
+                rejection_counter[reason] += 1
+                rejected_ids_by_reason.setdefault(reason, []).append(rejection.candidate_id)
     return {
         "total_candidates": len(candidates),
         "short_candidates": sum(1 for candidate in candidates if candidate.type == "short"),
         "normal_candidates": sum(1 for candidate in candidates if candidate.type == "normal"),
         "candidates_with_transcript_text": sum(1 for candidate in candidates if candidate.transcript_text.strip()),
+        "hard_gate_passed_count": selection.hard_gate_passed_count if selection is not None else 0,
+        "hard_gate_rejected_count": selection.hard_gate_rejected_count if selection is not None else 0,
+        "selected_above_threshold_count": selection.selected_above_threshold_count if selection is not None else 0,
+        "selected_below_threshold_backfill_count": (
+            selection.selected_below_threshold_backfill_count if selection is not None else 0
+        ),
         "min_duration": duration_stats["min"],
         "max_duration": duration_stats["max"],
         "avg_duration": duration_stats["avg"],
@@ -146,6 +189,22 @@ def build_candidate_summary(
         "min_final_score": final_score_stats["min"],
         "max_final_score": final_score_stats["max"],
         "avg_final_score": final_score_stats["avg"],
+        "p50_final_score": _percentile(final_scores, 0.50),
+        "p75_final_score": _percentile(final_scores, 0.75),
+        "p90_final_score": _percentile(final_scores, 0.90),
+        "p95_final_score": _percentile(final_scores, 0.95),
+        "top_selected_candidates": [
+            _candidate_summary_item(candidate)
+            for candidate in sorted(selected, key=lambda item: _score(item) or 0.0, reverse=True)[:10]
+        ],
+        "top_rejected_candidates_by_reason": [
+            {
+                "reason": reason,
+                "count": count,
+                "candidate_ids": rejected_ids_by_reason.get(reason, [])[:10],
+            }
+            for reason, count in rejection_counter.most_common(10)
+        ],
     }
 
 
@@ -223,6 +282,12 @@ def _selected_item(candidate: Candidate, output_paths: dict[str, dict[str, str |
         "type": candidate.type,
         "duration": _round(candidate.duration),
         "score": _round(_score(candidate)),
+        "rule_score": _round(candidate.rule_score),
+        "final_score": _round(_score(candidate)),
+        "hard_gate_passed": candidate.hard_gate_passed,
+        "below_quality_threshold": candidate.below_quality_threshold,
+        "quality_warning": candidate.quality_warning,
+        "selection_reason": candidate.selection_reason,
         "output_paths": output_paths.get(candidate.id, {}),
     }
 
@@ -238,9 +303,14 @@ def build_selected_clips_summary(
     return {
         "selected_normal_count": len(normal),
         "selected_short_count": len(shorts),
+        "selected_above_threshold_count": selection.selected_above_threshold_count if selection is not None else 0,
+        "selected_below_threshold_backfill_count": (
+            selection.selected_below_threshold_backfill_count if selection is not None else 0
+        ),
         "selected_ids": [candidate.id for candidate in selected],
         "selected_durations": {candidate.id: _round(candidate.duration) for candidate in selected},
         "selected_scores": {candidate.id: _round(_score(candidate)) for candidate in selected},
+        "selection_reasons": {candidate.id: candidate.selection_reason for candidate in selected},
         "output_paths": output_paths,
         "normal": [_selected_item(candidate, output_paths) for candidate in normal],
         "shorts": [_selected_item(candidate, output_paths) for candidate in shorts],
@@ -270,7 +340,12 @@ def write_generation_summaries(
             used_fixture_transcript=used_fixture_transcript,
         ),
         AUDIO_FEATURE_SUMMARY_FILENAME: build_audio_feature_summary(audio_features),
-        CANDIDATE_SUMMARY_FILENAME: build_candidate_summary(normal_candidates, short_candidates, scored_candidates),
+        CANDIDATE_SUMMARY_FILENAME: build_candidate_summary(
+            normal_candidates,
+            short_candidates,
+            scored_candidates,
+            selection=selection,
+        ),
         REJECTION_SUMMARY_FILENAME: build_rejection_summary(selection, normal_result, short_result),
         SELECTED_CLIPS_SUMMARY_FILENAME: build_selected_clips_summary(selection, exports),
     }

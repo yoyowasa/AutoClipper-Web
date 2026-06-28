@@ -27,6 +27,7 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.normal_max_duration == 600.0
     assert args.short_min_duration == 20.0
     assert args.short_max_duration == 75.0
+    assert args.selection_policy == "fill_requested"
 
     false_args = script.parse_args(["--video", "spoken.mp4", "--burn-subtitles", "false"])
     assert false_args.burn_subtitles is False
@@ -56,6 +57,8 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "15",
             "--short-max-duration",
             "45",
+            "--selection-policy",
+            "strict_quality",
             "--no-burn-subtitles",
         ]
     )
@@ -69,6 +72,7 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["normalMaxDuration"] == 60.0
     assert settings["shortMinDuration"] == 15.0
     assert settings["shortMaxDuration"] == 45.0
+    assert settings["selectionPolicy"] == "strict_quality"
     assert settings["burnSubtitles"] is False
     assert settings["profile"] == "talk"
 

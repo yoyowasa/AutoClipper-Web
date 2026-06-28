@@ -47,6 +47,8 @@ def summary_line(filename: str, payload: Any) -> str:
             f"normal={_value(payload, 'normal_candidates')} "
             f"short={_value(payload, 'short_candidates')} "
             f"with_text={_value(payload, 'candidates_with_transcript_text')} "
+            f"hard_passed={_value(payload, 'hard_gate_passed_count')} "
+            f"backfill={_value(payload, 'selected_below_threshold_backfill_count')} "
             f"avg_duration={_value(payload, 'avg_duration')} "
             f"avg_final_score={_value(payload, 'avg_final_score')}"
         )
@@ -63,6 +65,7 @@ def summary_line(filename: str, payload: Any) -> str:
         return (
             f"normal={_value(payload, 'selected_normal_count')} "
             f"short={_value(payload, 'selected_short_count')} "
+            f"backfill={_value(payload, 'selected_below_threshold_backfill_count')} "
             f"ids={selected_ids}"
         )
     return ", ".join(f"{key}={value}" for key, value in sorted(payload.items())[:6])

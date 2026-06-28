@@ -106,3 +106,46 @@ def evaluate_quality_gate(
         final_score=round(final_score, 6),
         incomplete_penalty=round(incomplete_penalty, 6),
     )
+
+
+def evaluate_hard_gate(
+    candidate: Candidate,
+    settings: QualityGateSettings | None = None,
+    audio_features: AudioFeatures | dict[str, Any] | None = None,
+    silence_segments: Sequence[SilenceSegment] | None = None,
+) -> QualityGateResult:
+    parsed_settings = settings or QualityGateSettings()
+    silence_ratio, speech_density = _candidate_audio_quality(
+        candidate,
+        audio_features=audio_features,
+        silence_segments=silence_segments,
+    )
+    final_score = effective_final_score(candidate)
+    incomplete_penalty = incomplete_boundary_penalty(candidate.transcript_text)
+    reasons: list[str] = []
+
+    if not candidate.transcript_text.strip():
+        reasons.append("no_transcript_text")
+    if candidate.duration <= 0 or candidate.end <= candidate.start:
+        reasons.append("invalid_duration")
+    if parsed_settings.reject_model_rejected_candidates and candidate.should_use is False:
+        reasons.append("model_rejected")
+    if silence_ratio > parsed_settings.max_silence_ratio:
+        reasons.append("max_silence_ratio")
+    if speech_density < parsed_settings.min_speech_density:
+        reasons.append("too_little_speech")
+    if (
+        parsed_settings.reject_incomplete_sentence
+        and incomplete_penalty > parsed_settings.incomplete_penalty_threshold
+    ):
+        reasons.append("incomplete_sentence")
+
+    return QualityGateResult(
+        candidate_id=candidate.id,
+        passed=not reasons,
+        reasons=reasons,
+        silence_ratio=round(silence_ratio, 6),
+        speech_density=round(speech_density, 6),
+        final_score=round(final_score, 6),
+        incomplete_penalty=round(incomplete_penalty, 6),
+    )

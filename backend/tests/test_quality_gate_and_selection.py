@@ -8,7 +8,7 @@ from app.candidates.select_candidates import (
     select_and_write_candidates,
     select_candidates,
 )
-from app.scoring.quality_gate import QualityGateSettings, evaluate_quality_gate
+from app.scoring.quality_gate import QualityGateSettings, evaluate_hard_gate, evaluate_quality_gate
 
 
 def make_candidate(
@@ -60,6 +60,70 @@ def test_quality_gate_rejects_silence_low_speech_incomplete_and_low_score() -> N
         "low_final_score",
         "incomplete_sentence",
     ]
+
+
+def test_hard_gate_does_not_reject_low_final_score() -> None:
+    candidate = make_candidate(
+        "low_score",
+        "normal",
+        0.0,
+        60.0,
+        "Complete but low scoring normal candidate.",
+        final_score=35.0,
+    )
+    result = evaluate_hard_gate(candidate, settings=QualityGateSettings(min_final_score=60.0))
+
+    assert result.passed is True
+    assert "low_final_score" not in result.reasons
+
+
+def test_fill_requested_backfills_below_min_final_score_with_metadata() -> None:
+    candidates = [
+        make_candidate("normal_low_best", "normal", 0.0, 60.0, "Complete low score one.", final_score=45.0),
+        make_candidate("normal_low_next", "normal", 70.0, 130.0, "Complete low score two.", final_score=35.0),
+    ]
+
+    selection = select_candidates(
+        candidates,
+        settings={
+            "normalClipCount": 1,
+            "shortCount": 0,
+            "minFinalScore": 60.0,
+        },
+    )
+
+    assert [candidate.id for candidate in selection.normal_clips] == ["normal_low_best"]
+    selected = selection.normal_clips[0]
+    assert selected.hard_gate_passed is True
+    assert selected.below_quality_threshold is True
+    assert selected.quality_warning == "below_min_final_score"
+    assert selected.selection_reason == "backfill_below_quality_threshold"
+    assert selection.hard_gate_passed_count == 2
+    assert selection.hard_gate_rejected_count == 0
+    assert selection.selected_above_threshold_count == 0
+    assert selection.selected_below_threshold_backfill_count == 1
+    assert selection.rejected_candidates == []
+
+
+def test_strict_quality_preserves_low_score_rejection() -> None:
+    candidates = [
+        make_candidate("normal_low", "normal", 0.0, 60.0, "Complete low score.", final_score=45.0),
+    ]
+
+    selection = select_candidates(
+        candidates,
+        settings={
+            "normalClipCount": 1,
+            "shortCount": 0,
+            "minFinalScore": 60.0,
+            "selectionPolicy": "strict_quality",
+        },
+    )
+
+    assert selection.normal_clips == []
+    assert selection.rejected_candidates[0].candidate_id == "normal_low"
+    assert selection.rejected_candidates[0].reasons == ["low_final_score"]
+    assert selection.selection_policy == "strict_quality"
 
 
 def test_selection_refills_rejected_candidates_and_separates_types() -> None:
@@ -129,5 +193,8 @@ def test_select_and_write_candidates_saves_selected_clips_json(tmp_path: Path) -
 
     assert output_path == tmp_path / "selected_clips.json"
     assert payload["normalClips"][0]["id"] == "normal"
+    assert payload["normalClips"][0]["hard_gate_passed"] is True
+    assert payload["normalClips"][0]["below_quality_threshold"] is False
+    assert payload["normalClips"][0]["selection_reason"] == "above_quality_threshold"
     assert payload["shorts"][0]["id"] == "short"
     assert payload["rejectedCandidates"] == []

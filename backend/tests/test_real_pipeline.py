@@ -82,10 +82,8 @@ def fake_transcript() -> list[TranscriptSegment]:
 
 def short_spoken_transcript() -> list[TranscriptSegment]:
     text = (
-        "why automation teams should test every upload before launch. "
-        "how a simple checklist catches broken audio and missing output files. "
-        "the important lesson is to keep the workflow measurable and repeatable. "
-        "before publishing the final result, confirm the transcript, candidates, render, and download."
+        "ordinary process notes describe plain steps for a calm internal update. "
+        "the speaker continues with simple context and finishes the sentence cleanly."
     )
     return [TranscriptSegment(start=0.0, end=60.0, text=text)]
 
@@ -261,8 +259,6 @@ def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_d
                 "shortCount": 0,
                 "normalMinDuration": 20,
                 "normalMaxDuration": 60,
-                "minFinalScore": 0,
-                "rejectIncompleteSentence": False,
                 "useOpenAIScoring": False,
                 "burnSubtitles": False,
             },
@@ -322,9 +318,17 @@ def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_d
     job_dir = storage.outputs / created["jobId"]
     candidate_summary = json.loads((job_dir / "candidate_summary.json").read_text(encoding="utf-8"))
     assert candidate_summary["normal_candidates"] > 0
+    assert candidate_summary["selected_below_threshold_backfill_count"] == 1
     selected_summary = json.loads((job_dir / "selected_clips_summary.json").read_text(encoding="utf-8"))
     assert selected_summary["selected_normal_count"] == 1
     assert selected_summary["selected_short_count"] == 0
+    assert selected_summary["selected_below_threshold_backfill_count"] == 1
+    selected_payload = json.loads((job_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    selected_normal = selected_payload["normalClips"][0]
+    assert selected_normal["hard_gate_passed"] is True
+    assert selected_normal["below_quality_threshold"] is True
+    assert selected_normal["quality_warning"] == "below_min_final_score"
+    assert selected_normal["selection_reason"] == "backfill_below_quality_threshold"
 
 
 def test_real_pipeline_openai_failure_falls_back_to_rule_scoring(client: TestClient) -> None:

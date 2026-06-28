@@ -64,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--normal-max-duration", type=positive_float, default=600.0)
     parser.add_argument("--short-min-duration", type=positive_float, default=20.0)
     parser.add_argument("--short-max-duration", type=positive_float, default=75.0)
+    parser.add_argument("--selection-policy", default="fill_requested", choices=["fill_requested", "strict_quality"])
     return parser
 
 
@@ -95,6 +96,7 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "normalMaxDuration": args.normal_max_duration,
         "shortMinDuration": args.short_min_duration,
         "shortMaxDuration": args.short_max_duration,
+        "selectionPolicy": args.selection_policy,
         "burnSubtitles": bool(args.burn_subtitles),
         "shortLayout": "auto",
         "useOpenAIScoring": use_openai_scoring,

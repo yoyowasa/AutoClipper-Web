@@ -1134,3 +1134,57 @@ completed / failed job ごとに生成診断 summary JSON を `storage/outputs/{
 ### 未解決事項
 
 - 実話者60秒動画での runtime E2E は未実施。60秒 normal clip 生成は fake dependency pipeline test で確認済み。
+
+## 2026-06-29 Task 23 Separate Hard Gate and Soft Score Selection
+
+### 目的
+
+客観的な hard gate と score 閾値による soft selection を分離し、default では `low_final_score` だけで全候補を hard reject しないようにする。
+
+### 変更ファイル
+
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/candidates/select_candidates.py`
+- `backend/app/jobs/summaries.py`
+- `backend/app/schemas.py`
+- `backend/app/scoring/quality_gate.py`
+- `backend/tests/test_api_routes.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `backend/tests/test_quality_gate_and_selection.py`
+- `backend/tests/test_real_pipeline.py`
+- `frontend/components/SettingsPanel.tsx`
+- `frontend/lib/types.ts`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `evaluate_hard_gate()` を追加し、default policy では `low_final_score` を hard rejection から除外。
+- `selectionPolicy` を追加。default は `fill_requested`、strict は `strict_quality`。
+- `fill_requested` では threshold 以上を優先し、不足分を hard gate 通過候補から `final_score` 順で backfill。
+- backfill した selected clip に `below_quality_threshold=true`、`quality_warning=below_min_final_score`、`selection_reason=backfill_below_quality_threshold` を保存。
+- `selected_clips.json`、`candidate_summary.json`、`selected_clips_summary.json` に hard gate / threshold / backfill diagnostics を追加。
+- frontend advanced settings と `scripts/e2e_real_video.py --selection-policy` を追加。
+- silent audio / transcript usability / existing quality gates は変更なし。
+
+### 検証結果
+
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_real_video.py .\scripts\e2e_summary.py`: passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_quality_gate_and_selection.py`: 7 passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_api_routes.py .\backend\tests\test_real_pipeline.py .\backend\tests\test_e2e_real_video_script.py`: 27 passed, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 106 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `npm --workspace frontend run build`: passed。
+- `.\.venv\Scripts\python .\scripts\e2e_sample_video.py --start`: E2E PASSED。job `job_75ecebfd11664a2ba022ff6a3982f7ba`、short `1080x1920`。
+- `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Desktop\bandicam 2026-06-28 23-06-52-866.mp4' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --timeout 1800`: REAL VIDEO E2E PASSED。job `job_b8a594d8310d4f70b44f6f4efee84c8a`、fixture transcript disabled、transcript 11 segments / 324 chars、normal MP4 `1632x912`。
+- job `job_b8a594d8310d4f70b44f6f4efee84c8a`: `selected_clips.json` で `hard_gate_passed=true`、`below_quality_threshold=true`、`quality_warning=below_min_final_score`、`selection_reason=backfill_below_quality_threshold` を確認。
+- strict policy expected failure: `--selection-policy strict_quality` job `job_1001ae473e864d8d86704d862bfda698`。hard gate passed 564、`low_final_score=278`、selected 0、script exit code 1。
+
+### 未解決事項
+
+- `fill_requested` は出力数を優先する policy。低 score backfill の品質改善は scoring / candidate generation の別 task。
+- この PowerShell セッションでは Docker が PATH に無かったため、検証時は `C:\Program Files\Docker\Docker\resources\bin` を一時追加して実行した。

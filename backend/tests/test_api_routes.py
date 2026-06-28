@@ -142,6 +142,7 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["normalMaxDuration"] == 600.0
         assert job.settings_json["shortMinDuration"] == 20.0
         assert job.settings_json["shortMaxDuration"] == 75.0
+        assert job.settings_json["selectionPolicy"] == "fill_requested"
 
 
 def test_create_job_persists_advanced_duration_settings(client: TestClient) -> None:
@@ -161,6 +162,7 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "normalMaxDuration": 60,
                 "shortMinDuration": 15,
                 "shortMaxDuration": 45,
+                "selectionPolicy": "strict_quality",
                 "minFinalScore": 0,
             },
         },
@@ -175,6 +177,7 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["normalMaxDuration"] == 60.0
         assert job.settings_json["shortMinDuration"] == 15.0
         assert job.settings_json["shortMaxDuration"] == 45.0
+        assert job.settings_json["selectionPolicy"] == "strict_quality"
         assert job.settings_json["minFinalScore"] == 0
 
 
@@ -206,6 +209,7 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["normalMaxDuration"]["default"] == 600.0
     assert properties["shortMinDuration"]["default"] == 20.0
     assert properties["shortMaxDuration"]["default"] == 75.0
+    assert properties["selectionPolicy"]["default"] == "fill_requested"
 
 
 def test_results_zip_download_and_export_download(client: TestClient) -> None:

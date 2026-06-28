@@ -25,6 +25,7 @@ ExportType = Literal["normal", "short"]
 ClipMode = Literal["low_cost", "fast", "high_quality"]
 ClipProfile = Literal["auto", "talk", "gameplay", "lecture"]
 ShortLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
+SelectionPolicy = Literal["fill_requested", "strict_quality"]
 
 
 class VideoRead(BaseModel):
@@ -58,6 +59,7 @@ class JobSettings(BaseModel):
     burn_subtitles: bool = Field(default=True, alias="burnSubtitles")
     normalize_audio: bool = Field(default=False, alias="normalizeAudio")
     short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
+    selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
     use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")
     e2e_fixture_transcript: bool = Field(default=False, alias="e2eFixtureTranscript")
 

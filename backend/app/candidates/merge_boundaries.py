@@ -29,6 +29,10 @@ class Candidate(BaseModel):
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
     reject_reason: str | None = None
+    hard_gate_passed: bool | None = None
+    below_quality_threshold: bool | None = None
+    quality_warning: str | None = None
+    selection_reason: str | None = None
 
     @model_validator(mode="after")
     def validate_range(self) -> "Candidate":
