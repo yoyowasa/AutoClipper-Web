@@ -10,6 +10,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - Git repository 初期化と GitHub remote 接続完了。
 - GitHub Actions backend ruff F401 修正完了。
 - Docker Desktop 導入と docker compose 起動検証完了。
+- Task 17 Runtime verification and real video E2E hardening の実装完了。
 - 初期 FastAPI backend data model / API routes の実装完了。
 - RQ worker と real AutoClipper pipeline の実装完了。
 - Next.js frontend upload flow の実装完了。
@@ -53,6 +54,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 2026-06-28: GitHub Actions CI、backend ruff、frontend build、Codex運用ルールを追加。
 - 2026-06-28: `OPENAI_API_KEY` を backend / worker コンテナへ渡す docker compose 設定を追加。
 - 2026-06-28: Docker Desktop を導入し、`docker compose up -d --build` で backend / frontend / redis / worker 起動を確認。
+- 2026-06-28: `scripts/smoke_runtime.py` と runtime README を追加し、Docker runtime / ffmpeg / ffprobe / shared storage smoke を実装。
 
 ## 修正履歴
 
@@ -865,3 +867,44 @@ Windows環境へDocker Desktopを導入し、AutoClipper Web の docker compose 
 ### 未解決事項
 
 - 実サンプル動画を使ったworker E2Eは未実施。
+
+## 2026-06-28 Task 17 Runtime verification and real video E2E hardening
+
+### 目的
+
+docker compose runtime、backend/worker の処理バイナリ、共有DB/storage、実動画smoke導線を検証可能にする。
+
+### 変更ファイル
+
+- `scripts/smoke_runtime.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `scripts/smoke_runtime.py` を追加。
+- smoke script で frontend / backend / worker / redis の起動状態を検証。
+- backend `/health` と frontend HTTP 200 を検証。
+- backend / worker の `DATABASE_URL` と `/app/storage` 配下 paths が一致することを検証。
+- backend で uploads / temp / outputs に marker を作成し、worker から読めることを検証。
+- backend / worker 内の `ffmpeg` / `ffprobe` を検証。
+- backend で1秒のMP4を生成し、worker から同じMP4を `ffprobe` できることを検証。
+- README を現行v1実装に合わせて更新し、docker compose、health、worker、upload、outputs、troubleshooting、real-video E2Eの実行手順を追記。
+
+### 検証結果
+
+- `docker compose up -d --build`: success。
+- `.\.venv\Scripts\python .\scripts\smoke_runtime.py`: SMOKE PASSED。
+- backend / worker: `ffmpeg version 7.1.5-0+deb13u1`。
+- backend / worker: `ffprobe version 7.1.5-0+deb13u1`。
+- generated MP4 probe: backend `128,72`、worker duration `1.000000`。
+- `.\.venv\Scripts\python -m py_compile .\scripts\smoke_runtime.py`: passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 89 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `npm --workspace frontend run build`: passed。
+- `git diff --check`: whitespace errorなし。
+
+### 未解決事項
+
+- 実サンプル動画を使った完了job E2Eは未実施。tone-only smoke video は upload/probe 用で、speech transcript によるclip生成保証用ではない。

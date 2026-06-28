@@ -1,22 +1,34 @@
 # AutoClipper Web
 
-AutoClipper Web is a full-auto video clipping web app scaffold.
+AutoClipper Web is a full-auto video clipping web app.
 
-This repository currently contains only the Task 01 foundation:
+The v1 flow is:
+
+- upload a long video
+- create a background job
+- analyze/transcribe/score/select clip candidates
+- render normal clips and 9:16 shorts with subtitles
+- download generated MP4 files or a ZIP
+
+Manual editing, approve/reject review flows, auth, billing, and social posting are out of scope for v1.
+
+## Stack
 
 - Frontend: Next.js + TypeScript + Tailwind CSS
 - Backend: FastAPI
-- Queue dependency: Redis service in Docker Compose
-- Storage directories for uploads, temporary files, and outputs
-
-Real video processing is intentionally not implemented yet.
+- Worker: RQ
+- Queue: Redis
+- Database: SQLite
+- Processing: FFmpeg / ffprobe, faster-whisper, optional OpenAI scoring
+- Storage: local filesystem under `storage/`
 
 ## Requirements
 
 - Docker Desktop
-- Docker Compose v2
+- Docker Compose
+- Python 3.11+ only if you want to run local tests or `scripts/smoke_runtime.py` from the host
 
-## Local Setup
+## Docker Compose Runtime
 
 Copy the example environment file if you want local overrides:
 
@@ -27,16 +39,44 @@ Copy-Item .env.example .env
 Start all services:
 
 ```powershell
-docker compose up --build
+docker compose up -d --build
 ```
 
-Open the frontend:
+Show service status:
 
-```text
-http://localhost:3000
+```powershell
+docker compose ps
 ```
 
-Check the backend health endpoint:
+Expected services:
+
+- `frontend`: `http://localhost:3000`
+- `backend`: `http://localhost:8000`
+- `worker`: RQ worker process
+- `redis`: queue backend
+
+Stop all services:
+
+```powershell
+docker compose down
+```
+
+Follow logs:
+
+```powershell
+docker compose logs -f backend frontend worker redis
+```
+
+Run or restart only the worker:
+
+```powershell
+docker compose up -d worker
+docker compose logs -f worker
+```
+
+## Health Checks
+
+Backend:
 
 ```powershell
 Invoke-RestMethod http://localhost:8000/health
@@ -48,49 +88,132 @@ Expected response:
 {"status":"ok"}
 ```
 
-The API health endpoint is also available at:
+API health endpoint:
 
-```text
-http://localhost:8000/api/health
+```powershell
+Invoke-RestMethod http://localhost:8000/api/health
 ```
 
-## Services
+Frontend:
 
-- `frontend`: Next.js app on port `3000`
-- `backend`: FastAPI app on port `8000`
-- `worker`: RQ worker for dummy AutoClipper jobs
-- `redis`: Redis on port `6379`
-
-## Repository Layout
-
-```text
-.
-├── frontend/
-│   └── Next.js app
-├── backend/
-│   └── FastAPI app
-├── storage/
-│   ├── uploads/
-│   ├── temp/
-│   └── outputs/
-├── docker-compose.yml
-├── .env.example
-├── AGENTS.md
-└── STATUS.md
+```powershell
+Invoke-WebRequest http://localhost:3000 -UseBasicParsing
 ```
 
-## Development Notes
+## Runtime Smoke Test
 
-- Do not run video processing inside HTTP requests.
-- Do not hardcode storage paths outside backend configuration or storage modules added later.
-- Keep v1 scope focused on upload, background job flow, generated clips, subtitles, and ZIP export.
-- Manual editing, authentication, billing, and social posting are out of scope for v1.
+After `docker compose up -d --build`, run:
 
-## CI
+```powershell
+python scripts/smoke_runtime.py
+```
 
-GitHub Actions workflow: `.github/workflows/ci.yml`
+The smoke test verifies:
 
-Backend checks:
+- `frontend`, `backend`, `worker`, and `redis` are running
+- `GET /health` returns ok
+- the frontend is reachable
+- backend and worker use the same SQLite URL
+- backend and worker share `/app/storage/uploads`, `/app/storage/temp`, and `/app/storage/outputs`
+- `ffmpeg` exists in backend and worker containers
+- `ffprobe` exists in backend and worker containers
+- a tiny generated MP4 can be created and probed inside the runtime container
+- the worker can see and probe the same generated MP4 via shared storage
+
+Keep the generated MP4 for manual upload testing:
+
+```powershell
+python scripts/smoke_runtime.py --keep-test-video
+```
+
+Generated file:
+
+```text
+storage/temp/smoke_runtime/smoke.mp4
+```
+
+## Upload A Small Test Video
+
+With the app running, open:
+
+```text
+http://localhost:3000/upload
+```
+
+For API-only upload using the smoke-generated MP4:
+
+```powershell
+python scripts/smoke_runtime.py --keep-test-video
+curl.exe -F "file=@storage/temp/smoke_runtime/smoke.mp4;type=video/mp4" http://localhost:8000/api/videos/upload
+```
+
+The upload response includes `videoId`.
+
+Create a job:
+
+```powershell
+curl.exe -H "Content-Type: application/json" -d '{"videoId":"VIDEO_ID_FROM_UPLOAD","settings":{}}' http://localhost:8000/api/jobs
+```
+
+Poll job status:
+
+```powershell
+curl.exe http://localhost:8000/api/jobs/JOB_ID_FROM_CREATE
+```
+
+Read results:
+
+```powershell
+curl.exe http://localhost:8000/api/jobs/JOB_ID_FROM_CREATE/results
+```
+
+For a full real-content E2E, use a short video that has audible speech. A generated tone-only smoke video is useful for upload/probe checks, but may not produce usable clips because candidate generation depends on transcript and speech features.
+
+## Storage
+
+Host paths:
+
+```text
+storage/uploads
+storage/temp
+storage/outputs
+storage/autoclipper.db
+```
+
+Container paths used by both backend and worker:
+
+```text
+/app/storage/uploads
+/app/storage/temp
+/app/storage/outputs
+/app/storage/autoclipper.db
+```
+
+`docker-compose.yml` mounts the same host `./storage` directory into backend and worker as `/app/storage`.
+
+## Runtime Requirements Inside Containers
+
+Backend and worker are built from `backend/Dockerfile`.
+
+The Dockerfile installs:
+
+```text
+ffmpeg
+ffprobe
+```
+
+Verify manually:
+
+```powershell
+docker compose exec backend ffmpeg -version
+docker compose exec backend ffprobe -version
+docker compose exec worker ffmpeg -version
+docker compose exec worker ffprobe -version
+```
+
+## Local Tests
+
+Backend:
 
 ```powershell
 cd backend
@@ -99,7 +222,7 @@ ruff check .
 pytest
 ```
 
-Frontend checks:
+Frontend:
 
 ```powershell
 npm ci
@@ -109,3 +232,55 @@ npm --workspace frontend run build
 ```
 
 CI runs on pull requests and pushes to `main`.
+
+## Troubleshooting
+
+Docker command not found:
+
+- Restart the terminal after installing Docker Desktop.
+- Verify `C:\Program Files\Docker\Docker\resources\bin` is on PATH.
+
+Docker daemon not running:
+
+```powershell
+Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"
+docker info
+```
+
+WSL not ready:
+
+```powershell
+wsl -l -v
+```
+
+Expected Docker distro:
+
+```text
+docker-desktop    Running    2
+```
+
+Port already in use:
+
+- backend uses `8000`
+- frontend uses `3000`
+- redis uses `6379`
+
+Find the process and stop it, or change the compose port mapping.
+
+Redis or worker issues:
+
+```powershell
+docker compose logs -f redis worker
+docker compose restart redis worker
+```
+
+Backend cannot find files:
+
+- Confirm backend and worker both use `STORAGE_ROOT=/app/storage`.
+- Confirm `docker compose ps` shows both services running from the same compose project.
+- Run `python scripts/smoke_runtime.py` to verify shared storage.
+
+OpenAI scoring failures:
+
+- Set `OPENAI_API_KEY` in `.env` for OpenAI scoring.
+- If OpenAI scoring fails, the worker falls back to rule scoring where possible.
