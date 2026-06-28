@@ -825,8 +825,10 @@ GitHub Actions backend job の `ruff check .` で検出された F401 unused imp
 - `.\.venv\Scripts\python -m pytest .\backend`: 89 passed, 1 skipped, 1 warning。
 - `.\.venv\Scripts\python -m py_compile .\backend\app\audio\volume_features.py .\backend\app\render\render_short.py .\backend\app\video\black_screen.py`: passed。
 - `git diff --check`: whitespace errorなし。
-- local `ruff check .`: Windows application control policy により実行不可のため、GitHub Actionsで確認予定。
+- GitHub Actions CI run `28318268336`: backend / frontend passed。
+- backend `ruff check .`: GitHub Actions上でpassed。
+- local `ruff check .`: Windows application control policy により実行不可。
 
 ### 未解決事項
 
-- local ruff 実行は Windows application control policy で未検証。
+- local ruff 実行は Windows application control policy で未検証。CI上ではpassed。
