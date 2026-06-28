@@ -140,7 +140,7 @@ def _openai_model_setting(settings: dict[str, Any]) -> str:
     value = settings.get("openaiModel") or settings.get("openai_model")
     if isinstance(value, str) and value.strip():
         return value.strip()
-    return "gpt-4o-mini"
+    return "gpt-5.5"
 
 
 def _e2e_fixture_transcript_enabled(settings: dict[str, Any]) -> bool:

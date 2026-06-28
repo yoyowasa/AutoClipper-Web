@@ -303,7 +303,7 @@ python scripts/e2e_real_video.py `
   --mode high_quality `
   --use-openai-scoring true `
   --openai-candidate-limit 20 `
-  --openai-model gpt-4o-mini `
+  --openai-model gpt-5.5 `
   --timeout 1800
 ```
 
@@ -381,7 +381,7 @@ Troubleshooting:
     "selectionPolicy": "fill_requested",
     "useOpenAIScoring": false,
     "openaiCandidateLimit": 40,
-    "openaiModel": "gpt-4o-mini",
+    "openaiModel": "gpt-5.5",
     "openaiFallbackToRuleScore": true
   }
 }
@@ -396,7 +396,7 @@ Production-safe defaults remain:
 - `selectionPolicy`: `fill_requested`
 - `useOpenAIScoring`: `false`
 - `openaiCandidateLimit`: `40`
-- `openaiModel`: `gpt-4o-mini`
+- `openaiModel`: `gpt-5.5`
 - `openaiFallbackToRuleScore`: `true`
 
 For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.

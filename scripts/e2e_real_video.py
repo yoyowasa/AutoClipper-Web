@@ -84,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--selection-policy", default="fill_requested", choices=["fill_requested", "strict_quality"])
     parser.add_argument("--use-openai-scoring", nargs="?", const=True, default=None, type=parse_bool)
     parser.add_argument("--openai-candidate-limit", type=non_negative_int, default=20)
-    parser.add_argument("--openai-model", default="gpt-4o-mini")
+    parser.add_argument("--openai-model", default="gpt-5.5")
     parser.add_argument("--openai-fallback-to-rule-score", nargs="?", const=True, default=True, type=parse_bool)
     parser.add_argument("--no-openai-fallback-to-rule-score", dest="openai_fallback_to_rule_score", action="store_false")
     return parser

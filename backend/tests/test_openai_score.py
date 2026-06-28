@@ -233,7 +233,7 @@ def test_scorer_summary_reports_counts_and_latency() -> None:
         rule_score_only_candidates=80,
     )
 
-    assert summary["model"] == "gpt-4o-mini"
+    assert summary["model"] == "gpt-5.5"
     assert summary["candidate_limit"] == 20
     assert summary["candidates_considered"] == 100
     assert summary["candidates_sent_to_openai"] == 1

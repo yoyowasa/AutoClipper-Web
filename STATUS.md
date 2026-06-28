@@ -1333,3 +1333,48 @@ completed / failed job ごとに生成診断 summary JSON を `storage/outputs/{
 - 今回は API path validation。score quality tuning は未実施。
 - OpenAI scoring 対象は cost safety のため上位候補に制限。今回の selected normal は candidate limit 外の rule-score backfill。
 - phase timing は status polling 由来の近似値。短時間 phase は `n/a` になる場合がある。
+
+## 2026-06-29 OpenAI scoring default model correction
+
+### 目的
+
+Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品質検証用として弱いため、既定モデルを `gpt-5.5` に修正する。
+
+### 変更ファイル
+
+- `backend/app/schemas.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/scoring/openai_score.py`
+- `scripts/e2e_real_video.py`
+- `backend/tests/test_api_routes.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `backend/tests/test_openai_score.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `JobSettings.openaiModel` default を `gpt-5.5` に変更。
+- worker fallback model を `gpt-5.5` に変更。
+- `OpenAICandidateScorer` default model を `gpt-5.5` に変更。
+- `scripts/e2e_real_video.py --openai-model` default を `gpt-5.5` に変更。
+- README の high_quality E2E 例と Job Settings 例を `gpt-5.5` に更新。
+- 既定値を検証する backend tests を更新。
+
+### 検証結果
+
+- OpenAI `/v1/models` で `gpt-5.5` 利用可能を確認。API key 値は出力せず。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_openai_score.py .\backend\tests\test_e2e_real_video_script.py .\backend\tests\test_api_routes.py`: 35 passed, 1 warning。
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_real_video.py`: passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 114 passed, 1 skipped, 1 warning。
+- high_quality real OpenAI E2E default model check:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Desktop\bandicam 2026-06-28 23-06-52-866.mp4' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --mode high_quality --use-openai-scoring true --openai-candidate-limit 1 --timeout 1800`
+  - result: REAL VIDEO E2E PASSED
+  - job `job_6f5a8709212d4edb9ed10e48455f47e7`
+  - `openai_scoring_summary.json`: model `gpt-5.5`、sent `1`、success `1`、failed `0`、fallback `0`、calls `1`、avg latency `9.661316`
+  - final output: normal MP4 `1632x912`, duration `58.333333s`
+
+### 未解決事項
+
+- 今回は model default 修正。score quality tuning は未実施。

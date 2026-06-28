@@ -30,7 +30,7 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.selection_policy == "fill_requested"
     assert args.use_openai_scoring is None
     assert args.openai_candidate_limit == 20
-    assert args.openai_model == "gpt-4o-mini"
+    assert args.openai_model == "gpt-5.5"
     assert args.openai_fallback_to_rule_score is True
 
     false_args = script.parse_args(["--video", "spoken.mp4", "--burn-subtitles", "false"])

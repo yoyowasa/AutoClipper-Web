@@ -144,7 +144,7 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["shortMaxDuration"] == 75.0
         assert job.settings_json["selectionPolicy"] == "fill_requested"
         assert job.settings_json["openaiCandidateLimit"] == 40
-        assert job.settings_json["openaiModel"] == "gpt-4o-mini"
+        assert job.settings_json["openaiModel"] == "gpt-5.5"
         assert job.settings_json["openaiFallbackToRuleScore"] is True
 
 
@@ -222,7 +222,7 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["shortMaxDuration"]["default"] == 75.0
     assert properties["selectionPolicy"]["default"] == "fill_requested"
     assert properties["openaiCandidateLimit"]["default"] == 40
-    assert properties["openaiModel"]["default"] == "gpt-4o-mini"
+    assert properties["openaiModel"]["default"] == "gpt-5.5"
     assert properties["openaiFallbackToRuleScore"]["default"] is True
 
 

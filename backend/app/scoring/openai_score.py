@@ -206,7 +206,7 @@ class OpenAICandidateScorer:
     def __init__(
         self,
         client: OpenAIClientProtocol | None = None,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5.5",
         cache: OpenAIScoreCache | None = None,
         max_retries: int = 3,
         retry_backoff_seconds: float = 0.25,
