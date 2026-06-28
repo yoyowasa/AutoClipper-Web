@@ -12,6 +12,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - Docker Desktop 導入と docker compose 起動検証完了。
 - Task 17 Runtime verification and real video E2E hardening の実装完了。
 - Task 18 Real sample video E2E validation の実装完了。
+- Task 19 Real spoken-video E2E without fixture transcript の実装完了。
 - 初期 FastAPI backend data model / API routes の実装完了。
 - RQ worker と real AutoClipper pipeline の実装完了。
 - Next.js frontend upload flow の実装完了。
@@ -57,6 +58,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 2026-06-28: Docker Desktop を導入し、`docker compose up -d --build` で backend / frontend / redis / worker 起動を確認。
 - 2026-06-28: `scripts/smoke_runtime.py` と runtime README を追加し、Docker runtime / ffmpeg / ffprobe / shared storage smoke を実装。
 - 2026-06-28: `scripts/generate_sample_video.py` と `scripts/e2e_sample_video.py` を追加し、synthetic MP4 の real runtime E2E 導線を実装。
+- 2026-06-28: `scripts/e2e_real_video.py` を追加し、ユーザー supplied spoken video の faster-whisper E2E 導線を実装。
 
 ## 修正履歴
 
@@ -952,3 +954,42 @@ docker compose runtime、backend/worker の処理バイナリ、共有DB/storage
 ### 未解決事項
 
 - 実話者音声を含むサンプル動画での full transcription E2E は未実施。
+
+## 2026-06-28 Task 19 Real spoken-video E2E without fixture transcript
+
+### 目的
+
+ユーザー supplied の実話者MP4で、fixture transcript を使わず faster-whisper transcription を通すE2E検証導線を作る。
+
+### 変更ファイル
+
+- `scripts/e2e_real_video.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `scripts/e2e_real_video.py` を追加。
+- `--video`、`--backend-url`、`--timeout`、`--normal-count`、`--short-count`、`--mode`、`--profile`、`--burn-subtitles` を受け取る。
+- job settings で `e2eFixtureTranscript=false` を明示。
+- upload、job作成、polling、results取得、ZIP/MP4 download、worker `ffprobe` を実行。
+- `transcript_segments.json` の存在、非空text、最小文字数、fixture marker不在を検証。
+- clips生成時は `selected_clips.json` を検証。
+- clips 0件や failed job の場合、no transcript / no candidates / quality gate rejection / render failure を artifact から分類して失敗する。
+- README に real spoken-video E2E 手順、推奨入力、low-cost初回実行、出力、troubleshooting を追記。
+
+### 検証結果
+
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_real_video.py .\scripts\e2e_sample_video.py .\scripts\generate_sample_video.py .\scripts\smoke_runtime.py`: passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_e2e_real_video_script.py`: 5 passed。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 95 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run build`: passed。
+- `npm --workspace frontend run typecheck`: passed。最初の並列実行では `.next/types` 更新raceで失敗、build後の単独再実行で成功。
+- `.\.venv\Scripts\python .\scripts\e2e_sample_video.py`: E2E PASSED。worker `ffprobe` で downloaded MP4 `1080,1920`。
+
+### 未解決事項
+
+- 実話者動画ファイルは未指定のため、`scripts/e2e_real_video.py --video ...` による実 faster-whisper runtime E2E は未実施。

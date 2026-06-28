@@ -224,6 +224,73 @@ storage/temp/e2e_download.mp4
 storage/temp/e2e_download.zip
 ```
 
+## Real Spoken-Video E2E
+
+Use this when you want to exercise the real faster-whisper transcription path. The input should be:
+
+- 1-3 minutes
+- MP4
+- clear spoken voice
+- audible speech for most of the video
+- not music-only or tone-only
+
+Start the runtime:
+
+```powershell
+docker compose up -d --build
+```
+
+Run the low-cost first pass:
+
+```powershell
+python scripts/e2e_real_video.py --video path\to\spoken_sample.mp4
+```
+
+Useful options:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_sample.mp4 `
+  --normal-count 1 `
+  --short-count 1 `
+  --mode low_cost `
+  --profile talk `
+  --timeout 1800
+```
+
+The script:
+
+- uploads through `POST /api/videos/upload`
+- creates a job through `POST /api/jobs`
+- explicitly sets `e2eFixtureTranscript=false`
+- waits for completion
+- validates `storage/outputs/{job_id}/transcript_segments.json`
+- fails if transcript text is empty, too short, or matches the synthetic fixture marker
+- validates `selected_clips.json` when clips are generated
+- downloads the ZIP
+- downloads generated MP4 files
+- probes downloaded MP4 files through worker `ffprobe`
+- verifies short MP4 files are `1080x1920`
+
+Expected outputs:
+
+```text
+storage/outputs/{job_id}/transcript_segments.json
+storage/outputs/{job_id}/selected_clips.json
+storage/outputs/{job_id}/download.zip
+storage/temp/e2e_real_{job_id}.zip
+storage/temp/e2e_real_{job_id}_*.mp4
+```
+
+Troubleshooting:
+
+- `transcription_empty`: use a clearer spoken sample with audible voice.
+- `no_candidates_found`: use a longer sample, ideally at least 90 seconds if normal clips are requested.
+- `quality gate rejection`: check `selected_clips.json` rejection reasons; the transcript may be too sparse or low scoring.
+- `render failure`: check `render_failures.json` and `docker compose logs worker`.
+- First run can be slow because faster-whisper may download the model.
+- Use `--short-count 1 --normal-count 0` for a shorter first real run on a 1 minute sample.
+
 ## Storage
 
 Host paths:
