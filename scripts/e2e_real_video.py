@@ -17,6 +17,36 @@ from smoke_runtime import ROOT, check_services, compose_exec, docker_env
 
 MIN_TRANSCRIPT_CHARS = 20
 FIXTURE_TRANSCRIPT_MARKER = "Why automation mistakes matter before launch."
+DEFAULT_VALIDATION_PROFILE = "default"
+VALIDATION_PROFILES: dict[str, dict[str, Any]] = {
+    "default": {
+        "timeout": 1800,
+        "normal_count": 1,
+        "short_count": 1,
+        "mode": "low_cost",
+        "normal_min_duration": 90.0,
+        "normal_max_duration": 600.0,
+        "short_min_duration": 20.0,
+        "short_max_duration": 75.0,
+        "selection_policy": "fill_requested",
+    },
+    "30min": {
+        "timeout": 7200,
+        "normal_count": 2,
+        "short_count": 3,
+        "mode": "low_cost",
+        "normal_min_duration": 90.0,
+        "normal_max_duration": 600.0,
+        "short_min_duration": 20.0,
+        "short_max_duration": 75.0,
+        "selection_policy": "fill_requested",
+    },
+}
+REQUIRED_RESULT_ARTIFACTS = [
+    "selected_clips.json",
+    "candidate_summary.json",
+    "selected_clips_summary.json",
+]
 
 
 @dataclass(frozen=True)
@@ -35,9 +65,14 @@ class TimedJobResult:
 
 
 PHASE_END_STATUSES = {
-    "transcribing": ["detecting_scenes", "generating_candidates", "scoring_candidates", "selecting_clips"],
-    "generating_candidates": ["scoring_candidates", "selecting_clips", "rendering_normal_clips", "rendering_shorts"],
-    "scoring_candidates": ["selecting_clips", "rendering_normal_clips", "rendering_shorts", "packaging_zip"],
+    "transcribing": ["detecting_scenes", "generating_candidates", "scoring_candidates", "selecting_clips", "failed"],
+    "detecting_scenes": ["generating_candidates", "scoring_candidates", "selecting_clips", "failed"],
+    "generating_candidates": ["scoring_candidates", "selecting_clips", "rendering_normal_clips", "rendering_shorts", "failed"],
+    "scoring_candidates": ["selecting_clips", "rendering_normal_clips", "rendering_shorts", "packaging_zip", "failed"],
+    "selecting_clips": ["rendering_normal_clips", "rendering_shorts", "packaging_zip", "completed", "failed"],
+    "rendering_normal_clips": ["rendering_shorts", "packaging_zip", "completed", "failed"],
+    "rendering_shorts": ["packaging_zip", "completed", "failed"],
+    "packaging_zip": ["completed", "failed"],
 }
 
 
@@ -70,18 +105,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a real spoken-video E2E without fixture transcript.")
     parser.add_argument("--video", type=Path, required=True, help="Path to an MP4 with clear spoken audio.")
     parser.add_argument("--backend-url", default="http://localhost:8000")
-    parser.add_argument("--timeout", type=int, default=1800, help="Seconds to wait for job completion.")
-    parser.add_argument("--normal-count", type=non_negative_int, default=1)
-    parser.add_argument("--short-count", type=non_negative_int, default=1)
-    parser.add_argument("--mode", default="low_cost", choices=["low_cost", "fast", "high_quality"])
+    parser.add_argument(
+        "--validation-profile",
+        default=DEFAULT_VALIDATION_PROFILE,
+        choices=sorted(VALIDATION_PROFILES),
+        help="Preset E2E defaults. Use 30min for long real-video validation.",
+    )
+    parser.add_argument("--timeout", type=int, default=None, help="Seconds to wait for job completion.")
+    parser.add_argument("--normal-count", type=non_negative_int, default=None)
+    parser.add_argument("--short-count", type=non_negative_int, default=None)
+    parser.add_argument("--mode", default=None, choices=["low_cost", "fast", "high_quality"])
     parser.add_argument("--profile", default="talk", choices=["auto", "talk", "gameplay", "lecture"])
     parser.add_argument("--burn-subtitles", nargs="?", const=True, default=True, type=parse_bool)
     parser.add_argument("--no-burn-subtitles", dest="burn_subtitles", action="store_false")
-    parser.add_argument("--normal-min-duration", type=positive_float, default=90.0)
-    parser.add_argument("--normal-max-duration", type=positive_float, default=600.0)
-    parser.add_argument("--short-min-duration", type=positive_float, default=20.0)
-    parser.add_argument("--short-max-duration", type=positive_float, default=75.0)
-    parser.add_argument("--selection-policy", default="fill_requested", choices=["fill_requested", "strict_quality"])
+    parser.add_argument("--normal-min-duration", type=positive_float, default=None)
+    parser.add_argument("--normal-max-duration", type=positive_float, default=None)
+    parser.add_argument("--short-min-duration", type=positive_float, default=None)
+    parser.add_argument("--short-max-duration", type=positive_float, default=None)
+    parser.add_argument("--selection-policy", default=None, choices=["fill_requested", "strict_quality"])
     parser.add_argument("--use-openai-scoring", nargs="?", const=True, default=None, type=parse_bool)
     parser.add_argument("--openai-candidate-limit", type=non_negative_int, default=20)
     parser.add_argument("--openai-model", default="gpt-5.5")
@@ -90,8 +131,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def apply_validation_profile_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    defaults = VALIDATION_PROFILES[args.validation_profile]
+    for name, value in defaults.items():
+        if getattr(args, name) is None:
+            setattr(args, name, value)
+    return args
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
-    return build_parser().parse_args(argv)
+    return apply_validation_profile_defaults(build_parser().parse_args(argv))
 
 
 def resolve_input_video(video_path: Path) -> Path:
@@ -200,6 +249,11 @@ def runtime_metrics(
             "transcribing",
             PHASE_END_STATUSES["transcribing"],
         ),
+        "scene_detection_time": phase_duration(
+            job_timing.status_times,
+            "detecting_scenes",
+            PHASE_END_STATUSES["detecting_scenes"],
+        ),
         "candidate_generation_time": phase_duration(
             job_timing.status_times,
             "generating_candidates",
@@ -210,6 +264,26 @@ def runtime_metrics(
             "scoring_candidates",
             PHASE_END_STATUSES["scoring_candidates"],
         ),
+        "selection_time": phase_duration(
+            job_timing.status_times,
+            "selecting_clips",
+            PHASE_END_STATUSES["selecting_clips"],
+        ),
+        "normal_render_time": phase_duration(
+            job_timing.status_times,
+            "rendering_normal_clips",
+            PHASE_END_STATUSES["rendering_normal_clips"],
+        ),
+        "short_render_time": phase_duration(
+            job_timing.status_times,
+            "rendering_shorts",
+            PHASE_END_STATUSES["rendering_shorts"],
+        ),
+        "zip_packaging_time": phase_duration(
+            job_timing.status_times,
+            "packaging_zip",
+            PHASE_END_STATUSES["packaging_zip"],
+        ),
         "render_time": render_duration(job_timing.status_times),
         "total_time": total_seconds,
     }
@@ -219,9 +293,13 @@ def print_runtime_metrics(metrics: dict[str, float | None]) -> None:
     print("runtime metrics:")
     print(f"  upload_time={format_seconds(metrics.get('upload_time'))}")
     print(f"  transcription_time={format_seconds(metrics.get('transcription_time'))}")
+    print(f"  scene_detection_time={format_seconds(metrics.get('scene_detection_time'))}")
     print(f"  candidate_generation_time={format_seconds(metrics.get('candidate_generation_time'))}")
     print(f"  scoring_time={format_seconds(metrics.get('scoring_time'))}")
-    print(f"  render_time={format_seconds(metrics.get('render_time'))}")
+    print(f"  selection_time={format_seconds(metrics.get('selection_time'))}")
+    print(f"  normal_render_time={format_seconds(metrics.get('normal_render_time'))}")
+    print(f"  short_render_time={format_seconds(metrics.get('short_render_time'))}")
+    print(f"  zip_packaging_time={format_seconds(metrics.get('zip_packaging_time'))}")
     print(f"  total_time={format_seconds(metrics.get('total_time'))}")
 
 
@@ -242,34 +320,47 @@ def read_summary(output_dir: Path, filename: str) -> dict[str, Any]:
 
 
 def pipeline_metrics(output_dir: Path) -> dict[str, Any]:
+    video_metadata = read_summary(output_dir, "video_metadata.json")
     transcript = read_summary(output_dir, "transcript_summary.json")
     candidates = read_summary(output_dir, "candidate_summary.json")
     selected = read_summary(output_dir, "selected_clips_summary.json")
+    rejections = read_summary(output_dir, "rejection_summary.json")
+    zip_path = output_dir / "download.zip"
     return {
+        "video_duration": video_metadata.get("duration"),
         "transcript_segment_count": transcript.get("segment_count"),
         "total_transcript_text_length": transcript.get("total_text_length"),
+        "total_candidates_count": candidates.get("total_candidates"),
         "short_candidates_count": candidates.get("short_candidates"),
         "normal_candidates_count": candidates.get("normal_candidates"),
         "hard_gate_passed_count": candidates.get("hard_gate_passed_count"),
+        "hard_gate_rejected_count": candidates.get("hard_gate_rejected_count"),
         "selected_normal_count": selected.get("selected_normal_count"),
         "selected_short_count": selected.get("selected_short_count"),
         "backfilled_count": selected.get(
             "selected_below_threshold_backfill_count",
             candidates.get("selected_below_threshold_backfill_count"),
         ),
+        "render_failures_count": rejections.get("render_failure_count"),
+        "zip_size_bytes": zip_path.stat().st_size if zip_path.is_file() else None,
     }
 
 
 def print_pipeline_metrics(metrics: dict[str, Any]) -> None:
     print("pipeline metrics:")
+    print(f"  video_duration={metrics.get('video_duration')}")
     print(f"  transcript_segment_count={metrics.get('transcript_segment_count')}")
     print(f"  total_transcript_text_length={metrics.get('total_transcript_text_length')}")
+    print(f"  total_candidates_count={metrics.get('total_candidates_count')}")
     print(f"  short_candidates_count={metrics.get('short_candidates_count')}")
     print(f"  normal_candidates_count={metrics.get('normal_candidates_count')}")
     print(f"  hard_gate_passed_count={metrics.get('hard_gate_passed_count')}")
+    print(f"  hard_gate_rejected_count={metrics.get('hard_gate_rejected_count')}")
     print(f"  selected_normal_count={metrics.get('selected_normal_count')}")
     print(f"  selected_short_count={metrics.get('selected_short_count')}")
     print(f"  backfilled_count={metrics.get('backfilled_count')}")
+    print(f"  render_failures_count={metrics.get('render_failures_count')}")
+    print(f"  zip_size_bytes={metrics.get('zip_size_bytes')}")
 
 
 def use_openai_scoring(settings: dict[str, Any]) -> bool:
@@ -428,6 +519,13 @@ def validate_selected_artifact(output_dir: Path) -> None:
     print(selected_summary)
 
 
+def validate_required_result_artifacts(output_dir: Path) -> None:
+    missing = [filename for filename in REQUIRED_RESULT_ARTIFACTS if not (output_dir / filename).is_file()]
+    if missing:
+        raise RuntimeError(f"required result artifacts missing: {', '.join(missing)}")
+    print("required artifacts: selected_clips.json, candidate_summary.json, selected_clips_summary.json")
+
+
 def probe_downloaded_mp4(path: Path, env: dict[str, str]) -> ProbeResult:
     container_path = _container_storage_path(path)
     output = compose_exec(
@@ -466,6 +564,8 @@ def validate_output_probe(export: dict[str, Any], path: Path, probe: ProbeResult
     export_type = str(export.get("type", "export"))
     if probe.duration <= 0:
         raise RuntimeError(f"{export_type} output has invalid duration={probe.duration}: {path}")
+    if probe.width <= 0 or probe.height <= 0:
+        raise RuntimeError(f"{export_type} output has invalid dimensions={probe.width}x{probe.height}: {path}")
     if export_type == "short" and (probe.width, probe.height) != (1080, 1920):
         raise RuntimeError(f"short output must be 1080x1920, got {probe.width}x{probe.height}: {path}")
     if export_type != "normal":
@@ -494,7 +594,10 @@ def download_and_probe_outputs(
 
     zip_path = ROOT / "storage" / "temp" / f"e2e_real_{job_id}.zip"
     _download(_absolute_url(backend_url, results["zipDownloadUrl"]), zip_path)
-    print(f"zip: {zip_path}")
+    zip_size = zip_path.stat().st_size if zip_path.is_file() else 0
+    if zip_size <= 0:
+        raise RuntimeError(f"downloaded ZIP is empty or missing: {zip_path}")
+    print(f"zip: {zip_path} ({zip_size} bytes)")
 
     probed: list[tuple[dict[str, Any], Path, ProbeResult]] = []
     for index, export in enumerate(exports, start=1):
@@ -558,6 +661,7 @@ def run_e2e(args: argparse.Namespace) -> int:
 
     output_dir = job_output_dir(job_id)
     validate_transcript_artifact(output_dir)
+    validate_required_result_artifacts(output_dir)
     results = _request_json(f"{args.backend_url}/api/jobs/{job_id}/results")
     exports = [*results.get("normalClips", []), *results.get("shorts", [])]
     if not exports:
@@ -591,6 +695,8 @@ def run_e2e(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     args = parse_args(argv)
     args.backend_url = args.backend_url.rstrip("/")
     try:

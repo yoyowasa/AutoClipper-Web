@@ -1378,3 +1378,108 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 ### 未解決事項
 
 - 今回は model default 修正。score quality tuning は未実施。
+
+## 2026-06-29 Task 26 30-minute real video E2E validation
+
+### 目的
+
+30分級の実発話動画で pipeline stability を検証し、長尺 E2E 用の実行 profile、詳細 runtime metrics、pipeline metrics、artifact 検証を追加する。
+
+### 変更ファイル
+
+- `scripts/e2e_real_video.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `scripts/e2e_real_video.py` に `--validation-profile 30min` を追加。
+  - `normalCount=2`
+  - `shortCount=3`
+  - `normalMinDuration=90`
+  - `normalMaxDuration=600`
+  - `shortMinDuration=20`
+  - `shortMaxDuration=75`
+  - `selectionPolicy=fill_requested`
+  - `mode=low_cost`
+  - `timeout=7200`
+- 既存 default profile は従来値を維持。
+- runtime metrics を拡張。
+  - upload
+  - transcription
+  - scene detection
+  - candidate generation
+  - scoring
+  - selection
+  - normal render
+  - short render
+  - ZIP packaging
+  - total
+- pipeline metrics を拡張。
+  - video duration
+  - transcript segment count / text length
+  - total / normal / short candidates
+  - hard gate passed / rejected
+  - selected normal / short
+  - backfilled
+  - render failures
+  - ZIP size
+- 必須 artifact 検証を追加。
+  - `selected_clips.json`
+  - `candidate_summary.json`
+  - `selected_clips_summary.json`
+- ZIP download の size 検証を追加。
+- normal MP4 の dimension > 0 検証を追加。
+- stdout line buffering を有効化し、長尺実行中の進捗が即時出るように修正。
+- README に 30分 E2E 手順、推奨入力、期待出力、troubleshooting を追加。
+
+### 検証結果
+
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_e2e_real_video_script.py`: 12 passed。
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_real_video.py`: passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 116 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `npm --workspace frontend run build`: passed。
+- synthetic E2E: `.\.venv\Scripts\python .\scripts\e2e_sample_video.py`: E2E PASSED。job `job_8d049214cf784508a0f7718019fa3b94`。
+- short real-video low_cost E2E:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Desktop\bandicam 2026-06-28 23-06-52-866.mp4' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --mode low_cost --timeout 1800`
+  - result: REAL VIDEO E2E PASSED
+  - job `job_f7a9062240f14f53bbfbfe5a64e43aba`
+- OpenAI path validation:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Desktop\bandicam 2026-06-28 23-06-52-866.mp4' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --mode high_quality --use-openai-scoring true --openai-candidate-limit 1 --timeout 1800`
+  - result: REAL VIDEO E2E PASSED
+  - job `job_ab5a6bac005444578797cb91347680e1`
+  - `openai_scoring_summary.json`: model `gpt-5.5`、sent `1`、success `1`、failed `0`、fallback `0`
+- 30-minute real-video low_cost E2E:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video '<30min spoken mp4>' --validation-profile 30min`
+  - result: REAL VIDEO E2E PASSED
+  - job `job_611687fe254f49259a39c0aac4417bfb`
+  - video duration: `1820.735583`
+  - transcript: `1555` segments, `15457` chars
+  - candidates: total `2400`, normal `1200`, short `1200`
+  - hard gate: passed `2400`, rejected `0`
+  - selected: normal `1`, short `3`, backfilled `0`
+  - rejection summary: `high_overlap=1209`
+  - render failures: `0`
+  - ZIP size: `112042483` bytes
+  - normal output: `1280x720`, duration `600.0154s`
+  - short outputs: `1080x1920`, durations `34.533817s`, `33.600233s`, `30.68s`
+  - runtime metrics:
+    - upload `1.922s`
+    - transcription `169.859s`
+    - scene detection `99.281s`
+    - candidate generation `127.735s`
+    - scoring `n/a`
+    - selection `n/a`
+    - normal render `40.453s`
+    - short render `20.375s`
+    - ZIP packaging `4.109s`
+    - total `472.609s`
+
+### 未解決事項
+
+- 30分 E2E では `normalCount=2` を要求したが、high overlap 除外により selected normal は `1`。short は `3` 生成済み。pipeline failure ではないが、通常切り抜き本数をより満たす調整は今後の品質調整対象。
+- いくつかの短時間 phase は polling 間隔内で通過するため `n/a` になる場合がある。

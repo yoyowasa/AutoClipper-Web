@@ -286,6 +286,40 @@ python scripts/e2e_real_video.py `
   --timeout 3600
 ```
 
+For a 30 minute spoken video, use the built-in validation profile. It keeps OpenAI scoring off by default and expands to `normalCount=2`, `shortCount=3`, `normalMinDuration=90`, `normalMaxDuration=600`, `shortMinDuration=20`, `shortMaxDuration=75`, `selectionPolicy=fill_requested`, `mode=low_cost`, and `timeout=7200`.
+
+Recommended input:
+
+- 25-35 minutes
+- MP4
+- clear spoken voice
+- audible speech throughout most of the video
+- not music-only, tone-only, or long silent-screen capture
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_30min_sample.mp4 `
+  --validation-profile 30min
+```
+
+Equivalent explicit command:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_30min_sample.mp4 `
+  --normal-count 2 `
+  --short-count 3 `
+  --normal-min-duration 90 `
+  --normal-max-duration 600 `
+  --short-min-duration 20 `
+  --short-max-duration 75 `
+  --selection-policy fill_requested `
+  --mode low_cost `
+  --timeout 7200
+```
+
+Expected runtime depends on CPU/GPU, disk speed, first-run faster-whisper model download, and render count. Start with the 30 minute profile before enabling OpenAI scoring.
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell
@@ -327,9 +361,10 @@ The script:
 - downloads generated MP4 files
 - probes downloaded MP4 files through worker `ffprobe`
 - verifies short MP4 files are `1080x1920`
-- verifies normal MP4 files have a valid duration close to the export metadata
-- prints runtime metrics: upload, transcription, candidate generation, scoring, render, and total time
-- prints pipeline metrics: transcript length, candidate counts, hard-gate pass count, selected counts, and backfilled count
+- verifies normal MP4 files have valid dimensions and a valid duration close to the export metadata
+- validates `candidate_summary.json`, `selected_clips_summary.json`, and `selected_clips.json`
+- prints runtime metrics: upload, transcription, scene detection, candidate generation, scoring, selection, normal render, short render, ZIP packaging, and total time
+- prints pipeline metrics: video duration, transcript length, candidate counts, hard-gate counts, selected counts, backfilled count, render failure count, and ZIP size
 - validates `openai_scoring_summary.json` when OpenAI scoring is enabled
 - prints diagnostic summary JSON files when they exist
 
@@ -361,6 +396,7 @@ Troubleshooting:
 - OpenAI rate limit / timeout: lower `--openai-candidate-limit`, retry later, or use `--openai-fallback-to-rule-score true`.
 - Structured output validation failure: check `openai_scoring_summary.json` error fields and keep the default strict schema.
 - `render failure`: check `render_failures.json` and `docker compose logs worker`.
+- 30 minute timeout: rerun with a larger `--timeout` if the worker is still making progress in `docker compose logs worker`.
 - First run can be slow because faster-whisper may download the model.
 - Use `--short-count 1 --normal-count 0` for a shorter first real run on a 1 minute sample.
 

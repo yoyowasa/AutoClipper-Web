@@ -17,6 +17,7 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     args = script.parse_args(["--video", "spoken.mp4"])
     assert args.video == Path("spoken.mp4")
     assert args.backend_url == "http://localhost:8000"
+    assert args.validation_profile == "default"
     assert args.timeout == 1800
     assert args.normal_count == 1
     assert args.short_count == 1
@@ -38,6 +39,38 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
 
     no_flag_args = script.parse_args(["--video", "spoken.mp4", "--no-burn-subtitles"])
     assert no_flag_args.burn_subtitles is False
+
+
+def test_parse_args_30min_validation_profile_and_overrides() -> None:
+    args = script.parse_args(["--video", "long.mp4", "--validation-profile", "30min"])
+
+    assert args.validation_profile == "30min"
+    assert args.timeout == 7200
+    assert args.normal_count == 2
+    assert args.short_count == 3
+    assert args.mode == "low_cost"
+    assert args.normal_min_duration == 90.0
+    assert args.normal_max_duration == 600.0
+    assert args.short_min_duration == 20.0
+    assert args.short_max_duration == 75.0
+    assert args.selection_policy == "fill_requested"
+
+    override_args = script.parse_args(
+        [
+            "--video",
+            "long.mp4",
+            "--validation-profile",
+            "30min",
+            "--short-count",
+            "1",
+            "--timeout",
+            "9000",
+        ]
+    )
+
+    assert override_args.short_count == 1
+    assert override_args.timeout == 9000
+    assert override_args.normal_count == 2
 
 
 def test_build_job_settings_disables_fixture_transcript() -> None:
@@ -128,8 +161,13 @@ def test_runtime_metrics_use_observed_status_transitions() -> None:
 
     assert metrics["upload_time"] == 1.25
     assert metrics["transcription_time"] == pytest.approx(5.5)
+    assert metrics["scene_detection_time"] == pytest.approx(0.5)
     assert metrics["candidate_generation_time"] == pytest.approx(4.0)
     assert metrics["scoring_time"] == pytest.approx(2.5)
+    assert metrics["selection_time"] == pytest.approx(7.5)
+    assert metrics["normal_render_time"] == pytest.approx(5.0)
+    assert metrics["short_render_time"] == pytest.approx(9.0)
+    assert metrics["zip_packaging_time"] == pytest.approx(1.0)
     assert metrics["render_time"] == pytest.approx(14.0)
     assert metrics["total_time"] == 50.0
     assert script.format_seconds(None) == "n/a"
@@ -137,6 +175,10 @@ def test_runtime_metrics_use_observed_status_transitions() -> None:
 
 
 def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
+    (tmp_path / "video_metadata.json").write_text(
+        json.dumps({"duration": 1812.5, "width": 1280, "height": 720}),
+        encoding="utf-8",
+    )
     (tmp_path / "transcript_summary.json").write_text(
         json.dumps({"segment_count": 8, "total_text_length": 420}),
         encoding="utf-8",
@@ -144,9 +186,11 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
     (tmp_path / "candidate_summary.json").write_text(
         json.dumps(
             {
+                "total_candidates": 42,
                 "short_candidates": 30,
                 "normal_candidates": 12,
                 "hard_gate_passed_count": 35,
+                "hard_gate_rejected_count": 7,
                 "selected_below_threshold_backfill_count": 2,
             }
         ),
@@ -162,18 +206,28 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    (tmp_path / "rejection_summary.json").write_text(
+        json.dumps({"render_failure_count": 1}),
+        encoding="utf-8",
+    )
+    (tmp_path / "download.zip").write_bytes(b"zip-bytes")
 
     metrics = script.pipeline_metrics(tmp_path)
 
     assert metrics == {
+        "video_duration": 1812.5,
         "transcript_segment_count": 8,
         "total_transcript_text_length": 420,
+        "total_candidates_count": 42,
         "short_candidates_count": 30,
         "normal_candidates_count": 12,
         "hard_gate_passed_count": 35,
+        "hard_gate_rejected_count": 7,
         "selected_normal_count": 1,
         "selected_short_count": 2,
         "backfilled_count": 1,
+        "render_failures_count": 1,
+        "zip_size_bytes": 9,
     }
 
 
@@ -238,6 +292,23 @@ def test_validate_output_probe_checks_short_dimensions_and_normal_duration(tmp_p
             tmp_path / "empty.mp4",
             script.ProbeResult(width=1080, height=1920, duration=0.0),
         )
+
+    with pytest.raises(RuntimeError, match="invalid dimensions"):
+        script.validate_output_probe(
+            {"type": "normal", "duration": 25.0},
+            tmp_path / "bad_dimensions.mp4",
+            script.ProbeResult(width=0, height=720, duration=25.0),
+        )
+
+
+def test_validate_required_result_artifacts(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="required result artifacts missing"):
+        script.validate_required_result_artifacts(tmp_path)
+
+    for filename in script.REQUIRED_RESULT_ARTIFACTS:
+        (tmp_path / filename).write_text("{}", encoding="utf-8")
+
+    script.validate_required_result_artifacts(tmp_path)
 
 
 def test_resolve_input_video_requires_existing_file(tmp_path: Path) -> None:
