@@ -14,12 +14,13 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.volume_features import build_audio_features
 from app.db import Base, get_db
 from app.jobs.queue import get_enqueue_job
-from app.jobs.runner import AutoClipperPipelineDependencies, run_autoclipper_job
+from app.candidates.merge_boundaries import Candidate
+from app.jobs.runner import AutoClipperPipelineDependencies, PipelineExpectedError, _score_candidate_list, run_autoclipper_job
 from app.jobs.status import SUCCESS_STATUSES
 from app.main import app
 from app.models import Job
 from app.storage.paths import StoragePaths, get_storage_paths
-from app.video.black_screen import BlackScreenSegment
+from app.video.black_screen import BlackScreenSegment, VisualQuality
 from app.video.probe import VideoMetadata
 from app.video.scene_detect import SceneSegment
 
@@ -86,6 +87,40 @@ def short_spoken_transcript() -> list[TranscriptSegment]:
         "the speaker continues with simple context and finishes the sentence cleanly."
     )
     return [TranscriptSegment(start=0.0, end=60.0, text=text)]
+
+
+def test_openai_scoring_without_api_key_raises_clear_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    candidate = Candidate(
+        id="cand_openai_missing_key",
+        type="short",
+        start=0.0,
+        end=30.0,
+        duration=30.0,
+        transcript_text="a useful spoken candidate with enough context for scoring",
+        rule_score=70.0,
+    )
+    audio_features = build_audio_features(duration=30.0, silence_segments=[], volume_peak=0.5)
+    visual_quality = VisualQuality(
+        duration=30.0,
+        black_screen_ratio=0.0,
+        usable_ratio=1.0,
+        black_seconds=0.0,
+        black_segments=[],
+    )
+
+    with pytest.raises(PipelineExpectedError) as exc_info:
+        _score_candidate_list(
+            [candidate],
+            settings={"useOpenAIScoring": True},
+            audio_features=audio_features,
+            silence_segments=[],
+            visual_quality=visual_quality,
+            scorer=None,
+        )
+
+    assert exc_info.value.code == "openai_configuration_missing"
+    assert "OPENAI_API_KEY" in exc_info.value.message
 
 
 def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> None:
@@ -407,6 +442,80 @@ def test_real_pipeline_openai_failure_falls_back_to_rule_scoring(client: TestCli
         (storage.outputs / created["jobId"] / "scored_candidates.json").read_text(encoding="utf-8")
     )
     assert any("openai_fallback_rule_score" in item["risk_flags"] for item in scored_payload)
+    openai_summary = json.loads(
+        (storage.outputs / created["jobId"] / "openai_scoring_summary.json").read_text(encoding="utf-8")
+    )
+    assert openai_summary["candidates_sent_to_openai"] > 0
+    assert openai_summary["fallback_scores"] > 0
+
+
+def test_real_pipeline_openai_failure_can_fail_without_fallback(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 0,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 180,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+                "useOpenAIScoring": True,
+                "openaiCandidateLimit": 3,
+                "openaiFallbackToRuleScore": False,
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    class BrokenScorer:
+        model = "gpt-test"
+
+        def score(self, *_args: object, **_kwargs: object) -> object:
+            raise RuntimeError("OpenAI unavailable")
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=240.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=lambda _path: fake_transcript(),
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        openai_scorer=BrokenScorer(),  # type: ignore[arg-type]
+    )
+
+    run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    status_response = client.get(f"/api/jobs/{created['jobId']}")
+    payload = status_response.json()
+    assert payload["status"] == "failed"
+    assert payload["error"]["code"] == "openai_scoring_failed"
+    assert "candidates_sent_to_openai" in payload["error"]["message"]
 
 
 def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: TestClient) -> None:

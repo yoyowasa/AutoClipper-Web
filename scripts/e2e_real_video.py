@@ -82,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--short-min-duration", type=positive_float, default=20.0)
     parser.add_argument("--short-max-duration", type=positive_float, default=75.0)
     parser.add_argument("--selection-policy", default="fill_requested", choices=["fill_requested", "strict_quality"])
+    parser.add_argument("--use-openai-scoring", nargs="?", const=True, default=None, type=parse_bool)
+    parser.add_argument("--openai-candidate-limit", type=non_negative_int, default=20)
+    parser.add_argument("--openai-model", default="gpt-4o-mini")
+    parser.add_argument("--openai-fallback-to-rule-score", nargs="?", const=True, default=True, type=parse_bool)
+    parser.add_argument("--no-openai-fallback-to-rule-score", dest="openai_fallback_to_rule_score", action="store_false")
     return parser
 
 
@@ -103,7 +108,7 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
     if args.short_max_duration < args.short_min_duration:
         raise RuntimeError("short-max-duration must be >= short-min-duration")
 
-    use_openai_scoring = args.mode == "high_quality"
+    use_openai_scoring = args.mode == "high_quality" if args.use_openai_scoring is None else args.use_openai_scoring
     return {
         "mode": args.mode,
         "profile": args.profile,
@@ -117,6 +122,9 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "burnSubtitles": bool(args.burn_subtitles),
         "shortLayout": "auto",
         "useOpenAIScoring": use_openai_scoring,
+        "openaiCandidateLimit": args.openai_candidate_limit,
+        "openaiModel": args.openai_model,
+        "openaiFallbackToRuleScore": bool(args.openai_fallback_to_rule_score),
         "normalizeAudio": False,
         "e2eFixtureTranscript": False,
     }
@@ -262,6 +270,48 @@ def print_pipeline_metrics(metrics: dict[str, Any]) -> None:
     print(f"  selected_normal_count={metrics.get('selected_normal_count')}")
     print(f"  selected_short_count={metrics.get('selected_short_count')}")
     print(f"  backfilled_count={metrics.get('backfilled_count')}")
+
+
+def use_openai_scoring(settings: dict[str, Any]) -> bool:
+    return bool(settings.get("useOpenAIScoring"))
+
+
+def check_openai_api_key_available(env: dict[str, str]) -> None:
+    try:
+        compose_exec("worker", ["sh", "-lc", 'test -n "${OPENAI_API_KEY:-}"'], env=env)
+    except Exception as exc:
+        raise RuntimeError(
+            "OPENAI_API_KEY is required for --mode high_quality / --use-openai-scoring true. "
+            "Set OPENAI_API_KEY in .env, then run docker compose up -d --build."
+        ) from exc
+
+
+def validate_openai_scoring_summary(output_dir: Path) -> dict[str, Any]:
+    summary_path = output_dir / "openai_scoring_summary.json"
+    if not summary_path.is_file():
+        raise RuntimeError(f"openai_scoring_summary.json not found: {summary_path}")
+    payload = read_json(summary_path)
+    if not isinstance(payload, dict):
+        raise RuntimeError("openai_scoring_summary.json must contain an object")
+    candidates_sent = int(payload.get("candidates_sent_to_openai") or 0)
+    successful_scores = int(payload.get("successful_scores") or 0)
+    final_calls = int(payload.get("total_api_calls") or 0)
+    if candidates_sent <= 0:
+        raise RuntimeError("OpenAI scoring summary shows zero candidates sent")
+    if final_calls <= 0:
+        raise RuntimeError("OpenAI scoring summary shows zero API calls")
+    if successful_scores <= 0:
+        raise RuntimeError("OpenAI scoring summary shows zero successful structured scores")
+    print(
+        "openai scoring: "
+        f"model={payload.get('model')} "
+        f"sent={candidates_sent} "
+        f"success={successful_scores} "
+        f"failed={payload.get('failed_scores')} "
+        f"fallback={payload.get('fallback_scores')} "
+        f"calls={final_calls}"
+    )
+    return payload
 
 
 def transcript_text_from_segments(segments: Any) -> str:
@@ -470,6 +520,14 @@ def run_e2e(args: argparse.Namespace) -> int:
     if settings.get("e2eFixtureTranscript") is not False:
         raise RuntimeError("e2eFixtureTranscript must be false for real spoken-video E2E")
     print("fixture transcript: explicitly disabled")
+    if use_openai_scoring(settings):
+        check_openai_api_key_available(env)
+        print(
+            "openai scoring: enabled "
+            f"model={settings['openaiModel']} "
+            f"candidate_limit={settings['openaiCandidateLimit']} "
+            f"fallback={settings['openaiFallbackToRuleScore']}"
+        )
 
     upload_started_at = time.monotonic()
     upload = _upload_file(f"{args.backend_url}/api/videos/upload", video_path)
@@ -516,6 +574,8 @@ def run_e2e(args: argparse.Namespace) -> int:
 
     validate_selected_artifact(output_dir)
     print_job_summaries(job_id)
+    if use_openai_scoring(settings):
+        validate_openai_scoring_summary(output_dir)
     print_pipeline_metrics(pipeline_metrics(output_dir))
     download_and_probe_outputs(backend_url=args.backend_url, job_id=job_id, results=results, env=env)
     print_runtime_metrics(

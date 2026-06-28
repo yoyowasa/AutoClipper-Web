@@ -28,6 +28,10 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.short_min_duration == 20.0
     assert args.short_max_duration == 75.0
     assert args.selection_policy == "fill_requested"
+    assert args.use_openai_scoring is None
+    assert args.openai_candidate_limit == 20
+    assert args.openai_model == "gpt-4o-mini"
+    assert args.openai_fallback_to_rule_score is True
 
     false_args = script.parse_args(["--video", "spoken.mp4", "--burn-subtitles", "false"])
     assert false_args.burn_subtitles is False
@@ -59,13 +63,20 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "45",
             "--selection-policy",
             "strict_quality",
+            "--use-openai-scoring",
+            "true",
+            "--openai-candidate-limit",
+            "7",
+            "--openai-model",
+            "gpt-test",
+            "--no-openai-fallback-to-rule-score",
             "--no-burn-subtitles",
         ]
     )
     settings = script.build_job_settings(args)
 
     assert settings["e2eFixtureTranscript"] is False
-    assert settings["useOpenAIScoring"] is False
+    assert settings["useOpenAIScoring"] is True
     assert settings["normalClipCount"] == 2
     assert settings["shortCount"] == 0
     assert settings["normalMinDuration"] == 20.0
@@ -73,11 +84,20 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["shortMinDuration"] == 15.0
     assert settings["shortMaxDuration"] == 45.0
     assert settings["selectionPolicy"] == "strict_quality"
+    assert settings["useOpenAIScoring"] is True
+    assert settings["openaiCandidateLimit"] == 7
+    assert settings["openaiModel"] == "gpt-test"
+    assert settings["openaiFallbackToRuleScore"] is False
     assert settings["burnSubtitles"] is False
     assert settings["profile"] == "talk"
 
     high_quality_args = script.parse_args(["--video", "spoken.mp4", "--mode", "high_quality"])
     assert script.build_job_settings(high_quality_args)["useOpenAIScoring"] is True
+
+    disabled_args = script.parse_args(
+        ["--video", "spoken.mp4", "--mode", "high_quality", "--use-openai-scoring", "false"]
+    )
+    assert script.build_job_settings(disabled_args)["useOpenAIScoring"] is False
 
     invalid_args = script.parse_args(
         ["--video", "spoken.mp4", "--normal-min-duration", "60", "--normal-max-duration", "20"]
@@ -155,6 +175,43 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
         "selected_short_count": 2,
         "backfilled_count": 1,
     }
+
+
+def test_validate_openai_scoring_summary_requires_successful_api_scores(tmp_path: Path) -> None:
+    with pytest.raises(RuntimeError, match="openai_scoring_summary.json not found"):
+        script.validate_openai_scoring_summary(tmp_path)
+
+    summary_path = tmp_path / "openai_scoring_summary.json"
+    summary_path.write_text(
+        json.dumps(
+            {
+                "model": "gpt-test",
+                "candidates_sent_to_openai": 2,
+                "successful_scores": 0,
+                "failed_scores": 2,
+                "fallback_scores": 2,
+                "total_api_calls": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="zero successful"):
+        script.validate_openai_scoring_summary(tmp_path)
+
+    summary_path.write_text(
+        json.dumps(
+            {
+                "model": "gpt-test",
+                "candidates_sent_to_openai": 2,
+                "successful_scores": 1,
+                "failed_scores": 1,
+                "fallback_scores": 1,
+                "total_api_calls": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert script.validate_openai_scoring_summary(tmp_path)["successful_scores"] == 1
 
 
 def test_validate_output_probe_checks_short_dimensions_and_normal_duration(tmp_path: Path) -> None:

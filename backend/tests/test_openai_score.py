@@ -159,6 +159,14 @@ def test_mocked_openai_score_updates_candidate() -> None:
     assert scored.reject_reason is None
     assert len(client.responses.calls) == 1
     assert client.responses.calls[0]["text"]["format"]["strict"] is True
+    encoded_request = json.dumps(client.responses.calls[0]["input"], ensure_ascii=False)
+    assert "video_path" not in encoded_request
+    assert "stored_path" not in encoded_request
+    assert ".mp4" not in encoded_request
+    assert scorer.stats.successful_scores == 1
+    assert scorer.stats.total_api_calls == 1
+    assert scorer.stats.estimated_input_text_length > 0
+    assert scorer.stats.estimated_output_text_length > 0
 
 
 def test_transient_errors_are_retried() -> None:
@@ -193,6 +201,48 @@ def test_repeated_scoring_failure_marks_candidate_rejected() -> None:
     assert scored.reject_reason.startswith("openai_scoring_failed:")
     assert "openai_scoring_failed" in scored.risk_flags
     assert len(client.responses.calls) == 2
+    assert scorer.stats.failed_scores == 1
+    assert scorer.stats.total_api_calls == 2
+    assert scorer.stats.error_types
+
+
+def test_malformed_openai_response_is_reported_as_schema_failure() -> None:
+    malformed = {key: value for key, value in VALID_SCORE.items() if key != "title"}
+    client = FakeClient([malformed])
+    scorer = OpenAICandidateScorer(client=client)
+
+    scored = score_candidate_with_openai(make_candidate(), scorer=scorer)
+
+    assert scored.should_use is False
+    assert scored.reject_reason is not None
+    assert "schema_validation_failed" in scored.reject_reason
+    assert "openai_scoring_failed" in scored.risk_flags
+    assert scorer.stats.failed_scores == 1
+
+
+def test_scorer_summary_reports_counts_and_latency() -> None:
+    client = FakeClient([VALID_SCORE])
+    scorer = OpenAICandidateScorer(client=client)
+
+    score_candidate_with_openai(make_candidate(), scorer=scorer)
+    summary = scorer.stats.to_summary(
+        candidate_limit=20,
+        candidates_considered=100,
+        skipped_due_to_limit=80,
+        fallback_scores=0,
+        rule_score_only_candidates=80,
+    )
+
+    assert summary["model"] == "gpt-4o-mini"
+    assert summary["candidate_limit"] == 20
+    assert summary["candidates_considered"] == 100
+    assert summary["candidates_sent_to_openai"] == 1
+    assert summary["successful_scores"] == 1
+    assert summary["failed_scores"] == 0
+    assert summary["skipped_due_to_limit"] == 80
+    assert summary["rule_score_only_candidates"] == 80
+    assert summary["total_api_calls"] == 1
+    assert summary["average_latency_seconds"] is not None
 
 
 def test_score_cache_reuses_existing_result(tmp_path: Path) -> None:

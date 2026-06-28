@@ -1,5 +1,6 @@
 import json
 import time
+from dataclasses import dataclass, field
 from collections.abc import Callable, Sequence
 from hashlib import sha256
 from pathlib import Path
@@ -21,6 +22,11 @@ TRANSIENT_ERROR_NAMES = {
     "RateLimitError",
 }
 
+SYSTEM_PROMPT = (
+    "Score clip candidates for a fully automated clipping app. "
+    "Return only the requested structured JSON. Do not ask for video files."
+)
+
 
 class OpenAIResponsesResource(Protocol):
     def create(self, **kwargs: Any) -> Any:
@@ -29,6 +35,59 @@ class OpenAIResponsesResource(Protocol):
 
 class OpenAIClientProtocol(Protocol):
     responses: OpenAIResponsesResource
+
+
+@dataclass
+class OpenAIScoringStats:
+    model: str
+    candidates_sent_to_openai: int = 0
+    successful_scores: int = 0
+    failed_scores: int = 0
+    fallback_scores: int = 0
+    cache_hits: int = 0
+    total_api_calls: int = 0
+    total_latency_seconds: float = 0.0
+    estimated_input_text_length: int = 0
+    estimated_output_text_length: int = 0
+    error_types: dict[str, int] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
+    def record_error(self, exc: Exception) -> None:
+        error_type = exc.__class__.__name__
+        self.error_types[error_type] = self.error_types.get(error_type, 0) + 1
+        if len(self.errors) < 10:
+            self.errors.append(f"{error_type}: {exc}")
+
+    def to_summary(
+        self,
+        *,
+        candidate_limit: int | None,
+        candidates_considered: int,
+        skipped_due_to_limit: int,
+        fallback_scores: int,
+        rule_score_only_candidates: int,
+    ) -> dict[str, Any]:
+        average_latency = None
+        if self.total_api_calls > 0:
+            average_latency = round(self.total_latency_seconds / self.total_api_calls, 6)
+        return {
+            "model": self.model,
+            "candidate_limit": candidate_limit,
+            "candidates_considered": candidates_considered,
+            "candidates_sent_to_openai": self.candidates_sent_to_openai,
+            "successful_scores": self.successful_scores,
+            "failed_scores": self.failed_scores,
+            "fallback_scores": fallback_scores,
+            "rule_score_only_candidates": rule_score_only_candidates,
+            "skipped_due_to_limit": skipped_due_to_limit,
+            "cache_hits": self.cache_hits,
+            "average_latency_seconds": average_latency,
+            "estimated_input_text_length": self.estimated_input_text_length,
+            "estimated_output_text_length": self.estimated_output_text_length,
+            "total_api_calls": self.total_api_calls,
+            "error_types": dict(sorted(self.error_types.items())),
+            "errors": self.errors,
+        }
 
 
 class OpenAIScoreCache:
@@ -159,6 +218,7 @@ class OpenAICandidateScorer:
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
         self.sleep_func = sleep_func
+        self.stats = OpenAIScoringStats(model=model)
 
     @property
     def client(self) -> OpenAIClientProtocol:
@@ -175,45 +235,64 @@ class OpenAICandidateScorer:
         cache_key = candidate_score_cache_key(candidate, audio_features, visual_features)
         cached = self.cache.get(cache_key)
         if cached is not None:
+            self.stats.cache_hits += 1
             return cached
 
         payload = build_score_input_payload(candidate, audio_features, visual_features)
-        score = self._score_with_retries(payload)
+        self.stats.candidates_sent_to_openai += 1
+        try:
+            score = self._score_with_retries(payload)
+        except Exception as exc:
+            self.stats.failed_scores += 1
+            self.stats.record_error(exc)
+            raise
+        self.stats.successful_scores += 1
         self.cache.set(cache_key, score)
         return score
 
     def _score_with_retries(self, payload: dict[str, Any]) -> ClipCandidateScore:
         last_error: Exception | None = None
+        user_content = json.dumps(payload, ensure_ascii=False)
         for attempt in range(self.max_retries + 1):
             try:
+                self.stats.total_api_calls += 1
+                self.stats.estimated_input_text_length += len(SYSTEM_PROMPT) + len(user_content)
+                started_at = time.monotonic()
                 response = self.client.responses.create(
                     model=self.model,
                     input=[
                         {
                             "role": "system",
-                            "content": (
-                                "Score clip candidates for a fully automated clipping app. "
-                                "Return only the requested structured JSON. Do not ask for video files."
-                            ),
+                            "content": SYSTEM_PROMPT,
                         },
                         {
                             "role": "user",
-                            "content": json.dumps(payload, ensure_ascii=False),
+                            "content": user_content,
                         },
                     ],
                     text={"format": response_format_json_schema()},
                 )
-                return parse_openai_score_response(response)
+                self.stats.total_latency_seconds += time.monotonic() - started_at
+                text = _extract_response_text(response)
+                self.stats.estimated_output_text_length += len(text)
+                return ClipCandidateScore.model_validate(json.loads(text))
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 last_error = exc
                 break
             except Exception as exc:
+                self.stats.total_latency_seconds += time.monotonic() - started_at
                 last_error = exc
                 if not _is_transient_api_error(exc) or attempt >= self.max_retries:
                     break
                 self.sleep_func(self.retry_backoff_seconds * (2**attempt))
 
-        raise RuntimeError(f"OpenAI scoring failed: {last_error}") from last_error
+        if isinstance(last_error, (json.JSONDecodeError, ValidationError, ValueError)):
+            raise RuntimeError(
+                f"OpenAI scoring failed (schema_validation_failed: {last_error.__class__.__name__}): {last_error}"
+            ) from last_error
+        raise RuntimeError(
+            f"OpenAI scoring failed ({last_error.__class__.__name__ if last_error else 'unknown'}): {last_error}"
+        ) from last_error
 
 
 def apply_openai_score_to_candidate(candidate: Candidate, score: ClipCandidateScore) -> Candidate:

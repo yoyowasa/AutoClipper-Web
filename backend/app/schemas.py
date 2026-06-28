@@ -61,6 +61,9 @@ class JobSettings(BaseModel):
     short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
     selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
     use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")
+    openai_candidate_limit: int = Field(default=40, ge=0, alias="openaiCandidateLimit")
+    openai_model: str = Field(default="gpt-4o-mini", min_length=1, alias="openaiModel")
+    openai_fallback_to_rule_score: bool = Field(default=True, alias="openaiFallbackToRuleScore")
     e2e_fixture_transcript: bool = Field(default=False, alias="e2eFixtureTranscript")
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")

@@ -18,6 +18,7 @@ from app.render.render_short import ShortRenderBatchResult
 TRANSCRIPT_SUMMARY_FILENAME = "transcript_summary.json"
 AUDIO_FEATURE_SUMMARY_FILENAME = "audio_feature_summary.json"
 CANDIDATE_SUMMARY_FILENAME = "candidate_summary.json"
+OPENAI_SCORING_SUMMARY_FILENAME = "openai_scoring_summary.json"
 REJECTION_SUMMARY_FILENAME = "rejection_summary.json"
 SELECTED_CLIPS_SUMMARY_FILENAME = "selected_clips_summary.json"
 
@@ -25,6 +26,7 @@ SUMMARY_FILENAMES = [
     TRANSCRIPT_SUMMARY_FILENAME,
     AUDIO_FEATURE_SUMMARY_FILENAME,
     CANDIDATE_SUMMARY_FILENAME,
+    OPENAI_SCORING_SUMMARY_FILENAME,
     REJECTION_SUMMARY_FILENAME,
     SELECTED_CLIPS_SUMMARY_FILENAME,
 ]
@@ -326,6 +328,7 @@ def write_generation_summaries(
     short_candidates: Sequence[Candidate] | None = None,
     scored_candidates: Sequence[Candidate] | None = None,
     selection: CandidateSelection | None = None,
+    openai_scoring_summary: dict[str, Any] | None = None,
     normal_result: NormalRenderBatchResult | None = None,
     short_result: ShortRenderBatchResult | None = None,
     exports: Sequence[ExportItem] | None = None,
@@ -349,4 +352,6 @@ def write_generation_summaries(
         REJECTION_SUMMARY_FILENAME: build_rejection_summary(selection, normal_result, short_result),
         SELECTED_CLIPS_SUMMARY_FILENAME: build_selected_clips_summary(selection, exports),
     }
+    if openai_scoring_summary is not None:
+        payloads[OPENAI_SCORING_SUMMARY_FILENAME] = openai_scoring_summary
     return [_write_json(root / filename, payload) for filename, payload in payloads.items()]

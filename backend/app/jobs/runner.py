@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 from collections import Counter
@@ -75,6 +76,13 @@ LOW_INFORMATION_WORDS = {
     "you",
     "yeah",
 }
+DEFAULT_OPENAI_CANDIDATE_LIMIT = 40
+
+
+@dataclass(frozen=True)
+class ScoringResult:
+    candidates: list[Candidate]
+    openai_summary: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +116,31 @@ def _truthy_setting(settings: dict[str, Any], key: str) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
+    if key not in settings:
+        return default
+    value = settings.get(key)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _int_setting(settings: dict[str, Any], key: str, default: int) -> int:
+    value = settings.get(key, default)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0, parsed)
+
+
+def _openai_model_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("openaiModel") or settings.get("openai_model")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return "gpt-4o-mini"
 
 
 def _e2e_fixture_transcript_enabled(settings: dict[str, Any]) -> bool:
@@ -346,6 +379,45 @@ def _safe_visual_quality(
     return build_visual_quality(duration, black_segments)
 
 
+def _openai_summary(
+    scorer: Any,
+    *,
+    candidate_limit: int,
+    candidates_considered: int,
+    skipped_due_to_limit: int,
+    fallback_scores: int,
+    rule_score_only_candidates: int,
+    candidates_sent: int,
+) -> dict[str, Any]:
+    stats = getattr(scorer, "stats", None)
+    if stats is not None and hasattr(stats, "to_summary"):
+        return stats.to_summary(
+            candidate_limit=candidate_limit,
+            candidates_considered=candidates_considered,
+            skipped_due_to_limit=skipped_due_to_limit,
+            fallback_scores=fallback_scores,
+            rule_score_only_candidates=rule_score_only_candidates,
+        )
+    return {
+        "model": getattr(scorer, "model", "unknown"),
+        "candidate_limit": candidate_limit,
+        "candidates_considered": candidates_considered,
+        "candidates_sent_to_openai": candidates_sent,
+        "successful_scores": 0,
+        "failed_scores": fallback_scores,
+        "fallback_scores": fallback_scores,
+        "rule_score_only_candidates": rule_score_only_candidates,
+        "skipped_due_to_limit": skipped_due_to_limit,
+        "cache_hits": 0,
+        "average_latency_seconds": None,
+        "estimated_input_text_length": None,
+        "estimated_output_text_length": None,
+        "total_api_calls": None,
+        "error_types": {},
+        "errors": ["scorer did not expose runtime stats"],
+    }
+
+
 def _score_candidate_list(
     candidates: Sequence[Candidate],
     settings: dict[str, Any],
@@ -353,7 +425,7 @@ def _score_candidate_list(
     silence_segments: Sequence[SilenceSegment],
     visual_quality: VisualQuality,
     scorer: OpenAICandidateScorer | None,
-) -> list[Candidate]:
+) -> ScoringResult:
     rule_scored = score_candidates(
         candidates,
         audio_features=audio_features,
@@ -365,51 +437,128 @@ def _score_candidate_list(
         or settings.get("enableOpenAIScoring")
     )
     if not use_openai:
-        return [candidate.model_copy(update={"final_score": candidate.rule_score}) for candidate in rule_scored]
-    active_scorer = scorer or OpenAICandidateScorer()
+        return ScoringResult(
+            candidates=[candidate.model_copy(update={"final_score": candidate.rule_score}) for candidate in rule_scored]
+        )
+
+    if scorer is None and not os.getenv("OPENAI_API_KEY"):
+        raise PipelineExpectedError(
+            "openai_configuration_missing",
+            "OPENAI_API_KEY is required when useOpenAIScoring is true.",
+            details={"setting": "OPENAI_API_KEY"},
+        )
+
+    fallback_enabled = _bool_setting(settings, "openaiFallbackToRuleScore", True)
+    candidate_limit = _int_setting(settings, "openaiCandidateLimit", DEFAULT_OPENAI_CANDIDATE_LIMIT)
+    active_scorer = scorer or OpenAICandidateScorer(model=_openai_model_setting(settings))
+    ranked_for_openai = sorted(
+        rule_scored,
+        key=lambda candidate: float(candidate.rule_score or 0.0),
+        reverse=True,
+    )
+    candidates_for_openai = ranked_for_openai[:candidate_limit] if candidate_limit > 0 else []
+    openai_candidate_ids = {candidate.id for candidate in candidates_for_openai}
+    skipped_due_to_limit = max(0, len(rule_scored) - len(candidates_for_openai))
+    scored_by_id: dict[str, Candidate] = {}
+    fallback_scores = 0
+
     try:
         openai_scored = score_candidate_batch(
-            rule_scored,
+            candidates_for_openai,
             scorer=active_scorer,
             audio_features=audio_features,
             visual_features=visual_quality,
         )
-    except Exception:
-        return [
-            candidate.model_copy(
-                update={
-                    "final_score": candidate.rule_score,
-                    "should_use": None,
-                    "reject_reason": None,
-                    "risk_flags": [*candidate.risk_flags, "openai_fallback_rule_score"],
-                }
+    except Exception as exc:
+        if not fallback_enabled:
+            summary = _openai_summary(
+                active_scorer,
+                candidate_limit=candidate_limit,
+                candidates_considered=len(rule_scored),
+                skipped_due_to_limit=skipped_due_to_limit,
+                fallback_scores=0,
+                rule_score_only_candidates=skipped_due_to_limit,
+                candidates_sent=len(candidates_for_openai),
             )
-            for candidate in rule_scored
-        ]
-
-    fallback_candidates: list[Candidate] = []
-    for candidate in openai_scored:
-        if "openai_scoring_failed" not in candidate.risk_flags:
-            fallback_candidates.append(candidate)
-            continue
-        fallback_candidates.append(
+            raise PipelineExpectedError(
+                "openai_scoring_failed",
+                f"OpenAI scoring failed: {exc}",
+                details=summary,
+            ) from exc
+        openai_scored = [
             candidate.model_copy(
                 update={
-                    "ai_score": None,
                     "final_score": candidate.rule_score,
                     "should_use": None,
                     "reject_reason": None,
                     "reason": "OpenAI scoring failed; used rule score fallback.",
-                    "risk_flags": [
-                        flag
-                        for flag in candidate.risk_flags
-                        if flag != "openai_scoring_failed"
-                    ]
-                    + ["openai_fallback_rule_score"],
+                    "risk_flags": [*candidate.risk_flags, "openai_fallback_rule_score"],
                 }
             )
+            for candidate in candidates_for_openai
+        ]
+
+    failed_candidates = [
+        candidate for candidate in openai_scored if "openai_scoring_failed" in candidate.risk_flags
+    ]
+    if failed_candidates and not fallback_enabled:
+        summary = _openai_summary(
+            active_scorer,
+            candidate_limit=candidate_limit,
+            candidates_considered=len(rule_scored),
+            skipped_due_to_limit=skipped_due_to_limit,
+            fallback_scores=0,
+            rule_score_only_candidates=skipped_due_to_limit,
+            candidates_sent=len(candidates_for_openai),
         )
-    return fallback_candidates
+        raise PipelineExpectedError(
+            "openai_scoring_failed",
+            "OpenAI scoring failed for one or more candidates.",
+            details={
+                **summary,
+                "failed_candidate_ids": [candidate.id for candidate in failed_candidates[:20]],
+            },
+        )
+
+    for candidate in openai_scored:
+        if "openai_scoring_failed" not in candidate.risk_flags:
+            scored_by_id[candidate.id] = candidate
+            continue
+        fallback_scores += 1
+        scored_by_id[candidate.id] = candidate.model_copy(
+            update={
+                "ai_score": None,
+                "final_score": candidate.rule_score,
+                "should_use": None,
+                "reject_reason": None,
+                "reason": "OpenAI scoring failed; used rule score fallback.",
+                "risk_flags": [
+                    flag for flag in candidate.risk_flags if flag != "openai_scoring_failed"
+                ]
+                + ["openai_fallback_rule_score"],
+            }
+        )
+
+    merged: list[Candidate] = []
+    for candidate in rule_scored:
+        if candidate.id in scored_by_id:
+            merged.append(scored_by_id[candidate.id])
+            continue
+        risk_flags = list(candidate.risk_flags)
+        if openai_candidate_ids and "openai_not_scored_candidate_limit" not in risk_flags:
+            risk_flags.append("openai_not_scored_candidate_limit")
+        merged.append(candidate.model_copy(update={"final_score": candidate.rule_score, "risk_flags": risk_flags}))
+
+    summary = _openai_summary(
+        active_scorer,
+        candidate_limit=candidate_limit,
+        candidates_considered=len(rule_scored),
+        skipped_due_to_limit=skipped_due_to_limit,
+        fallback_scores=fallback_scores,
+        rule_score_only_candidates=skipped_due_to_limit,
+        candidates_sent=len(candidates_for_openai),
+    )
+    return ScoringResult(candidates=merged, openai_summary=summary)
 
 
 def _render_failures_to_jsonable(
@@ -569,6 +718,7 @@ def run_autoclipper_job(
     short_candidates: list[Candidate] = []
     scored_candidates: list[Candidate] = []
     selection: CandidateSelection | None = None
+    openai_scoring_summary: dict[str, Any] | None = None
     exports: list[ExportItem] = []
     transcription_engine = "not_run"
     used_fixture_transcript = False
@@ -600,6 +750,7 @@ def run_autoclipper_job(
                 short_candidates=short_candidates,
                 scored_candidates=scored_candidates,
                 selection=selection,
+                openai_scoring_summary=openai_scoring_summary,
                 normal_result=normal_result,
                 short_result=short_result,
                 exports=exports,
@@ -712,7 +863,7 @@ def run_autoclipper_job(
 
             _set_status(db, job, "scoring_candidates")
             visited_statuses.append("scoring_candidates")
-            scored_candidates = _score_candidate_list(
+            scoring_result = _score_candidate_list(
                 all_candidates,
                 settings=settings,
                 audio_features=audio_features,
@@ -720,6 +871,8 @@ def run_autoclipper_job(
                 visual_quality=visual_quality,
                 scorer=deps.openai_scorer,
             )
+            scored_candidates = scoring_result.candidates
+            openai_scoring_summary = scoring_result.openai_summary
             metadata_files.append(write_candidates(scored_candidates, job_dir / "scored_candidates.json"))
 
             _set_status(db, job, "selecting_clips")

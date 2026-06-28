@@ -286,6 +286,34 @@ python scripts/e2e_real_video.py `
   --timeout 3600
 ```
 
+For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
+
+```powershell
+OPENAI_API_KEY=<your_openai_api_key>
+docker compose up -d --build
+```
+
+Then run a small, cost-bounded E2E:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_sample.mp4 `
+  --normal-count 1 `
+  --short-count 1 `
+  --mode high_quality `
+  --use-openai-scoring true `
+  --openai-candidate-limit 20 `
+  --openai-model gpt-4o-mini `
+  --timeout 1800
+```
+
+Cost controls:
+
+- `--openai-candidate-limit` defaults to `20` in the E2E script.
+- Backend default `openaiCandidateLimit` is `40`.
+- The worker sends candidate transcript text plus audio/visual feature summaries only. It does not send uploaded video files or rendered MP4 files.
+- Use `--use-openai-scoring false` with `--mode high_quality` to exercise the rest of high-quality settings without API calls.
+
 The script:
 
 - uploads through `POST /api/videos/upload`
@@ -302,6 +330,7 @@ The script:
 - verifies normal MP4 files have a valid duration close to the export metadata
 - prints runtime metrics: upload, transcription, candidate generation, scoring, render, and total time
 - prints pipeline metrics: transcript length, candidate counts, hard-gate pass count, selected counts, and backfilled count
+- validates `openai_scoring_summary.json` when OpenAI scoring is enabled
 - prints diagnostic summary JSON files when they exist
 
 Expected outputs:
@@ -311,6 +340,7 @@ storage/outputs/{job_id}/transcript_segments.json
 storage/outputs/{job_id}/transcript_summary.json
 storage/outputs/{job_id}/audio_feature_summary.json
 storage/outputs/{job_id}/candidate_summary.json
+storage/outputs/{job_id}/openai_scoring_summary.json
 storage/outputs/{job_id}/rejection_summary.json
 storage/outputs/{job_id}/selected_clips_summary.json
 storage/outputs/{job_id}/selected_clips.json
@@ -326,6 +356,10 @@ Troubleshooting:
 - `transcription_empty`: use a clearer spoken sample with audible voice.
 - `no_candidates_found`: use a longer sample, ideally at least 90 seconds if normal clips are requested.
 - `quality gate rejection`: check `selected_clips.json` and `rejection_summary.json`; in `strict_quality` mode, low scores can intentionally leave selected outputs at zero.
+- `openai_configuration_missing`: `OPENAI_API_KEY` is missing in the worker container. Update `.env`, then recreate services with `docker compose up -d --build`.
+- `openai_scoring_failed`: OpenAI scoring failed and fallback was disabled. Check `openai_scoring_summary.json` and `docker compose logs worker`.
+- OpenAI rate limit / timeout: lower `--openai-candidate-limit`, retry later, or use `--openai-fallback-to-rule-score true`.
+- Structured output validation failure: check `openai_scoring_summary.json` error fields and keep the default strict schema.
 - `render failure`: check `render_failures.json` and `docker compose logs worker`.
 - First run can be slow because faster-whisper may download the model.
 - Use `--short-count 1 --normal-count 0` for a shorter first real run on a 1 minute sample.
@@ -344,7 +378,11 @@ Troubleshooting:
     "normalMaxDuration": 600,
     "shortMinDuration": 20,
     "shortMaxDuration": 75,
-    "selectionPolicy": "fill_requested"
+    "selectionPolicy": "fill_requested",
+    "useOpenAIScoring": false,
+    "openaiCandidateLimit": 40,
+    "openaiModel": "gpt-4o-mini",
+    "openaiFallbackToRuleScore": true
   }
 }
 ```
@@ -356,6 +394,10 @@ Production-safe defaults remain:
 - `shortMinDuration`: `20`
 - `shortMaxDuration`: `75`
 - `selectionPolicy`: `fill_requested`
+- `useOpenAIScoring`: `false`
+- `openaiCandidateLimit`: `40`
+- `openaiModel`: `gpt-4o-mini`
+- `openaiFallbackToRuleScore`: `true`
 
 For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.
 
@@ -377,6 +419,7 @@ Summary files:
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
+- `openai_scoring_summary.json`: model, candidates sent, successful scores, failed scores, fallback scores, average latency, text length proxy, total API calls.
 - `rejection_summary.json`: quality gate rejection counts and render failure counts.
 - `selected_clips_summary.json`: selected normal/short counts, selected IDs, durations, scores, quality warnings, selection reasons, output paths.
 

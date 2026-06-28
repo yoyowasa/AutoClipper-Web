@@ -1259,3 +1259,77 @@ completed / failed job ごとに生成診断 summary JSON を `storage/outputs/{
 
 - phase timing は status polling からの近似値。短時間で通過する `scoring_candidates` などは `n/a` になる場合がある。
 - この PowerShell セッションでは Docker が PATH に無かったため、検証時は `C:\Program Files\Docker\Docker\resources\bin` を一時追加して実行した。
+
+## 2026-06-29 Task 25 OpenAI Structured Outputs scoring real API validation
+
+### 目的
+
+`high_quality` mode で OpenAI Structured Outputs scoring の production API path を検証し、候補数制限・失敗時 diagnostics・summary 出力を追加する。
+
+### 変更ファイル
+
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/summaries.py`
+- `backend/app/schemas.py`
+- `backend/app/scoring/openai_score.py`
+- `backend/tests/test_api_routes.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `backend/tests/test_openai_score.py`
+- `backend/tests/test_real_pipeline.py`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `scripts/e2e_real_video.py` に OpenAI scoring options を追加。
+  - `--use-openai-scoring true/false`
+  - `--openai-candidate-limit`
+  - `--openai-model`
+  - `--openai-fallback-to-rule-score`
+  - `--no-openai-fallback-to-rule-score`
+- E2E script で high_quality / OpenAI scoring 有効時、worker container 内の `OPENAI_API_KEY` presence を事前確認。値は出力しない。
+- backend settings schema に `openaiCandidateLimit`、`openaiModel`、`openaiFallbackToRuleScore` を追加。
+- worker scoring で `openaiCandidateLimit` を適用。default backend limit は `40`、E2E script default は `20`。
+- OpenAI API へ送る payload は candidate transcript と audio / visual feature summary のみ。video file / MP4 は送らない。
+- OpenAI scorer に stats を追加。
+  - model
+  - candidates sent
+  - success / failed / fallback counts
+  - average latency
+  - estimated input / output text length
+  - total API calls
+  - error types
+- `openai_scoring_summary.json` を追加。
+- missing key は `openai_configuration_missing` で明確に失敗。
+- API/schema failure は `openaiFallbackToRuleScore=true` なら rule score fallback、false なら `openai_scoring_failed`。
+- malformed response / schema validation failure は `schema_validation_failed` として記録。
+- README に OpenAI key 設定、high_quality E2E、candidate limit、troubleshooting を追加。
+
+### 検証結果
+
+- `OPENAI_API_KEY`: host `.env` と worker container で presence 確認済み。値は出力せず。
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_real_video.py .\scripts\e2e_summary.py`: passed。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_openai_score.py .\backend\tests\test_e2e_real_video_script.py .\backend\tests\test_api_routes.py .\backend\tests\test_real_pipeline.py`: 46 passed, 1 warning。
+- `.\.venv\Scripts\python -m pytest .\backend`: 114 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `npm --workspace frontend run build`: passed。
+- `docker compose up -d --build`: backend / worker / frontend image rebuild succeeded。
+- high_quality real OpenAI E2E:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Desktop\bandicam 2026-06-28 23-06-52-866.mp4' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --mode high_quality --use-openai-scoring true --openai-candidate-limit 3 --openai-model gpt-4o-mini --timeout 1800`
+  - result: REAL VIDEO E2E PASSED
+  - job `job_c06425f7fbab45c781324e1b045ad6fb`
+  - `openai_scoring_summary.json`: model `gpt-4o-mini`、sent `3`、success `3`、failed `0`、fallback `0`、calls `3`、avg latency `3.250862`
+  - scored candidates: 3 candidates have numeric `ai_score` / `final_score`, `title`, `overlay_title`, `risk_flags=[]`
+  - final output: normal MP4 `1632x912`, duration `58.333333s`
+- existing synthetic E2E: `.\.venv\Scripts\python .\scripts\e2e_sample_video.py`: E2E PASSED。job `job_3021f13b3a6a461e82f835ae84169c7a`。
+- existing low_cost real E2E: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Desktop\bandicam 2026-06-28 23-06-52-866.mp4' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --mode low_cost --timeout 1800`: REAL VIDEO E2E PASSED。job `job_73e7a12c17f84e7c9beb50d18f9bdd10`。
+
+### 未解決事項
+
+- 今回は API path validation。score quality tuning は未実施。
+- OpenAI scoring 対象は cost safety のため上位候補に制限。今回の selected normal は candidate limit 外の rule-score backfill。
+- phase timing は status polling 由来の近似値。短時間 phase は `n/a` になる場合がある。
