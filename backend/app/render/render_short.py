@@ -62,7 +62,7 @@ def _duration(start: float, end: float) -> float:
 
 
 def _run_ffmpeg_command(command: list[str]) -> None:
-    subprocess.run(command, check=True, capture_output=True, text=True)
+    subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
 def build_render_short_command(

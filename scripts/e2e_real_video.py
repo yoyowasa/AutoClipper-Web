@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
 from e2e_summary import print_job_summaries
-from e2e_sample_video import _absolute_url, _download, _poll_job, _request_json, _upload_file, _wait_http
+from e2e_sample_video import _absolute_url, _download, _request_json, _upload_file, _wait_http
 from generate_sample_video import _container_storage_path
 from smoke_runtime import ROOT, check_services, compose_exec, docker_env
 
@@ -22,6 +23,22 @@ FIXTURE_TRANSCRIPT_MARKER = "Why automation mistakes matter before launch."
 class ProbeResult:
     width: int
     height: int
+    duration: float
+
+
+@dataclass(frozen=True)
+class TimedJobResult:
+    final_status: dict[str, Any]
+    status_times: dict[str, float]
+    poll_started_at: float
+    poll_finished_at: float
+
+
+PHASE_END_STATUSES = {
+    "transcribing": ["detecting_scenes", "generating_candidates", "scoring_candidates", "selecting_clips"],
+    "generating_candidates": ["scoring_candidates", "selecting_clips", "rendering_normal_clips", "rendering_shorts"],
+    "scoring_candidates": ["selecting_clips", "rendering_normal_clips", "rendering_shorts", "packaging_zip"],
+}
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -105,12 +122,146 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def format_seconds(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.3f}s"
+
+
+def phase_duration(status_times: dict[str, float], start_status: str, end_statuses: Sequence[str]) -> float | None:
+    start_time = status_times.get(start_status)
+    if start_time is None:
+        return None
+    candidates = [status_times[status] for status in end_statuses if status in status_times and status_times[status] >= start_time]
+    if not candidates:
+        return None
+    return max(0.0, min(candidates) - start_time)
+
+
+def render_duration(status_times: dict[str, float]) -> float | None:
+    starts = [
+        status_times[status]
+        for status in ("rendering_normal_clips", "rendering_shorts")
+        if status in status_times
+    ]
+    if not starts:
+        return None
+    start_time = min(starts)
+    candidates = [
+        status_times[status]
+        for status in ("packaging_zip", "completed", "failed")
+        if status in status_times and status_times[status] >= start_time
+    ]
+    if not candidates:
+        return None
+    return max(0.0, min(candidates) - start_time)
+
+
+def poll_job_with_timings(backend_url: str, job_id: str, timeout_seconds: int) -> TimedJobResult:
+    deadline = time.monotonic() + timeout_seconds
+    status_times: dict[str, float] = {}
+    poll_started_at = time.monotonic()
+    last_status = ""
+    while time.monotonic() < deadline:
+        payload = _request_json(f"{backend_url}/api/jobs/{job_id}")
+        now = time.monotonic()
+        status = str(payload["status"])
+        status_times.setdefault(status, now)
+        if status != last_status:
+            print(f"job {job_id}: {status} {payload.get('progress')}%")
+            last_status = status
+        if status in {"completed", "failed"}:
+            return TimedJobResult(
+                final_status=payload,
+                status_times=status_times,
+                poll_started_at=poll_started_at,
+                poll_finished_at=now,
+            )
+        time.sleep(2)
+    raise RuntimeError(f"job did not finish within {timeout_seconds} seconds: {job_id}")
+
+
+def runtime_metrics(
+    *,
+    upload_seconds: float,
+    job_timing: TimedJobResult,
+    total_seconds: float,
+) -> dict[str, float | None]:
+    return {
+        "upload_time": upload_seconds,
+        "transcription_time": phase_duration(
+            job_timing.status_times,
+            "transcribing",
+            PHASE_END_STATUSES["transcribing"],
+        ),
+        "candidate_generation_time": phase_duration(
+            job_timing.status_times,
+            "generating_candidates",
+            PHASE_END_STATUSES["generating_candidates"],
+        ),
+        "scoring_time": phase_duration(
+            job_timing.status_times,
+            "scoring_candidates",
+            PHASE_END_STATUSES["scoring_candidates"],
+        ),
+        "render_time": render_duration(job_timing.status_times),
+        "total_time": total_seconds,
+    }
+
+
+def print_runtime_metrics(metrics: dict[str, float | None]) -> None:
+    print("runtime metrics:")
+    print(f"  upload_time={format_seconds(metrics.get('upload_time'))}")
+    print(f"  transcription_time={format_seconds(metrics.get('transcription_time'))}")
+    print(f"  candidate_generation_time={format_seconds(metrics.get('candidate_generation_time'))}")
+    print(f"  scoring_time={format_seconds(metrics.get('scoring_time'))}")
+    print(f"  render_time={format_seconds(metrics.get('render_time'))}")
+    print(f"  total_time={format_seconds(metrics.get('total_time'))}")
+
+
 def job_output_dir(job_id: str) -> Path:
     return ROOT / "storage" / "outputs" / job_id
 
 
 def read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_summary(output_dir: Path, filename: str) -> dict[str, Any]:
+    path = output_dir / filename
+    if not path.is_file():
+        return {}
+    payload = read_json(path)
+    return payload if isinstance(payload, dict) else {}
+
+
+def pipeline_metrics(output_dir: Path) -> dict[str, Any]:
+    transcript = read_summary(output_dir, "transcript_summary.json")
+    candidates = read_summary(output_dir, "candidate_summary.json")
+    selected = read_summary(output_dir, "selected_clips_summary.json")
+    return {
+        "transcript_segment_count": transcript.get("segment_count"),
+        "total_transcript_text_length": transcript.get("total_text_length"),
+        "short_candidates_count": candidates.get("short_candidates"),
+        "normal_candidates_count": candidates.get("normal_candidates"),
+        "hard_gate_passed_count": candidates.get("hard_gate_passed_count"),
+        "selected_normal_count": selected.get("selected_normal_count"),
+        "selected_short_count": selected.get("selected_short_count"),
+        "backfilled_count": selected.get(
+            "selected_below_threshold_backfill_count",
+            candidates.get("selected_below_threshold_backfill_count"),
+        ),
+    }
+
+
+def print_pipeline_metrics(metrics: dict[str, Any]) -> None:
+    print("pipeline metrics:")
+    print(f"  transcript_segment_count={metrics.get('transcript_segment_count')}")
+    print(f"  total_transcript_text_length={metrics.get('total_transcript_text_length')}")
+    print(f"  short_candidates_count={metrics.get('short_candidates_count')}")
+    print(f"  normal_candidates_count={metrics.get('normal_candidates_count')}")
+    print(f"  hard_gate_passed_count={metrics.get('hard_gate_passed_count')}")
+    print(f"  selected_normal_count={metrics.get('selected_normal_count')}")
+    print(f"  selected_short_count={metrics.get('selected_short_count')}")
+    print(f"  backfilled_count={metrics.get('backfilled_count')}")
 
 
 def transcript_text_from_segments(segments: Any) -> str:
@@ -238,18 +389,46 @@ def probe_downloaded_mp4(path: Path, env: dict[str, str]) -> ProbeResult:
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=width,height",
+            "stream=width,height:format=duration",
             "-of",
-            "csv=p=0",
+            "json",
             container_path,
         ],
         env=env,
     )
-    first_line = output.splitlines()[0].strip() if output.strip() else ""
-    values = [value.strip() for value in first_line.split(",")]
-    if len(values) < 2:
-        raise RuntimeError(f"could not parse ffprobe dimensions for {path}: {output}")
-    return ProbeResult(width=int(values[0]), height=int(values[1]))
+    try:
+        payload = json.loads(output)
+        stream = payload["streams"][0]
+        duration = float(payload.get("format", {}).get("duration", 0.0))
+        return ProbeResult(width=int(stream["width"]), height=int(stream["height"]), duration=duration)
+    except Exception as exc:
+        raise RuntimeError(f"could not parse ffprobe output for {path}: {output}") from exc
+
+
+def _optional_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_output_probe(export: dict[str, Any], path: Path, probe: ProbeResult) -> None:
+    export_type = str(export.get("type", "export"))
+    if probe.duration <= 0:
+        raise RuntimeError(f"{export_type} output has invalid duration={probe.duration}: {path}")
+    if export_type == "short" and (probe.width, probe.height) != (1080, 1920):
+        raise RuntimeError(f"short output must be 1080x1920, got {probe.width}x{probe.height}: {path}")
+    if export_type != "normal":
+        return
+    expected_duration = _optional_float(export.get("duration"))
+    if expected_duration is None:
+        return
+    tolerance = 3.0
+    if abs(probe.duration - expected_duration) > tolerance:
+        raise RuntimeError(
+            f"normal output duration mismatch: expected about {expected_duration:.3f}s, "
+            f"got {probe.duration:.3f}s: {path}"
+        )
 
 
 def download_and_probe_outputs(
@@ -274,14 +453,14 @@ def download_and_probe_outputs(
         output_path = ROOT / "storage" / "temp" / f"e2e_real_{job_id}_{index:02d}_{export_type}_{export_id}.mp4"
         _download(_absolute_url(backend_url, export["downloadUrl"]), output_path)
         probe = probe_downloaded_mp4(output_path, env)
-        print(f"{export_type} mp4: {output_path} ({probe.width}x{probe.height})")
-        if export_type == "short" and (probe.width, probe.height) != (1080, 1920):
-            raise RuntimeError(f"short output must be 1080x1920, got {probe.width}x{probe.height}: {output_path}")
+        print(f"{export_type} mp4: {output_path} ({probe.width}x{probe.height}, {probe.duration:.3f}s)")
+        validate_output_probe(export, output_path, probe)
         probed.append((export, output_path, probe))
     return probed
 
 
 def run_e2e(args: argparse.Namespace) -> int:
+    total_started_at = time.monotonic()
     video_path = resolve_input_video(args.video)
     env = docker_env()
     check_services(env)
@@ -292,7 +471,9 @@ def run_e2e(args: argparse.Namespace) -> int:
         raise RuntimeError("e2eFixtureTranscript must be false for real spoken-video E2E")
     print("fixture transcript: explicitly disabled")
 
+    upload_started_at = time.monotonic()
     upload = _upload_file(f"{args.backend_url}/api/videos/upload", video_path)
+    upload_seconds = time.monotonic() - upload_started_at
     video_id = upload["videoId"]
     print(f"uploaded video: {video_id}")
 
@@ -304,9 +485,17 @@ def run_e2e(args: argparse.Namespace) -> int:
     job_id = job["jobId"]
     print(f"created job: {job_id}")
 
-    final_status = _poll_job(args.backend_url, job_id, args.timeout)
+    job_timing = poll_job_with_timings(args.backend_url, job_id, args.timeout)
+    final_status = job_timing.final_status
     if final_status["status"] == "failed":
         print_job_summaries(job_id)
+        print_runtime_metrics(
+            runtime_metrics(
+                upload_seconds=upload_seconds,
+                job_timing=job_timing,
+                total_seconds=time.monotonic() - total_started_at,
+            )
+        )
         raise RuntimeError(f"job failed; {diagnose_no_clips(job_id, final_status)}")
 
     output_dir = job_output_dir(job_id)
@@ -315,11 +504,27 @@ def run_e2e(args: argparse.Namespace) -> int:
     exports = [*results.get("normalClips", []), *results.get("shorts", [])]
     if not exports:
         print_job_summaries(job_id)
+        print_pipeline_metrics(pipeline_metrics(output_dir))
+        print_runtime_metrics(
+            runtime_metrics(
+                upload_seconds=upload_seconds,
+                job_timing=job_timing,
+                total_seconds=time.monotonic() - total_started_at,
+            )
+        )
         raise RuntimeError(f"job completed with no clips; {diagnose_no_clips(job_id, final_status)}")
 
     validate_selected_artifact(output_dir)
     print_job_summaries(job_id)
+    print_pipeline_metrics(pipeline_metrics(output_dir))
     download_and_probe_outputs(backend_url=args.backend_url, job_id=job_id, results=results, env=env)
+    print_runtime_metrics(
+        runtime_metrics(
+            upload_seconds=upload_seconds,
+            job_timing=job_timing,
+            total_seconds=time.monotonic() - total_started_at,
+        )
+    )
     print(f"job outputs: {output_dir}")
     print("REAL VIDEO E2E PASSED")
     return 0

@@ -86,6 +86,103 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
         script.build_job_settings(invalid_args)
 
 
+def test_runtime_metrics_use_observed_status_transitions() -> None:
+    timing = script.TimedJobResult(
+        final_status={"status": "completed"},
+        status_times={
+            "transcribing": 10.0,
+            "detecting_scenes": 15.5,
+            "generating_candidates": 16.0,
+            "scoring_candidates": 20.0,
+            "selecting_clips": 22.5,
+            "rendering_normal_clips": 30.0,
+            "rendering_shorts": 35.0,
+            "packaging_zip": 44.0,
+            "completed": 45.0,
+        },
+        poll_started_at=9.0,
+        poll_finished_at=45.0,
+    )
+
+    metrics = script.runtime_metrics(upload_seconds=1.25, job_timing=timing, total_seconds=50.0)
+
+    assert metrics["upload_time"] == 1.25
+    assert metrics["transcription_time"] == pytest.approx(5.5)
+    assert metrics["candidate_generation_time"] == pytest.approx(4.0)
+    assert metrics["scoring_time"] == pytest.approx(2.5)
+    assert metrics["render_time"] == pytest.approx(14.0)
+    assert metrics["total_time"] == 50.0
+    assert script.format_seconds(None) == "n/a"
+    assert script.format_seconds(1.23456) == "1.235s"
+
+
+def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
+    (tmp_path / "transcript_summary.json").write_text(
+        json.dumps({"segment_count": 8, "total_text_length": 420}),
+        encoding="utf-8",
+    )
+    (tmp_path / "candidate_summary.json").write_text(
+        json.dumps(
+            {
+                "short_candidates": 30,
+                "normal_candidates": 12,
+                "hard_gate_passed_count": 35,
+                "selected_below_threshold_backfill_count": 2,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "selected_clips_summary.json").write_text(
+        json.dumps(
+            {
+                "selected_normal_count": 1,
+                "selected_short_count": 2,
+                "selected_below_threshold_backfill_count": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    metrics = script.pipeline_metrics(tmp_path)
+
+    assert metrics == {
+        "transcript_segment_count": 8,
+        "total_transcript_text_length": 420,
+        "short_candidates_count": 30,
+        "normal_candidates_count": 12,
+        "hard_gate_passed_count": 35,
+        "selected_normal_count": 1,
+        "selected_short_count": 2,
+        "backfilled_count": 1,
+    }
+
+
+def test_validate_output_probe_checks_short_dimensions_and_normal_duration(tmp_path: Path) -> None:
+    valid_normal = script.ProbeResult(width=1920, height=1080, duration=58.8)
+    script.validate_output_probe({"type": "normal", "duration": 60.0}, tmp_path / "normal.mp4", valid_normal)
+
+    with pytest.raises(RuntimeError, match="normal output duration mismatch"):
+        script.validate_output_probe(
+            {"type": "normal", "duration": 60.0},
+            tmp_path / "normal_bad.mp4",
+            script.ProbeResult(width=1920, height=1080, duration=45.0),
+        )
+
+    with pytest.raises(RuntimeError, match="short output must be 1080x1920"):
+        script.validate_output_probe(
+            {"type": "short", "duration": 25.0},
+            tmp_path / "short_bad.mp4",
+            script.ProbeResult(width=720, height=1280, duration=25.0),
+        )
+
+    with pytest.raises(RuntimeError, match="invalid duration"):
+        script.validate_output_probe(
+            {"type": "short", "duration": 25.0},
+            tmp_path / "empty.mp4",
+            script.ProbeResult(width=1080, height=1920, duration=0.0),
+        )
+
+
 def test_resolve_input_video_requires_existing_file(tmp_path: Path) -> None:
     video = tmp_path / "spoken.mp4"
     video.write_bytes(b"mp4")

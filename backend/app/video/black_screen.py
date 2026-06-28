@@ -145,7 +145,7 @@ def detect_black_screen(
         pixel_threshold=pixel_threshold,
         ffmpeg_bin=ffmpeg_bin,
     )
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
+    result = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return parse_blackdetect_log(result.stderr)
 
 

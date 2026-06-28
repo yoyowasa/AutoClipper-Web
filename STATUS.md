@@ -1188,3 +1188,74 @@ completed / failed job ごとに生成診断 summary JSON を `storage/outputs/{
 
 - `fill_requested` は出力数を優先する policy。低 score backfill の品質改善は scoring / candidate generation の別 task。
 - この PowerShell セッションでは Docker が PATH に無かったため、検証時は `C:\Program Files\Docker\Docker\resources\bin` を一時追加して実行した。
+
+## 2026-06-29 Task 24 10-minute real video E2E validation
+
+### 目的
+
+10分級の実話者動画を docker compose runtime に流し、timing / candidate / output metrics を確認できる E2E validation path を追加する。
+
+### 変更ファイル
+
+- `backend/app/audio/extract.py`
+- `backend/app/audio/silence_detect.py`
+- `backend/app/render/render_normal.py`
+- `backend/app/render/render_short.py`
+- `backend/app/video/black_screen.py`
+- `backend/app/video/probe.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `scripts/e2e_real_video.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `scripts/e2e_real_video.py` に runtime metrics 出力を追加。
+  - upload time
+  - transcription time
+  - candidate generation time
+  - scoring time
+  - render time
+  - total time
+- `scripts/e2e_real_video.py` に pipeline metrics 出力を追加。
+  - transcript segment count
+  - total transcript text length
+  - short / normal candidate count
+  - hard gate passed count
+  - selected normal / short count
+  - backfilled count
+- downloaded MP4 の ffprobe を JSON parsing に変更し、duration を検証。
+- short output は `1080x1920` を検証。
+- normal output は export metadata に近い有効 duration を検証。
+- FFmpeg / ffprobe wrapper の `subprocess.run(..., text=True)` に `encoding="utf-8", errors="replace"` を追加。
+  - 日本語ファイル名または FFmpeg stderr の非UTF-8 byte 混入で audio extraction が落ちる問題への最小修正。
+- README に 10分動画 E2E command と metrics 説明を追加。
+
+### 検証結果
+
+- 初回10分動画 E2E: expected failure。job `job_767eded8360e41bfa8d8a315c9eb6784`、`audio_extraction_failed`、原因は FFmpeg stderr decode error。
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_real_video.py`: passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_ffmpeg_wrappers.py .\backend\tests\test_e2e_real_video_script.py`: 16 passed, 1 skipped。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 109 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `npm --workspace frontend run build`: passed。
+- `docker compose up -d --build`: backend / worker / frontend image rebuild succeeded。
+- 10分級実動画 E2E: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Downloads\【騒然】アンソロピックの裏に「本当の勝ち組」（ジェーンストリート_ゴールドマン・サックス_JPモルガン・チェース_ウォール街_マットエックス_AIデータセンター_解説後藤直義、森川潤） - NewsPicks _ニューズピックス (1080p, h264) (1).mp4' --normal-count 1 --short-count 1 --normal-min-duration 90 --normal-max-duration 600 --short-min-duration 20 --short-max-duration 75 --selection-policy fill_requested --mode low_cost --timeout 3600`: REAL VIDEO E2E PASSED。
+- 10分級 job `job_c18978fad90a425890c0f4c5b20e4eeb`:
+  - transcript 1008 segments / 9038 chars
+  - video duration 1331.747083 seconds
+  - candidates total 2400、normal 1200、short 1200
+  - hard gate passed 2400
+  - selected normal 1、short 1、backfill 0
+  - normal MP4 `1920x1080`, duration `599.389750s`
+  - short MP4 `1080x1920`, duration `44.960875s`
+  - runtime metrics: upload `1.407s`, transcription `97.078s`, candidate generation `91.344s`, scoring `n/a`, render `32.406s`, total `293.984s`
+- `.\.venv\Scripts\python .\scripts\e2e_sample_video.py`: E2E PASSED。job `job_0d5d03b61560483b81351353b98ac053`。
+- short real-video E2E: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video 'C:\Users\peace.YAGURUMAGIKUHM\Desktop\bandicam 2026-06-28 23-06-52-866.mp4' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --timeout 1800`: REAL VIDEO E2E PASSED。job `job_ba1a10409cba4834b3e192492c3cb565`。
+
+### 未解決事項
+
+- phase timing は status polling からの近似値。短時間で通過する `scoring_candidates` などは `n/a` になる場合がある。
+- この PowerShell セッションでは Docker が PATH に無かったため、検証時は `C:\Program Files\Docker\Docker\resources\bin` を一時追加して実行した。

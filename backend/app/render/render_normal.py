@@ -105,7 +105,7 @@ def render_normal_clip(
         normalize_audio=normalize_audio,
         ffmpeg_bin=ffmpeg_bin,
     )
-    subprocess.run(command, check=True, capture_output=True, text=True)
+    subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return Path(output_path)
 
 

@@ -87,5 +87,5 @@ def parse_ffprobe_output(output: str) -> VideoMetadata:
 
 def probe_metadata(input_path: str | Path, ffprobe_bin: str = "ffprobe") -> VideoMetadata:
     command = build_ffprobe_command(input_path, ffprobe_bin=ffprobe_bin)
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
+    result = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return parse_ffprobe_output(result.stdout)

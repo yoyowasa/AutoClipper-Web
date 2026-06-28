@@ -116,7 +116,7 @@ def detect_silence(
         min_duration=min_duration,
         ffmpeg_bin=ffmpeg_bin,
     )
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
+    result = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return parse_silence_detect_log(result.stderr, audio_duration=audio_duration)
 
 

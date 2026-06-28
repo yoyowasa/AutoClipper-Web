@@ -270,6 +270,22 @@ python scripts/e2e_real_video.py `
   --selection-policy fill_requested
 ```
 
+For a 10 minute spoken video, use a longer timeout and keep OpenAI scoring off:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_10min_sample.mp4 `
+  --normal-count 1 `
+  --short-count 1 `
+  --normal-min-duration 90 `
+  --normal-max-duration 600 `
+  --short-min-duration 20 `
+  --short-max-duration 75 `
+  --selection-policy fill_requested `
+  --mode low_cost `
+  --timeout 3600
+```
+
 The script:
 
 - uploads through `POST /api/videos/upload`
@@ -283,6 +299,9 @@ The script:
 - downloads generated MP4 files
 - probes downloaded MP4 files through worker `ffprobe`
 - verifies short MP4 files are `1080x1920`
+- verifies normal MP4 files have a valid duration close to the export metadata
+- prints runtime metrics: upload, transcription, candidate generation, scoring, render, and total time
+- prints pipeline metrics: transcript length, candidate counts, hard-gate pass count, selected counts, and backfilled count
 - prints diagnostic summary JSON files when they exist
 
 Expected outputs:

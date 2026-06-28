@@ -29,5 +29,5 @@ def extract_mono_wav(
     ffmpeg_bin: str = "ffmpeg",
 ) -> Path:
     command = build_extract_audio_command(input_path, output_path, ffmpeg_bin=ffmpeg_bin)
-    subprocess.run(command, check=True, capture_output=True, text=True)
+    subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return Path(output_path)
