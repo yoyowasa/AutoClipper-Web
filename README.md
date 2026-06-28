@@ -271,11 +271,17 @@ The script:
 - downloads generated MP4 files
 - probes downloaded MP4 files through worker `ffprobe`
 - verifies short MP4 files are `1080x1920`
+- prints diagnostic summary JSON files when they exist
 
 Expected outputs:
 
 ```text
 storage/outputs/{job_id}/transcript_segments.json
+storage/outputs/{job_id}/transcript_summary.json
+storage/outputs/{job_id}/audio_feature_summary.json
+storage/outputs/{job_id}/candidate_summary.json
+storage/outputs/{job_id}/rejection_summary.json
+storage/outputs/{job_id}/selected_clips_summary.json
 storage/outputs/{job_id}/selected_clips.json
 storage/outputs/{job_id}/download.zip
 storage/temp/e2e_real_{job_id}.zip
@@ -292,6 +298,29 @@ Troubleshooting:
 - `render failure`: check `render_failures.json` and `docker compose logs worker`.
 - First run can be slow because faster-whisper may download the model.
 - Use `--short-count 1 --normal-count 0` for a shorter first real run on a 1 minute sample.
+
+## Generation Diagnostics
+
+Each completed or expected-failure job writes compact summary files under:
+
+```text
+storage/outputs/{job_id}/
+```
+
+Summary files:
+
+- `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
+- `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
+- `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, duration stats, rule/final score stats.
+- `rejection_summary.json`: quality gate rejection counts and render failure counts.
+- `selected_clips_summary.json`: selected normal/short counts, selected IDs, durations, scores, output paths.
+
+The E2E scripts print these summaries:
+
+```powershell
+python scripts/e2e_sample_video.py
+python scripts/e2e_real_video.py --video path\to\spoken_sample.mp4
+```
 
 ## Storage
 

@@ -22,9 +22,10 @@ from app.audio.volume_features import AudioFeatures, audio_features_output_path,
 from app.candidates.generate_normal_candidates import generate_normal_candidates
 from app.candidates.generate_short_candidates import generate_short_candidates
 from app.candidates.merge_boundaries import Candidate, write_candidates
-from app.candidates.select_candidates import select_candidates, write_selected_clips
+from app.candidates.select_candidates import CandidateSelection, select_candidates, write_selected_clips
 from app.db import SessionLocal
 from app.ids import make_id
+from app.jobs.summaries import write_generation_summaries
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
 from app.models import ExportItem, Job, Video
 from app.render.render_normal import NormalRenderBatchResult, render_normal_clip, render_selected_normal_candidates
@@ -520,7 +521,8 @@ def run_dummy_autoclipper_job(
                 visited_statuses.append(next_status)
 
             exports = _create_dummy_exports(db, job, output_dir)
-            _create_zip(storage_paths.zip_path(job.id), exports)
+            summary_files = write_generation_summaries(output_dir, exports=exports)
+            _create_zip(storage_paths.zip_path(job.id), exports, metadata_files=summary_files)
 
             _set_status(db, job, "completed")
             visited_statuses.append("completed")
@@ -560,6 +562,17 @@ def run_autoclipper_job(
     metadata_files: list[Path] = []
     normal_result: NormalRenderBatchResult | None = None
     short_result: ShortRenderBatchResult | None = None
+    transcript_segments: list[TranscriptSegment] = []
+    silence_segments: list[SilenceSegment] = []
+    audio_features: AudioFeatures | None = None
+    normal_candidates: list[Candidate] = []
+    short_candidates: list[Candidate] = []
+    scored_candidates: list[Candidate] = []
+    selection: CandidateSelection | None = None
+    exports: list[ExportItem] = []
+    transcription_engine = "not_run"
+    used_fixture_transcript = False
+    summary_files: list[Path] = []
     temp_dir: Path | None = None
 
     with session_factory() as db:
@@ -571,11 +584,28 @@ def run_autoclipper_job(
             raise ValueError(f"video not found for job: {job_id}")
 
         settings = dict(job.settings_json or {})
+        used_fixture_transcript = _e2e_fixture_transcript_enabled(settings)
         job_dir = storage_paths.job_outputs(job.id)
         temp_dir = storage_paths.temp / job.id
         temp_dir.mkdir(parents=True, exist_ok=True)
         input_path = storage_paths.resolve_stored_file(video.stored_path)
         audio_path = temp_dir / "audio.wav"
+
+        def write_summaries() -> list[Path]:
+            return write_generation_summaries(
+                job_dir,
+                transcript_segments=transcript_segments,
+                audio_features=audio_features,
+                normal_candidates=normal_candidates,
+                short_candidates=short_candidates,
+                scored_candidates=scored_candidates,
+                selection=selection,
+                normal_result=normal_result,
+                short_result=short_result,
+                exports=exports,
+                transcription_engine=transcription_engine,
+                used_fixture_transcript=used_fixture_transcript,
+            )
 
         try:
             _set_status(db, job, "probing")
@@ -621,9 +651,11 @@ def run_autoclipper_job(
 
             _set_status(db, job, "transcribing")
             visited_statuses.append("transcribing")
-            if _e2e_fixture_transcript_enabled(settings):
+            if used_fixture_transcript:
+                transcription_engine = "e2e_fixture"
                 transcript_segments = _e2e_fixture_transcript(duration)
             else:
+                transcription_engine = "faster_whisper"
                 try:
                     transcript_segments = transcribe_audio(audio_path)
                 except Exception as exc:
@@ -740,6 +772,8 @@ def run_autoclipper_job(
             )
             metadata_files.append(render_failures_path)
             exports = [*normal_result.exports, *short_result.exports]
+            summary_files = write_summaries()
+            metadata_files.extend(path for path in summary_files if path not in metadata_files)
             if not exports:
                 raise PipelineExpectedError(
                     "no_usable_output",
@@ -758,6 +792,11 @@ def run_autoclipper_job(
             _fail_job(db, job_id, "pipeline_failed", str(exc))
             raise
         finally:
+            if not summary_files:
+                try:
+                    write_summaries()
+                except Exception:
+                    pass
             if temp_dir is not None:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 

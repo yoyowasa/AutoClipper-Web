@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from e2e_summary import print_job_summaries
 from e2e_sample_video import _absolute_url, _download, _poll_job, _request_json, _upload_file, _wait_http
 from generate_sample_video import _container_storage_path
 from smoke_runtime import ROOT, check_services, compose_exec, docker_env
@@ -283,6 +284,7 @@ def run_e2e(args: argparse.Namespace) -> int:
 
     final_status = _poll_job(args.backend_url, job_id, args.timeout)
     if final_status["status"] == "failed":
+        print_job_summaries(job_id)
         raise RuntimeError(f"job failed; {diagnose_no_clips(job_id, final_status)}")
 
     output_dir = job_output_dir(job_id)
@@ -290,9 +292,11 @@ def run_e2e(args: argparse.Namespace) -> int:
     results = _request_json(f"{args.backend_url}/api/jobs/{job_id}/results")
     exports = [*results.get("normalClips", []), *results.get("shorts", [])]
     if not exports:
+        print_job_summaries(job_id)
         raise RuntimeError(f"job completed with no clips; {diagnose_no_clips(job_id, final_status)}")
 
     validate_selected_artifact(output_dir)
+    print_job_summaries(job_id)
     download_and_probe_outputs(backend_url=args.backend_url, job_id=job_id, results=results, env=env)
     print(f"job outputs: {output_dir}")
     print("REAL VIDEO E2E PASSED")

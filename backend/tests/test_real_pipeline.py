@@ -24,6 +24,15 @@ from app.video.probe import VideoMetadata
 from app.video.scene_detect import SceneSegment
 
 
+SUMMARY_FILENAMES = [
+    "transcript_summary.json",
+    "audio_feature_summary.json",
+    "candidate_summary.json",
+    "rejection_summary.json",
+    "selected_clips_summary.json",
+]
+
+
 @pytest.fixture()
 def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     database_path = tmp_path / "test.db"
@@ -174,12 +183,42 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         "scored_candidates.json",
         "selected_clips.json",
         "render_failures.json",
+        *SUMMARY_FILENAMES,
     ]:
         assert (job_dir / name).is_file()
 
     selected_payload = json.loads((job_dir / "selected_clips.json").read_text(encoding="utf-8"))
     assert len(selected_payload["normalClips"]) == 1
     assert len(selected_payload["shorts"]) == 1
+    transcript_summary = json.loads((job_dir / "transcript_summary.json").read_text(encoding="utf-8"))
+    assert transcript_summary["segment_count"] == 4
+    assert transcript_summary["total_text_length"] > 20
+    assert transcript_summary["total_speech_duration"] == 195.0
+    assert transcript_summary["transcription_engine"] == "faster_whisper"
+    assert transcript_summary["used_fixture_transcript"] is False
+
+    audio_summary = json.loads((job_dir / "audio_feature_summary.json").read_text(encoding="utf-8"))
+    assert audio_summary["has_audio_features"] is True
+    assert audio_summary["duration"] == 240.0
+    assert audio_summary["volume_peak"] == 0.5
+
+    candidate_summary = json.loads((job_dir / "candidate_summary.json").read_text(encoding="utf-8"))
+    assert candidate_summary["total_candidates"] > 0
+    assert candidate_summary["normal_candidates"] > 0
+    assert candidate_summary["short_candidates"] > 0
+    assert candidate_summary["candidates_with_transcript_text"] == candidate_summary["total_candidates"]
+    assert candidate_summary["avg_rule_score"] is not None
+    assert candidate_summary["avg_final_score"] is not None
+
+    selected_summary = json.loads((job_dir / "selected_clips_summary.json").read_text(encoding="utf-8"))
+    assert selected_summary["selected_normal_count"] == 1
+    assert selected_summary["selected_short_count"] == 1
+    assert len(selected_summary["selected_ids"]) == 2
+    assert all(path["video_path"] for path in selected_summary["output_paths"].values())
+
+    rejection_summary = json.loads((job_dir / "rejection_summary.json").read_text(encoding="utf-8"))
+    assert "rejected_by_reason" in rejection_summary
+    assert rejection_summary["render_failure_count"] == 0
     assert (job_dir / "normal" / "normal_01.json").is_file()
     assert (job_dir / "shorts" / "short_01.json").is_file()
 
@@ -192,6 +231,8 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "normal_01.json" in names
     assert "short_01.json" in names
     assert "selected_clips.json" in names
+    assert "transcript_summary.json" in names
+    assert "selected_clips_summary.json" in names
 
 
 def test_real_pipeline_openai_failure_falls_back_to_rule_scoring(client: TestClient) -> None:
@@ -356,6 +397,11 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
         (storage.outputs / created["jobId"] / "transcript_segments.json").read_text(encoding="utf-8")
     )
     assert transcript_payload[0]["text"].startswith("Why automation mistakes matter before launch.")
+    transcript_summary = json.loads(
+        (storage.outputs / created["jobId"] / "transcript_summary.json").read_text(encoding="utf-8")
+    )
+    assert transcript_summary["transcription_engine"] == "e2e_fixture"
+    assert transcript_summary["used_fixture_transcript"] is True
     assert not (storage.temp / created["jobId"]).exists()
 
 
@@ -430,6 +476,15 @@ def test_real_pipeline_marks_failed_without_unhandled_exception_when_no_output_i
         job = db.get(Job, created["jobId"])
         assert job is not None
         assert job.error_message == "Pipeline completed analysis but produced no usable clips."
+    job_dir = storage.outputs / created["jobId"]
+    for name in SUMMARY_FILENAMES:
+        assert (job_dir / name).is_file()
+    rejection_summary = json.loads((job_dir / "rejection_summary.json").read_text(encoding="utf-8"))
+    assert rejection_summary["render_failure_count"] == 2
+    assert rejection_summary["render_failures_by_type"] == {"normal": 1, "short": 1}
+    selected_summary = json.loads((job_dir / "selected_clips_summary.json").read_text(encoding="utf-8"))
+    assert selected_summary["selected_normal_count"] == 1
+    assert selected_summary["selected_short_count"] == 1
 
 
 def test_real_pipeline_marks_failed_for_missing_audio_without_unhandled_exception(client: TestClient) -> None:
@@ -531,6 +586,15 @@ def test_real_pipeline_fails_silent_audio_before_transcription_and_candidates(cl
     assert payload["details"]["volume_peak"] == 0.0
     job_dir = storage.outputs / created["jobId"]
     assert (job_dir / "audio_features.json").is_file()
+    for name in SUMMARY_FILENAMES:
+        assert (job_dir / name).is_file()
+    audio_summary = json.loads((job_dir / "audio_feature_summary.json").read_text(encoding="utf-8"))
+    assert audio_summary["silence_ratio"] == 1.0
+    assert audio_summary["speech_seconds"] == 0.0
+    transcript_summary = json.loads((job_dir / "transcript_summary.json").read_text(encoding="utf-8"))
+    assert transcript_summary["segment_count"] == 0
+    candidate_summary = json.loads((job_dir / "candidate_summary.json").read_text(encoding="utf-8"))
+    assert candidate_summary["total_candidates"] == 0
     assert not (job_dir / "transcript_segments.json").exists()
     assert not (job_dir / "candidates.json").exists()
     assert not (storage.temp / created["jobId"]).exists()
@@ -601,6 +665,13 @@ def test_real_pipeline_fails_unusable_transcript_before_candidates(client: TestC
     assert payload["details"]["average_confidence"] == 0.95
     job_dir = storage.outputs / created["jobId"]
     assert (job_dir / "transcript_segments.json").is_file()
+    for name in SUMMARY_FILENAMES:
+        assert (job_dir / name).is_file()
+    transcript_summary = json.loads((job_dir / "transcript_summary.json").read_text(encoding="utf-8"))
+    assert transcript_summary["segment_count"] == 2
+    assert transcript_summary["average_confidence"] == 0.95
+    candidate_summary = json.loads((job_dir / "candidate_summary.json").read_text(encoding="utf-8"))
+    assert candidate_summary["total_candidates"] == 0
     assert not (job_dir / "candidates.json").exists()
     assert not (storage.temp / created["jobId"]).exists()
 
@@ -664,3 +735,8 @@ def test_real_pipeline_marks_failed_when_no_candidates_found(client: TestClient)
     assert payload["status"] == "failed"
     assert payload["error"]["code"] == "no_candidates_found"
     assert "No clip candidates" in payload["error"]["message"]
+    job_dir = storage.outputs / created["jobId"]
+    for name in SUMMARY_FILENAMES:
+        assert (job_dir / name).is_file()
+    candidate_summary = json.loads((job_dir / "candidate_summary.json").read_text(encoding="utf-8"))
+    assert candidate_summary["total_candidates"] == 0

@@ -14,6 +14,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - Task 18 Real sample video E2E validation の実装完了。
 - Task 19 Real spoken-video E2E without fixture transcript の実装完了。
 - Task 20 Add early failure for silent or unusable audio の実装完了。
+- Task 21 Add generation diagnostic summaries の実装完了。
 - 初期 FastAPI backend data model / API routes の実装完了。
 - RQ worker と real AutoClipper pipeline の実装完了。
 - Next.js frontend upload flow の実装完了。
@@ -61,6 +62,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 2026-06-28: `scripts/generate_sample_video.py` と `scripts/e2e_sample_video.py` を追加し、synthetic MP4 の real runtime E2E 導線を実装。
 - 2026-06-28: `scripts/e2e_real_video.py` を追加し、ユーザー supplied spoken video の faster-whisper E2E 導線を実装。
 - 2026-06-28: silent / unusable audio と unusable transcript の早期失敗を worker pipeline に追加。
+- 2026-06-28: completed / failed job の generation diagnostic summary JSON 出力を追加。
 
 ## 修正履歴
 
@@ -1038,3 +1040,49 @@ silent / unusable audio または unusable transcript を candidate generation �
 ### 未解決事項
 
 - 閾値は現時点の保守的な初期値。多様な実動画で false positive / false negative が出る場合は実測値で調整する。
+
+## 2026-06-28 Task 21 Add generation diagnostic summaries
+
+### 目的
+
+completed / failed job ごとに生成診断 summary JSON を `storage/outputs/{job_id}/` へ保存し、E2E scripts から短く確認できるようにする。
+
+### 変更ファイル
+
+- `backend/app/jobs/summaries.py`
+- `backend/app/jobs/runner.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `scripts/e2e_summary.py`
+- `scripts/e2e_sample_video.py`
+- `scripts/e2e_real_video.py`
+- `README.md`
+- `STATUS.md`
+
+### 実装内容
+
+- `transcript_summary.json` を追加。segment count、text length、speech duration、average confidence、first segments、engine、fixture flag を保存。
+- `audio_feature_summary.json` を追加。duration、silence ratio、speech density、volume peak、silent/speech seconds を保存。
+- `candidate_summary.json` を追加。total / normal / short counts、transcript text coverage、duration / rule_score / final_score stats を保存。
+- `rejection_summary.json` を追加。quality gate rejection と render failure の集計を保存。
+- `selected_clips_summary.json` を追加。selected counts、IDs、durations、scores、output paths を保存。
+- 成功時は ZIP metadata に summary files を含める。
+- 失敗時は `finally` で summary files を保存する。
+- `scripts/e2e_sample_video.py` と `scripts/e2e_real_video.py` で summary files を表示する。
+- README に Generation Diagnostics を追記。
+
+### 検証結果
+
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_summary.py .\scripts\e2e_sample_video.py .\scripts\e2e_real_video.py`: passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_e2e_real_video_script.py`: 6 passed。
+- `.\.venv\Scripts\python -m pytest .\backend\tests\test_real_pipeline.py`: 8 passed, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m pytest .\backend`: 98 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run build`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `.\.venv\Scripts\python .\scripts\e2e_sample_video.py --start`: E2E PASSED。summary 表示確認済み。job `job_31cea2c5626448dabe2833953fc425ae`。
+
+### 未解決事項
+
+- Task 21 では実話者動画 E2E は未再実行。summary 出力は unit / pipeline tests と synthetic docker E2E で確認済み。

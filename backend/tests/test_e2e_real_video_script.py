@@ -10,6 +10,7 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import e2e_real_video as script  # noqa: E402
+import e2e_summary  # noqa: E402
 
 
 def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
@@ -157,3 +158,55 @@ def test_diagnose_no_clips_classifies_failure_modes(tmp_path: Path, monkeypatch:
     )
     render_failure = script.diagnose_no_clips(job_id, {"error": {"code": "no_usable_output", "message": "none"}})
     assert "cause=render failure" in render_failure
+
+
+def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    job_id = "job_summary"
+    output_dir = tmp_path / "storage" / "outputs" / job_id
+    output_dir.mkdir(parents=True)
+    (output_dir / "transcript_summary.json").write_text(
+        json.dumps(
+            {
+                "segment_count": 2,
+                "total_text_length": 80,
+                "total_speech_duration": 42.0,
+                "average_confidence": 0.91,
+                "transcription_engine": "faster_whisper",
+                "used_fixture_transcript": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (output_dir / "candidate_summary.json").write_text(
+        json.dumps(
+            {
+                "total_candidates": 12,
+                "normal_candidates": 4,
+                "short_candidates": 8,
+                "candidates_with_transcript_text": 12,
+                "avg_duration": 52.5,
+                "avg_final_score": 71.2,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    line = e2e_summary.summary_line(
+        "transcript_summary.json",
+        {
+            "segment_count": 2,
+            "total_text_length": 80,
+            "total_speech_duration": 42.0,
+            "average_confidence": 0.91,
+            "transcription_engine": "faster_whisper",
+            "used_fixture_transcript": False,
+        },
+    )
+    assert "segments=2" in line
+    assert "engine=faster_whisper" in line
+
+    e2e_summary.print_job_summaries(job_id, root=tmp_path)
+    output = capsys.readouterr().out
+    assert "transcript_summary.json: segments=2" in output
+    assert "candidate_summary.json: total=12" in output
+    assert "audio_feature_summary.json: missing" in output

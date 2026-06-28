@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from e2e_summary import print_job_summaries
 from generate_sample_video import DEFAULT_OUTPUT, _container_storage_path, generate_sample_video
 from smoke_runtime import ROOT, check_http, check_services, compose, compose_exec, docker_env
 
@@ -157,6 +158,7 @@ def run_e2e(
 
     final_status = _poll_job(backend_url, job_id, timeout_seconds)
     if final_status["status"] == "failed":
+        print_job_summaries(job_id)
         error = final_status.get("error") or {}
         code = str(error.get("code", "unknown"))
         message = str(error.get("message", ""))
@@ -168,8 +170,10 @@ def run_e2e(
     results = _request_json(f"{backend_url}/api/jobs/{job_id}/results")
     exports = [*results["normalClips"], *results["shorts"]]
     if not exports:
+        print_job_summaries(job_id)
         raise RuntimeError("job completed but returned no output exports")
 
+    print_job_summaries(job_id)
     first_export = exports[0]
     output_mp4 = _download(_absolute_url(backend_url, first_export["downloadUrl"]), DEFAULT_DOWNLOAD)
     container_mp4 = _container_storage_path(output_mp4)
