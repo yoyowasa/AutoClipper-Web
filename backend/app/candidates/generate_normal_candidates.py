@@ -1,0 +1,29 @@
+from app.audio.silence_detect import SilenceSegment
+from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.candidates.merge_boundaries import (
+    Candidate,
+    CandidateGenerationSettings,
+    generate_window_candidates,
+    parse_generation_settings,
+)
+from app.video.scene_detect import SceneSegment
+
+
+def generate_normal_candidates(
+    transcript_segments: list[TranscriptSegment],
+    scene_segments: list[SceneSegment],
+    silence_segments: list[SilenceSegment],
+    settings: CandidateGenerationSettings | dict | None = None,
+) -> list[Candidate]:
+    parsed_settings = parse_generation_settings(settings)
+    return generate_window_candidates(
+        "normal",
+        transcript_segments=transcript_segments,
+        scene_segments=scene_segments,
+        silence_segments=silence_segments,
+        min_duration=parsed_settings.normal_min_duration,
+        max_duration=parsed_settings.normal_max_duration,
+        step_seconds=parsed_settings.normal_step_seconds,
+        speech_boundary_tolerance=parsed_settings.speech_boundary_tolerance,
+        max_candidates=parsed_settings.max_candidates,
+    )

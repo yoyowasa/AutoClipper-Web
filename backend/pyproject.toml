@@ -1,0 +1,41 @@
+[project]
+name = "autoclipper-backend"
+version = "0.1.0"
+description = "FastAPI backend for AutoClipper Web"
+requires-python = ">=3.11"
+dependencies = [
+  "faster-whisper>=1.0.0,<2.0.0",
+  "fastapi>=0.115.0,<1.0.0",
+  "openai>=1.100.0,<2.0.0",
+  "python-multipart>=0.0.20,<1.0.0",
+  "redis>=5.0.0,<7.0.0",
+  "rq>=2.0.0,<3.0.0",
+  "scenedetect[opencv]>=0.6.0,<0.7.0",
+  "sqlalchemy>=2.0.0,<3.0.0",
+  "uvicorn[standard]>=0.30.0,<1.0.0",
+  "pydantic-settings>=2.4.0,<3.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27.0,<1.0.0",
+  "pytest>=8.0.0,<9.0.0",
+  "ruff>=0.8.0,<1.0.0"
+]
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F"]
+
+[build-system]
+requires = ["setuptools>=69.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

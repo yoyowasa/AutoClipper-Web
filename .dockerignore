@@ -1,0 +1,10 @@
+node_modules/
+frontend/node_modules/
+.venv/
+.git/
+.next/
+frontend/.next/
+storage/uploads/*
+storage/temp/*
+storage/outputs/*
+*.log

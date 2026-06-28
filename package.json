@@ -1,0 +1,13 @@
+{
+  "name": "autoclipper",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "dev:frontend": "npm --workspace frontend run dev",
+    "typecheck:frontend": "npm --workspace frontend run typecheck",
+    "lint:frontend": "npm --workspace frontend run lint"
+  }
+}

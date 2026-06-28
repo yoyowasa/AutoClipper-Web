@@ -1,0 +1,48 @@
+SUCCESS_STATUSES = [
+    "queued",
+    "probing",
+    "extracting_audio",
+    "transcribing",
+    "detecting_scenes",
+    "generating_candidates",
+    "scoring_candidates",
+    "selecting_clips",
+    "rendering_normal_clips",
+    "rendering_shorts",
+    "packaging_zip",
+    "completed",
+]
+
+PROGRESS_MAP = {
+    "uploaded": 0,
+    "queued": 5,
+    "probing": 10,
+    "extracting_audio": 18,
+    "transcribing": 30,
+    "detecting_scenes": 40,
+    "generating_candidates": 50,
+    "scoring_candidates": 65,
+    "selecting_clips": 72,
+    "rendering_normal_clips": 82,
+    "rendering_shorts": 92,
+    "packaging_zip": 98,
+    "completed": 100,
+    "failed": 100,
+}
+
+CURRENT_STEP_MAP = {
+    "uploaded": "Uploaded",
+    "queued": "Queued",
+    "probing": "Reading video metadata",
+    "extracting_audio": "Extracting audio",
+    "transcribing": "Transcribing audio",
+    "detecting_scenes": "Detecting scenes",
+    "generating_candidates": "Generating clip candidates",
+    "scoring_candidates": "Scoring candidates",
+    "selecting_clips": "Selecting clips",
+    "rendering_normal_clips": "Rendering normal clips",
+    "rendering_shorts": "Rendering shorts",
+    "packaging_zip": "Packaging ZIP",
+    "completed": "Completed",
+    "failed": "Failed",
+}
