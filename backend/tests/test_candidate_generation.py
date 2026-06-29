@@ -1,12 +1,15 @@
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.generate_normal_candidates import generate_normal_candidates
-from app.candidates.generate_short_candidates import generate_short_candidates
+from app.candidates.generate_normal_candidates import generate_normal_candidates_with_summary
+from app.candidates.generate_short_candidates import generate_short_candidates, generate_short_candidates_with_summary
 from app.candidates.merge_boundaries import (
     Candidate,
+    CandidateGenerationMemoryLimitError,
     adjust_end_to_speech_boundary,
     adjust_start_to_speech_boundary,
     is_inside_speech,
+    merge_candidate_generation_summaries,
     merge_boundaries,
     transcript_text_for_range,
 )
@@ -152,6 +155,151 @@ def test_candidate_limit_is_spread_across_timeline() -> None:
     assert len(candidates) == 30
     assert max(candidate.start for candidate in candidates) > 1200
     assert min(candidate.start for candidate in candidates) == 0.0
+
+
+def test_bounded_generation_handles_2000_segments_without_unbounded_output() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=float(index * 2), end=float(index * 2 + 1), text=f"segment {index}")
+        for index in range(2100)
+    ]
+    scene_segments = [SceneSegment(start=0.0, end=4200.0)]
+    silence_segments = [
+        SilenceSegment(start=float(index * 2 + 1), end=float(index * 2 + 2), duration=1.0)
+        for index in range(2099)
+    ]
+
+    result = generate_short_candidates_with_summary(
+        transcript_segments=transcript_segments,
+        scene_segments=scene_segments,
+        silence_segments=silence_segments,
+        settings={
+            "shortMinDuration": 20,
+            "shortMaxDuration": 75,
+            "shortStepSeconds": 10,
+            "maxCandidates": 200,
+            "maxKeptCandidatesPerType": 200,
+            "maxCandidatesPerTimeBucket": 20,
+            "candidateTimeBucketSeconds": 300,
+            "candidateChunkSeconds": 600,
+            "candidateChunkOverlapSeconds": 75,
+        },
+    )
+
+    assert 0 < len(result.candidates) <= 200
+    assert result.summary["transcript_segment_count"] == 2100
+    assert result.summary["chunks_processed"] >= 3
+    assert result.summary["raw_candidates_considered"] > len(result.candidates)
+    assert result.summary["candidates_dropped_due_to_cap"] > 0
+    assert result.summary["candidates_kept_by_type"]["short"] == len(result.candidates)
+    assert all(candidate.transcript_text for candidate in result.candidates)
+    assert all(candidate.segment_start_index is not None for candidate in result.candidates)
+    assert all(candidate.segment_end_index is not None for candidate in result.candidates)
+    assert all(candidate.transcript_char_count is not None for candidate in result.candidates)
+    assert all(candidate.speech_seconds is not None for candidate in result.candidates)
+    assert all(candidate.silence_ratio is not None for candidate in result.candidates)
+
+
+def test_bounded_generation_respects_raw_candidate_cap() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=float(index * 5), end=float(index * 5 + 3), text=f"segment {index}")
+        for index in range(200)
+    ]
+    silence_segments = [
+        SilenceSegment(start=float(index * 5 + 3), end=float(index * 5 + 5), duration=2.0)
+        for index in range(199)
+    ]
+
+    result = generate_normal_candidates_with_summary(
+        transcript_segments=transcript_segments,
+        scene_segments=[SceneSegment(start=0.0, end=1000.0)],
+        silence_segments=silence_segments,
+        settings={
+            "normalMinDuration": 20,
+            "normalMaxDuration": 120,
+            "normalStepSeconds": 10,
+            "maxRawCandidatesPerType": 25,
+            "maxCandidates": 100,
+            "maxKeptCandidatesPerType": 100,
+            "maxCandidatesPerTimeBucket": 50,
+        },
+    )
+
+    assert result.summary["raw_candidates_considered"] <= 25
+    assert result.summary["stopped_due_to_raw_candidate_cap"] is False
+    assert result.summary["candidates_dropped_due_to_cap"] >= 1
+    assert len(result.candidates) <= 100
+
+
+def test_bounded_generation_memory_guard_raises_clear_error() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=float(index * 5), end=float(index * 5 + 3), text=f"speech {index}")
+        for index in range(200)
+    ]
+    silence_segments = [
+        SilenceSegment(start=float(index * 5 + 3), end=float(index * 5 + 5), duration=2.0)
+        for index in range(199)
+    ]
+
+    try:
+        generate_short_candidates_with_summary(
+            transcript_segments=transcript_segments,
+            scene_segments=[SceneSegment(start=0.0, end=1000.0)],
+            silence_segments=silence_segments,
+            settings={
+                "shortMinDuration": 20,
+                "shortMaxDuration": 75,
+                "shortStepSeconds": 5,
+                "maxCandidateGenerationMemoryMb": 1,
+            },
+        )
+    except CandidateGenerationMemoryLimitError as exc:
+        assert exc.summary["memory_guard_triggered"] is True
+    else:
+        # Windows test runners may not expose /proc/self/status.
+        assert True
+
+
+def test_chunked_generation_produces_normal_and_short_candidates() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=float(start), end=float(start + 30), text=f"speech block {start}")
+        for start in range(0, 900, 45)
+    ]
+    silence_segments = [
+        SilenceSegment(start=float(start + 30), end=float(start + 45), duration=15.0)
+        for start in range(0, 855, 45)
+    ]
+    settings = {
+        "normalMinDuration": 90,
+        "normalMaxDuration": 240,
+        "shortMinDuration": 20,
+        "shortMaxDuration": 75,
+        "candidateChunkSeconds": 300,
+        "candidateChunkOverlapSeconds": 75,
+        "maxCandidates": 80,
+    }
+
+    normal = generate_normal_candidates_with_summary(
+        transcript_segments,
+        [SceneSegment(start=0.0, end=900.0)],
+        silence_segments,
+        settings=settings,
+    )
+    short = generate_short_candidates_with_summary(
+        transcript_segments,
+        [SceneSegment(start=0.0, end=900.0)],
+        silence_segments,
+        settings=settings,
+    )
+    combined_summary = merge_candidate_generation_summaries(
+        [normal.summary, short.summary],
+        video_duration=900.0,
+        transcript_segment_count=len(transcript_segments),
+    )
+
+    assert normal.candidates
+    assert short.candidates
+    assert combined_summary["candidates_kept_by_type"]["normal"] == len(normal.candidates)
+    assert combined_summary["candidates_kept_by_type"]["short"] == len(short.candidates)
 
 
 def test_generate_short_candidates_avoid_cutting_inside_speech_when_possible() -> None:

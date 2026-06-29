@@ -35,6 +35,11 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.openai_fallback_to_rule_score is True
     assert args.ensure_selected_openai_scored is None
     assert args.openai_finalist_scoring_limit is None
+    assert args.max_raw_candidates_per_type is None
+    assert args.max_kept_candidates_per_type is None
+    assert args.max_candidates_per_time_bucket is None
+    assert args.candidate_time_bucket_seconds is None
+    assert args.max_candidate_generation_memory_mb is None
 
     false_args = script.parse_args(["--video", "spoken.mp4", "--burn-subtitles", "false"])
     assert false_args.burn_subtitles is False
@@ -129,6 +134,20 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "true",
             "--openai-finalist-scoring-limit",
             "4",
+            "--max-raw-candidates-per-type",
+            "1000",
+            "--max-kept-candidates-per-type",
+            "300",
+            "--max-candidates-per-time-bucket",
+            "25",
+            "--candidate-time-bucket-seconds",
+            "120",
+            "--max-candidate-generation-memory-mb",
+            "2048",
+            "--candidate-chunk-seconds",
+            "300",
+            "--candidate-chunk-overlap-seconds",
+            "75",
             "--no-openai-fallback-to-rule-score",
             "--no-burn-subtitles",
         ]
@@ -152,6 +171,13 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["openaiFinalistScoringLimit"] == 4
     assert settings["burnSubtitles"] is False
     assert settings["profile"] == "talk"
+    assert settings["maxRawCandidatesPerType"] == 1000
+    assert settings["maxKeptCandidatesPerType"] == 300
+    assert settings["maxCandidatesPerTimeBucket"] == 25
+    assert settings["candidateTimeBucketSeconds"] == 120.0
+    assert settings["maxCandidateGenerationMemoryMb"] == 2048
+    assert settings["candidateChunkSeconds"] == 300.0
+    assert settings["candidateChunkOverlapSeconds"] == 75.0
 
     high_quality_args = script.parse_args(["--video", "spoken.mp4", "--mode", "high_quality"])
     assert script.build_job_settings(high_quality_args)["useOpenAIScoring"] is True
@@ -229,6 +255,21 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
+    (tmp_path / "candidate_generation_summary.json").write_text(
+        json.dumps(
+            {
+                "chunks_processed": 6,
+                "raw_candidates_considered": 12000,
+                "candidates_kept_by_type": {"normal": 12, "short": 30},
+                "candidates_dropped_due_to_cap": 500,
+                "candidates_dropped_due_to_duplicate": 25,
+                "peak_memory_mb": 512.5,
+                "memory_guard_triggered": False,
+                "configured_caps": {"maxRawCandidatesPerType": 250000},
+            }
+        ),
+        encoding="utf-8",
+    )
     (tmp_path / "selected_clips_summary.json").write_text(
         json.dumps(
             {
@@ -263,6 +304,14 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
         "total_candidates_count": 42,
         "short_candidates_count": 30,
         "normal_candidates_count": 12,
+        "candidate_generation_chunks_processed": 6,
+        "candidate_generation_raw_considered": 12000,
+        "candidate_generation_kept_by_type": {"normal": 12, "short": 30},
+        "candidate_generation_dropped_due_to_cap": 500,
+        "candidate_generation_dropped_due_to_duplicate": 25,
+        "candidate_generation_peak_memory_mb": 512.5,
+        "candidate_generation_memory_guard_triggered": False,
+        "candidate_generation_caps": {"maxRawCandidatesPerType": 250000},
         "hard_gate_passed_count": 35,
         "hard_gate_rejected_count": 7,
         "requested_normal_count": 2,
@@ -553,6 +602,23 @@ def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: py
     assert "limit=20" in openai_line
     assert "finalists=2" in openai_line
     assert "selected_ai=2" in openai_line
+    candidate_generation_line = e2e_summary.summary_line(
+        "candidate_generation_summary.json",
+        {
+            "video_duration": 3600,
+            "transcript_segment_count": 2000,
+            "chunks_processed": 12,
+            "raw_candidates_considered": 50000,
+            "candidates_kept_by_type": {"normal": 1200, "short": 1200},
+            "candidates_dropped_due_to_cap": 48000,
+            "candidates_dropped_due_to_duplicate": 100,
+            "peak_memory_mb": 640.5,
+            "memory_guard_triggered": False,
+        },
+    )
+    assert "chunks=12" in candidate_generation_line
+    assert "raw=50000" in candidate_generation_line
+    assert "memory_guard=False" in candidate_generation_line
 
     e2e_summary.print_job_summaries(job_id, root=tmp_path)
     output = capsys.readouterr().out

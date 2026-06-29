@@ -128,6 +128,13 @@ def positive_float(value: str) -> float:
     return parsed
 
 
+def non_negative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must be >= 0")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a real spoken-video E2E without fixture transcript.")
     parser.add_argument("--video", type=Path, required=True, help="Path to an MP4 with clear spoken audio.")
@@ -157,6 +164,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-openai-fallback-to-rule-score", dest="openai_fallback_to_rule_score", action="store_false")
     parser.add_argument("--ensure-selected-openai-scored", nargs="?", const=True, default=None, type=parse_bool)
     parser.add_argument("--openai-finalist-scoring-limit", type=non_negative_int, default=None)
+    parser.add_argument("--max-raw-candidates-per-type", type=non_negative_int, default=None)
+    parser.add_argument("--max-kept-candidates-per-type", type=non_negative_int, default=None)
+    parser.add_argument("--max-candidates-per-time-bucket", type=non_negative_int, default=None)
+    parser.add_argument("--candidate-time-bucket-seconds", type=positive_float, default=None)
+    parser.add_argument("--max-candidate-generation-memory-mb", type=non_negative_int, default=None)
+    parser.add_argument("--candidate-chunk-seconds", type=positive_float, default=None)
+    parser.add_argument("--candidate-chunk-overlap-seconds", type=non_negative_float, default=None)
     return parser
 
 
@@ -196,7 +210,7 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
     if finalist_limit is None:
         requested_count = int(args.normal_count) + int(args.short_count)
         finalist_limit = requested_count + 2 if requested_count > 0 else 0
-    return {
+    settings = {
         "mode": args.mode,
         "profile": args.profile,
         "normalClipCount": args.normal_count,
@@ -217,6 +231,17 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "normalizeAudio": False,
         "e2eFixtureTranscript": False,
     }
+    optional_settings = {
+        "maxRawCandidatesPerType": args.max_raw_candidates_per_type,
+        "maxKeptCandidatesPerType": args.max_kept_candidates_per_type,
+        "maxCandidatesPerTimeBucket": args.max_candidates_per_time_bucket,
+        "candidateTimeBucketSeconds": args.candidate_time_bucket_seconds,
+        "maxCandidateGenerationMemoryMb": args.max_candidate_generation_memory_mb,
+        "candidateChunkSeconds": args.candidate_chunk_seconds,
+        "candidateChunkOverlapSeconds": args.candidate_chunk_overlap_seconds,
+    }
+    settings.update({key: value for key, value in optional_settings.items() if value is not None})
+    return settings
 
 
 def format_seconds(value: float | None) -> str:
@@ -363,6 +388,7 @@ def pipeline_metrics(output_dir: Path) -> dict[str, Any]:
     video_metadata = read_summary(output_dir, "video_metadata.json")
     transcript = read_summary(output_dir, "transcript_summary.json")
     candidates = read_summary(output_dir, "candidate_summary.json")
+    candidate_generation = read_summary(output_dir, "candidate_generation_summary.json")
     selected = read_summary(output_dir, "selected_clips_summary.json")
     rejections = read_summary(output_dir, "rejection_summary.json")
     zip_path = output_dir / "download.zip"
@@ -377,6 +403,14 @@ def pipeline_metrics(output_dir: Path) -> dict[str, Any]:
         "total_candidates_count": candidates.get("total_candidates"),
         "short_candidates_count": candidates.get("short_candidates"),
         "normal_candidates_count": candidates.get("normal_candidates"),
+        "candidate_generation_chunks_processed": candidate_generation.get("chunks_processed"),
+        "candidate_generation_raw_considered": candidate_generation.get("raw_candidates_considered"),
+        "candidate_generation_kept_by_type": candidate_generation.get("candidates_kept_by_type"),
+        "candidate_generation_dropped_due_to_cap": candidate_generation.get("candidates_dropped_due_to_cap"),
+        "candidate_generation_dropped_due_to_duplicate": candidate_generation.get("candidates_dropped_due_to_duplicate"),
+        "candidate_generation_peak_memory_mb": candidate_generation.get("peak_memory_mb"),
+        "candidate_generation_memory_guard_triggered": candidate_generation.get("memory_guard_triggered"),
+        "candidate_generation_caps": candidate_generation.get("configured_caps"),
         "hard_gate_passed_count": candidates.get("hard_gate_passed_count"),
         "hard_gate_rejected_count": candidates.get("hard_gate_rejected_count"),
         "requested_normal_count": requested_normal,
@@ -427,6 +461,14 @@ def print_pipeline_metrics(metrics: dict[str, Any]) -> None:
     print(f"  total_candidates_count={metrics.get('total_candidates_count')}")
     print(f"  short_candidates_count={metrics.get('short_candidates_count')}")
     print(f"  normal_candidates_count={metrics.get('normal_candidates_count')}")
+    print(f"  candidate_generation_chunks_processed={metrics.get('candidate_generation_chunks_processed')}")
+    print(f"  candidate_generation_raw_considered={metrics.get('candidate_generation_raw_considered')}")
+    print(f"  candidate_generation_kept_by_type={metrics.get('candidate_generation_kept_by_type')}")
+    print(f"  candidate_generation_dropped_due_to_cap={metrics.get('candidate_generation_dropped_due_to_cap')}")
+    print(f"  candidate_generation_dropped_due_to_duplicate={metrics.get('candidate_generation_dropped_due_to_duplicate')}")
+    print(f"  candidate_generation_peak_memory_mb={metrics.get('candidate_generation_peak_memory_mb')}")
+    print(f"  candidate_generation_memory_guard_triggered={metrics.get('candidate_generation_memory_guard_triggered')}")
+    print(f"  candidate_generation_caps={metrics.get('candidate_generation_caps')}")
     print(f"  hard_gate_passed_count={metrics.get('hard_gate_passed_count')}")
     print(f"  hard_gate_rejected_count={metrics.get('hard_gate_rejected_count')}")
     print(

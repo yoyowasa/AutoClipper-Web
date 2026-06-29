@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from app.jobs.queue import get_enqueue_job
 from app.jobs.runner import run_dummy_autoclipper_job
 from app.jobs.status import SUCCESS_STATUSES
 from app.main import app
-from app.models import ExportItem, Job, Video
+from app.models import ExportItem, Job, Video, utc_now
 from app.storage.paths import StoragePaths, get_storage_paths
 
 
@@ -142,6 +143,14 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["normalMaxDuration"] == 600.0
         assert job.settings_json["shortMinDuration"] == 20.0
         assert job.settings_json["shortMaxDuration"] == 75.0
+        assert job.settings_json["maxCandidates"] == 1200
+        assert job.settings_json["maxRawCandidatesPerType"] == 250000
+        assert job.settings_json["maxKeptCandidatesPerType"] == 1200
+        assert job.settings_json["maxCandidatesPerTimeBucket"] == 100
+        assert job.settings_json["candidateTimeBucketSeconds"] == 300.0
+        assert job.settings_json["maxCandidateGenerationMemoryMb"] == 12000
+        assert job.settings_json["candidateChunkSeconds"] == 600.0
+        assert job.settings_json["candidateChunkOverlapSeconds"] == 75.0
         assert job.settings_json["selectionPolicy"] == "fill_requested"
         assert job.settings_json["crossTypeOverlapDedupe"] is False
         assert job.settings_json["openaiCandidateLimit"] == 40
@@ -168,6 +177,14 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "normalMaxDuration": 60,
                 "shortMinDuration": 15,
                 "shortMaxDuration": 45,
+                "maxCandidates": 300,
+                "maxRawCandidatesPerType": 5000,
+                "maxKeptCandidatesPerType": 300,
+                "maxCandidatesPerTimeBucket": 25,
+                "candidateTimeBucketSeconds": 120,
+                "maxCandidateGenerationMemoryMb": 2048,
+                "candidateChunkSeconds": 300,
+                "candidateChunkOverlapSeconds": 60,
                 "selectionPolicy": "strict_quality",
                 "crossTypeOverlapDedupe": True,
                 "useOpenAIScoring": True,
@@ -190,6 +207,14 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["normalMaxDuration"] == 60.0
         assert job.settings_json["shortMinDuration"] == 15.0
         assert job.settings_json["shortMaxDuration"] == 45.0
+        assert job.settings_json["maxCandidates"] == 300
+        assert job.settings_json["maxRawCandidatesPerType"] == 5000
+        assert job.settings_json["maxKeptCandidatesPerType"] == 300
+        assert job.settings_json["maxCandidatesPerTimeBucket"] == 25
+        assert job.settings_json["candidateTimeBucketSeconds"] == 120.0
+        assert job.settings_json["maxCandidateGenerationMemoryMb"] == 2048
+        assert job.settings_json["candidateChunkSeconds"] == 300.0
+        assert job.settings_json["candidateChunkOverlapSeconds"] == 60.0
         assert job.settings_json["selectionPolicy"] == "strict_quality"
         assert job.settings_json["crossTypeOverlapDedupe"] is True
         assert job.settings_json["useOpenAIScoring"] is True
@@ -249,6 +274,14 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["normalMaxDuration"]["default"] == 600.0
     assert properties["shortMinDuration"]["default"] == 20.0
     assert properties["shortMaxDuration"]["default"] == 75.0
+    assert properties["maxCandidates"]["default"] == 1200
+    assert properties["maxRawCandidatesPerType"]["default"] == 250000
+    assert properties["maxKeptCandidatesPerType"]["default"] == 1200
+    assert properties["maxCandidatesPerTimeBucket"]["default"] == 100
+    assert properties["candidateTimeBucketSeconds"]["default"] == 300.0
+    assert properties["maxCandidateGenerationMemoryMb"]["default"] == 12000
+    assert properties["candidateChunkSeconds"]["default"] == 600.0
+    assert properties["candidateChunkOverlapSeconds"]["default"] == 75.0
     assert properties["selectionPolicy"]["default"] == "fill_requested"
     assert properties["crossTypeOverlapDedupe"]["default"] is False
     assert properties["openaiCandidateLimit"]["default"] == 40
@@ -256,6 +289,37 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["openaiFallbackToRuleScore"]["default"] is True
     assert "ensureSelectedOpenAIScored" in properties
     assert "openaiFinalistScoringLimit" in properties
+
+
+def test_stale_running_job_is_marked_failed_on_status_poll(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"workerHeartbeatTimeoutSeconds": 60},
+        },
+    ).json()
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        job.status = "generating_candidates"
+        job.progress = 50
+        job.current_step = "Generating clip candidates"
+        job.updated_at = utc_now() - timedelta(seconds=120)
+        db.commit()
+
+    response = client.get(f"/api/jobs/{created['jobId']}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "failed"
+    assert payload["error"]["code"] == "worker_terminated_unexpectedly"
+    assert "Previous status: generating_candidates" in payload["error"]["message"]
 
 
 def test_results_zip_download_and_export_download(client: TestClient) -> None:
