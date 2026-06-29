@@ -15,10 +15,19 @@ from app.audio.volume_features import build_audio_features
 from app.db import Base, get_db
 from app.jobs.queue import get_enqueue_job
 from app.candidates.merge_boundaries import Candidate
-from app.jobs.runner import AutoClipperPipelineDependencies, PipelineExpectedError, _score_candidate_list, run_autoclipper_job
+from app.candidates.select_candidates import select_candidates
+from app.jobs.runner import (
+    AutoClipperPipelineDependencies,
+    PipelineExpectedError,
+    _build_openai_scoring_pool,
+    _ensure_selected_candidates_openai_scored,
+    _score_candidate_list,
+    run_autoclipper_job,
+)
 from app.jobs.status import SUCCESS_STATUSES
 from app.main import app
 from app.models import Job
+from app.scoring.openai_score import OpenAICandidateScorer
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.black_screen import BlackScreenSegment, VisualQuality
 from app.video.probe import VideoMetadata
@@ -89,6 +98,41 @@ def short_spoken_transcript() -> list[TranscriptSegment]:
     return [TranscriptSegment(start=0.0, end=60.0, text=text)]
 
 
+VALID_OPENAI_SCORE = {
+    "should_use": True,
+    "final_score": 82,
+    "hook_score": 80,
+    "completeness_score": 82,
+    "context_independence_score": 84,
+    "information_density_score": 81,
+    "title": "Selected clip",
+    "overlay_title": "Selected clip",
+    "reason": "Structured score for selected candidate.",
+    "risk_flags": [],
+}
+
+
+class FakeOpenAIResponse:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.output_text = json.dumps(payload)
+
+
+class FakeOpenAIResponses:
+    def __init__(self, payloads: list[dict[str, Any]]) -> None:
+        self.payloads = payloads
+        self.calls: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> FakeOpenAIResponse:
+        self.calls.append(kwargs)
+        payload = self.payloads.pop(0)
+        return FakeOpenAIResponse(payload)
+
+
+class FakeOpenAIClient:
+    def __init__(self, payloads: list[dict[str, Any]]) -> None:
+        self.responses = FakeOpenAIResponses(payloads)
+
+
 def test_openai_scoring_without_api_key_raises_clear_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     candidate = Candidate(
@@ -121,6 +165,116 @@ def test_openai_scoring_without_api_key_raises_clear_configuration_error(monkeyp
 
     assert exc_info.value.code == "openai_configuration_missing"
     assert "OPENAI_API_KEY" in exc_info.value.message
+
+
+def _candidate(candidate_id: str, candidate_type: str, start: float, end: float, rule_score: float) -> Candidate:
+    return Candidate(
+        id=candidate_id,
+        type=candidate_type,  # type: ignore[arg-type]
+        start=start,
+        end=end,
+        duration=end - start,
+        transcript_text="a complete spoken section with enough context for useful scoring.",
+        rule_score=rule_score,
+    )
+
+
+def test_openai_scoring_pool_is_type_aware_and_diverse() -> None:
+    candidates = [
+        *[_candidate(f"normal_{index}", "normal", index * 120.0, index * 120.0 + 120.0, 90 - index) for index in range(6)],
+        *[_candidate(f"short_{index}", "short", index * 80.0, index * 80.0 + 40.0, 70 - index) for index in range(6)],
+    ]
+    audio_features = build_audio_features(duration=800.0, silence_segments=[], volume_peak=0.5)
+
+    pool = _build_openai_scoring_pool(
+        candidates,
+        settings={
+            "normalClipCount": 2,
+            "shortCount": 3,
+            "openaiCandidateLimit": 6,
+            "minFinalScore": 0,
+            "rejectIncompleteSentence": False,
+        },
+        audio_features=audio_features,
+        silence_segments=[],
+        candidate_limit=6,
+    )
+
+    assert len(pool) == 6
+    assert {candidate.type for candidate in pool} == {"normal", "short"}
+    assert sum(1 for candidate in pool if candidate.type == "normal") >= 2
+    assert sum(1 for candidate in pool if candidate.type == "short") >= 2
+
+
+def test_finalist_on_demand_scores_selected_rule_only_candidates() -> None:
+    candidates = [
+        _candidate("normal_a", "normal", 0.0, 120.0, 95.0),
+        _candidate("normal_b", "normal", 300.0, 420.0, 94.0),
+    ]
+    audio_features = build_audio_features(duration=500.0, silence_segments=[], volume_peak=0.5)
+    visual_quality = VisualQuality(
+        duration=500.0,
+        black_screen_ratio=0.0,
+        usable_ratio=1.0,
+        black_seconds=0.0,
+        black_segments=[],
+    )
+    scorer = OpenAICandidateScorer(
+        client=FakeOpenAIClient(
+            [
+                {**VALID_OPENAI_SCORE, "title": "Preselection", "final_score": 88},
+                {**VALID_OPENAI_SCORE, "title": "Finalist", "final_score": 86},
+            ]
+        )
+    )
+    settings = {
+        "mode": "high_quality",
+        "normalClipCount": 2,
+        "shortCount": 0,
+        "minFinalScore": 0,
+        "rejectIncompleteSentence": False,
+        "useOpenAIScoring": True,
+        "openaiCandidateLimit": 1,
+        "ensureSelectedOpenAIScored": True,
+        "openaiFinalistScoringLimit": 3,
+    }
+
+    scoring = _score_candidate_list(
+        candidates,
+        settings=settings,
+        audio_features=audio_features,
+        silence_segments=[],
+        visual_quality=visual_quality,
+        scorer=scorer,
+    )
+    selection = select_candidates(
+        scoring.candidates,
+        settings=settings,
+        audio_features=audio_features,
+        silence_segments=[],
+    )
+    updated_selection, updated_candidates, updated_summary = _ensure_selected_candidates_openai_scored(
+        selection,
+        scoring.candidates,
+        settings=settings,
+        audio_features=audio_features,
+        visual_quality=visual_quality,
+        scorer=scoring.openai_scorer,
+        openai_summary=scoring.openai_summary,
+    )
+
+    selected = [*updated_selection.normal_clips, *updated_selection.shorts]
+    assert len(selected) == 2
+    assert all(candidate.used_ai_score is True for candidate in selected)
+    assert {candidate.openai_score_source for candidate in selected} == {"preselection_pool", "finalist_on_demand"}
+    assert updated_summary is not None
+    assert updated_summary["candidates_sent_preselection"] == 1
+    assert updated_summary["candidates_sent_as_finalists"] == 1
+    assert updated_summary["successful_scores"] == 2
+    assert {candidate.id for candidate in updated_candidates if candidate.used_ai_score is True} == {
+        "normal_a",
+        "normal_b",
+    }
 
 
 def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> None:

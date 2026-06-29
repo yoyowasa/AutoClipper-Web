@@ -147,6 +147,8 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["openaiCandidateLimit"] == 40
         assert job.settings_json["openaiModel"] == "gpt-5.5"
         assert job.settings_json["openaiFallbackToRuleScore"] is True
+        assert job.settings_json["ensureSelectedOpenAIScored"] is True
+        assert job.settings_json["openaiFinalistScoringLimit"] == 20
 
 
 def test_create_job_persists_advanced_duration_settings(client: TestClient) -> None:
@@ -172,6 +174,8 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "openaiCandidateLimit": 7,
                 "openaiModel": "gpt-test",
                 "openaiFallbackToRuleScore": False,
+                "ensureSelectedOpenAIScored": True,
+                "openaiFinalistScoringLimit": 5,
                 "minFinalScore": 0,
             },
         },
@@ -192,7 +196,29 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["openaiCandidateLimit"] == 7
         assert job.settings_json["openaiModel"] == "gpt-test"
         assert job.settings_json["openaiFallbackToRuleScore"] is False
+        assert job.settings_json["ensureSelectedOpenAIScored"] is True
+        assert job.settings_json["openaiFinalistScoringLimit"] == 5
         assert job.settings_json["minFinalScore"] == 0
+
+
+def test_low_cost_defaults_do_not_require_selected_openai_scoring(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {"mode": "low_cost"}},
+    )
+
+    assert response.status_code == 201
+    created = response.json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        assert job.settings_json["mode"] == "low_cost"
+        assert job.settings_json["ensureSelectedOpenAIScored"] is False
 
 
 def test_create_job_rejects_invalid_duration_ranges(client: TestClient) -> None:
@@ -228,6 +254,8 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["openaiCandidateLimit"]["default"] == 40
     assert properties["openaiModel"]["default"] == "gpt-5.5"
     assert properties["openaiFallbackToRuleScore"]["default"] is True
+    assert "ensureSelectedOpenAIScored" in properties
+    assert "openaiFinalistScoringLimit" in properties
 
 
 def test_results_zip_download_and_export_download(client: TestClient) -> None:

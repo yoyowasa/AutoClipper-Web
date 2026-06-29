@@ -359,6 +359,8 @@ python scripts/e2e_real_video.py `
   --use-openai-scoring true `
   --openai-candidate-limit 20 `
   --openai-fallback-to-rule-score true `
+  --ensure-selected-openai-scored true `
+  --openai-finalist-scoring-limit 7 `
   --normal-count 2 `
   --short-count 3 `
   --selection-policy fill_requested `
@@ -370,7 +372,8 @@ Cost controls:
 - `--openai-candidate-limit` defaults to `20` in the E2E script.
 - Backend default `openaiCandidateLimit` is `40`.
 - The worker sends candidate transcript text plus audio/visual feature summaries only. It does not send uploaded video files or rendered MP4 files.
-- The 30 minute high-quality profile still sends only the limited OpenAI candidate set. It does not send all generated candidates.
+- The 30 minute high-quality profile first sends only the limited OpenAI preselection pool. It does not send all generated candidates.
+- When `ensureSelectedOpenAIScored=true`, selected rule-only finalists are scored on demand before rendering, up to `openaiFinalistScoringLimit`.
 - Use `--use-openai-scoring false` with `--mode high_quality` to exercise the rest of high-quality settings without API calls.
 
 The script:
@@ -390,7 +393,7 @@ The script:
 - validates `candidate_summary.json`, `selected_clips_summary.json`, and `selected_clips.json`
 - prints runtime metrics: upload, transcription, scene detection, candidate generation, scoring, selection, normal render, short render, ZIP packaging, and total time
 - prints pipeline metrics: video duration, transcript length, candidate counts, hard-gate counts, selected counts, backfilled count, render failure count, and ZIP size
-- validates `openai_scoring_summary.json` when OpenAI scoring is enabled and prints model, candidate limit, eligible/sent counts, success/failure/fallback counts, schema failures, latency, text-size proxy, and selected clip score source counts
+- validates `openai_scoring_summary.json` when OpenAI scoring is enabled and prints model, candidate limit, finalist limit, preselection/finalist call counts, success/failure/fallback counts, schema failures, latency, text-size proxy, and selected clip score source counts
 - prints diagnostic summary JSON files when they exist
 
 Expected outputs:
@@ -444,7 +447,9 @@ Troubleshooting:
     "useOpenAIScoring": false,
     "openaiCandidateLimit": 40,
     "openaiModel": "gpt-5.5",
-    "openaiFallbackToRuleScore": true
+    "openaiFallbackToRuleScore": true,
+    "ensureSelectedOpenAIScored": true,
+    "openaiFinalistScoringLimit": 7
   }
 }
 ```
@@ -461,6 +466,8 @@ Production-safe defaults remain:
 - `openaiCandidateLimit`: `40`
 - `openaiModel`: `gpt-5.5`
 - `openaiFallbackToRuleScore`: `true`
+- `ensureSelectedOpenAIScored`: `true` in `high_quality`, `false` in `low_cost`
+- `openaiFinalistScoringLimit`: requested output count plus a small buffer by default
 
 For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.
 
@@ -485,7 +492,7 @@ Summary files:
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
-- `openai_scoring_summary.json`: model, candidate limit, eligible/selected/sent counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, and selected clip score source counts.
+- `openai_scoring_summary.json`: model, initial candidate limit, finalist scoring limit, eligible/selected/sent counts, preselection/finalist counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, selected clip score source counts, and not-scored reasons.
 - `rejection_summary.json`: quality gate rejection counts, high-overlap counts by type, cross-type overlap counts, and render failure counts.
 - `selected_clips_summary.json`: requested/selected normal/short counts, unfilled counts, selected IDs, durations, scores, quality warnings, selection reasons, overlap relaxation flags, timeline clusters, and output paths.
 

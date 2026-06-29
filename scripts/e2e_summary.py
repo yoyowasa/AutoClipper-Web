@@ -67,8 +67,11 @@ def summary_line(filename: str, payload: Any) -> str:
         return (
             f"model={_value(payload, 'model')} "
             f"limit={_value(payload, 'candidate_limit')} "
+            f"finalist_limit={_value(payload, 'finalist_scoring_limit')} "
             f"eligible={_value(payload, 'candidates_eligible_for_openai_scoring')} "
             f"selected_for_openai={_value(payload, 'candidates_selected_for_openai')} "
+            f"preselection={_value(payload, 'candidates_sent_preselection')} "
+            f"finalists={_value(payload, 'candidates_sent_as_finalists')} "
             f"sent={_value(payload, 'candidates_sent_to_openai')} "
             f"success={_value(payload, 'successful_scores')} "
             f"failed={_value(payload, 'failed_scores')} "
@@ -78,7 +81,8 @@ def summary_line(filename: str, payload: Any) -> str:
             f"avg_latency={_value(payload, 'avg_latency_seconds')} "
             f"max_latency={_value(payload, 'max_latency_seconds')} "
             f"selected_ai={_value(payload, 'selected_ai_score_count')} "
-            f"selected_fallback={_value(payload, 'selected_fallback_score_count')}"
+            f"selected_fallback={_value(payload, 'selected_fallback_score_count')} "
+            f"selected_not_scored={_value(payload, 'selected_not_scored_count')}"
         )
     if filename == "selected_clips_summary.json":
         selected_ids = payload.get("selected_ids", [])

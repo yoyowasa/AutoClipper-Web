@@ -19,6 +19,8 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   shortMaxDuration: 75,
   selectionPolicy: "fill_requested",
   crossTypeOverlapDedupe: false,
+  ensureSelectedOpenAIScored: true,
+  openaiFinalistScoringLimit: 7,
   burnSubtitles: true,
   shortLayout: "auto"
 };
