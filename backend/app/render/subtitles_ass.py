@@ -11,12 +11,14 @@ SHORT_WIDTH = 1080
 SHORT_HEIGHT = 1920
 DEFAULT_NORMAL_WIDTH = 1920
 DEFAULT_NORMAL_HEIGHT = 1080
+DEFAULT_ASS_FONT = "Noto Sans CJK JP"
 
 
 @dataclass(frozen=True)
 class SubtitleLayout:
     width: int
     height: int
+    font_name: str
     font_size: int
     title_font_size: int
     outline: int
@@ -30,6 +32,7 @@ class SubtitleLayout:
         return cls(
             width=SHORT_WIDTH,
             height=SHORT_HEIGHT,
+            font_name=DEFAULT_ASS_FONT,
             font_size=76,
             title_font_size=88,
             outline=5,
@@ -47,6 +50,7 @@ class SubtitleLayout:
         return cls(
             width=safe_width,
             height=safe_height,
+            font_name=DEFAULT_ASS_FONT,
             font_size=font_size,
             title_font_size=max(font_size + 6, round(safe_height * 0.07)),
             outline=max(3, round(safe_height * 0.004)),
@@ -139,7 +143,7 @@ def _style_line(
     margin_v: int,
 ) -> str:
     return (
-        f"Style: {name},Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        f"Style: {name},{layout.font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
         f"1,0,0,0,100,100,0,0,1,{layout.outline},{layout.shadow},{alignment},"
         f"{layout.margin_x},{layout.margin_x},{margin_v},1"
     )

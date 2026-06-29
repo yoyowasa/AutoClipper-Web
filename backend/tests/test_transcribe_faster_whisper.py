@@ -42,6 +42,7 @@ class FakeWhisperModel:
     def transcribe(self, wav_path: str, **kwargs: object) -> tuple[list[FakeFasterWhisperSegment], object]:
         assert wav_path.endswith(".wav")
         assert kwargs["word_timestamps"] is True
+        assert kwargs["language"] == "ja"
         return (
             [
                 FakeFasterWhisperSegment(

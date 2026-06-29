@@ -4,6 +4,7 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
 from app.render.subtitles_ass import (
+    DEFAULT_ASS_FONT,
     SubtitleLayout,
     build_ass_document,
     clipped_transcript_segments,
@@ -72,6 +73,8 @@ def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None
 
     assert "PlayResX: 1080" in ass
     assert "PlayResY: 1920" in ass
+    assert f"Style: Subtitle,{DEFAULT_ASS_FONT}," in ass
+    assert f"Style: Title,{DEFAULT_ASS_FONT}," in ass
     assert "Dialogue: 1,0:00:00.00,0:00:10.00,Title" in ass
     assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle" in ass
     assert "Dialogue: 0,0:00:05.00,0:00:10.00,Subtitle" in ass

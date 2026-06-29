@@ -26,7 +26,7 @@ class FasterWhisperTranscriptionEngine:
         model_size: str = "base",
         device: str = "cpu",
         compute_type: str = "int8",
-        language: str | None = None,
+        language: str | None = "ja",
         beam_size: int = 5,
     ) -> None:
         self.model_size = model_size

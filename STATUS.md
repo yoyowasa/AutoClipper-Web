@@ -1843,3 +1843,50 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - `e2e_compare_quality.py` の high_quality 実行には `OPENAI_API_KEY` が必要。
 - 今回は比較可視化のみ。score calibration / selection tuning は未実施。
+
+## 2026-06-29 Task 31: Fix Japanese subtitle font defaults
+
+### 目的
+
+- ショート動画の字幕が `□` 表示になる問題を先に修正する。
+- faster-whisper の日本語入力で言語自動判定に流れる余地を減らす。
+- ショートの構図改善、crop strategy 改修、score tuning は今回の対象外。
+
+### 変更ファイル
+
+- `backend/Dockerfile`
+- `backend/app/render/subtitles_ass.py`
+- `backend/tests/test_subtitles_ass.py`
+- `backend/app/audio/transcribe_faster_whisper.py`
+- `backend/tests/test_transcribe_faster_whisper.py`
+- `STATUS.md`
+
+### 変更内容
+
+- backend / worker runtime に `fontconfig` と `fonts-noto-cjk` を追加し、Docker build 時に `fc-cache -f` を実行。
+- ASS 字幕の既定フォントを `Arial` から `Noto Sans CJK JP` に変更。
+- short / normal の `SubtitleLayout` が同じ既定日本語フォントを使うように変更。
+- faster-whisper の既定 `language` を `ja` に変更。
+- 字幕 ASS と faster-whisper 呼び出しの unit test を更新。
+
+### 検証結果
+
+- `..\.venv\Scripts\python -m pytest tests\test_transcribe_faster_whisper.py tests\test_subtitles_ass.py tests\test_ffmpeg_wrappers.py tests\test_short_rendering.py` from `backend`: 24 passed, 1 skipped, 1 warning。
+- `..\.venv\Scripts\python -m pytest` from `backend`: 130 passed, 1 skipped, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `npm run lint` from `frontend`: passed。
+- `npm run typecheck` from `frontend`: passed。
+- `npm run build` from `frontend`: passed。
+- `git diff --check`: passed。
+- `docker compose up -d --build`: passed。
+- `docker compose ps`: backend / frontend / redis / worker running。backend healthy。
+- backend `/health`: `ok`。
+- frontend `http://localhost:3000`: HTTP `200`。
+- worker container `fc-match "Noto Sans CJK JP"`: `NotoSansCJK-Regular.ttc: "Noto Sans CJK JP" "Regular"`。
+- worker container `SubtitleLayout.short().font_name`: `Noto Sans CJK JP`。
+
+### 未解決事項
+
+- 既存の出力済み MP4 は焼き込み済みのため変わらない。修正後の字幕を確認するには job の再実行が必要。
+- Whisper model size は `base` のまま。誤変換の追加改善は model size / VAD / 辞書 / subtitle postprocess の別タスクで扱う。
+- ショートの構図は未修正。現状の `face_tracking_crop` は顔検出位置ベースで、人物ごと・台詞ごとの画面構成はまだ行っていない。
