@@ -1843,3 +1843,104 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - `e2e_compare_quality.py` の high_quality 実行には `OPENAI_API_KEY` が必要。
 - 今回は比較可視化のみ。score calibration / selection tuning は未実施。
+
+## 2026-06-29 Task 31: Bounded streaming candidate generation for long videos
+
+### 目的
+
+- 58分動画で `generating_candidates` 中に worker work-horse が `signal 9` 終了した問題を修正する。
+- candidate generation を memory-bounded / chunked にし、1時間級動画で selection/rendering へ進める。
+- hard gate、score threshold、OpenAI candidate limit、manual editing UI は変更しない。
+
+### 変更ファイル
+
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/candidates/generate_normal_candidates.py`
+- `backend/app/candidates/generate_short_candidates.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/summaries.py`
+- `backend/app/api/jobs.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_candidate_generation.py`
+- `backend/tests/test_api_routes.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- candidate generation 内部を `LightweightCandidate` + bounded keeper に変更。
+  - raw candidate では `transcript_text` を materialize しない。
+  - kept candidate だけ `Candidate` 化し、`segment_start_index` / `segment_end_index` / `transcript_char_count` / `speech_seconds` / `silence_ratio` を保存。
+- chunked generation を追加。
+  - default chunk: `600s`
+  - overlap: `75s`
+  - time bucket: `300s`
+- candidate caps を追加。
+  - `maxRawCandidatesPerType`: `250000`
+  - `maxKeptCandidatesPerType`: `1200`
+  - `maxCandidatesPerTimeBucket`: `100`
+  - `candidateTimeBucketSeconds`: `300`
+  - `maxCandidateGenerationMemoryMb`: `12000`
+  - `candidateChunkSeconds`: `600`
+  - `candidateChunkOverlapSeconds`: `75`
+- `candidate_generation_summary.json` を追加。
+  - chunks processed
+  - raw candidates considered
+  - kept candidates by type
+  - dropped due to cap / duplicate / no transcript / invalid duration
+  - peak memory
+  - configured caps
+- candidate generation heartbeat を追加。
+  - heartbeat 時に `updated_at` と `candidate_generation_summary.json` を更新。
+- stale running job recovery を追加。
+  - 実行中 job の heartbeat が止まった場合、status polling 時に `worker_terminated_unexpectedly` で failed 化。
+- E2E script に candidate generation metrics / caps 表示と cap override CLI を追加。
+- README に1時間 low_cost E2E、candidate generation caps、troubleshooting を追記。
+
+### 検証結果
+
+- `..\.venv\Scripts\python -m pytest tests\test_candidate_generation.py tests\test_api_routes.py tests\test_e2e_real_video_script.py` from `backend`: 40 passed, 1 warning。
+- `..\.venv\Scripts\python -m pytest` from `backend`: 135 passed, 1 skipped, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `npm run lint` from `frontend`: passed。
+- `npm run typecheck` from `frontend`: passed。
+- `npm run build` from `frontend`: passed。
+- `docker compose up -d --build`: passed。
+- backend `/health`: `ok`。
+- frontend `http://localhost:3000`: HTTP `200`。
+- 58分 artifact candidate generation smoke:
+  - input job artifacts: `job_f98f00dbafcb4a97a67c5b7a2d7db80a`
+  - normal candidates: `600`
+  - short candidates: `900`
+  - chunks processed: `12`
+  - raw candidates considered: `500000`
+  - selection result: normal `5/5`、short `10/10`
+- 58分 real low_cost E2E:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video '<58min spoken mp4>' --timeout 14400 --normal-count 3 --short-count 5 --mode low_cost --profile talk --burn-subtitles true --normal-min-duration 90 --normal-max-duration 600 --short-min-duration 20 --short-max-duration 75 --selection-policy fill_requested`
+  - result: REAL VIDEO E2E PASSED
+  - job: `job_aeea2831f0d7486dac106cd9462a94fe`
+  - total time: `489.250s`
+  - candidate generation time: `52.828s`
+  - selected: normal `3/3`、short `5/5`
+  - render failures: `0`
+  - ZIP size: `219480888 bytes`
+  - generated shorts: all verified `1080x1920`
+  - `candidate_generation_summary.json`:
+    - chunks processed: `12`
+    - raw candidates considered: `477250`
+    - kept: normal `600`、short `800`
+    - peak memory: `457.145 MB`
+    - memory guard: `false`
+- Disk:
+  - E2E start C free: `181.70 GB`
+  - after E2E C free: `180.67 GB`
+  - job output size: `0.424 GB`
+
+### 未解決事項
+
+- 58分 E2E は `normal=3` / `short=5` で実施。`normal=5` / `short=10` は artifact smoke では selection `5/5` / `10/10` まで確認済みだが、全render E2Eは未実施。
+- candidate generation は memory-bounded になったが、raw candidates considered は still large。CPU時間最適化は別タスク。
+- `worker_terminated_unexpectedly` は status polling 時の stale recovery。worker kill 瞬間に即時 failed へ更新する仕組みではない。

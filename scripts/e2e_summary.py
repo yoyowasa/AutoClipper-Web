@@ -11,6 +11,7 @@ SUMMARY_FILENAMES = [
     "transcript_summary.json",
     "audio_feature_summary.json",
     "candidate_summary.json",
+    "candidate_generation_summary.json",
     "openai_scoring_summary.json",
     "rejection_summary.json",
     "selected_clips_summary.json",
@@ -55,6 +56,18 @@ def summary_line(filename: str, payload: Any) -> str:
             f"overlap_relaxed={_value(payload, 'overlap_relaxed_count')} "
             f"avg_duration={_value(payload, 'avg_duration')} "
             f"avg_final_score={_value(payload, 'avg_final_score')}"
+        )
+    if filename == "candidate_generation_summary.json":
+        return (
+            f"duration={_value(payload, 'video_duration')} "
+            f"segments={_value(payload, 'transcript_segment_count')} "
+            f"chunks={_value(payload, 'chunks_processed')} "
+            f"raw={_value(payload, 'raw_candidates_considered')} "
+            f"kept={_value(payload, 'candidates_kept_by_type')} "
+            f"dropped_cap={_value(payload, 'candidates_dropped_due_to_cap')} "
+            f"dropped_duplicate={_value(payload, 'candidates_dropped_due_to_duplicate')} "
+            f"peak_memory_mb={_value(payload, 'peak_memory_mb')} "
+            f"memory_guard={_value(payload, 'memory_guard_triggered')}"
         )
     if filename == "rejection_summary.json":
         return (

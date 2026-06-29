@@ -21,9 +21,16 @@ from app.audio.transcribe_faster_whisper import (
 )
 from app.audio.volume_features import AudioFeatures, audio_features_output_path, compute_audio_features, write_audio_features
 from app.candidates.deduplicate import time_overlap_ratio
-from app.candidates.generate_normal_candidates import generate_normal_candidates
-from app.candidates.generate_short_candidates import generate_short_candidates
-from app.candidates.merge_boundaries import Candidate, CandidateType, OpenAIScoreSource, write_candidates
+from app.candidates.generate_normal_candidates import generate_normal_candidates_with_summary
+from app.candidates.generate_short_candidates import generate_short_candidates_with_summary
+from app.candidates.merge_boundaries import (
+    Candidate,
+    CandidateGenerationMemoryLimitError,
+    CandidateType,
+    OpenAIScoreSource,
+    merge_candidate_generation_summaries,
+    write_candidates,
+)
 from app.candidates.select_candidates import (
     CandidateSelection,
     parse_selection_settings,
@@ -34,7 +41,7 @@ from app.db import SessionLocal
 from app.ids import make_id
 from app.jobs.summaries import write_generation_summaries
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
-from app.models import ExportItem, Job, Video
+from app.models import ExportItem, Job, Video, utc_now
 from app.render.render_normal import NormalRenderBatchResult, render_normal_clip, render_selected_normal_candidates
 from app.render.render_short import ShortRenderBatchResult, render_selected_short_candidates, render_short_clip
 from app.scoring.openai_score import OpenAICandidateScorer, score_candidate_batch
@@ -212,9 +219,16 @@ def _set_status(db: Session, job: Job, status: str) -> None:
     job.status = status
     job.progress = PROGRESS_MAP[status]
     job.current_step = CURRENT_STEP_MAP[status]
+    job.updated_at = utc_now()
     if status != "failed":
         job.error_code = None
         job.error_message = None
+    db.commit()
+    db.refresh(job)
+
+
+def _heartbeat_job(db: Session, job: Job) -> None:
+    job.updated_at = utc_now()
     db.commit()
     db.refresh(job)
 
@@ -228,6 +242,7 @@ def _fail_job(db: Session, job_id: str, code: str, message: str, details: dict[s
     job.current_step = CURRENT_STEP_MAP["failed"]
     job.error_code = code
     job.error_message = _format_diagnostic_message(message, details or {})
+    job.updated_at = utc_now()
     db.commit()
 
 
@@ -1142,6 +1157,7 @@ def run_autoclipper_job(
     audio_features: AudioFeatures | None = None
     normal_candidates: list[Candidate] = []
     short_candidates: list[Candidate] = []
+    candidate_generation_summary: dict[str, Any] | None = None
     scored_candidates: list[Candidate] = []
     selection: CandidateSelection | None = None
     openai_scoring_summary: dict[str, Any] | None = None
@@ -1174,6 +1190,7 @@ def run_autoclipper_job(
                 audio_features=audio_features,
                 normal_candidates=normal_candidates,
                 short_candidates=short_candidates,
+                candidate_generation_summary=candidate_generation_summary,
                 scored_candidates=scored_candidates,
                 selection=selection,
                 openai_scoring_summary=openai_scoring_summary,
@@ -1255,19 +1272,45 @@ def run_autoclipper_job(
 
             _set_status(db, job, "generating_candidates")
             visited_statuses.append("generating_candidates")
+            candidate_generation_summary_path = job_dir / "candidate_generation_summary.json"
+
+            def candidate_generation_heartbeat(summary: dict[str, Any]) -> None:
+                nonlocal candidate_generation_summary
+                candidate_generation_summary = summary
+                _write_json(candidate_generation_summary_path, summary)
+                _heartbeat_job(db, job)
+
             try:
-                normal_candidates = generate_normal_candidates(
+                normal_generation_result = generate_normal_candidates_with_summary(
                     transcript_segments,
                     scene_segments,
                     silence_segments,
                     settings=settings,
+                    heartbeat=candidate_generation_heartbeat,
                 )
-                short_candidates = generate_short_candidates(
+                normal_candidates = normal_generation_result.candidates
+                short_generation_result = generate_short_candidates_with_summary(
                     transcript_segments,
                     scene_segments,
                     silence_segments,
                     settings=settings,
+                    heartbeat=candidate_generation_heartbeat,
                 )
+                short_candidates = short_generation_result.candidates
+                candidate_generation_summary = merge_candidate_generation_summaries(
+                    [normal_generation_result.summary, short_generation_result.summary],
+                    video_duration=duration,
+                    transcript_segment_count=len(transcript_segments),
+                )
+                metadata_files.append(_write_json(candidate_generation_summary_path, candidate_generation_summary))
+            except CandidateGenerationMemoryLimitError as exc:
+                candidate_generation_summary = exc.summary
+                metadata_files.append(_write_json(candidate_generation_summary_path, candidate_generation_summary))
+                raise PipelineExpectedError(
+                    "candidate_generation_memory_limit",
+                    "Candidate generation exceeded the configured memory limit.",
+                    details=candidate_generation_summary,
+                ) from exc
             except Exception as exc:
                 raise PipelineExpectedError(
                     "candidate_generation_failed",

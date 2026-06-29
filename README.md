@@ -320,6 +320,46 @@ python scripts/e2e_real_video.py `
 
 Expected runtime depends on CPU/GPU, disk speed, first-run faster-whisper model download, and render count. Start with the 30 minute profile before enabling OpenAI scoring.
 
+For a 1 hour spoken video, keep OpenAI scoring off first and use a longer timeout. Candidate generation is bounded by time buckets and chunked generation, so this path should reach selection/rendering instead of building unbounded raw candidates in memory.
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_1hour_sample.mp4 `
+  --normal-count 5 `
+  --short-count 10 `
+  --normal-min-duration 90 `
+  --normal-max-duration 600 `
+  --short-min-duration 20 `
+  --short-max-duration 75 `
+  --selection-policy fill_requested `
+  --mode low_cost `
+  --timeout 14400
+```
+
+Long-video candidate generation defaults:
+
+- `maxRawCandidatesPerType`: `250000`
+- `maxKeptCandidatesPerType`: `1200`
+- `maxCandidatesPerTimeBucket`: `100`
+- `candidateTimeBucketSeconds`: `300`
+- `candidateChunkSeconds`: `600`
+- `candidateChunkOverlapSeconds`: `75`
+- `maxCandidateGenerationMemoryMb`: `12000`
+
+For diagnostics or constrained machines, override these from the E2E script:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_1hour_sample.mp4 `
+  --normal-count 3 `
+  --short-count 5 `
+  --mode low_cost `
+  --timeout 14400 `
+  --max-kept-candidates-per-type 800 `
+  --max-candidates-per-time-bucket 60 `
+  --max-candidate-generation-memory-mb 9000
+```
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell
@@ -392,7 +432,7 @@ The script:
 - verifies normal MP4 files have valid dimensions and a valid duration close to the export metadata
 - validates `candidate_summary.json`, `selected_clips_summary.json`, and `selected_clips.json`
 - prints runtime metrics: upload, transcription, scene detection, candidate generation, scoring, selection, normal render, short render, ZIP packaging, and total time
-- prints pipeline metrics: video duration, transcript length, candidate counts, hard-gate counts, selected counts, backfilled count, render failure count, and ZIP size
+- prints pipeline metrics: video duration, transcript length, candidate counts, candidate generation chunks/raw/kept/dropped/caps, hard-gate counts, selected counts, backfilled count, render failure count, and ZIP size
 - validates `openai_scoring_summary.json` when OpenAI scoring is enabled and prints model, candidate limit, finalist limit, preselection/finalist call counts, success/failure/fallback counts, schema failures, latency, text-size proxy, and selected clip score source counts
 - prints diagnostic summary JSON files when they exist
 
@@ -402,6 +442,7 @@ Expected outputs:
 storage/outputs/{job_id}/transcript_segments.json
 storage/outputs/{job_id}/transcript_summary.json
 storage/outputs/{job_id}/audio_feature_summary.json
+storage/outputs/{job_id}/candidate_generation_summary.json
 storage/outputs/{job_id}/candidate_summary.json
 storage/outputs/{job_id}/openai_scoring_summary.json
 storage/outputs/{job_id}/rejection_summary.json
@@ -418,6 +459,8 @@ Troubleshooting:
 - `transcript_unusable`: faster-whisper ran, but the transcript was empty, too short, too low confidence, or repeated low-information text.
 - `transcription_empty`: use a clearer spoken sample with audible voice.
 - `no_candidates_found`: use a longer sample, ideally at least 90 seconds if normal clips are requested.
+- `candidate_generation_memory_limit`: candidate generation exceeded `maxCandidateGenerationMemoryMb`. Lower `--max-kept-candidates-per-type` or `--max-candidates-per-time-bucket`, then retry.
+- `worker_terminated_unexpectedly`: the worker heartbeat stopped while a job was running. Check `docker compose logs worker` for RQ work-horse termination, signal 9, or container restart.
 - `quality gate rejection`: check `selected_clips.json` and `rejection_summary.json`; in `strict_quality` mode, low scores can intentionally leave selected outputs at zero.
 - `openai_configuration_missing`: `OPENAI_API_KEY` is missing in the worker container. Update `.env`, then recreate services with `docker compose up -d --build`.
 - `openai_scoring_failed`: OpenAI scoring failed and fallback was disabled. Check `openai_scoring_summary.json` and `docker compose logs worker`.
@@ -442,6 +485,14 @@ Troubleshooting:
     "normalMaxDuration": 600,
     "shortMinDuration": 20,
     "shortMaxDuration": 75,
+    "maxCandidates": 1200,
+    "maxRawCandidatesPerType": 250000,
+    "maxKeptCandidatesPerType": 1200,
+    "maxCandidatesPerTimeBucket": 100,
+    "candidateTimeBucketSeconds": 300,
+    "candidateChunkSeconds": 600,
+    "candidateChunkOverlapSeconds": 75,
+    "maxCandidateGenerationMemoryMb": 12000,
     "selectionPolicy": "fill_requested",
     "crossTypeOverlapDedupe": false,
     "useOpenAIScoring": false,
@@ -460,6 +511,14 @@ Production-safe defaults remain:
 - `normalMaxDuration`: `600`
 - `shortMinDuration`: `20`
 - `shortMaxDuration`: `75`
+- `maxCandidates`: `1200`
+- `maxRawCandidatesPerType`: `250000`
+- `maxKeptCandidatesPerType`: `1200`
+- `maxCandidatesPerTimeBucket`: `100`
+- `candidateTimeBucketSeconds`: `300`
+- `candidateChunkSeconds`: `600`
+- `candidateChunkOverlapSeconds`: `75`
+- `maxCandidateGenerationMemoryMb`: `12000`
 - `selectionPolicy`: `fill_requested`
 - `crossTypeOverlapDedupe`: `false`
 - `useOpenAIScoring`: `false`
