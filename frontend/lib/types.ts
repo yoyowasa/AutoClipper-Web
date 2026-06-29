@@ -27,6 +27,8 @@ export type ClipSettings = {
   shortMaxDuration: number;
   selectionPolicy: "fill_requested" | "strict_quality";
   crossTypeOverlapDedupe: boolean;
+  ensureSelectedOpenAIScored?: boolean;
+  openaiFinalistScoringLimit?: number;
   burnSubtitles: boolean;
   shortLayout: "auto" | "center_crop" | "blur_background";
 };

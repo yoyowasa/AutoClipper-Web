@@ -65,6 +65,8 @@ class JobSettings(BaseModel):
     openai_candidate_limit: int = Field(default=40, ge=0, alias="openaiCandidateLimit")
     openai_model: str = Field(default="gpt-5.5", min_length=1, alias="openaiModel")
     openai_fallback_to_rule_score: bool = Field(default=True, alias="openaiFallbackToRuleScore")
+    ensure_selected_openai_scored: bool | None = Field(default=None, alias="ensureSelectedOpenAIScored")
+    openai_finalist_scoring_limit: int | None = Field(default=None, ge=0, alias="openaiFinalistScoringLimit")
     e2e_fixture_transcript: bool = Field(default=False, alias="e2eFixtureTranscript")
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -75,6 +77,11 @@ class JobSettings(BaseModel):
             raise ValueError("normalMaxDuration must be >= normalMinDuration")
         if self.short_max_duration < self.short_min_duration:
             raise ValueError("shortMaxDuration must be >= shortMinDuration")
+        if self.ensure_selected_openai_scored is None:
+            self.ensure_selected_openai_scored = self.mode == "high_quality"
+        if self.openai_finalist_scoring_limit is None:
+            requested_count = self.normal_clip_count + self.short_count
+            self.openai_finalist_scoring_limit = requested_count + 2 if requested_count > 0 else 0
         return self
 
 

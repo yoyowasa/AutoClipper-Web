@@ -90,6 +90,11 @@ def _candidate_summary_item(candidate: Candidate) -> dict[str, Any]:
         "overlap_relaxed": candidate.overlap_relaxed,
         "overlap_ratio_used": _round(candidate.overlap_ratio_used),
         "time_cluster": candidate.time_cluster,
+        "used_ai_score": candidate.used_ai_score,
+        "openai_scored": candidate.openai_scored,
+        "openai_fallback_used": candidate.openai_fallback_used,
+        "openai_score_source": candidate.openai_score_source,
+        "openai_not_scored_reason": candidate.openai_not_scored_reason,
     }
 
 
@@ -317,6 +322,12 @@ def _selected_item(candidate: Candidate, output_paths: dict[str, dict[str, str |
         "overlap_relaxed": candidate.overlap_relaxed,
         "overlap_ratio_used": _round(candidate.overlap_ratio_used),
         "time_cluster": candidate.time_cluster,
+        "used_ai_score": candidate.used_ai_score,
+        "ai_score": _round(candidate.ai_score),
+        "openai_scored": candidate.openai_scored,
+        "openai_fallback_used": candidate.openai_fallback_used,
+        "openai_score_source": candidate.openai_score_source,
+        "openai_not_scored_reason": candidate.openai_not_scored_reason,
         "output_paths": output_paths.get(candidate.id, {}),
     }
 
@@ -365,6 +376,11 @@ def _selected_score_source_item(candidate: Candidate) -> dict[str, Any]:
         "final_score": _round(_score(candidate)),
         "ai_score": _round(candidate.ai_score),
         "rule_score": _round(candidate.rule_score),
+        "used_ai_score": candidate.used_ai_score,
+        "openai_scored": candidate.openai_scored,
+        "openai_fallback_used": candidate.openai_fallback_used,
+        "openai_score_source": candidate.openai_score_source,
+        "openai_not_scored_reason": candidate.openai_not_scored_reason,
         "risk_flags": candidate.risk_flags,
     }
 
@@ -388,6 +404,12 @@ def build_openai_scoring_summary(
     rule_only_due_to_limit = [
         candidate for candidate in selected if "openai_not_scored_candidate_limit" in candidate.risk_flags
     ]
+    not_scored = [
+        candidate
+        for candidate in selected
+        if candidate.openai_scored is not True and candidate.openai_fallback_used is not True
+    ]
+    not_scored_reasons = Counter(candidate.openai_not_scored_reason or "unknown" for candidate in not_scored)
 
     payload = dict(summary)
     candidates_considered = payload.get("candidates_considered")
@@ -403,6 +425,8 @@ def build_openai_scoring_summary(
     payload["selected_ai_score_count"] = len(ai_scored)
     payload["selected_fallback_score_count"] = len(fallback_scored)
     payload["selected_rule_score_only_due_to_limit_count"] = len(rule_only_due_to_limit)
+    payload["selected_not_scored_count"] = len(not_scored)
+    payload["selected_not_scored_reason_counts"] = dict(sorted(not_scored_reasons.items()))
     payload["final_selected_clips_using_ai_score"] = [
         _selected_score_source_item(candidate) for candidate in ai_scored
     ]
@@ -411,6 +435,9 @@ def build_openai_scoring_summary(
     ]
     payload["final_selected_clips_rule_score_only_due_to_limit"] = [
         _selected_score_source_item(candidate) for candidate in rule_only_due_to_limit
+    ]
+    payload["final_selected_clips_not_scored"] = [
+        _selected_score_source_item(candidate) for candidate in not_scored
     ]
     return payload
 

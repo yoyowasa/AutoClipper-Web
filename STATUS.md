@@ -1696,3 +1696,82 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 ### 未解決事項
 
 - 最終選択された5本は今回の `openaiCandidateLimit=20` 外の rule-only 候補だった。API経路検証としては成功。品質チューニングや「選択候補を優先してOpenAI scoringする」設計は別タスク。
+
+## 2026-06-29 Task 29: Ensure OpenAI scoring affects final selection
+
+### 目的
+
+- `high_quality` で最終選択された clip に OpenAI Structured Outputs score を反映する。
+- 全候補を OpenAI に送らず、preselection pool と finalist on-demand scoring で API コストを抑える。
+- score tuning、hard gate 変更、manual review UI は実施しない。
+
+### 変更ファイル
+
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/summaries.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_api_routes.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `backend/tests/test_real_pipeline.py`
+- `frontend/components/SettingsPanel.tsx`
+- `frontend/lib/types.ts`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `JobSettings` に `ensureSelectedOpenAIScored` と `openaiFinalistScoringLimit` を追加。
+  - `high_quality`: `ensureSelectedOpenAIScored=true`
+  - `low_cost`: `ensureSelectedOpenAIScored=false`
+  - finalist limit default: `normalCount + shortCount + 2`
+- OpenAI scoring pool を hard-gate-passed candidates から type-aware / cluster-diverse に構築。
+- 最終選択後、render 前に rule-only finalist へ on-demand OpenAI scoring を実行。
+- 選択候補に以下を保存。
+  - `used_ai_score`
+  - `ai_score`
+  - `rule_score`
+  - `final_score`
+  - `openai_scored`
+  - `openai_fallback_used`
+  - `openai_score_source`
+  - `openai_not_scored_reason`
+- `openai_scoring_summary.json` に preselection / finalist / selected score source counts を追加。
+- E2E stdout に OpenAI finalist calls、selected AI/fallback/not_scored counts を追加。
+- README に finalist on-demand scoring と cost-safety 設定を追記。
+
+### 検証結果
+
+- `..\.venv\Scripts\python -m pytest` from `backend`: 126 passed, 1 skipped, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `npm --workspace frontend run build`: passed。
+- `docker compose up -d --build`: passed。
+- Synthetic E2E: REAL VIDEO E2E PASSED、job `job_2793964686b44851b92594a25c332c63`。
+- Short real low_cost E2E: REAL VIDEO E2E PASSED、job `job_207054fc996049ebaa5ef01a64c86da5`、normal `1/1`。
+- 30-minute low_cost E2E: REAL VIDEO E2E PASSED、job `job_bfe84635e7064edbb59079261d058a10`、normal `2/2`、short `3/3`。
+- 30-minute high_quality E2E:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video '<30min spoken mp4>' --validation-profile 30min_high_quality`
+  - result: REAL VIDEO E2E PASSED
+  - job: `job_dfd13dd8435a401f9ab9773fa217bd18`
+  - OpenAI summary: candidate limit `20`、finalist limit `7`、preselection sent `20`、finalists sent `5`、success `25`、failed `0`、fallback `0`
+  - selected: normal `2/2`、short `3/3`
+  - selected using AI score: `5`
+  - selected using fallback: `0`
+  - selected not scored: `0`
+- Forced finalist smoke after final docker rebuild:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video '<61s spoken mp4>' --normal-count 1 --short-count 0 --normal-min-duration 20 --normal-max-duration 60 --mode high_quality --use-openai-scoring true --openai-candidate-limit 0 --ensure-selected-openai-scored true --openai-finalist-scoring-limit 1 --timeout 1800`
+  - job: `job_482223dfa6cc4c9bbf61eebad0800392`
+  - OpenAI summary: preselection sent `0`、finalists sent `1`、success `1`、fallback `0`
+  - selected using AI score: `1`
+  - selected using fallback: `0`
+  - selected not scored: `0`
+  - selected `openai_score_source`: `finalist_on_demand`
+
+### 未解決事項
+
+- OpenAI の score calibration / quality tuning は未実施。
+- `OPENAI_API_KEY` が無い環境では high_quality OpenAI 実API E2E は実行不可。CI は key 不要の mock/unit path のみ。

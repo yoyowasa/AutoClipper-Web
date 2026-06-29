@@ -33,6 +33,8 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.openai_candidate_limit == 20
     assert args.openai_model == "gpt-5.5"
     assert args.openai_fallback_to_rule_score is True
+    assert args.ensure_selected_openai_scored is None
+    assert args.openai_finalist_scoring_limit is None
 
     false_args = script.parse_args(["--video", "spoken.mp4", "--burn-subtitles", "false"])
     assert false_args.burn_subtitles is False
@@ -85,9 +87,13 @@ def test_parse_args_30min_high_quality_validation_profile() -> None:
     assert args.openai_candidate_limit == 20
     assert args.openai_model == "gpt-5.5"
     assert args.openai_fallback_to_rule_score is True
+    assert args.ensure_selected_openai_scored is True
+    assert args.openai_finalist_scoring_limit == 7
     settings = script.build_job_settings(args)
     assert settings["useOpenAIScoring"] is True
     assert settings["openaiCandidateLimit"] == 20
+    assert settings["ensureSelectedOpenAIScored"] is True
+    assert settings["openaiFinalistScoringLimit"] == 7
 
 
 def test_build_job_settings_disables_fixture_transcript() -> None:
@@ -119,6 +125,10 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "7",
             "--openai-model",
             "gpt-test",
+            "--ensure-selected-openai-scored",
+            "true",
+            "--openai-finalist-scoring-limit",
+            "4",
             "--no-openai-fallback-to-rule-score",
             "--no-burn-subtitles",
         ]
@@ -138,11 +148,14 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["openaiCandidateLimit"] == 7
     assert settings["openaiModel"] == "gpt-test"
     assert settings["openaiFallbackToRuleScore"] is False
+    assert settings["ensureSelectedOpenAIScored"] is True
+    assert settings["openaiFinalistScoringLimit"] == 4
     assert settings["burnSubtitles"] is False
     assert settings["profile"] == "talk"
 
     high_quality_args = script.parse_args(["--video", "spoken.mp4", "--mode", "high_quality"])
     assert script.build_job_settings(high_quality_args)["useOpenAIScoring"] is True
+    assert script.build_job_settings(high_quality_args)["ensureSelectedOpenAIScored"] is True
 
     disabled_args = script.parse_args(
         ["--video", "spoken.mp4", "--mode", "high_quality", "--use-openai-scoring", "false"]
@@ -298,8 +311,11 @@ def test_validate_openai_scoring_summary_requires_successful_api_scores(tmp_path
             {
                 "model": "gpt-test",
                 "candidate_limit": 20,
+                "finalist_scoring_limit": 7,
                 "candidates_eligible_for_openai_scoring": 12,
                 "candidates_selected_for_openai": 2,
+                "candidates_sent_preselection": 2,
+                "candidates_sent_as_finalists": 1,
                 "candidates_sent_to_openai": 2,
                 "successful_scores": 1,
                 "failed_scores": 1,
@@ -312,6 +328,8 @@ def test_validate_openai_scoring_summary_requires_successful_api_scores(tmp_path
                 "estimated_text_payload_size": 1024,
                 "selected_ai_score_count": 1,
                 "selected_fallback_score_count": 0,
+                "selected_not_scored_count": 0,
+                "selected_not_scored_reason_counts": {},
                 "selected_rule_score_only_due_to_limit_count": 1,
             }
         ),
@@ -514,8 +532,11 @@ def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: py
         {
             "model": "gpt-test",
             "candidate_limit": 20,
+            "finalist_scoring_limit": 7,
             "candidates_eligible_for_openai_scoring": 40,
             "candidates_selected_for_openai": 20,
+            "candidates_sent_preselection": 20,
+            "candidates_sent_as_finalists": 2,
             "candidates_sent_to_openai": 18,
             "successful_scores": 17,
             "failed_scores": 1,
@@ -526,9 +547,11 @@ def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: py
             "max_latency_seconds": 0.5,
             "selected_ai_score_count": 2,
             "selected_fallback_score_count": 0,
+            "selected_not_scored_count": 0,
         },
     )
     assert "limit=20" in openai_line
+    assert "finalists=2" in openai_line
     assert "selected_ai=2" in openai_line
 
     e2e_summary.print_job_summaries(job_id, root=tmp_path)

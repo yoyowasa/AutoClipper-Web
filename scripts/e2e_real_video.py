@@ -32,6 +32,8 @@ VALIDATION_PROFILES: dict[str, dict[str, Any]] = {
         "openai_candidate_limit": 20,
         "openai_model": "gpt-5.5",
         "openai_fallback_to_rule_score": True,
+        "ensure_selected_openai_scored": None,
+        "openai_finalist_scoring_limit": None,
     },
     "30min": {
         "timeout": 7200,
@@ -46,6 +48,8 @@ VALIDATION_PROFILES: dict[str, dict[str, Any]] = {
         "openai_candidate_limit": 20,
         "openai_model": "gpt-5.5",
         "openai_fallback_to_rule_score": True,
+        "ensure_selected_openai_scored": None,
+        "openai_finalist_scoring_limit": None,
     },
     "30min_high_quality": {
         "timeout": 7200,
@@ -61,6 +65,8 @@ VALIDATION_PROFILES: dict[str, dict[str, Any]] = {
         "openai_candidate_limit": 20,
         "openai_model": "gpt-5.5",
         "openai_fallback_to_rule_score": True,
+        "ensure_selected_openai_scored": True,
+        "openai_finalist_scoring_limit": 7,
     },
 }
 REQUIRED_RESULT_ARTIFACTS = [
@@ -149,6 +155,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--openai-model", default=None)
     parser.add_argument("--openai-fallback-to-rule-score", nargs="?", const=True, default=None, type=parse_bool)
     parser.add_argument("--no-openai-fallback-to-rule-score", dest="openai_fallback_to_rule_score", action="store_false")
+    parser.add_argument("--ensure-selected-openai-scored", nargs="?", const=True, default=None, type=parse_bool)
+    parser.add_argument("--openai-finalist-scoring-limit", type=non_negative_int, default=None)
     return parser
 
 
@@ -179,6 +187,15 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError("short-max-duration must be >= short-min-duration")
 
     use_openai_scoring = args.mode == "high_quality" if args.use_openai_scoring is None else args.use_openai_scoring
+    ensure_selected_openai_scored = (
+        args.mode == "high_quality"
+        if args.ensure_selected_openai_scored is None
+        else bool(args.ensure_selected_openai_scored)
+    )
+    finalist_limit = args.openai_finalist_scoring_limit
+    if finalist_limit is None:
+        requested_count = int(args.normal_count) + int(args.short_count)
+        finalist_limit = requested_count + 2 if requested_count > 0 else 0
     return {
         "mode": args.mode,
         "profile": args.profile,
@@ -195,6 +212,8 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "openaiCandidateLimit": args.openai_candidate_limit,
         "openaiModel": args.openai_model,
         "openaiFallbackToRuleScore": bool(args.openai_fallback_to_rule_score),
+        "ensureSelectedOpenAIScored": ensure_selected_openai_scored,
+        "openaiFinalistScoringLimit": finalist_limit,
         "normalizeAudio": False,
         "e2eFixtureTranscript": False,
     }
@@ -470,8 +489,11 @@ def validate_openai_scoring_summary(output_dir: Path) -> dict[str, Any]:
         "openai scoring: "
         f"model={payload.get('model')} "
         f"candidate_limit={payload.get('candidate_limit')} "
+        f"finalist_limit={payload.get('finalist_scoring_limit')} "
         f"eligible={payload.get('candidates_eligible_for_openai_scoring')} "
         f"selected_for_openai={payload.get('candidates_selected_for_openai')} "
+        f"preselection={payload.get('candidates_sent_preselection')} "
+        f"finalists={payload.get('candidates_sent_as_finalists')} "
         f"sent={candidates_sent} "
         f"success={successful_scores} "
         f"failed={payload.get('failed_scores')} "
@@ -487,7 +509,9 @@ def validate_openai_scoring_summary(output_dir: Path) -> dict[str, Any]:
         "openai selected clips: "
         f"ai_score={payload.get('selected_ai_score_count')} "
         f"fallback_score={payload.get('selected_fallback_score_count')} "
-        f"rule_only_due_to_limit={payload.get('selected_rule_score_only_due_to_limit_count')}"
+        f"not_scored={payload.get('selected_not_scored_count')} "
+        f"rule_only_due_to_limit={payload.get('selected_rule_score_only_due_to_limit_count')} "
+        f"not_scored_reasons={payload.get('selected_not_scored_reason_counts')}"
     )
     return payload
 

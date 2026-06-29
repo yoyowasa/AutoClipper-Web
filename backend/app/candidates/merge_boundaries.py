@@ -11,6 +11,12 @@ from app.video.scene_detect import SceneSegment
 
 
 CandidateType = Literal["short", "normal"]
+OpenAIScoreSource = Literal[
+    "preselection_pool",
+    "finalist_on_demand",
+    "fallback_rule_score",
+    "not_scored",
+]
 
 
 class Candidate(BaseModel):
@@ -36,6 +42,11 @@ class Candidate(BaseModel):
     overlap_relaxed: bool | None = None
     overlap_ratio_used: float | None = Field(default=None, ge=0)
     time_cluster: int | None = None
+    used_ai_score: bool | None = None
+    openai_scored: bool | None = None
+    openai_fallback_used: bool | None = None
+    openai_score_source: OpenAIScoreSource | None = None
+    openai_not_scored_reason: str | None = None
 
     @model_validator(mode="after")
     def validate_range(self) -> "Candidate":
