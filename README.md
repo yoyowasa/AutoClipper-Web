@@ -582,6 +582,64 @@ python scripts/e2e_sample_video.py
 python scripts/e2e_real_video.py --video path\to\spoken_sample.mp4
 ```
 
+## Output Quality Audit
+
+Use this after a job completes to summarize generated clips and identify likely quality issues before manual viewing.
+The audit reads existing artifacts only. It does not change selection, scoring, rendering, or job state.
+
+```powershell
+python scripts/audit_outputs.py --job-id job_ID
+```
+
+Default outputs:
+
+```text
+storage/outputs/{job_id}/audit/output_audit_report.json
+storage/outputs/{job_id}/audit/output_audit_report.md
+```
+
+Useful options:
+
+```powershell
+python scripts/audit_outputs.py `
+  --job-id job_ID `
+  --output storage\outputs\audits\job_ID `
+  --format both
+```
+
+The report includes:
+
+- per-clip file path, duration, resolution, selected start/end, transcript excerpts, scores, selection reason, title, overlay title, subtitle path, and OpenAI score source
+- short verification for `1080x1920`
+- normal verification for valid dimensions and duration
+- subtitle existence and subtitle density checks
+- aggregate warning counts by clip type
+- clips requiring human visual inspection
+
+Heuristic warnings include:
+
+- `very_short_transcript_text`
+- `likely_abrupt_start`
+- `likely_abrupt_ending`
+- `subtitle_too_dense`
+- `no_subtitle_file`
+- `missing_title`
+- `below_quality_threshold`
+- `backfilled_clip`
+- `rule_only_clip_in_high_quality_mode`
+- `short_duration_outside_recommended_range`
+- `normal_duration_outside_recommended_range`
+- `short_resolution_not_1080x1920`
+
+58-minute full-render audit reference:
+
+- Job: `job_6e0b6c7539644c679e853eccfcb77039`
+- Result: generated reports under `storage/outputs/job_6e0b6c7539644c679e853eccfcb77039/audit/`
+- Generated clips: normal `5`, short `10`
+- Shorts: all resolved as `1080x1920`
+- Clips requiring human visual inspection: `15`
+- Dominant warnings: generic/missing content titles, subtitle density, likely abrupt starts, one below-threshold backfill clip
+
 ## Compare low_cost and high_quality runs
 
 Use this after running both modes on the same source video. The comparison reads existing artifacts only and does not change selection behavior.

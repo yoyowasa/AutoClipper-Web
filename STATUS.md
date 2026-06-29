@@ -2014,3 +2014,68 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - 58分 full render workload は検証済み。品質評価、字幕精度、ショート構図改善は別タスク。
 - raw candidates considered はまだ大きい。CPU時間最適化は未実施。
+
+## 2026-06-30 Task 33: Output quality audit and review report
+
+### 目的
+
+- 完了済みjobの出力MP4、subtitle、selected clip artifactを読み、品質確認用のJSON/Markdownレポートを生成する。
+- 生成物の問題候補を見つけやすくする。
+- selection behavior、scoring weight、rendering、manual review UI、approve/reject workflow は変更しない。
+
+### 変更ファイル
+
+- `scripts/audit_outputs.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `scripts/audit_outputs.py` を追加。
+  - 入力: `--job-id`、`--output`、`--format json|markdown|both`
+  - 読み取り対象: `selected_clips.json`、`selected_clips_summary.json`、`candidate_summary.json`、`transcript_segments.json`、`openai_scoring_summary.json`、`normal/*.json`、`shorts/*.json`、`.ass` subtitle files
+  - 出力: `output_audit_report.json`、`output_audit_report.md`
+- per-clip audit項目を追加。
+  - type、file path、duration、resolution、selected start/end、transcript text length、first/last transcript text、rule/AI/final score、selection reason、quality warning、OpenAI score source、subtitle path、title、overlay title
+- heuristic warnings を追加。
+  - `very_short_transcript_text`
+  - `likely_abrupt_start`
+  - `likely_abrupt_ending`
+  - `subtitle_too_dense`
+  - `no_subtitle_file`
+  - `missing_title`
+  - `below_quality_threshold`
+  - `backfilled_clip`
+  - `rule_only_clip_in_high_quality_mode`
+  - `short_duration_outside_recommended_range`
+  - `normal_duration_outside_recommended_range`
+  - `short_resolution_not_1080x1920`
+- 解像度は metadata にあればそれを使い、不足時は host `ffprobe`、さらに Docker worker `ffprobe` へフォールバック。
+- README に output quality audit の使い方と58分jobの監査結果を追記。
+- fixture artifact だけで動く unit tests を追加。CIで実動画やDockerは不要。
+
+### 検証結果
+
+- `..\.venv\Scripts\python -m pytest tests\test_audit_outputs_script.py` from `backend`: 4 passed。
+- `..\.venv\Scripts\python -m ruff check ..\scripts\audit_outputs.py tests\test_audit_outputs_script.py` from `backend`: All checks passed。
+- 58分 full-render job audit:
+  - command: `.\.venv\Scripts\python .\scripts\audit_outputs.py --job-id job_6e0b6c7539644c679e853eccfcb77039 --format both`
+  - result: passed
+  - output: `storage/outputs/job_6e0b6c7539644c679e853eccfcb77039/audit/output_audit_report.json`
+  - output: `storage/outputs/job_6e0b6c7539644c679e853eccfcb77039/audit/output_audit_report.md`
+  - generated normal count: `5`
+  - generated short count: `10`
+  - average duration: `154.669667`
+  - average final score: `68.9708`
+  - shorts: all resolved as `1080x1920`
+  - clips requiring human visual inspection: `15`
+  - warnings by type:
+    - normal: `likely_abrupt_start=1`、`subtitle_too_dense=4`、`missing_title=5`、`below_quality_threshold=1`、`backfilled_clip=1`
+    - short: `subtitle_too_dense=5`、`missing_title=10`、`likely_abrupt_start=4`、`likely_abrupt_ending=1`
+
+### 未解決事項
+
+- 監査は heuristic。実際の良し悪しはMP4目視確認が必要。
+- subtitle density / missing title / abrupt boundary の改善実装は未実施。
+- ショート構図改善は保留中。
