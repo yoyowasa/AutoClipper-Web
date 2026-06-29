@@ -47,10 +47,17 @@ class OpenAIScoringStats:
     cache_hits: int = 0
     total_api_calls: int = 0
     total_latency_seconds: float = 0.0
+    max_latency_seconds: float = 0.0
     estimated_input_text_length: int = 0
     estimated_output_text_length: int = 0
+    schema_validation_failures: int = 0
     error_types: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+
+    def record_latency(self, seconds: float) -> None:
+        elapsed = max(0.0, float(seconds))
+        self.total_latency_seconds += elapsed
+        self.max_latency_seconds = max(self.max_latency_seconds, elapsed)
 
     def record_error(self, exc: Exception) -> None:
         error_type = exc.__class__.__name__
@@ -66,25 +73,41 @@ class OpenAIScoringStats:
         skipped_due_to_limit: int,
         fallback_scores: int,
         rule_score_only_candidates: int,
+        candidates_selected_for_openai: int | None = None,
     ) -> dict[str, Any]:
         average_latency = None
         if self.total_api_calls > 0:
             average_latency = round(self.total_latency_seconds / self.total_api_calls, 6)
+        selected_for_openai = (
+            candidates_selected_for_openai
+            if candidates_selected_for_openai is not None
+            else self.candidates_sent_to_openai
+        )
         return {
             "model": self.model,
             "candidate_limit": candidate_limit,
             "candidates_considered": candidates_considered,
+            "candidates_eligible_for_openai_scoring": candidates_considered,
+            "candidates_selected_for_openai": selected_for_openai,
             "candidates_sent_to_openai": self.candidates_sent_to_openai,
+            "candidates_actually_sent": self.candidates_sent_to_openai,
             "successful_scores": self.successful_scores,
+            "successful_structured_scores": self.successful_scores,
             "failed_scores": self.failed_scores,
+            "failed_structured_scores": self.failed_scores,
             "fallback_scores": fallback_scores,
             "rule_score_only_candidates": rule_score_only_candidates,
             "skipped_due_to_limit": skipped_due_to_limit,
             "cache_hits": self.cache_hits,
             "average_latency_seconds": average_latency,
+            "avg_latency_seconds": average_latency,
+            "max_latency_seconds": round(self.max_latency_seconds, 6) if self.total_api_calls > 0 else None,
+            "total_latency_seconds": round(self.total_latency_seconds, 6),
             "estimated_input_text_length": self.estimated_input_text_length,
             "estimated_output_text_length": self.estimated_output_text_length,
+            "estimated_text_payload_size": self.estimated_input_text_length + self.estimated_output_text_length,
             "total_api_calls": self.total_api_calls,
+            "schema_validation_failures": self.schema_validation_failures,
             "error_types": dict(sorted(self.error_types.items())),
             "errors": self.errors,
         }
@@ -272,15 +295,16 @@ class OpenAICandidateScorer:
                     ],
                     text={"format": response_format_json_schema()},
                 )
-                self.stats.total_latency_seconds += time.monotonic() - started_at
+                self.stats.record_latency(time.monotonic() - started_at)
                 text = _extract_response_text(response)
                 self.stats.estimated_output_text_length += len(text)
                 return ClipCandidateScore.model_validate(json.loads(text))
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
+                self.stats.schema_validation_failures += 1
                 last_error = exc
                 break
             except Exception as exc:
-                self.stats.total_latency_seconds += time.monotonic() - started_at
+                self.stats.record_latency(time.monotonic() - started_at)
                 last_error = exc
                 if not _is_transient_api_error(exc) or attempt >= self.max_retries:
                     break

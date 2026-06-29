@@ -447,6 +447,10 @@ def test_real_pipeline_openai_failure_falls_back_to_rule_scoring(client: TestCli
     )
     assert openai_summary["candidates_sent_to_openai"] > 0
     assert openai_summary["fallback_scores"] > 0
+    assert openai_summary["candidates_eligible_for_openai_scoring"] > 0
+    assert openai_summary["candidates_selected_for_openai"] > 0
+    assert openai_summary["selected_fallback_score_count"] > 0
+    assert openai_summary["final_selected_clips_using_fallback_score"]
 
 
 def test_real_pipeline_openai_failure_can_fail_without_fallback(client: TestClient) -> None:

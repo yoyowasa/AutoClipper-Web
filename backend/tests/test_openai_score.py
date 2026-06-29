@@ -218,6 +218,7 @@ def test_malformed_openai_response_is_reported_as_schema_failure() -> None:
     assert "schema_validation_failed" in scored.reject_reason
     assert "openai_scoring_failed" in scored.risk_flags
     assert scorer.stats.failed_scores == 1
+    assert scorer.stats.schema_validation_failures == 1
 
 
 def test_scorer_summary_reports_counts_and_latency() -> None:
@@ -231,18 +232,29 @@ def test_scorer_summary_reports_counts_and_latency() -> None:
         skipped_due_to_limit=80,
         fallback_scores=0,
         rule_score_only_candidates=80,
+        candidates_selected_for_openai=20,
     )
 
     assert summary["model"] == "gpt-5.5"
     assert summary["candidate_limit"] == 20
     assert summary["candidates_considered"] == 100
+    assert summary["candidates_eligible_for_openai_scoring"] == 100
+    assert summary["candidates_selected_for_openai"] == 20
     assert summary["candidates_sent_to_openai"] == 1
+    assert summary["candidates_actually_sent"] == 1
     assert summary["successful_scores"] == 1
+    assert summary["successful_structured_scores"] == 1
     assert summary["failed_scores"] == 0
+    assert summary["failed_structured_scores"] == 0
     assert summary["skipped_due_to_limit"] == 80
     assert summary["rule_score_only_candidates"] == 80
     assert summary["total_api_calls"] == 1
     assert summary["average_latency_seconds"] is not None
+    assert summary["avg_latency_seconds"] is not None
+    assert summary["max_latency_seconds"] is not None
+    assert summary["total_latency_seconds"] is not None
+    assert summary["estimated_text_payload_size"] > 0
+    assert summary["schema_validation_failures"] == 0
 
 
 def test_score_cache_reuses_existing_result(tmp_path: Path) -> None:

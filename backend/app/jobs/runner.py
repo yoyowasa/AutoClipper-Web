@@ -397,22 +397,33 @@ def _openai_summary(
             skipped_due_to_limit=skipped_due_to_limit,
             fallback_scores=fallback_scores,
             rule_score_only_candidates=rule_score_only_candidates,
+            candidates_selected_for_openai=candidates_sent,
         )
     return {
         "model": getattr(scorer, "model", "unknown"),
         "candidate_limit": candidate_limit,
         "candidates_considered": candidates_considered,
+        "candidates_eligible_for_openai_scoring": candidates_considered,
+        "candidates_selected_for_openai": candidates_sent,
         "candidates_sent_to_openai": candidates_sent,
+        "candidates_actually_sent": candidates_sent,
         "successful_scores": 0,
+        "successful_structured_scores": 0,
         "failed_scores": fallback_scores,
+        "failed_structured_scores": fallback_scores,
         "fallback_scores": fallback_scores,
         "rule_score_only_candidates": rule_score_only_candidates,
         "skipped_due_to_limit": skipped_due_to_limit,
         "cache_hits": 0,
         "average_latency_seconds": None,
+        "avg_latency_seconds": None,
+        "max_latency_seconds": None,
+        "total_latency_seconds": None,
         "estimated_input_text_length": None,
         "estimated_output_text_length": None,
+        "estimated_text_payload_size": None,
         "total_api_calls": None,
+        "schema_validation_failures": 0,
         "error_types": {},
         "errors": ["scorer did not expose runtime stats"],
     }
@@ -497,6 +508,7 @@ def _score_candidate_list(
             )
             for candidate in candidates_for_openai
         ]
+        fallback_scores = len(candidates_for_openai)
 
     failed_candidates = [
         candidate for candidate in openai_scored if "openai_scoring_failed" in candidate.risk_flags

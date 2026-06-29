@@ -73,6 +73,23 @@ def test_parse_args_30min_validation_profile_and_overrides() -> None:
     assert override_args.normal_count == 2
 
 
+def test_parse_args_30min_high_quality_validation_profile() -> None:
+    args = script.parse_args(["--video", "long.mp4", "--validation-profile", "30min_high_quality"])
+
+    assert args.validation_profile == "30min_high_quality"
+    assert args.timeout == 7200
+    assert args.normal_count == 2
+    assert args.short_count == 3
+    assert args.mode == "high_quality"
+    assert args.use_openai_scoring is True
+    assert args.openai_candidate_limit == 20
+    assert args.openai_model == "gpt-5.5"
+    assert args.openai_fallback_to_rule_score is True
+    settings = script.build_job_settings(args)
+    assert settings["useOpenAIScoring"] is True
+    assert settings["openaiCandidateLimit"] == 20
+
+
 def test_build_job_settings_disables_fixture_transcript() -> None:
     args = script.parse_args(
         [
@@ -280,16 +297,29 @@ def test_validate_openai_scoring_summary_requires_successful_api_scores(tmp_path
         json.dumps(
             {
                 "model": "gpt-test",
+                "candidate_limit": 20,
+                "candidates_eligible_for_openai_scoring": 12,
+                "candidates_selected_for_openai": 2,
                 "candidates_sent_to_openai": 2,
                 "successful_scores": 1,
                 "failed_scores": 1,
                 "fallback_scores": 1,
+                "schema_validation_failures": 0,
                 "total_api_calls": 2,
+                "avg_latency_seconds": 0.25,
+                "max_latency_seconds": 0.4,
+                "total_latency_seconds": 0.5,
+                "estimated_text_payload_size": 1024,
+                "selected_ai_score_count": 1,
+                "selected_fallback_score_count": 0,
+                "selected_rule_score_only_due_to_limit_count": 1,
             }
         ),
         encoding="utf-8",
     )
-    assert script.validate_openai_scoring_summary(tmp_path)["successful_scores"] == 1
+    payload = script.validate_openai_scoring_summary(tmp_path)
+    assert payload["successful_scores"] == 1
+    assert payload["selected_ai_score_count"] == 1
 
 
 def test_validate_output_probe_checks_short_dimensions_and_normal_duration(tmp_path: Path) -> None:
@@ -479,6 +509,27 @@ def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: py
     )
     assert "segments=2" in line
     assert "engine=faster_whisper" in line
+    openai_line = e2e_summary.summary_line(
+        "openai_scoring_summary.json",
+        {
+            "model": "gpt-test",
+            "candidate_limit": 20,
+            "candidates_eligible_for_openai_scoring": 40,
+            "candidates_selected_for_openai": 20,
+            "candidates_sent_to_openai": 18,
+            "successful_scores": 17,
+            "failed_scores": 1,
+            "fallback_scores": 1,
+            "schema_validation_failures": 0,
+            "total_api_calls": 18,
+            "avg_latency_seconds": 0.2,
+            "max_latency_seconds": 0.5,
+            "selected_ai_score_count": 2,
+            "selected_fallback_score_count": 0,
+        },
+    )
+    assert "limit=20" in openai_line
+    assert "selected_ai=2" in openai_line
 
     e2e_summary.print_job_summaries(job_id, root=tmp_path)
     output = capsys.readouterr().out

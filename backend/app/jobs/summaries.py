@@ -358,6 +358,63 @@ def build_selected_clips_summary(
     }
 
 
+def _selected_score_source_item(candidate: Candidate) -> dict[str, Any]:
+    return {
+        "id": candidate.id,
+        "type": candidate.type,
+        "final_score": _round(_score(candidate)),
+        "ai_score": _round(candidate.ai_score),
+        "rule_score": _round(candidate.rule_score),
+        "risk_flags": candidate.risk_flags,
+    }
+
+
+def build_openai_scoring_summary(
+    summary: dict[str, Any],
+    selection: CandidateSelection | None,
+) -> dict[str, Any]:
+    selected = []
+    if selection is not None:
+        selected = [*selection.normal_clips, *selection.shorts]
+
+    ai_scored = [
+        candidate
+        for candidate in selected
+        if candidate.ai_score is not None and "openai_fallback_rule_score" not in candidate.risk_flags
+    ]
+    fallback_scored = [
+        candidate for candidate in selected if "openai_fallback_rule_score" in candidate.risk_flags
+    ]
+    rule_only_due_to_limit = [
+        candidate for candidate in selected if "openai_not_scored_candidate_limit" in candidate.risk_flags
+    ]
+
+    payload = dict(summary)
+    candidates_considered = payload.get("candidates_considered")
+    candidates_sent = payload.get("candidates_sent_to_openai")
+    payload.setdefault("candidates_eligible_for_openai_scoring", candidates_considered)
+    payload.setdefault("candidates_selected_for_openai", candidates_sent)
+    payload.setdefault("candidates_actually_sent", candidates_sent)
+    payload.setdefault("successful_structured_scores", payload.get("successful_scores"))
+    payload.setdefault("failed_structured_scores", payload.get("failed_scores"))
+    payload.setdefault("avg_latency_seconds", payload.get("average_latency_seconds"))
+    payload.setdefault("estimated_text_payload_size", None)
+    payload.setdefault("schema_validation_failures", 0)
+    payload["selected_ai_score_count"] = len(ai_scored)
+    payload["selected_fallback_score_count"] = len(fallback_scored)
+    payload["selected_rule_score_only_due_to_limit_count"] = len(rule_only_due_to_limit)
+    payload["final_selected_clips_using_ai_score"] = [
+        _selected_score_source_item(candidate) for candidate in ai_scored
+    ]
+    payload["final_selected_clips_using_fallback_score"] = [
+        _selected_score_source_item(candidate) for candidate in fallback_scored
+    ]
+    payload["final_selected_clips_rule_score_only_due_to_limit"] = [
+        _selected_score_source_item(candidate) for candidate in rule_only_due_to_limit
+    ]
+    return payload
+
+
 def write_generation_summaries(
     output_dir: str | Path,
     *,
@@ -392,5 +449,8 @@ def write_generation_summaries(
         SELECTED_CLIPS_SUMMARY_FILENAME: build_selected_clips_summary(selection, exports),
     }
     if openai_scoring_summary is not None:
-        payloads[OPENAI_SCORING_SUMMARY_FILENAME] = openai_scoring_summary
+        payloads[OPENAI_SCORING_SUMMARY_FILENAME] = build_openai_scoring_summary(
+            openai_scoring_summary,
+            selection,
+        )
     return [_write_json(root / filename, payload) for filename, payload in payloads.items()]

@@ -29,6 +29,9 @@ VALIDATION_PROFILES: dict[str, dict[str, Any]] = {
         "short_min_duration": 20.0,
         "short_max_duration": 75.0,
         "selection_policy": "fill_requested",
+        "openai_candidate_limit": 20,
+        "openai_model": "gpt-5.5",
+        "openai_fallback_to_rule_score": True,
     },
     "30min": {
         "timeout": 7200,
@@ -40,6 +43,24 @@ VALIDATION_PROFILES: dict[str, dict[str, Any]] = {
         "short_min_duration": 20.0,
         "short_max_duration": 75.0,
         "selection_policy": "fill_requested",
+        "openai_candidate_limit": 20,
+        "openai_model": "gpt-5.5",
+        "openai_fallback_to_rule_score": True,
+    },
+    "30min_high_quality": {
+        "timeout": 7200,
+        "normal_count": 2,
+        "short_count": 3,
+        "mode": "high_quality",
+        "normal_min_duration": 90.0,
+        "normal_max_duration": 600.0,
+        "short_min_duration": 20.0,
+        "short_max_duration": 75.0,
+        "selection_policy": "fill_requested",
+        "use_openai_scoring": True,
+        "openai_candidate_limit": 20,
+        "openai_model": "gpt-5.5",
+        "openai_fallback_to_rule_score": True,
     },
 }
 REQUIRED_RESULT_ARTIFACTS = [
@@ -124,9 +145,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--short-max-duration", type=positive_float, default=None)
     parser.add_argument("--selection-policy", default=None, choices=["fill_requested", "strict_quality"])
     parser.add_argument("--use-openai-scoring", nargs="?", const=True, default=None, type=parse_bool)
-    parser.add_argument("--openai-candidate-limit", type=non_negative_int, default=20)
-    parser.add_argument("--openai-model", default="gpt-5.5")
-    parser.add_argument("--openai-fallback-to-rule-score", nargs="?", const=True, default=True, type=parse_bool)
+    parser.add_argument("--openai-candidate-limit", type=non_negative_int, default=None)
+    parser.add_argument("--openai-model", default=None)
+    parser.add_argument("--openai-fallback-to-rule-score", nargs="?", const=True, default=None, type=parse_bool)
     parser.add_argument("--no-openai-fallback-to-rule-score", dest="openai_fallback_to_rule_score", action="store_false")
     return parser
 
@@ -423,7 +444,8 @@ def check_openai_api_key_available(env: dict[str, str]) -> None:
         compose_exec("worker", ["sh", "-lc", 'test -n "${OPENAI_API_KEY:-}"'], env=env)
     except Exception as exc:
         raise RuntimeError(
-            "OPENAI_API_KEY is required for --mode high_quality / --use-openai-scoring true. "
+            "openai_configuration_missing: OPENAI_API_KEY is required for "
+            "--mode high_quality / --use-openai-scoring true. "
             "Set OPENAI_API_KEY in .env, then run docker compose up -d --build."
         ) from exc
 
@@ -447,11 +469,25 @@ def validate_openai_scoring_summary(output_dir: Path) -> dict[str, Any]:
     print(
         "openai scoring: "
         f"model={payload.get('model')} "
+        f"candidate_limit={payload.get('candidate_limit')} "
+        f"eligible={payload.get('candidates_eligible_for_openai_scoring')} "
+        f"selected_for_openai={payload.get('candidates_selected_for_openai')} "
         f"sent={candidates_sent} "
         f"success={successful_scores} "
         f"failed={payload.get('failed_scores')} "
         f"fallback={payload.get('fallback_scores')} "
-        f"calls={final_calls}"
+        f"schema_failures={payload.get('schema_validation_failures')} "
+        f"calls={final_calls} "
+        f"avg_latency={payload.get('avg_latency_seconds', payload.get('average_latency_seconds'))} "
+        f"max_latency={payload.get('max_latency_seconds')} "
+        f"total_latency={payload.get('total_latency_seconds')} "
+        f"text_size={payload.get('estimated_text_payload_size')}"
+    )
+    print(
+        "openai selected clips: "
+        f"ai_score={payload.get('selected_ai_score_count')} "
+        f"fallback_score={payload.get('selected_fallback_score_count')} "
+        f"rule_only_due_to_limit={payload.get('selected_rule_score_only_due_to_limit_count')}"
     )
     return payload
 

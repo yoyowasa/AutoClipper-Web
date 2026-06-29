@@ -341,11 +341,36 @@ python scripts/e2e_real_video.py `
   --timeout 1800
 ```
 
+For a 30 minute high-quality API-path validation, use the cost-bounded profile:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_30min_sample.mp4 `
+  --validation-profile 30min_high_quality
+```
+
+Equivalent explicit command:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_30min_sample.mp4 `
+  --validation-profile 30min `
+  --mode high_quality `
+  --use-openai-scoring true `
+  --openai-candidate-limit 20 `
+  --openai-fallback-to-rule-score true `
+  --normal-count 2 `
+  --short-count 3 `
+  --selection-policy fill_requested `
+  --timeout 7200
+```
+
 Cost controls:
 
 - `--openai-candidate-limit` defaults to `20` in the E2E script.
 - Backend default `openaiCandidateLimit` is `40`.
 - The worker sends candidate transcript text plus audio/visual feature summaries only. It does not send uploaded video files or rendered MP4 files.
+- The 30 minute high-quality profile still sends only the limited OpenAI candidate set. It does not send all generated candidates.
 - Use `--use-openai-scoring false` with `--mode high_quality` to exercise the rest of high-quality settings without API calls.
 
 The script:
@@ -365,7 +390,7 @@ The script:
 - validates `candidate_summary.json`, `selected_clips_summary.json`, and `selected_clips.json`
 - prints runtime metrics: upload, transcription, scene detection, candidate generation, scoring, selection, normal render, short render, ZIP packaging, and total time
 - prints pipeline metrics: video duration, transcript length, candidate counts, hard-gate counts, selected counts, backfilled count, render failure count, and ZIP size
-- validates `openai_scoring_summary.json` when OpenAI scoring is enabled
+- validates `openai_scoring_summary.json` when OpenAI scoring is enabled and prints model, candidate limit, eligible/sent counts, success/failure/fallback counts, schema failures, latency, text-size proxy, and selected clip score source counts
 - prints diagnostic summary JSON files when they exist
 
 Expected outputs:
@@ -460,7 +485,7 @@ Summary files:
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
-- `openai_scoring_summary.json`: model, candidates sent, successful scores, failed scores, fallback scores, average latency, text length proxy, total API calls.
+- `openai_scoring_summary.json`: model, candidate limit, eligible/selected/sent counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, and selected clip score source counts.
 - `rejection_summary.json`: quality gate rejection counts, high-overlap counts by type, cross-type overlap counts, and render failure counts.
 - `selected_clips_summary.json`: requested/selected normal/short counts, unfilled counts, selected IDs, durations, scores, quality warnings, selection reasons, overlap relaxation flags, timeline clusters, and output paths.
 

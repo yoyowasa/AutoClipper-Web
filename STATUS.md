@@ -1594,3 +1594,105 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - selection quality tuning は未実施。今回の修正は count fulfillment / overlap diagnostics / timeline diversity に限定。
 - frontend typecheck は `.next/types` 未生成状態では失敗する場合があるため、local では `npm --workspace frontend run build` 後に再実行して passed を確認した。CI は build job で typecheck も実行する。
+
+## 2026-06-29 Task 28: 30-minute high_quality limited OpenAI scoring E2E
+
+### 目的
+
+- 30分実動画で `high_quality` + OpenAI Structured Outputs scoring を候補数制限付きで検証する。
+- API経路、fallback、schema validation、latency、cost-safety 指標を確認する。
+- quality tuning は実施しない。
+
+### 変更ファイル
+
+- `backend/app/scoring/openai_score.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/summaries.py`
+- `backend/tests/test_openai_score.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `openai_scoring_summary.json` を拡張。
+  - `candidate_limit`
+  - `candidates_eligible_for_openai_scoring`
+  - `candidates_selected_for_openai`
+  - `candidates_actually_sent`
+  - `successful_structured_scores`
+  - `failed_structured_scores`
+  - `schema_validation_failures`
+  - `avg_latency_seconds`
+  - `max_latency_seconds`
+  - `total_latency_seconds`
+  - `estimated_text_payload_size`
+  - `selected_ai_score_count`
+  - `selected_fallback_score_count`
+  - `selected_rule_score_only_due_to_limit_count`
+  - final selected clip score source lists
+- `scripts/e2e_real_video.py` に `30min_high_quality` validation profile を追加。
+  - `mode=high_quality`
+  - `useOpenAIScoring=true`
+  - `openaiCandidateLimit=20`
+  - `openaiFallbackToRuleScore=true`
+  - `normalCount=2`
+  - `shortCount=3`
+  - `selectionPolicy=fill_requested`
+  - `timeout=7200`
+- E2E stdout に OpenAI model、candidate limit、eligible/sent counts、success/failure/fallback、schema failures、latency、text-size proxy、selected clip score source counts を追加。
+- `OPENAI_API_KEY` 欠如時の script error に `openai_configuration_missing` を明記。
+- OpenAI scoring batch fallback 時に `fallback_scores` が 0 のままになる経路を修正。
+- README に 30分 high_quality E2E 手順と cost-safety 説明を追記。
+
+### 検証結果
+
+- `..\.venv\Scripts\python -m pytest tests\test_openai_score.py tests\test_e2e_real_video_script.py tests\test_real_pipeline.py` from `backend`: 37 passed, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `.\.venv\Scripts\python -m py_compile .\scripts\e2e_real_video.py .\scripts\e2e_summary.py`: passed。
+- `..\.venv\Scripts\python -m pytest` from `backend`: 123 passed, 1 skipped, 1 warning。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run build`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `docker compose up -d --build`: passed。
+- backend `/health`: `{"status":"ok"}`。
+- worker container: `OPENAI_API_KEY` visible。値は記録しない。
+- 30-minute high_quality E2E:
+  - command: `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video '<30min spoken mp4>' --validation-profile 30min_high_quality`
+  - result: REAL VIDEO E2E PASSED
+  - job: `job_9b255223fb794123af9495fff438eacf`
+  - video duration: `1820.735583`
+  - transcript: `1325` segments, `14797` chars
+  - candidates: total `2400`, normal `1200`, short `1200`
+  - hard gate: passed `2380`, rejected `20`
+  - selected: normal `2/2`, short `3/3`
+  - render failures: `0`
+  - ZIP size: `77706529` bytes
+  - OpenAI summary:
+    - model: `gpt-5.5`
+    - candidate limit: `20`
+    - eligible: `2400`
+    - selected for OpenAI: `20`
+    - sent: `20`
+    - success: `20`
+    - failed: `0`
+    - fallback: `0`
+    - schema failures: `0`
+    - API calls: `20`
+    - avg latency: `8.639599`
+    - max latency: `18.529867`
+    - total latency: `172.791975`
+    - estimated text payload size: `33485`
+    - final selected clips using AI score: `0`
+    - final selected clips using fallback score: `0`
+    - final selected clips rule-only due to limit: `5`
+  - normal outputs: `1280x720`, durations `137.303150s`, `152.101267s`
+  - short outputs: `1080x1920`, durations `58.591183s`, `66.632550s`, `67.383300s`
+  - total runtime: `685.796s`
+
+### 未解決事項
+
+- 最終選択された5本は今回の `openaiCandidateLimit=20` 外の rule-only 候補だった。API経路検証としては成功。品質チューニングや「選択候補を優先してOpenAI scoringする」設計は別タスク。
