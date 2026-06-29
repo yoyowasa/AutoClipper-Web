@@ -1775,3 +1775,71 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - OpenAI の score calibration / quality tuning は未実施。
 - `OPENAI_API_KEY` が無い環境では high_quality OpenAI 実API E2E は実行不可。CI は key 不要の mock/unit path のみ。
+
+## 2026-06-29 Task 30: Add low_cost vs high_quality comparison report
+
+### 目的
+
+- 同じ動画の `low_cost` と `high_quality` job artifact を比較できる再現可能 workflow を追加する。
+- score tuning、selection behavior 変更、hard gate 変更は実施しない。
+
+### 変更ファイル
+
+- `scripts/compare_runs.py`
+- `scripts/e2e_compare_quality.py`
+- `backend/tests/test_compare_runs_script.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `scripts/compare_runs.py` を追加。
+  - 入力: `--low-cost-job-id`、`--high-quality-job-id`、`--output`、`--format json|markdown|both`
+  - 読み取り対象: `storage/outputs/{job_id}/selected_clips.json`、`selected_clips_summary.json`、`candidate_summary.json`、`openai_scoring_summary.json`、`transcript_summary.json`
+  - 出力: `comparison_report.json`、`comparison_report.md`
+- 比較指標を追加。
+  - selected normal / short count
+  - requested / selected fulfillment
+  - selected clip time range
+  - low_cost / high_quality overlap
+  - rule_score / ai_score / final_score 差分
+  - title / overlay_title
+  - selection_reason / below_quality_threshold / quality_warning
+  - openai_score_source / fallback / backfill
+  - render failure count
+  - high_quality selected clips using AI / fallback / not scored
+- `scripts/e2e_compare_quality.py` を追加。
+  - 同じ `--video` で low_cost E2E を実行。
+  - 続けて high_quality E2E を限定 OpenAI scoring で実行。
+  - 完了後に comparison report を生成。
+- README に比較 workflow と report 出力先を追記。
+- fixture JSON だけで CI 実行できる tests を追加。`OPENAI_API_KEY` は不要。
+
+### 検証結果
+
+- `..\.venv\Scripts\python -m pytest tests\test_compare_runs_script.py tests\test_e2e_real_video_script.py` from `backend`: 17 passed。
+- `..\.venv\Scripts\python -m pytest` from `backend`: 130 passed, 1 skipped, 1 warning。
+- `..\.venv\Scripts\python -m ruff check .` from `backend`: All checks passed。
+- `npm --workspace frontend run lint`: passed。
+- `npm --workspace frontend run typecheck`: passed。
+- `npm --workspace frontend run build`: passed。
+- `.\.venv\Scripts\python -m py_compile .\scripts\compare_runs.py .\scripts\e2e_compare_quality.py`: passed。
+- `docker compose up -d --build`: passed。
+- `docker compose ps`: backend / frontend / redis / worker running。backend healthy。
+- backend `/health`: `{"status":"ok"}`。
+- frontend `http://localhost:3000`: HTTP `200`。
+- Existing 30-minute artifacts comparison smoke:
+  - command: `.\.venv\Scripts\python .\scripts\compare_runs.py --low-cost-job-id job_bfe84635e7064edbb59079261d058a10 --high-quality-job-id job_dfd13dd8435a401f9ab9773fa217bd18 --format both`
+  - result: passed
+  - same selected clips by time overlap: `2`
+  - different high_quality selected clips: `3`
+  - high_quality selected using AI score: `5`
+  - fallback: `0`
+  - not scored: `0`
+  - output: `storage/outputs/comparisons/job_bfe84635e7064edbb59079261d058a10_vs_job_dfd13dd8435a401f9ab9773fa217bd18/comparison_report.json`
+  - output: `storage/outputs/comparisons/job_bfe84635e7064edbb59079261d058a10_vs_job_dfd13dd8435a401f9ab9773fa217bd18/comparison_report.md`
+
+### 未解決事項
+
+- `e2e_compare_quality.py` の high_quality 実行には `OPENAI_API_KEY` が必要。
+- 今回は比較可視化のみ。score calibration / selection tuning は未実施。

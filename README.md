@@ -503,6 +503,58 @@ python scripts/e2e_sample_video.py
 python scripts/e2e_real_video.py --video path\to\spoken_sample.mp4
 ```
 
+## Compare low_cost and high_quality runs
+
+Use this after running both modes on the same source video. The comparison reads existing artifacts only and does not change selection behavior.
+
+```powershell
+python scripts/compare_runs.py `
+  --low-cost-job-id job_LOW_COST_ID `
+  --high-quality-job-id job_HIGH_QUALITY_ID
+```
+
+Default outputs:
+
+```text
+storage/outputs/comparisons/{low_cost_job_id}_vs_{high_quality_job_id}/comparison_report.json
+storage/outputs/comparisons/{low_cost_job_id}_vs_{high_quality_job_id}/comparison_report.md
+```
+
+Useful options:
+
+```powershell
+python scripts/compare_runs.py `
+  --low-cost-job-id job_LOW_COST_ID `
+  --high-quality-job-id job_HIGH_QUALITY_ID `
+  --output storage\outputs\comparisons\my_run `
+  --format both
+```
+
+The report compares:
+
+- selected normal and short counts
+- requested versus selected count fulfillment
+- selected clip time ranges
+- low_cost / high_quality time overlap
+- rule, AI, and final scores
+- titles and overlay titles
+- selection reason, quality warning, fallback, backfill, and OpenAI score source
+- render failure counts
+- high_quality selected clips using AI score, fallback, or no score
+
+To run both modes and then compare:
+
+```powershell
+python scripts/e2e_compare_quality.py `
+  --video path\to\spoken_30min_sample.mp4 `
+  --normal-count 2 `
+  --short-count 3 `
+  --openai-candidate-limit 20 `
+  --openai-finalist-scoring-limit 7
+```
+
+`e2e_compare_quality.py` runs a low_cost E2E first, then a high_quality E2E with limited OpenAI scoring, then writes the comparison reports. It requires `OPENAI_API_KEY` for the high_quality run. CI does not require an OpenAI key because tests use fixture JSON files.
+
 ## Storage
 
 Host paths:
