@@ -336,6 +336,26 @@ python scripts/e2e_real_video.py `
   --timeout 14400
 ```
 
+Validated 58-minute full-render reference run:
+
+- Date: 2026-06-30
+- Mode: `low_cost`
+- Request: normal `5`, short `10`, `selectionPolicy=fill_requested`
+- Job: `job_6e0b6c7539644c679e853eccfcb77039`
+- Result: `REAL VIDEO E2E PASSED`
+- Total runtime: `627.141s`
+- Candidate generation: `52.704s`, `12` chunks, peak memory `466.258 MB`, memory guard `false`
+- Selection: normal `5/5`, short `10/10`
+- Render failures: `0`
+- Render time: normal `111.219s`, shorts `87.281s`
+- ZIP packaging: `22.266s`
+- ZIP size: `385749028 bytes` (`367.88 MB`)
+- Job output size: `790240046 bytes` (`753.63 MB`)
+- Disk free: `180.39 GB` before run, `177.99 GB` after run
+- Shorts: all downloaded MP4s verified as `1080x1920`
+- Normal clips: all downloaded MP4s had valid dimensions and durations
+- Required artifacts present: `candidate_generation_summary.json`, `selected_clips.json`, `selected_clips_summary.json`, `download.zip`
+
 Long-video candidate generation defaults:
 
 - `maxRawCandidatesPerType`: `250000`

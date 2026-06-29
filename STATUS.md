@@ -1944,3 +1944,73 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 - 58分 E2E は `normal=3` / `short=5` で実施。`normal=5` / `short=10` は artifact smoke では selection `5/5` / `10/10` まで確認済みだが、全render E2Eは未実施。
 - candidate generation は memory-bounded になったが、raw candidates considered は still large。CPU時間最適化は別タスク。
 - `worker_terminated_unexpectedly` は status polling 時の stale recovery。worker kill 瞬間に即時 failed へ更新する仕組みではない。
+
+## 2026-06-30 Task 32: 58-minute full render E2E validation
+
+### 目的
+
+- 58分実動画で `normal=5` / `short=10` の full render E2E を検証する。
+- candidate generation OOM 再発なし、selection 充足、render、ZIP、出力サイズ、ディスク使用量を確認する。
+- selection logic、hard gate、score threshold、UI は変更しない。
+
+### 変更ファイル
+
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- README に58分 `low_cost` full-render reference run の実測結果を追記。
+- STATUS に Task 32 の検証結果を追記。
+- 実装コード変更なし。
+
+### 検証結果
+
+- command:
+  - `.\.venv\Scripts\python .\scripts\e2e_real_video.py --video '<58min spoken mp4>' --backend-url http://localhost:8000 --timeout 21600 --normal-count 5 --short-count 10 --mode low_cost --profile talk --burn-subtitles true --normal-min-duration 90 --normal-max-duration 600 --short-min-duration 20 --short-max-duration 75 --selection-policy fill_requested`
+- result: `REAL VIDEO E2E PASSED`
+- job: `job_6e0b6c7539644c679e853eccfcb77039`
+- total runtime: `627.141s`
+- upload time: `1.750s`
+- transcription time: `224.313s`
+- scene detection time: `101.265s`
+- candidate generation time: `52.704s`
+- selection time: `2.015s`
+- normal render time: `111.219s`
+- short render time: `87.281s`
+- zip packaging time: `22.266s`
+- selected: normal `5/5`、short `10/10`
+- render failures: `0`
+- generated MP4 count: normal `5`、short `10`
+- generated shorts: all downloaded MP4s verified `1080x1920`
+- normal clips: all downloaded MP4s had valid dimensions and durations
+- ZIP size: `385749028 bytes` (`367.88 MB`)
+- job output size: `790240046 bytes` (`753.63 MB`)
+- disk:
+  - before E2E C free: `180.39 GB`
+  - after E2E C free: `177.99 GB`
+- `candidate_generation_summary.json`:
+  - chunks processed: `12`
+  - raw candidates considered: `487517`
+  - kept: normal `600`、short `900`
+  - dropped due to cap: `477404`
+  - dropped due to duplicate: `8623`
+  - dropped due to invalid duration: `3623`
+  - peak memory: `466.258 MB`
+  - memory guard: `false`
+- `candidate_summary.json`:
+  - total candidates: `1500`
+  - hard gate passed: `1500`
+  - hard gate rejected: `0`
+  - selected below threshold backfill: `1`
+  - unfilled requested counts: normal `0`、short `0`
+- required artifacts present:
+  - `selected_clips.json`
+  - `candidate_generation_summary.json`
+  - `selected_clips_summary.json`
+  - `download.zip`
+
+### 未解決事項
+
+- 58分 full render workload は検証済み。品質評価、字幕精度、ショート構図改善は別タスク。
+- raw candidates considered はまだ大きい。CPU時間最適化は未実施。
