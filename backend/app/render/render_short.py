@@ -12,6 +12,7 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate
 from app.ids import make_id
 from app.models import ExportItem, Job
+from app.candidates.title_generation import TitleFields, build_title_fields
 from app.render.crop_strategy import (
     CropLayout,
     CropStrategy,
@@ -243,15 +244,24 @@ def _candidate_score(candidate: Candidate) -> float:
     return 0.0
 
 
-def _candidate_title(candidate: Candidate, index: int) -> str:
-    return candidate.title or f"Short {index}"
+def _candidate_title_fields(candidate: Candidate, index: int) -> TitleFields:
+    return build_title_fields(
+        clip_type="short",
+        index=index,
+        transcript_text=candidate.transcript_text,
+        title=candidate.title,
+        overlay_title=candidate.overlay_title,
+        title_source=candidate.title_source,
+        used_ai_score=candidate.used_ai_score,
+        openai_score_source=candidate.openai_score_source,
+    )
 
 
 def _write_export_metadata(
     path: Path,
     export_id: str,
     candidate: Candidate,
-    title: str,
+    title_fields: TitleFields,
     video_path: Path,
     subtitle_path: Path | None,
     strategy: str | None,
@@ -262,8 +272,10 @@ def _write_export_metadata(
                 "id": export_id,
                 "type": "short",
                 "candidate_id": candidate.id,
-                "title": title,
-                "overlay_title": candidate.overlay_title,
+                "title": title_fields.title,
+                "overlay_title": title_fields.overlay_title,
+                "title_source": title_fields.title_source,
+                "filename_safe_title": title_fields.filename_safe_title,
                 "start": candidate.start,
                 "end": candidate.end,
                 "duration": candidate.duration,
@@ -332,7 +344,7 @@ def render_selected_short_candidates(
         subtitle_path: Path | None = None
 
         try:
-            title = _candidate_title(candidate, index)
+            title_fields = _candidate_title_fields(candidate, index)
             if burn_subtitles:
                 subtitle_path = output_dir / f"short_{index:02d}.ass"
                 write_ass_for_candidate(
@@ -340,7 +352,7 @@ def render_selected_short_candidates(
                     _subtitle_segments_for_candidate(candidate, transcript_segments),
                     subtitle_path,
                     layout=SubtitleLayout.short(),
-                    top_title=candidate.overlay_title,
+                    top_title=title_fields.overlay_title,
                 )
 
             render_result = renderer(
@@ -360,7 +372,7 @@ def render_selected_short_candidates(
                 metadata_path,
                 export_id=export_id,
                 candidate=candidate,
-                title=title,
+                title_fields=title_fields,
                 video_path=rendered_path,
                 subtitle_path=subtitle_path,
                 strategy=render_result.strategy if isinstance(render_result, ShortRenderResult) else None,
@@ -372,7 +384,7 @@ def render_selected_short_candidates(
                 video_id=job.video_id,
                 candidate_id=candidate.id,
                 type="short",
-                title=title,
+                title=title_fields.title,
                 duration=candidate.duration,
                 score=_candidate_score(candidate),
                 video_path=str(rendered_path),

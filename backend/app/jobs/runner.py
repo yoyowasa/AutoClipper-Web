@@ -37,6 +37,7 @@ from app.candidates.select_candidates import (
     select_candidates,
     write_selected_clips,
 )
+from app.candidates.title_generation import apply_titles_by_type
 from app.db import SessionLocal
 from app.ids import make_id
 from app.jobs.summaries import write_generation_summaries
@@ -879,6 +880,12 @@ def _selection_with_replacements(
     )
 
 
+def _selection_with_titles(selection: CandidateSelection) -> CandidateSelection:
+    normal_clips = apply_titles_by_type(selection.normal_clips, "normal")
+    shorts = apply_titles_by_type(selection.shorts, "short")
+    return selection.model_copy(update={"normal_clips": normal_clips, "shorts": shorts})
+
+
 def _candidate_needs_finalist_scoring(candidate: Candidate) -> bool:
     if candidate.used_ai_score is True and candidate.ai_score is not None:
         return False
@@ -1360,6 +1367,12 @@ def run_autoclipper_job(
                 scorer=scoring_result.openai_scorer,
                 openai_summary=openai_scoring_summary,
             )
+            selection = _selection_with_titles(selection)
+            selected_replacements = {
+                candidate.id: candidate
+                for candidate in [*selection.normal_clips, *selection.shorts]
+            }
+            scored_candidates = _replace_scored_candidates(scored_candidates, selected_replacements)
             metadata_files.append(write_candidates(scored_candidates, job_dir / "scored_candidates.json"))
             selected_path = write_selected_clips(selection, job_dir / "selected_clips.json")
             metadata_files.append(selected_path)

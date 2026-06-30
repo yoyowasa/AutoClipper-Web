@@ -609,7 +609,7 @@ python scripts/audit_outputs.py `
 
 The report includes:
 
-- per-clip file path, duration, resolution, selected start/end, transcript excerpts, scores, selection reason, title, overlay title, subtitle path, and OpenAI score source
+- per-clip file path, duration, resolution, selected start/end, transcript excerpts, scores, selection reason, title, title source, filename-safe title, overlay title, subtitle path, and OpenAI score source
 - short verification for `1080x1920`
 - normal verification for valid dimensions and duration
 - subtitle existence and subtitle density checks
@@ -637,8 +637,17 @@ Heuristic warnings include:
 - Result: generated reports under `storage/outputs/job_6e0b6c7539644c679e853eccfcb77039/audit/`
 - Generated clips: normal `5`, short `10`
 - Shorts: all resolved as `1080x1920`
-- Clips requiring human visual inspection: `15`
-- Dominant warnings: generic/missing content titles, subtitle density, likely abrupt starts, one below-threshold backfill clip
+- Clips requiring human visual inspection: `13`
+- `missing_title`: `0`
+- Dominant warnings: subtitle density, likely abrupt starts/endings, one below-threshold backfill clip
+
+Title behavior:
+
+- OpenAI Structured Outputs titles are preserved with `title_source=openai`.
+- Rule-only / `low_cost` selected clips derive fallback titles from `transcript_text` with `title_source=transcript_fallback`.
+- If transcript text is unavailable, titles fall back to deterministic labels such as `Normal Clip 01` or `Short 01` with `title_source=deterministic_fallback`.
+- Shorts also get `overlay_title` from the generated title when no explicit overlay title exists.
+- `selected_clips.json`, rendered `normal/*.json`, rendered `shorts/*.json`, and API result `ExportItem.title` should all contain a non-empty title.
 
 ## Compare low_cost and high_quality runs
 

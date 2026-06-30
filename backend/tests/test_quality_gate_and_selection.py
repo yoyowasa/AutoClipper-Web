@@ -313,5 +313,10 @@ def test_select_and_write_candidates_saves_selected_clips_json(tmp_path: Path) -
     assert payload["normalClips"][0]["hard_gate_passed"] is True
     assert payload["normalClips"][0]["below_quality_threshold"] is False
     assert payload["normalClips"][0]["selection_reason"] == "above_quality_threshold"
+    assert payload["normalClips"][0]["title"] == "Selected normal"
+    assert payload["normalClips"][0]["title_source"] == "transcript_fallback"
+    assert payload["normalClips"][0]["filename_safe_title"] == "Selected_normal"
     assert payload["shorts"][0]["id"] == "short"
+    assert payload["shorts"][0]["title"] == "Selected short"
+    assert payload["shorts"][0]["overlay_title"] == "Selected short"
     assert payload["rejectedCandidates"] == []

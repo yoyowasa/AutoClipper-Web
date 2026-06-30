@@ -10,6 +10,7 @@ from app.audio.silence_detect import SilenceSegment
 from app.audio.volume_features import AudioFeatures
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType
+from app.candidates.title_generation import apply_titles_by_type
 from app.scoring.quality_gate import (
     QualityGateSettings,
     effective_final_score,
@@ -628,8 +629,8 @@ def select_candidates(
         silence_segments=silence_segments,
         cross_type_selected=normal_result.selected if parsed_settings.cross_type_overlap_dedupe else (),
     )
-    normal_clips = normal_result.selected
-    shorts = shorts_result.selected
+    normal_clips = apply_titles_by_type(normal_result.selected, "normal")
+    shorts = apply_titles_by_type(shorts_result.selected, "short")
     selected = [*normal_clips, *shorts]
     rejections = [*normal_result.rejected, *shorts_result.rejected]
     hard_gate_passed_count, hard_gate_rejected_count = _hard_gate_counts(

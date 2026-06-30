@@ -10,6 +10,7 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate
 from app.ids import make_id
 from app.models import ExportItem, Job
+from app.candidates.title_generation import TitleFields, build_title_fields
 from app.render.filters import ass_filter, loudnorm_filter
 from app.render.subtitles_ass import SubtitleLayout, write_ass_for_candidate
 from app.storage.paths import StoragePaths, get_storage_paths
@@ -122,15 +123,24 @@ def _candidate_score(candidate: Candidate) -> float:
     return 0.0
 
 
-def _candidate_title(candidate: Candidate, index: int) -> str:
-    return candidate.title or f"Normal clip {index}"
+def _candidate_title_fields(candidate: Candidate, index: int) -> TitleFields:
+    return build_title_fields(
+        clip_type="normal",
+        index=index,
+        transcript_text=candidate.transcript_text,
+        title=candidate.title,
+        overlay_title=candidate.overlay_title,
+        title_source=candidate.title_source,
+        used_ai_score=candidate.used_ai_score,
+        openai_score_source=candidate.openai_score_source,
+    )
 
 
 def _write_export_metadata(
     path: Path,
     export_id: str,
     candidate: Candidate,
-    title: str,
+    title_fields: TitleFields,
     video_path: Path,
     subtitle_path: Path | None,
 ) -> Path:
@@ -140,7 +150,9 @@ def _write_export_metadata(
                 "id": export_id,
                 "type": "normal",
                 "candidate_id": candidate.id,
-                "title": title,
+                "title": title_fields.title,
+                "title_source": title_fields.title_source,
+                "filename_safe_title": title_fields.filename_safe_title,
                 "start": candidate.start,
                 "end": candidate.end,
                 "duration": candidate.duration,
@@ -201,7 +213,7 @@ def render_selected_normal_candidates(
         subtitle_path: Path | None = None
 
         try:
-            title = _candidate_title(candidate, index)
+            title_fields = _candidate_title_fields(candidate, index)
             if burn_subtitles:
                 subtitle_path = output_dir / f"normal_{index:02d}.ass"
                 write_ass_for_candidate(
@@ -224,7 +236,7 @@ def render_selected_normal_candidates(
                 metadata_path,
                 export_id=export_id,
                 candidate=candidate,
-                title=title,
+                title_fields=title_fields,
                 video_path=output_path,
                 subtitle_path=subtitle_path,
             )
@@ -235,7 +247,7 @@ def render_selected_normal_candidates(
                 video_id=job.video_id,
                 candidate_id=candidate.id,
                 type="normal",
-                title=title,
+                title=title_fields.title,
                 duration=candidate.duration,
                 score=_candidate_score(candidate),
                 video_path=str(output_path),

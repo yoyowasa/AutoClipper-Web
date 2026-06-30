@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from app.audio.volume_features import AudioFeatures
 from app.candidates.merge_boundaries import Candidate
+from app.candidates.title_generation import build_title_fields
 from app.scoring.score_schema import ClipCandidateScore, response_format_json_schema
 from app.video.black_screen import VisualQuality
 
@@ -321,13 +322,25 @@ class OpenAICandidateScorer:
 
 def apply_openai_score_to_candidate(candidate: Candidate, score: ClipCandidateScore) -> Candidate:
     reject_reason = None if score.should_use else score.reason
+    title_fields = build_title_fields(
+        clip_type=candidate.type,
+        index=1,
+        transcript_text=candidate.transcript_text,
+        title=score.title,
+        overlay_title=score.overlay_title,
+        title_source="openai",
+        used_ai_score=True,
+        openai_score_source="preselection_pool",
+    )
     return candidate.model_copy(
         update={
             "ai_score": float(score.final_score),
             "final_score": float(score.final_score),
             "should_use": score.should_use,
-            "title": score.title,
-            "overlay_title": score.overlay_title,
+            "title": title_fields.title,
+            "overlay_title": title_fields.overlay_title,
+            "title_source": title_fields.title_source,
+            "filename_safe_title": title_fields.filename_safe_title,
             "reason": score.reason,
             "risk_flags": score.risk_flags,
             "reject_reason": reject_reason,

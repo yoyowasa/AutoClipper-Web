@@ -2079,3 +2079,78 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 - 監査は heuristic。実際の良し悪しはMP4目視確認が必要。
 - subtitle density / missing title / abrupt boundary の改善実装は未実施。
 - ショート構図改善は保留中。
+
+## 2026-06-30 Task 34: Fix missing titles and title propagation
+
+### 目的
+
+- generated clips の `missing_title` を解消する。
+- OpenAI title は保持し、low_cost / rule-only clip には deterministic fallback title を付与する。
+- selection behavior、hard gate、score weight、OpenAI candidate count、manual review UI、approve/reject workflow は変更しない。
+
+### 変更ファイル
+
+- `backend/app/candidates/title_generation.py`
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/candidates/select_candidates.py`
+- `backend/app/scoring/openai_score.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/render/render_normal.py`
+- `backend/app/render/render_short.py`
+- `scripts/audit_outputs.py`
+- `backend/tests/test_title_generation.py`
+- `backend/tests/test_quality_gate_and_selection.py`
+- `backend/tests/test_openai_score.py`
+- `backend/tests/test_render_normal_selected.py`
+- `backend/tests/test_short_rendering.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- title fallback 生成を追加。
+  - OpenAI title: `title_source=openai`
+  - transcript fallback: `title_source=transcript_fallback`
+  - deterministic fallback: `Normal Clip 01` / `Short 01`、`title_source=deterministic_fallback`
+- `Candidate` に以下を追加。
+  - `title_source`
+  - `filename_safe_title`
+- selected candidates に title fallback を反映。
+  - `selected_clips.json` に `title`、`overlay_title`、`title_source`、`filename_safe_title` が入る。
+  - OpenAI finalist scoring 後も再反映し、OpenAI title を保持する。
+- render metadata を更新。
+  - `normal_XX.json`: `title`、`title_source`、`filename_safe_title`
+  - `short_XX.json`: `title`、`overlay_title`、`title_source`、`filename_safe_title`
+  - `ExportItem.title` は fallback 後の非空 title を使用。
+- `scripts/audit_outputs.py` を更新。
+  - 既存 artifact でも同じ fallback title を算出。
+  - `title_source` と `filename_safe_title` を report に含める。
+  - fallback title が生成できる場合は `missing_title` を出さない。
+
+### 検証結果
+
+- `..\.venv\Scripts\python -m ruff check . ..\scripts\audit_outputs.py` from `backend`: All checks passed。
+- `..\.venv\Scripts\python -m pytest` from `backend`: 145 passed, 1 skipped, 1 warning。
+- `npm run lint` from `frontend`: passed。
+- `npm run typecheck` from `frontend`: passed。
+- `npm run build` from `frontend`: passed。
+- `git diff --check`: whitespace errorなし。
+- targeted tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_title_generation.py tests\test_quality_gate_and_selection.py tests\test_audit_outputs_script.py` from `backend`: 21 passed。
+  - initial targeted run found punctuation expectation mismatch, fixed title punctuation handling。
+- 58分 full-render job audit:
+  - command: `.\.venv\Scripts\python .\scripts\audit_outputs.py --job-id job_6e0b6c7539644c679e853eccfcb77039 --format both`
+  - result: passed
+  - generated normal count: `5`
+  - generated short count: `10`
+  - clips requiring human visual inspection: `13`
+  - `missing_title`: `0`
+  - warnings by type:
+    - normal: `likely_abrupt_start=1`、`subtitle_too_dense=4`、`below_quality_threshold=1`、`backfilled_clip=1`
+    - short: `subtitle_too_dense=5`、`likely_abrupt_start=4`、`likely_abrupt_ending=1`
+
+### 未解決事項
+
+- title fallback は deterministic。タイトル品質そのもののAI調整・コピー改善は未実施。
+- subtitle density / abrupt boundary / short composition 改善は別タスク。

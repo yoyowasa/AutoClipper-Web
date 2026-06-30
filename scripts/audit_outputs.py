@@ -14,6 +14,12 @@ from typing import Any, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / "backend"
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
+
+from app.candidates.title_generation import build_title_fields  # noqa: E402
+
 DOCKER_BIN_DIR = Path(r"C:\Program Files\Docker\Docker\resources\bin")
 SHORT_RECOMMENDED_RANGE = (20.0, 75.0)
 NORMAL_RECOMMENDED_RANGE = (90.0, 600.0)
@@ -408,12 +414,9 @@ def analyze_ass_subtitles(path: Path | None) -> dict[str, Any]:
     }
 
 
-def _has_generic_or_missing_title(selected_title: Any, metadata_title: Any) -> bool:
-    selected = _plain_text(selected_title)
-    if selected:
-        return False
-    metadata = _plain_text(metadata_title)
-    return not metadata or bool(GENERIC_TITLE_PATTERN.match(metadata))
+def _has_generic_or_missing_title(title: Any) -> bool:
+    text = _plain_text(title)
+    return not text or bool(GENERIC_TITLE_PATTERN.match(text))
 
 
 def _likely_abrupt_start(clip: dict[str, Any], transcript: dict[str, Any]) -> bool:
@@ -457,7 +460,7 @@ def _quality_warnings(
         warnings.append("subtitle_too_dense")
     if not subtitle.get("subtitle_exists"):
         warnings.append("no_subtitle_file")
-    if _has_generic_or_missing_title(clip.get("title"), metadata.get("title")):
+    if _has_generic_or_missing_title(clip.get("title")):
         warnings.append("missing_title")
     if clip.get("below_quality_threshold"):
         warnings.append("below_quality_threshold")
@@ -484,6 +487,7 @@ def _quality_warnings(
 def _clip_report(
     *,
     clip: dict[str, Any],
+    index: int,
     metadata: dict[str, Any],
     transcript_segments: Sequence[dict[str, Any]],
     high_quality_mode: bool,
@@ -497,16 +501,35 @@ def _clip_report(
         probe = probe_video(host_path=host_path, container_path=container_video_path, root=root)
     transcript = _transcript_excerpt(transcript_segments, clip)
     subtitle = analyze_ass_subtitles(subtitle_path)
+    raw_title = clip.get("title")
+    if _has_generic_or_missing_title(raw_title):
+        raw_title = metadata.get("title")
+    if _has_generic_or_missing_title(raw_title):
+        raw_title = None
+    title_fields = build_title_fields(
+        clip_type=str(clip.get("type")),
+        index=index,
+        transcript_text=str(clip.get("transcript_text") or ""),
+        title=raw_title,
+        overlay_title=clip.get("overlay_title") or metadata.get("overlay_title"),
+        title_source=clip.get("title_source") or metadata.get("title_source"),
+        used_ai_score=clip.get("used_ai_score"),
+        openai_score_source=clip.get("openai_score_source"),
+    )
+    effective_clip = {
+        **clip,
+        "title": title_fields.title,
+        "overlay_title": title_fields.overlay_title,
+        "title_source": title_fields.title_source,
+    }
     warnings = _quality_warnings(
-        clip=clip,
+        clip=effective_clip,
         metadata=metadata,
         transcript=transcript,
         probe=probe,
         subtitle=subtitle,
         high_quality_mode=high_quality_mode,
     )
-    title = clip.get("title") or metadata.get("title")
-    overlay_title = clip.get("overlay_title") or metadata.get("overlay_title")
     duration = _number(clip.get("duration")) or probe.duration
     return {
         "id": clip.get("id"),
@@ -538,8 +561,10 @@ def _clip_report(
         "subtitle_file_path": str(subtitle_path) if subtitle_path is not None else None,
         "container_subtitle_file_path": container_subtitle_path,
         "subtitle": subtitle,
-        "title": title,
-        "overlay_title": overlay_title,
+        "title": title_fields.title,
+        "overlay_title": title_fields.overlay_title,
+        "title_source": title_fields.title_source,
+        "filename_safe_title": title_fields.filename_safe_title,
         "metadata_path": metadata.get("_metadata_path"),
         "warnings": warnings,
         "requires_human_visual_inspection": bool(warnings),
@@ -576,16 +601,22 @@ def build_audit_report(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
     export_metadata = _load_export_metadata(output_dir)
     high_quality_mode = isinstance(openai_summary, dict)
 
-    clip_reports = [
-        _clip_report(
-            clip=clip,
-            metadata=export_metadata.get(str(clip.get("id")), {}),
-            transcript_segments=transcript_segments,
-            high_quality_mode=high_quality_mode,
-            root=root,
+    raw_clips = _clip_items(selected)
+    type_indexes: dict[str, int] = {}
+    clip_reports = []
+    for clip in raw_clips:
+        clip_type = str(clip.get("type"))
+        type_indexes[clip_type] = type_indexes.get(clip_type, 0) + 1
+        clip_reports.append(
+            _clip_report(
+                clip=clip,
+                index=type_indexes[clip_type],
+                metadata=export_metadata.get(str(clip.get("id")), {}),
+                transcript_segments=transcript_segments,
+                high_quality_mode=high_quality_mode,
+                root=root,
+            )
         )
-        for clip in _clip_items(selected)
-    ]
     average_duration = _mean([_number(clip.get("duration")) for clip in clip_reports])
     average_final_score = _mean([_number(clip.get("final_score")) for clip in clip_reports])
     inspection_clips = [
@@ -674,8 +705,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Generated Clips",
             "",
-            "| Type | Clip | Range | Duration | Resolution | Final | Selection | Warnings | Title | Overlay |",
-            "| --- | --- | --- | ---: | --- | ---: | --- | --- | --- | --- |",
+            "| Type | Clip | Range | Duration | Resolution | Final | Selection | Warnings | Title | Source | Overlay |",
+            "| --- | --- | --- | ---: | --- | ---: | --- | --- | --- | --- | --- |",
         ]
     )
     for clip in report["clips"]:
@@ -695,6 +726,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"{_markdown_value(clip.get('selection_reason'))} | "
             f"{_markdown_value(clip.get('warnings'), limit=160)} | "
             f"{_markdown_value(clip.get('title'))} | "
+            f"{_markdown_value(clip.get('title_source'))} | "
             f"{_markdown_value(clip.get('overlay_title'))} |"
         )
 

@@ -289,6 +289,8 @@ def test_batch_scoring_for_worker_use() -> None:
     scored = score_candidate_batch(candidates, scorer=scorer, audio_features=make_audio_features())
 
     assert [candidate.title for candidate in scored] == ["First", "Second"]
+    assert [candidate.title_source for candidate in scored] == ["openai", "openai"]
+    assert [candidate.filename_safe_title for candidate in scored] == ["First", "Second"]
     assert [candidate.final_score for candidate in scored] == [81.0, 74.0]
     assert scored[0].should_use is True
     assert scored[1].should_use is False

@@ -161,18 +161,44 @@ def test_audit_outputs_builds_quality_report(tmp_path: Path) -> None:
     assert summary["warnings_by_type"]["normal"]["very_short_transcript_text"] == 1
     assert summary["warnings_by_type"]["normal"]["subtitle_too_dense"] == 1
     assert summary["warnings_by_type"]["normal"]["backfilled_clip"] == 1
+    assert "missing_title" not in summary["warnings_by_type"]["normal"]
     assert summary["warnings_by_type"]["short"]["short_resolution_not_1080x1920"] == 1
     assert summary["warnings_by_type"]["short"]["no_subtitle_file"] == 1
     assert summary["warnings_by_type"]["short"]["rule_only_clip_in_high_quality_mode"] == 1
+    assert "missing_title" not in summary["warnings_by_type"]["short"]
 
     normal_clip = report["clips"][0]
     short_clip = report["clips"][1]
     assert normal_clip["first_transcript_text"] == "だから短い"
     assert normal_clip["resolution"]["width"] == 1280
-    assert normal_clip["title"] == "Normal clip 1"
-    assert "missing_title" in normal_clip["warnings"]
+    assert normal_clip["title"] == "だから短い"
+    assert normal_clip["title_source"] == "transcript_fallback"
+    assert "missing_title" not in normal_clip["warnings"]
     assert short_clip["resolution"]["height"] == 1280
-    assert "missing_overlay_title" in short_clip["warnings"]
+    assert short_clip["title"] == "Clear short transcript text for the clip"
+    assert short_clip["title_source"] == "transcript_fallback"
+    assert short_clip["overlay_title"] == "Clear short transcript text for the clip"
+    assert "missing_overlay_title" not in short_clip["warnings"]
+
+
+def test_audit_outputs_prefers_metadata_title_when_selected_title_is_generic(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    selected_path = output_dir / "selected_clips.json"
+    selected = json.loads(selected_path.read_text(encoding="utf-8"))
+    selected["normalClips"][0]["title"] = "Normal clip 1"
+    write_json(selected_path, selected)
+    metadata_path = output_dir / "normal" / "normal_01.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["title"] = "Metadata real title"
+    metadata["title_source"] = "openai"
+    write_json(metadata_path, metadata)
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+
+    normal_clip = report["clips"][0]
+    assert normal_clip["title"] == "Metadata real title"
+    assert normal_clip["title_source"] == "openai"
+    assert "missing_title" not in normal_clip["warnings"]
 
 
 def test_audit_outputs_writes_json_and_markdown(tmp_path: Path) -> None:

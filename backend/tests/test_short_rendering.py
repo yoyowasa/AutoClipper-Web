@@ -1,3 +1,4 @@
+import json
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -241,6 +242,11 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert (shorts_dir / "short_01.ass").is_file()
     assert not (shorts_dir / "short_02.mp4").is_file()
     assert (shorts_dir / "short_03.mp4").is_file()
+    metadata = json.loads((shorts_dir / "short_01.json").read_text(encoding="utf-8"))
+    assert metadata["title"] == "First short"
+    assert metadata["overlay_title"] == "First short overlay"
+    assert metadata["title_source"] == "transcript_fallback"
+    assert metadata["filename_safe_title"] == "First_short"
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200

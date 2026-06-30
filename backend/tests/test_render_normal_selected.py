@@ -1,3 +1,4 @@
+import json
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -146,6 +147,10 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     assert (normal_dir / "normal_01.ass").is_file()
     assert not (normal_dir / "normal_02.mp4").is_file()
     assert (normal_dir / "normal_03.mp4").is_file()
+    metadata = json.loads((normal_dir / "normal_01.json").read_text(encoding="utf-8"))
+    assert metadata["title"] == "First normal"
+    assert metadata["title_source"] == "transcript_fallback"
+    assert metadata["filename_safe_title"] == "First_normal"
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200

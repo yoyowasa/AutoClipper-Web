@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.candidates.title_generation import TitleSource
 from app.video.scene_detect import SceneSegment
 
 
@@ -40,6 +41,8 @@ class Candidate(BaseModel):
     should_use: bool | None = None
     title: str | None = None
     overlay_title: str | None = None
+    title_source: TitleSource | None = None
+    filename_safe_title: str | None = None
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
     reject_reason: str | None = None
