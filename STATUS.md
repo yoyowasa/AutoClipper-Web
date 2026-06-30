@@ -2079,3 +2079,84 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 - 監査は heuristic。実際の良し悪しはMP4目視確認が必要。
 - subtitle density / missing title / abrupt boundary の改善実装は未実施。
 - ショート構図改善は保留中。
+
+## 2026-06-30 Task 35: Improve subtitle readability and reduce subtitle density warnings
+
+### 目的
+
+- ASS subtitle generation を読みやすくする。
+- 特に 1080x1920 shorts で、1-2行・短すぎない表示時間・長文segment分割を行う。
+- transcription、candidate selection、scoring、manual subtitle editing UI は変更しない。
+
+### 変更ファイル
+
+- `backend/app/render/subtitles_ass.py`
+- `backend/app/render/render_normal.py`
+- `backend/app/render/render_short.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/schemas.py`
+- `frontend/lib/types.ts`
+- `frontend/components/SettingsPanel.tsx`
+- `scripts/audit_outputs.py`
+- `backend/tests/test_subtitles_ass.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `backend/tests/test_api_routes.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- subtitle layout settings を追加。
+  - `maxCharsPerLineShort`
+  - `maxCharsPerLineNormal`
+  - `maxLines`
+  - `minSubtitleDuration`
+  - `maxSubtitleDuration`
+  - `minGapBetweenSubtitles`
+- shorts default:
+  - `maxCharsPerLineShort=16`
+  - `maxLines=2`
+- normal default:
+  - `maxCharsPerLineNormal=28`
+  - `maxLines=2`
+- ASS生成を改善。
+  - 日本語句読点 `。、！？!?` と自然境界を優先して分割。
+  - 長い transcript segment を複数 subtitle event に分割。
+  - event timing を文字数比で配分。
+  - 短すぎる隣接eventを結合。
+  - min display duration と max display duration を考慮。
+- render path に subtitle settings を伝播。
+  - normal render
+  - short render
+  - worker pipeline settings
+- audit を更新。
+  - Title style は subtitle density 判定から除外。
+  - normal / short 別の readability threshold を使用。
+  - `density_reasons` と `worst_density_samples` を report に出力。
+
+### 検証結果
+
+- full checks:
+  - `..\.venv\Scripts\python -m ruff check . ..\scripts\audit_outputs.py` from `backend`: All checks passed。
+  - `..\.venv\Scripts\python -m pytest` from `backend`: 144 passed, 1 skipped, 1 warning。
+  - `npm run lint` from `frontend`: passed。
+  - `npm run typecheck` from `frontend`: passed。
+  - `npm run build` from `frontend`: passed。
+- targeted tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_subtitles_ass.py tests\test_audit_outputs_script.py`: 14 passed。
+  - `..\.venv\Scripts\python -m pytest tests\test_subtitles_ass.py tests\test_audit_outputs_script.py tests\test_api_routes.py tests\test_render_normal_selected.py tests\test_short_rendering.py`: 33 passed, 1 warning。
+  - `..\.venv\Scripts\python -m ruff check app\render\subtitles_ass.py app\render\render_normal.py app\render\render_short.py app\schemas.py app\jobs\runner.py ..\scripts\audit_outputs.py tests\test_subtitles_ass.py tests\test_audit_outputs_script.py tests\test_api_routes.py`: All checks passed。
+- 58分 subtitle-only smoke:
+  - source job: `job_6e0b6c7539644c679e853eccfcb77039`
+  - smoke job: `job_6e0b6c7539644c679e853eccfcb77039_task35_subtitle_smoke`
+  - MP4は再レンダーしていない。既存 selected clips と transcript から ASS だけ再生成。
+  - `scripts/audit_outputs.py --job-id job_6e0b6c7539644c679e853eccfcb77039_task35_subtitle_smoke --format both`: passed。
+  - subtitle_too_dense:
+    - normal: `1`
+    - short: `0`
+
+### 未解決事項
+
+- 58分 smoke はASS再生成のみ。MP4焼き込み済み字幕の完全確認には再レンダーが必要。
+- subtitle誤変換そのものは transcription 側の問題であり未対応。
+- missing title、abrupt boundary、short composition は別タスク。

@@ -65,6 +65,12 @@ class JobSettings(BaseModel):
     candidate_chunk_seconds: float = Field(default=600.0, gt=0, alias="candidateChunkSeconds")
     candidate_chunk_overlap_seconds: float = Field(default=75.0, ge=0, alias="candidateChunkOverlapSeconds")
     burn_subtitles: bool = Field(default=True, alias="burnSubtitles")
+    max_chars_per_line_short: int = Field(default=16, ge=6, le=80, alias="maxCharsPerLineShort")
+    max_chars_per_line_normal: int = Field(default=28, ge=8, le=100, alias="maxCharsPerLineNormal")
+    max_lines: int = Field(default=2, ge=1, le=2, alias="maxLines")
+    min_subtitle_duration: float = Field(default=1.1, gt=0, alias="minSubtitleDuration")
+    max_subtitle_duration: float = Field(default=4.2, gt=0, alias="maxSubtitleDuration")
+    min_gap_between_subtitles: float = Field(default=0.08, ge=0, alias="minGapBetweenSubtitles")
     normalize_audio: bool = Field(default=False, alias="normalizeAudio")
     short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
     selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
@@ -85,6 +91,8 @@ class JobSettings(BaseModel):
             raise ValueError("normalMaxDuration must be >= normalMinDuration")
         if self.short_max_duration < self.short_min_duration:
             raise ValueError("shortMaxDuration must be >= shortMinDuration")
+        if self.max_subtitle_duration < self.min_subtitle_duration:
+            raise ValueError("maxSubtitleDuration must be >= minSubtitleDuration")
         if self.ensure_selected_openai_scored is None:
             self.ensure_selected_openai_scored = self.mode == "high_quality"
         if self.openai_finalist_scoring_limit is None:

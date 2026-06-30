@@ -193,6 +193,36 @@ def test_audit_outputs_writes_json_and_markdown(tmp_path: Path) -> None:
     assert "short_resolution_not_1080x1920" in markdown
 
 
+def test_audit_subtitle_density_uses_readability_thresholds_and_samples(tmp_path: Path) -> None:
+    dense_path = tmp_path / "dense.ass"
+    readable_path = tmp_path / "readable.ass"
+    dense_path.write_text(
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:00.00,0:00:02.00,Title,,0,0,0,,This title should not affect density\n"
+        "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle,,0,0,0,,"
+        "これは非常に長すぎる字幕で一度に読むには密度が高すぎます\n",
+        encoding="utf-8",
+    )
+    readable_path.write_text(
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:00.00,0:00:02.20,Subtitle,,0,0,0,,これは読みやすい\\N字幕です\n"
+        "Dialogue: 0,0:00:02.30,0:00:04.50,Subtitle,,0,0,0,,次の字幕も\\N短めです\n",
+        encoding="utf-8",
+    )
+
+    dense = audit_outputs.analyze_ass_subtitles(dense_path, clip_type="short")
+    readable = audit_outputs.analyze_ass_subtitles(readable_path, clip_type="short")
+
+    assert dense["dialogue_count"] == 1
+    assert dense["subtitle_too_dense"] is True
+    assert dense["density_reasons"]
+    assert dense["worst_density_samples"][0]["text"].startswith("これは非常に")
+    assert readable["subtitle_too_dense"] is False
+    assert readable["density_reasons"] == []
+
+
 def test_audit_outputs_output_path_suffixes(tmp_path: Path) -> None:
     both = audit_outputs.output_paths(
         job_id="job_audit",

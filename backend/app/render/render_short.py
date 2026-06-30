@@ -5,6 +5,7 @@ import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -20,7 +21,7 @@ from app.render.crop_strategy import (
     strategy_order,
 )
 from app.render.filters import loudnorm_filter
-from app.render.subtitles_ass import SubtitleLayout, write_ass_for_candidate
+from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center, detect_faces_for_clip
 from app.video.probe import VideoMetadata, probe_metadata
@@ -318,6 +319,7 @@ def render_selected_short_candidates(
     ffmpeg_bin: str = "ffmpeg",
     source_width: int | None = None,
     source_height: int | None = None,
+    subtitle_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
 ) -> ShortRenderBatchResult:
     storage_paths = paths or get_storage_paths()
     output_dir = shorts_output_dir(storage_paths, job.id)
@@ -339,8 +341,9 @@ def render_selected_short_candidates(
                     candidate,
                     _subtitle_segments_for_candidate(candidate, transcript_segments),
                     subtitle_path,
-                    layout=SubtitleLayout.short(),
+                    layout=SubtitleLayout.short(settings=subtitle_settings),
                     top_title=candidate.overlay_title,
+                    subtitle_settings=subtitle_settings,
                 )
 
             render_result = renderer(

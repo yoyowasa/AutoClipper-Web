@@ -9,6 +9,8 @@ from app.render.subtitles_ass import (
     clipped_transcript_segments,
     format_ass_timestamp,
     split_subtitle_lines,
+    split_subtitle_text,
+    subtitle_events_for_candidate,
     write_ass_for_selected_clips,
 )
 
@@ -45,6 +47,18 @@ def test_split_subtitle_lines_uses_max_two_lines() -> None:
     assert split.replace("\\N", " ") == text
 
 
+def test_japanese_long_sentence_splits_into_two_line_chunks() -> None:
+    text = "物価上昇が家計と企業収益に与える影響を、投資判断の観点から整理します。"
+
+    chunks = split_subtitle_text(text, max_chars_per_event=32)
+    rendered = [split_subtitle_lines(chunk, max_chars_per_line=16, max_lines=2) for chunk in chunks]
+
+    assert len(chunks) >= 2
+    assert all(line.count("\\N") <= 1 for line in rendered)
+    assert all(len(part) <= 16 for line in rendered for part in line.split("\\N"))
+    assert "".join(line.replace("\\N", "") for line in rendered) == text
+
+
 def test_clipped_transcript_segments_are_relative_to_candidate_start() -> None:
     candidate = make_candidate("short_1", "short", 10.0, 20.0)
     segments = [
@@ -61,6 +75,41 @@ def test_clipped_transcript_segments_are_relative_to_candidate_start() -> None:
     ]
 
 
+def test_subtitle_events_split_long_segment_and_keep_valid_timing() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 12.0)
+    layout = SubtitleLayout.short()
+    segments = [
+        TranscriptSegment(
+            start=0.0,
+            end=12.0,
+            text="インフレが続く中で企業の価格転嫁力と賃金上昇の関係を丁寧に見る必要があります。",
+        )
+    ]
+
+    events = subtitle_events_for_candidate(segments, candidate, layout)
+
+    assert len(events) >= 2
+    assert all(0.0 <= event.start < event.end <= candidate.duration for event in events)
+    assert all(events[index].end <= events[index + 1].start for index in range(len(events) - 1))
+    assert all(len(event.text) <= layout.max_chars_per_line * layout.max_lines for event in events)
+
+
+def test_subtitle_events_merge_adjacent_short_segments_when_timing_allows() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 4.0)
+    layout = SubtitleLayout.short()
+    segments = [
+        TranscriptSegment(start=0.0, end=0.45, text="はい"),
+        TranscriptSegment(start=0.45, end=0.9, text="次です"),
+        TranscriptSegment(start=2.0, end=3.4, text="離れた字幕"),
+    ]
+
+    events = subtitle_events_for_candidate(segments, candidate, layout)
+
+    assert events[0].text == "はい 次です"
+    assert events[0].end - events[0].start >= 0.9
+    assert len(events) == 2
+
+
 def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None:
     candidate = make_candidate("short_1", "short", 10.0, 20.0, overlay_title="Top title")
     segments = [
@@ -74,7 +123,26 @@ def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None
     assert "PlayResY: 1920" in ass
     assert "Dialogue: 1,0:00:00.00,0:00:10.00,Title" in ass
     assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle" in ass
-    assert "Dialogue: 0,0:00:05.00,0:00:10.00,Subtitle" in ass
+    assert "Dialogue: 0,0:00:05.00,0:00:07.06,Subtitle" in ass
+    assert "Dialogue: 0,0:00:07.14,0:00:10.00,Subtitle" in ass
+
+
+def test_build_ass_document_limits_short_subtitles_to_two_lines() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 12.0, overlay_title="Top title")
+    segments = [
+        TranscriptSegment(
+            start=0.0,
+            end=12.0,
+            text="物価上昇が家計と企業収益に与える影響を投資判断の観点から整理します",
+        )
+    ]
+
+    ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
+    subtitle_lines = [line for line in ass.splitlines() if line.startswith("Dialogue: 0")]
+
+    assert subtitle_lines
+    assert all(line.split(",", 9)[9].count("\\N") <= 1 for line in subtitle_lines)
+    assert all("Subtitle" in line for line in subtitle_lines)
 
 
 def test_write_ass_for_selected_clips_generates_file_for_each_clip(tmp_path: Path) -> None:

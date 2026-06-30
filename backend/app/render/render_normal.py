@@ -3,6 +3,7 @@ import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -11,7 +12,7 @@ from app.candidates.merge_boundaries import Candidate
 from app.ids import make_id
 from app.models import ExportItem, Job
 from app.render.filters import ass_filter, loudnorm_filter
-from app.render.subtitles_ass import SubtitleLayout, write_ass_for_candidate
+from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
 from app.storage.paths import StoragePaths, get_storage_paths
 
 
@@ -187,6 +188,7 @@ def render_selected_normal_candidates(
     ffmpeg_bin: str = "ffmpeg",
     normal_width: int = 1920,
     normal_height: int = 1080,
+    subtitle_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
 ) -> NormalRenderBatchResult:
     storage_paths = paths or get_storage_paths()
     output_dir = normal_output_dir(storage_paths, job.id)
@@ -208,7 +210,12 @@ def render_selected_normal_candidates(
                     candidate,
                     _subtitle_segments_for_candidate(candidate, transcript_segments),
                     subtitle_path,
-                    layout=SubtitleLayout.normal(width=normal_width, height=normal_height),
+                    layout=SubtitleLayout.normal(
+                        width=normal_width,
+                        height=normal_height,
+                        settings=subtitle_settings,
+                    ),
+                    subtitle_settings=subtitle_settings,
                 )
 
             renderer(

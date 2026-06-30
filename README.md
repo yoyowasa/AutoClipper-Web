@@ -612,7 +612,8 @@ The report includes:
 - per-clip file path, duration, resolution, selected start/end, transcript excerpts, scores, selection reason, title, overlay title, subtitle path, and OpenAI score source
 - short verification for `1080x1920`
 - normal verification for valid dimensions and duration
-- subtitle existence and subtitle density checks
+- subtitle existence and readability density checks
+- subtitle density reasons and worst subtitle density samples when detected
 - aggregate warning counts by clip type
 - clips requiring human visual inspection
 
@@ -639,6 +640,15 @@ Heuristic warnings include:
 - Shorts: all resolved as `1080x1920`
 - Clips requiring human visual inspection: `15`
 - Dominant warnings: generic/missing content titles, subtitle density, likely abrupt starts, one below-threshold backfill clip
+
+Subtitle readability behavior:
+
+- Shorts default to `maxCharsPerLineShort=16`, `maxLines=2`.
+- Normal clips default to `maxCharsPerLineNormal=28`, `maxLines=2`.
+- Long transcript segments are split into multiple ASS subtitle events and timed by character count.
+- Very short adjacent transcript segments are merged when the timing gap is small enough.
+- Advanced API settings: `maxCharsPerLineShort`, `maxCharsPerLineNormal`, `maxLines`, `minSubtitleDuration`, `maxSubtitleDuration`, `minGapBetweenSubtitles`.
+- Task 35 subtitle-only 58-minute smoke regenerated ASS files without re-rendering MP4 and reduced subtitle density warnings to normal `1`, short `0`.
 
 ## Compare low_cost and high_quality runs
 
