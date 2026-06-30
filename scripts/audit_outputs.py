@@ -18,8 +18,20 @@ DOCKER_BIN_DIR = Path(r"C:\Program Files\Docker\Docker\resources\bin")
 SHORT_RECOMMENDED_RANGE = (20.0, 75.0)
 NORMAL_RECOMMENDED_RANGE = (90.0, 600.0)
 VERY_SHORT_TRANSCRIPT_TEXT = {"normal": 160, "short": 40}
-SUBTITLE_DENSE_CHARS_PER_SECOND = 18.0
-SUBTITLE_DENSE_CHARS_PER_EVENT = 72
+SUBTITLE_READABILITY_LIMITS = {
+    "short": {
+        "max_lines": 2,
+        "max_chars_per_line": 18,
+        "max_chars_per_event": 36,
+        "max_chars_per_second": 16.0,
+    },
+    "normal": {
+        "max_lines": 2,
+        "max_chars_per_line": 30,
+        "max_chars_per_event": 60,
+        "max_chars_per_second": 18.0,
+    },
+}
 ABRUPT_START_PREFIXES = (
     "だから",
     "それで",
@@ -359,20 +371,27 @@ def _ass_visible_text(value: str) -> str:
     return text.strip()
 
 
-def analyze_ass_subtitles(path: Path | None) -> dict[str, Any]:
+def analyze_ass_subtitles(path: Path | None, *, clip_type: str | None = None) -> dict[str, Any]:
+    limits = SUBTITLE_READABILITY_LIMITS.get(clip_type or "", SUBTITLE_READABILITY_LIMITS["normal"])
     if path is None or not path.is_file():
         return {
             "subtitle_exists": False,
             "dialogue_count": 0,
             "max_lines": 0,
             "max_chars_per_dialogue": 0,
+            "max_chars_per_line": 0,
             "max_chars_per_second": None,
+            "readability_limits": limits,
+            "density_reasons": [],
+            "worst_density_samples": [],
             "subtitle_too_dense": False,
         }
 
     max_lines = 0
     max_chars = 0
+    max_line_chars = 0
     chars_per_second: list[float] = []
+    density_samples: list[dict[str, Any]] = []
     dialogue_count = 0
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.startswith("Dialogue:"):
@@ -380,31 +399,70 @@ def analyze_ass_subtitles(path: Path | None) -> dict[str, Any]:
         parts = line.removeprefix("Dialogue:").lstrip().split(",", 9)
         if len(parts) < 10:
             continue
+        style = parts[3].strip()
+        if style != "Subtitle":
+            continue
         start = _parse_ass_time(parts[1])
         end = _parse_ass_time(parts[2])
         visible = _ass_visible_text(parts[9])
         lines = visible.splitlines() or [visible]
         char_count = len("".join(lines))
+        line_char_count = max((len(subtitle_line) for subtitle_line in lines), default=0)
         duration = (end - start) if start is not None and end is not None else 0.0
+        cps = None
         if duration > 0:
-            chars_per_second.append(char_count / duration)
+            cps = char_count / duration
+            chars_per_second.append(cps)
         dialogue_count += 1
         max_lines = max(max_lines, len(lines))
         max_chars = max(max_chars, char_count)
+        max_line_chars = max(max_line_chars, line_char_count)
+        density_samples.append(
+            {
+                "start": round(start, 3) if start is not None else None,
+                "end": round(end, 3) if end is not None else None,
+                "duration": round(duration, 3),
+                "line_count": len(lines),
+                "char_count": char_count,
+                "max_line_chars": line_char_count,
+                "chars_per_second": round(cps, 6) if cps is not None else None,
+                "text": visible[:160],
+            }
+        )
 
     max_cps = max(chars_per_second) if chars_per_second else None
+    density_reasons = []
+    if max_lines > limits["max_lines"]:
+        density_reasons.append("too_many_lines")
+    if max_line_chars > limits["max_chars_per_line"]:
+        density_reasons.append("line_too_long")
+    if max_chars > limits["max_chars_per_event"]:
+        density_reasons.append("event_too_long")
+    if max_cps is not None and max_cps > limits["max_chars_per_second"]:
+        density_reasons.append("too_many_chars_per_second")
+    worst_samples = sorted(
+        density_samples,
+        key=lambda sample: (
+            float(sample["chars_per_second"] or 0),
+            int(sample["max_line_chars"] or 0),
+            int(sample["char_count"] or 0),
+        ),
+        reverse=True,
+    )[:3]
     return {
         "subtitle_exists": True,
         "dialogue_count": dialogue_count,
         "max_lines": max_lines,
         "max_chars_per_dialogue": max_chars,
+        "max_chars_per_line": max_line_chars,
         "max_chars_per_second": round(max_cps, 6) if max_cps is not None else None,
         "avg_chars_per_second": round(sum(chars_per_second) / len(chars_per_second), 6)
         if chars_per_second
         else None,
-        "subtitle_too_dense": max_lines > 2
-        or max_chars > SUBTITLE_DENSE_CHARS_PER_EVENT
-        or (max_cps is not None and max_cps > SUBTITLE_DENSE_CHARS_PER_SECOND),
+        "readability_limits": limits,
+        "density_reasons": density_reasons,
+        "worst_density_samples": worst_samples,
+        "subtitle_too_dense": bool(density_reasons),
     }
 
 
@@ -496,7 +554,7 @@ def _clip_report(
     if probe.width is None or probe.height is None or probe.duration is None:
         probe = probe_video(host_path=host_path, container_path=container_video_path, root=root)
     transcript = _transcript_excerpt(transcript_segments, clip)
-    subtitle = analyze_ass_subtitles(subtitle_path)
+    subtitle = analyze_ass_subtitles(subtitle_path, clip_type=str(clip.get("type") or ""))
     warnings = _quality_warnings(
         clip=clip,
         metadata=metadata,
@@ -697,6 +755,28 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"{_markdown_value(clip.get('title'))} | "
             f"{_markdown_value(clip.get('overlay_title'))} |"
         )
+
+    dense_clips = [
+        clip
+        for clip in report["clips"]
+        if clip.get("subtitle", {}).get("subtitle_too_dense")
+        and clip.get("subtitle", {}).get("worst_density_samples")
+    ]
+    if dense_clips:
+        lines.extend(["", "## Subtitle Density Samples", ""])
+        for clip in dense_clips:
+            subtitle = clip.get("subtitle", {})
+            lines.append(
+                f"- `{clip.get('id')}` ({clip.get('type')}): "
+                f"{_markdown_value(subtitle.get('density_reasons'), limit=160)}"
+            )
+            for sample in subtitle.get("worst_density_samples", [])[:2]:
+                lines.append(
+                    f"  - {sample.get('start')}s-{sample.get('end')}s, "
+                    f"{sample.get('chars_per_second')} cps, "
+                    f"{sample.get('max_line_chars')} chars/line: "
+                    f"{_markdown_value(sample.get('text'), limit=120)}"
+                )
 
     lines.extend(
         [

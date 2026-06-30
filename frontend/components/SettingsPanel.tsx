@@ -22,6 +22,12 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   ensureSelectedOpenAIScored: true,
   openaiFinalistScoringLimit: 7,
   burnSubtitles: true,
+  maxCharsPerLineShort: 16,
+  maxCharsPerLineNormal: 28,
+  maxLines: 2,
+  minSubtitleDuration: 1.1,
+  maxSubtitleDuration: 4.2,
+  minGapBetweenSubtitles: 0.08,
   shortLayout: "auto"
 };
 

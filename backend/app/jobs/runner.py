@@ -1378,6 +1378,7 @@ def run_autoclipper_job(
                 renderer=deps.normal_renderer,
                 normal_width=metadata.width or 1920,
                 normal_height=metadata.height or 1080,
+                subtitle_settings=settings,
             )
 
             _set_status(db, job, "rendering_shorts")
@@ -1395,6 +1396,7 @@ def run_autoclipper_job(
                 renderer=deps.short_renderer,
                 source_width=metadata.width,
                 source_height=metadata.height,
+                subtitle_settings=settings,
             )
 
             render_failures_path = _write_json(

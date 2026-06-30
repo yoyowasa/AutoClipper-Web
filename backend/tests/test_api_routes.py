@@ -151,6 +151,12 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["maxCandidateGenerationMemoryMb"] == 12000
         assert job.settings_json["candidateChunkSeconds"] == 600.0
         assert job.settings_json["candidateChunkOverlapSeconds"] == 75.0
+        assert job.settings_json["maxCharsPerLineShort"] == 16
+        assert job.settings_json["maxCharsPerLineNormal"] == 28
+        assert job.settings_json["maxLines"] == 2
+        assert job.settings_json["minSubtitleDuration"] == 1.1
+        assert job.settings_json["maxSubtitleDuration"] == 4.2
+        assert job.settings_json["minGapBetweenSubtitles"] == 0.08
         assert job.settings_json["selectionPolicy"] == "fill_requested"
         assert job.settings_json["crossTypeOverlapDedupe"] is False
         assert job.settings_json["openaiCandidateLimit"] == 40
@@ -185,6 +191,12 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "maxCandidateGenerationMemoryMb": 2048,
                 "candidateChunkSeconds": 300,
                 "candidateChunkOverlapSeconds": 60,
+                "maxCharsPerLineShort": 14,
+                "maxCharsPerLineNormal": 26,
+                "maxLines": 2,
+                "minSubtitleDuration": 1.25,
+                "maxSubtitleDuration": 3.75,
+                "minGapBetweenSubtitles": 0.12,
                 "selectionPolicy": "strict_quality",
                 "crossTypeOverlapDedupe": True,
                 "useOpenAIScoring": True,
@@ -215,6 +227,12 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["maxCandidateGenerationMemoryMb"] == 2048
         assert job.settings_json["candidateChunkSeconds"] == 300.0
         assert job.settings_json["candidateChunkOverlapSeconds"] == 60.0
+        assert job.settings_json["maxCharsPerLineShort"] == 14
+        assert job.settings_json["maxCharsPerLineNormal"] == 26
+        assert job.settings_json["maxLines"] == 2
+        assert job.settings_json["minSubtitleDuration"] == 1.25
+        assert job.settings_json["maxSubtitleDuration"] == 3.75
+        assert job.settings_json["minGapBetweenSubtitles"] == 0.12
         assert job.settings_json["selectionPolicy"] == "strict_quality"
         assert job.settings_json["crossTypeOverlapDedupe"] is True
         assert job.settings_json["useOpenAIScoring"] is True

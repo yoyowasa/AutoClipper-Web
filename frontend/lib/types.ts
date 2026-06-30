@@ -30,6 +30,12 @@ export type ClipSettings = {
   ensureSelectedOpenAIScored?: boolean;
   openaiFinalistScoringLimit?: number;
   burnSubtitles: boolean;
+  maxCharsPerLineShort: number;
+  maxCharsPerLineNormal: number;
+  maxLines: number;
+  minSubtitleDuration: number;
+  maxSubtitleDuration: number;
+  minGapBetweenSubtitles: number;
   shortLayout: "auto" | "center_crop" | "blur_background";
 };
 
