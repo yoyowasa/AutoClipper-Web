@@ -48,6 +48,11 @@ def test_parse_args_defaults() -> None:
     assert args.ffmpeg_bin == "ffmpeg"
     assert args.ffprobe_bin == "ffprobe"
     assert args.docker_service is None
+    assert args.mode is None
+    assert args.openai_candidate_limit == 5
+    assert args.timeout == 1800
+    assert args.extract_short_frames is True
+    assert args.run_audit is True
 
 
 def test_host_path_from_artifact_resolves_container_storage(tmp_path: Path) -> None:
@@ -94,6 +99,29 @@ def test_selected_subset_applies_counts_and_normal_duration_limit() -> None:
     assert subset["shorts"][0]["id"] == "short_1"
 
 
+def test_apply_overlay_title_policy_can_require_or_force_titles() -> None:
+    subset = {
+        "normalClips": [],
+        "shorts": [
+            candidate_payload(candidate_id="short_1", candidate_type="short", start=0.0, end=30.0),
+            {
+                **candidate_payload(candidate_id="short_2", candidate_type="short", start=40.0, end=70.0),
+                "overlay_title": "",
+            },
+        ],
+    }
+
+    forced = script.apply_overlay_title_policy(
+        subset,
+        require_overlay_title=True,
+        force_overlay_title="日本語タイトル{number}",
+    )
+
+    assert forced["shorts"][0]["overlay_title"] == "日本語タイトル01"
+    assert forced["shorts"][1]["overlay_title"] == "日本語タイトル02"
+    assert forced["shorts"][0]["source_overlay_title"] == "確認用タイトル"
+
+
 def test_candidates_from_subset_and_container_output_path() -> None:
     subset = {
         "normalClips": [candidate_payload(candidate_id="normal_1", candidate_type="normal", start=0.0, end=120.0)],
@@ -110,3 +138,37 @@ def test_candidates_from_subset_and_container_output_path() -> None:
         script.container_output_path("job_test", "shorts", "short_01.mp4")
         == "/app/storage/outputs/job_test/shorts/short_01.mp4"
     )
+
+
+def test_inspect_ass_layout_reports_safe_title_and_subtitle_positions(tmp_path: Path) -> None:
+    layout = script.SubtitleLayout.short()
+    path = tmp_path / "short.ass"
+    path.write_text(
+        "[Script Info]\n"
+        "PlayResX: 1080\n"
+        "PlayResY: 1920\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Subtitle,Noto Sans CJK JP,76,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,1,5,2,2,86,86,250,1\n"
+        "Style: Title,Noto Sans CJK JP,88,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,1,5,2,8,86,86,150,1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 1,0:00:00.00,0:00:30.00,Title,,0,0,0,,日本語タイトル\n"
+        "Dialogue: 0,0:00:01.00,0:00:03.00,Subtitle,,0,0,0,,日本語字幕\n",
+        encoding="utf-8",
+    )
+
+    inspection = script.inspect_ass_layout(path, layout)
+
+    assert inspection.title_style_exists is True
+    assert inspection.subtitle_style_exists is True
+    assert inspection.title_dialogue_count == 1
+    assert inspection.subtitle_dialogue_count == 1
+    assert inspection.title_subtitle_overlap is False
+    assert inspection.safe_vertical_positions is True
