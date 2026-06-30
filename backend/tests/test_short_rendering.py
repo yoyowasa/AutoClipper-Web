@@ -1,4 +1,5 @@
 from collections.abc import Generator
+import json
 from pathlib import Path
 from typing import Any
 
@@ -241,6 +242,10 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert (shorts_dir / "short_01.ass").is_file()
     assert not (shorts_dir / "short_02.mp4").is_file()
     assert (shorts_dir / "short_03.mp4").is_file()
+    short_metadata = json.loads((shorts_dir / "short_01.json").read_text(encoding="utf-8"))
+    assert short_metadata["title"] == "First short"
+    assert short_metadata["overlay_title"] == "First short overlay"
+    assert short_metadata["title_source"] == "existing"
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200
@@ -251,3 +256,57 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     download_response = client.get(shorts[0]["downloadUrl"])
     assert download_response.status_code == 200
     assert download_response.content.startswith(b"rendered short_")
+
+
+def test_render_selected_short_candidates_writes_fallback_title_metadata(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_renderer(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> ShortRenderResult:
+        Path(output_path).write_bytes(b"rendered short")
+        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+
+    candidate = Candidate(
+        id="cand_short_title_fallback",
+        type="short",
+        start=0.0,
+        end=45.0,
+        duration=45.0,
+        transcript_text="まあ インフレの見方が変わる重要な場面です。",
+        final_score=82.0,
+    )
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        result = render_selected_short_candidates(
+            db=db,
+            job=job,
+            input_path=Path(storage.uploads) / "sample.mp4",
+            selected_candidates=[candidate],
+            burn_subtitles=True,
+            paths=storage,
+            renderer=fake_renderer,
+        )
+        exports = db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all()
+
+    assert result.exports[0].title == "インフレの見方が変わる重要な場面です"
+    assert exports[0].title == "インフレの見方が変わる重要な場面です"
+    shorts_dir = storage.outputs / created["jobId"] / "shorts"
+    short_metadata = json.loads((shorts_dir / "short_01.json").read_text(encoding="utf-8"))
+    assert short_metadata["title"] == "インフレの見方が変わる重要な場面です"
+    assert short_metadata["overlay_title"] == "インフレの見方が変わる重要な場面です"
+    assert short_metadata["title_source"] == "transcript_fallback"
+    ass_text = (shorts_dir / "short_01.ass").read_text(encoding="utf-8")
+    assert ",Title,," not in ass_text

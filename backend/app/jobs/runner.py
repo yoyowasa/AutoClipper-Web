@@ -37,6 +37,7 @@ from app.candidates.select_candidates import (
     select_candidates,
     write_selected_clips,
 )
+from app.candidates.title_fallback import titled_candidates
 from app.db import SessionLocal
 from app.ids import make_id
 from app.jobs.summaries import write_generation_summaries
@@ -879,6 +880,20 @@ def _selection_with_replacements(
     )
 
 
+def _selection_with_fallback_titles(
+    selection: CandidateSelection,
+    scored_candidates: Sequence[Candidate],
+    transcript_segments: Sequence[TranscriptSegment],
+) -> tuple[CandidateSelection, list[Candidate]]:
+    normal_clips = titled_candidates(selection.normal_clips, transcript_segments=transcript_segments)
+    shorts = titled_candidates(selection.shorts, transcript_segments=transcript_segments)
+    replacements = {candidate.id: candidate for candidate in [*normal_clips, *shorts]}
+    return (
+        selection.model_copy(update={"normal_clips": normal_clips, "shorts": shorts}),
+        _replace_scored_candidates(scored_candidates, replacements),
+    )
+
+
 def _candidate_needs_finalist_scoring(candidate: Candidate) -> bool:
     if candidate.used_ai_score is True and candidate.ai_score is not None:
         return False
@@ -1048,17 +1063,19 @@ def _create_export(
     duration: float,
     score: float,
 ) -> ExportItem:
-    title_prefix = "Normal clip" if export_type == "normal" else "Short"
+    title_prefix = "Normal Clip" if export_type == "normal" else "Short"
+    title = f"{title_prefix} {index:02d}"
     export_id = make_id("exp")
     video_path = output_dir / f"{export_type}_{index:02d}.mp4"
     metadata_path = output_dir / f"{export_type}_{index:02d}.json"
-    _write_placeholder_mp4(video_path, f"{title_prefix} {index}")
+    _write_placeholder_mp4(video_path, title)
     _write_json(
         metadata_path,
         {
             "id": export_id,
             "type": export_type,
-            "title": f"{title_prefix} {index}",
+            "title": title,
+            "title_source": "deterministic_fallback",
         },
     )
 
@@ -1068,7 +1085,7 @@ def _create_export(
         video_id=job.video_id,
         candidate_id=None,
         type=export_type,
-        title=f"{title_prefix} {index}",
+        title=title,
         duration=duration,
         score=score,
         video_path=str(video_path),
@@ -1359,6 +1376,11 @@ def run_autoclipper_job(
                 visual_quality=visual_quality,
                 scorer=scoring_result.openai_scorer,
                 openai_summary=openai_scoring_summary,
+            )
+            selection, scored_candidates = _selection_with_fallback_titles(
+                selection,
+                scored_candidates,
+                transcript_segments,
             )
             metadata_files.append(write_candidates(scored_candidates, job_dir / "scored_candidates.json"))
             selected_path = write_selected_clips(selection, job_dir / "selected_clips.json")

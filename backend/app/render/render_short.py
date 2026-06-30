@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate
+from app.candidates.title_fallback import candidate_with_title, resolve_candidate_title
 from app.ids import make_id
 from app.models import ExportItem, Job
 from app.render.crop_strategy import (
@@ -245,7 +246,13 @@ def _candidate_score(candidate: Candidate) -> float:
 
 
 def _candidate_title(candidate: Candidate, index: int) -> str:
-    return candidate.title or f"Short {index}"
+    return resolve_candidate_title(candidate, index=index).title
+
+
+def _overlay_title_for_burn(candidate: Candidate) -> str | None:
+    if candidate.title_source in {"openai", "existing"}:
+        return candidate.overlay_title
+    return ""
 
 
 def _write_export_metadata(
@@ -265,6 +272,7 @@ def _write_export_metadata(
                 "candidate_id": candidate.id,
                 "title": title,
                 "overlay_title": candidate.overlay_title,
+                "title_source": candidate.title_source,
                 "start": candidate.start,
                 "end": candidate.end,
                 "duration": candidate.duration,
@@ -328,6 +336,7 @@ def render_selected_short_candidates(
 
     short_candidates = [candidate for candidate in selected_candidates if candidate.type == "short"]
     for index, candidate in enumerate(short_candidates, start=1):
+        candidate = candidate_with_title(candidate, index=index, transcript_segments=transcript_segments)
         export_id = make_id("exp")
         output_path = output_dir / f"short_{index:02d}.mp4"
         metadata_path = output_dir / f"short_{index:02d}.json"
@@ -342,7 +351,7 @@ def render_selected_short_candidates(
                     _subtitle_segments_for_candidate(candidate, transcript_segments),
                     subtitle_path,
                     layout=SubtitleLayout.short(settings=subtitle_settings),
-                    top_title=candidate.overlay_title,
+                    top_title=_overlay_title_for_burn(candidate),
                     subtitle_settings=subtitle_settings,
                 )
 

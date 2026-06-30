@@ -609,7 +609,7 @@ python scripts/audit_outputs.py `
 
 The report includes:
 
-- per-clip file path, duration, resolution, selected start/end, transcript excerpts, scores, selection reason, title, overlay title, subtitle path, and OpenAI score source
+- per-clip file path, duration, resolution, selected start/end, transcript excerpts, scores, selection reason, title, title source, overlay title, subtitle path, and OpenAI score source
 - short verification for `1080x1920`
 - normal verification for valid dimensions and duration
 - subtitle existence and readability density checks
@@ -625,6 +625,7 @@ Heuristic warnings include:
 - `subtitle_too_dense`
 - `no_subtitle_file`
 - `missing_title`
+- `generic_fallback_title`
 - `below_quality_threshold`
 - `backfilled_clip`
 - `rule_only_clip_in_high_quality_mode`
@@ -639,7 +640,16 @@ Heuristic warnings include:
 - Generated clips: normal `5`, short `10`
 - Shorts: all resolved as `1080x1920`
 - Clips requiring human visual inspection: `15`
-- Dominant warnings: generic/missing content titles, subtitle density, likely abrupt starts, one below-threshold backfill clip
+- Dominant warnings: generic fallback titles on older artifacts, subtitle density, likely abrupt starts, one below-threshold backfill clip
+
+Title fallback behavior:
+
+- OpenAI titles are preserved with `title_source=openai`.
+- Low-cost and rule-only clips get deterministic local titles without calling OpenAI.
+- Fallback priority is existing/OpenAI title, candidate transcript text, transcript segments within the clip range, then deterministic labels such as `Normal Clip 01` or `Short 01`.
+- Generated `selected_clips.json`, `normal_XX.json`, and `short_XX.json` include `title` and `title_source`.
+- Short metadata also includes `overlay_title`; fallback overlay titles are metadata only unless an existing/OpenAI overlay title is already part of the render path.
+- Audit treats an empty title as `missing_title`; deterministic labels are reported as the weaker `generic_fallback_title`.
 
 Subtitle readability behavior:
 

@@ -82,6 +82,9 @@ def _candidate_summary_item(candidate: Candidate) -> dict[str, Any]:
     return {
         "id": candidate.id,
         "type": candidate.type,
+        "title": candidate.title,
+        "overlay_title": candidate.overlay_title,
+        "title_source": candidate.title_source,
         "duration": _round(candidate.duration),
         "rule_score": _round(candidate.rule_score),
         "final_score": _round(_score(candidate)),
@@ -313,6 +316,9 @@ def _selected_item(candidate: Candidate, output_paths: dict[str, dict[str, str |
     return {
         "id": candidate.id,
         "type": candidate.type,
+        "title": candidate.title,
+        "overlay_title": candidate.overlay_title,
+        "title_source": candidate.title_source,
         "duration": _round(candidate.duration),
         "score": _round(_score(candidate)),
         "rule_score": _round(candidate.rule_score),

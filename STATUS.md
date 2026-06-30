@@ -2311,3 +2311,78 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 - normal clip の `subtitle_too_dense=1` は今回の overlay title 検証対象外。
 - forced overlay title を使って glyph と layout を確認した。実際の OpenAI title 文言の品質調整は未実施。
 - short composition / face-aware layout は保留。
+
+## 2026-07-01 Task 34: Fix title fallback and propagation
+
+### 目的
+
+- low_cost / rule-only clip でも OpenAI API なしで非空 title を生成する。
+- `selected_clips.json`、clip metadata、ExportItem、results API、audit report に title を伝播する。
+- candidate selection、scoring weights、hard gates、manual editing UI、approve/reject workflow は変更しない。
+
+### 変更ファイル
+
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/candidates/title_fallback.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/summaries.py`
+- `backend/app/render/render_normal.py`
+- `backend/app/render/render_short.py`
+- `backend/app/scoring/openai_score.py`
+- `scripts/audit_outputs.py`
+- `backend/tests/test_title_fallback.py`
+- `backend/tests/test_render_normal_selected.py`
+- `backend/tests/test_short_rendering.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `Candidate.title_source` を追加。
+  - `openai`
+  - `transcript_fallback`
+  - `deterministic_fallback`
+  - `existing`
+- `backend/app/candidates/title_fallback.py` を追加。
+  - OpenAI / 既存 title を保持。
+  - candidate `transcript_text` から title を生成。
+  - candidate text が空なら clip 範囲内 transcript segments から title を生成。
+  - transcript が使えない場合は `Normal Clip 01` / `Short 01` 形式に fallback。
+  - 日本語 filler prefix を除去。
+- pipeline で selection 後、render 前に selected candidates へ title を付与。
+- normal / short metadata JSON に `title_source` を出力。
+- short metadata に fallback `overlay_title` を出力。
+- fallback overlay title は metadata に残すが、low_cost fallback title を自動で burn-in しない。
+- OpenAI structured score 由来 title は `title_source=openai` として保持。
+- selected clips summary に title / overlay_title / title_source を追加。
+- audit の `missing_title` を「本当に title が空」のみに変更。
+- placeholder title は `generic_fallback_title` として弱い warning に分離。
+
+### 検証結果
+
+- targeted tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_title_fallback.py tests\test_render_normal_selected.py tests\test_short_rendering.py tests\test_audit_outputs_script.py tests\test_real_pipeline.py`: 34 passed。
+  - `..\.venv\Scripts\python -m ruff check app\candidates\title_fallback.py app\candidates\merge_boundaries.py app\jobs\runner.py app\jobs\summaries.py app\render\render_normal.py app\render\render_short.py app\scoring\openai_score.py tests\test_title_fallback.py tests\test_render_normal_selected.py tests\test_short_rendering.py tests\test_audit_outputs_script.py tests\test_real_pipeline.py ..\scripts\audit_outputs.py`: All checks passed。
+- full checks:
+  - `..\.venv\Scripts\python -m ruff check . ..\scripts\audit_outputs.py ..\scripts\smoke_subtitle_burn_in.py`: All checks passed。
+  - `..\.venv\Scripts\python -m pytest`: 162 passed, 1 skipped。
+  - `npm run lint`: passed。
+  - `npm run typecheck`: passed。
+  - `npm run build`: passed。
+- Existing 58-minute audit rerun:
+  - `job_e6369a199f9945d7bdbef9f5bad5bb32`
+  - `missing_title`: `0`
+  - `generic_fallback_title`: `15`
+  - `subtitle_too_dense`: `0`
+  - `title_subtitle_overlap`: `0`
+- Reference 58-minute audit rerun:
+  - `job_6e0b6c7539644c679e853eccfcb77039`
+  - `missing_title`: `0`
+  - `generic_fallback_title`: `15`
+
+### 未解決事項
+
+- 既存 artifact は再renderしていないため、title 内容は generic fallback のまま。新規生成では transcript fallback title が metadata に入る。
+- likely abrupt start/end は未対応。次タスクは boundary refinement。

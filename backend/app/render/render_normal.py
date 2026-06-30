@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate
+from app.candidates.title_fallback import candidate_with_title, resolve_candidate_title
 from app.ids import make_id
 from app.models import ExportItem, Job
 from app.render.filters import ass_filter, loudnorm_filter
@@ -124,7 +125,7 @@ def _candidate_score(candidate: Candidate) -> float:
 
 
 def _candidate_title(candidate: Candidate, index: int) -> str:
-    return candidate.title or f"Normal clip {index}"
+    return resolve_candidate_title(candidate, index=index).title
 
 
 def _write_export_metadata(
@@ -142,6 +143,7 @@ def _write_export_metadata(
                 "type": "normal",
                 "candidate_id": candidate.id,
                 "title": title,
+                "title_source": candidate.title_source,
                 "start": candidate.start,
                 "end": candidate.end,
                 "duration": candidate.duration,
@@ -197,6 +199,7 @@ def render_selected_normal_candidates(
 
     normal_candidates = [candidate for candidate in selected_candidates if candidate.type == "normal"]
     for index, candidate in enumerate(normal_candidates, start=1):
+        candidate = candidate_with_title(candidate, index=index, transcript_segments=transcript_segments)
         export_id = make_id("exp")
         output_path = output_dir / f"normal_{index:02d}.mp4"
         metadata_path = output_dir / f"normal_{index:02d}.json"
