@@ -223,6 +223,54 @@ def test_audit_subtitle_density_uses_readability_thresholds_and_samples(tmp_path
     assert readable["density_reasons"] == []
 
 
+def test_audit_detects_ass_title_layout_and_japanese_font(tmp_path: Path) -> None:
+    path = tmp_path / "short.ass"
+    path.write_text(
+        "[Script Info]\n"
+        "PlayResY: 1920\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Subtitle,Noto Sans CJK JP,76,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,1,5,2,2,86,86,250,1\n"
+        "Style: Title,Noto Sans CJK JP,88,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,1,5,2,8,86,86,150,1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 1,0:00:00.00,0:00:10.00,Title,,0,0,0,,日本語タイトル\n"
+        "Dialogue: 0,0:00:01.00,0:00:03.00,Subtitle,,0,0,0,,読みやすい字幕\n",
+        encoding="utf-8",
+    )
+
+    subtitle = audit_outputs.analyze_ass_subtitles(path, clip_type="short")
+
+    assert subtitle["title_dialogue_count"] == 1
+    assert subtitle["dialogue_count"] == 1
+    assert subtitle["font_supports_japanese"] is True
+    assert subtitle["title_subtitle_vertical_overlap"] is False
+    assert subtitle["title_subtitle_vertical_gap"] and subtitle["title_subtitle_vertical_gap"] > 0
+
+
+def test_audit_warns_when_overlay_title_has_no_ass_title_event(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    short_metadata = json.loads((output_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))
+    short_metadata["overlay_title"] = "日本語タイトル"
+    write_json(output_dir / "shorts" / "short_01.json", short_metadata)
+    selected = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    selected["shorts"][0]["overlay_title"] = "日本語タイトル"
+    write_json(output_dir / "selected_clips.json", selected)
+    write_json(output_dir / "openai_scoring_summary.json", {"model": "gpt-test"})
+    write_ass(output_dir / "shorts" / "short_01.ass", dense=False)
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+    short_clip = next(clip for clip in report["clips"] if clip["type"] == "short")
+
+    assert "missing_ass_title_event" in short_clip["warnings"]
+
+
 def test_audit_outputs_output_path_suffixes(tmp_path: Path) -> None:
     both = audit_outputs.output_paths(
         job_id="job_audit",

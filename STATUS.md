@@ -2226,3 +2226,88 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 - transcription 誤変換そのものは未対応。
 - short composition / face-aware layout は保留。
 - overlay_title ありの short overlap は今回の low_cost subset では未確認。
+
+## 2026-07-01 Task 35c: Validate overlay title burn-in for high_quality shorts
+
+### 目的
+
+- high_quality short の `overlay_title` と subtitles を同時に焼き込んだ場合の表示を検証する。
+- title は上 safe area、subtitle は下 safe area に出し、重なりがないことを確認する。
+- candidate selection、scoring weights、manual subtitle editing UI、approve/reject workflow は変更しない。
+
+### 変更ファイル
+
+- `scripts/smoke_subtitle_burn_in.py`
+- `scripts/audit_outputs.py`
+- `backend/tests/test_smoke_subtitle_burn_in_script.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `scripts/smoke_subtitle_burn_in.py` を high_quality overlay title smoke に拡張。
+  - `--job-id` alias を追加。
+  - `--video` から小さめの high_quality E2E を先に走らせる経路を追加。
+  - `--mode high_quality`
+  - `--openai-candidate-limit`
+  - `--timeout`
+  - `--require-overlay-title`
+  - `--force-overlay-title`
+  - `--extract-short-frames` / `--no-extract-short-frames`
+  - `--run-audit` / `--no-run-audit`
+- shortごとに代表フレームを `storage/outputs/{job_id}/audit_frames/` に保存。
+- ASS の Title / Subtitle style と dialogue event を検査。
+- Title と Subtitle の推定縦位置 gap を計算し、overlap を検出。
+- `audit_outputs.py` に ASS title検査を追加。
+  - `title_dialogue_count`
+  - `font_supports_japanese`
+  - `title_subtitle_vertical_gap`
+  - `title_subtitle_vertical_overlap`
+  - warning: `missing_ass_title_event`
+  - warning: `title_subtitle_vertical_overlap`
+  - warning: `subtitle_font_missing_japanese_support`
+
+### 検証結果
+
+- targeted tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_smoke_subtitle_burn_in_script.py tests\test_audit_outputs_script.py tests\test_subtitles_ass.py`: 23 passed。
+  - `..\.venv\Scripts\python -m ruff check ..\scripts\smoke_subtitle_burn_in.py ..\scripts\audit_outputs.py tests\test_smoke_subtitle_burn_in_script.py tests\test_audit_outputs_script.py tests\test_subtitles_ass.py`: All checks passed。
+- Docker runtime:
+  - `docker compose ps`: backend healthy、frontend/redis/worker running。
+  - worker `fc-match 'Noto Sans CJK JP'`: `NotoSansCJK-Regular.ttc`。
+  - worker `DEFAULT_ASS_FONT`: `Noto Sans CJK JP`。
+- high_quality overlay burn-in smoke:
+  - source job: `job_dfd13dd8435a401f9ab9773fa217bd18`
+  - smoke job: `job_dfd13dd8435a401f9ab9773fa217bd18_task35c_overlay_burnin`
+  - command: `.\.venv\Scripts\python .\scripts\smoke_subtitle_burn_in.py --docker-service worker --job-id job_dfd13dd8435a401f9ab9773fa217bd18 --output-job-id job_dfd13dd8435a401f9ab9773fa217bd18_task35c_overlay_burnin --mode high_quality --normal-count 1 --short-count 2 --normal-duration-limit 120 --require-overlay-title --force-overlay-title "日本語タイトル確認 {number}" --short-layout center_crop`
+  - normal rendered: `1`
+  - shorts rendered: `2`
+  - render failures: `0`
+  - short dimensions: `1080x1920`
+  - shorts with overlay title: `2`
+  - ASS title dialogue count: `1` per short
+  - ASS subtitle dialogue count: `19`, `22`
+  - Title margin: `150`
+  - Subtitle margin: `250`
+  - title/subtitle vertical gap: `1172`
+  - title/subtitle overlap: `false`
+  - safe vertical positions: `true`
+  - extracted frames:
+    - `storage/outputs/job_dfd13dd8435a401f9ab9773fa217bd18_task35c_overlay_burnin/audit_frames/short_01.png`
+    - `storage/outputs/job_dfd13dd8435a401f9ab9773fa217bd18_task35c_overlay_burnin/audit_frames/short_02.png`
+- Audit:
+  - `scripts/audit_outputs.py --job-id job_dfd13dd8435a401f9ab9773fa217bd18_task35c_overlay_burnin --format both`: passed。
+  - generated normal: `1`
+  - generated short: `2`
+  - short warnings: `0`
+  - normal warnings: `likely_abrupt_ending=1`、`subtitle_too_dense=1`
+- Visual frame checks:
+  - `short_01.png`: top title and lower subtitle render as Japanese glyphs, no overlap。
+  - `short_02.png`: top title and lower subtitle render as Japanese glyphs, no overlap。
+
+### 未解決事項
+
+- normal clip の `subtitle_too_dense=1` は今回の overlay title 検証対象外。
+- forced overlay title を使って glyph と layout を確認した。実際の OpenAI title 文言の品質調整は未実施。
+- short composition / face-aware layout は保留。

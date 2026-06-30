@@ -66,6 +66,7 @@ ABRUPT_END_SUFFIXES = (
     " because",
 )
 GENERIC_TITLE_PATTERN = re.compile(r"^(Normal clip|Short) \d+$")
+EXPECTED_ASS_FONT = "Noto Sans CJK JP"
 
 
 @dataclass(frozen=True)
@@ -371,16 +372,42 @@ def _ass_visible_text(value: str) -> str:
     return text.strip()
 
 
+def _parse_ass_style(line: str) -> dict[str, Any] | None:
+    if not line.startswith("Style:"):
+        return None
+    parts = line.removeprefix("Style:").strip().split(",")
+    if len(parts) < 23:
+        return None
+    try:
+        return {
+            "name": parts[0],
+            "font_name": parts[1],
+            "font_size": int(float(parts[2])),
+            "outline": int(float(parts[16])),
+            "alignment": int(parts[18]),
+            "margin_v": int(parts[21]),
+        }
+    except ValueError:
+        return None
+
+
 def analyze_ass_subtitles(path: Path | None, *, clip_type: str | None = None) -> dict[str, Any]:
     limits = SUBTITLE_READABILITY_LIMITS.get(clip_type or "", SUBTITLE_READABILITY_LIMITS["normal"])
     if path is None or not path.is_file():
         return {
             "subtitle_exists": False,
             "dialogue_count": 0,
+            "title_dialogue_count": 0,
             "max_lines": 0,
             "max_chars_per_dialogue": 0,
             "max_chars_per_line": 0,
             "max_chars_per_second": None,
+            "subtitle_style": None,
+            "title_style": None,
+            "expected_font": EXPECTED_ASS_FONT,
+            "font_supports_japanese": False,
+            "title_subtitle_vertical_gap": None,
+            "title_subtitle_vertical_overlap": False,
             "readability_limits": limits,
             "density_reasons": [],
             "worst_density_samples": [],
@@ -393,13 +420,29 @@ def analyze_ass_subtitles(path: Path | None, *, clip_type: str | None = None) ->
     chars_per_second: list[float] = []
     density_samples: list[dict[str, Any]] = []
     dialogue_count = 0
+    title_dialogue_count = 0
+    play_res_y: int | None = None
+    styles: dict[str, dict[str, Any]] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("PlayResY:"):
+            try:
+                play_res_y = int(float(line.split(":", 1)[1].strip()))
+            except ValueError:
+                play_res_y = None
+            continue
+        parsed_style = _parse_ass_style(line)
+        if parsed_style:
+            styles[str(parsed_style["name"])] = parsed_style
+            continue
         if not line.startswith("Dialogue:"):
             continue
         parts = line.removeprefix("Dialogue:").lstrip().split(",", 9)
         if len(parts) < 10:
             continue
         style = parts[3].strip()
+        if style == "Title":
+            title_dialogue_count += 1
+            continue
         if style != "Subtitle":
             continue
         start = _parse_ass_time(parts[1])
@@ -440,6 +483,30 @@ def analyze_ass_subtitles(path: Path | None, *, clip_type: str | None = None) ->
         density_reasons.append("event_too_long")
     if max_cps is not None and max_cps > limits["max_chars_per_second"]:
         density_reasons.append("too_many_chars_per_second")
+    subtitle_style = styles.get("Subtitle")
+    title_style = styles.get("Title")
+    font_supports_japanese = bool(
+        subtitle_style
+        and subtitle_style.get("font_name") == EXPECTED_ASS_FONT
+        and (not title_style or title_style.get("font_name") == EXPECTED_ASS_FONT)
+    )
+    vertical_gap = None
+    vertical_overlap = False
+    if play_res_y is not None and subtitle_style and title_style:
+        layout_lines = int(limits.get("max_lines") or 2)
+        title_bottom = (
+            int(title_style["margin_v"])
+            + int(title_style["font_size"]) * layout_lines
+            + int(title_style.get("outline") or 0) * 2
+        )
+        subtitle_top = (
+            play_res_y
+            - int(subtitle_style["margin_v"])
+            - int(subtitle_style["font_size"]) * layout_lines
+            - int(subtitle_style.get("outline") or 0) * 2
+        )
+        vertical_gap = subtitle_top - title_bottom
+        vertical_overlap = vertical_gap <= 0
     worst_samples = sorted(
         density_samples,
         key=lambda sample: (
@@ -452,6 +519,7 @@ def analyze_ass_subtitles(path: Path | None, *, clip_type: str | None = None) ->
     return {
         "subtitle_exists": True,
         "dialogue_count": dialogue_count,
+        "title_dialogue_count": title_dialogue_count,
         "max_lines": max_lines,
         "max_chars_per_dialogue": max_chars,
         "max_chars_per_line": max_line_chars,
@@ -459,6 +527,12 @@ def analyze_ass_subtitles(path: Path | None, *, clip_type: str | None = None) ->
         "avg_chars_per_second": round(sum(chars_per_second) / len(chars_per_second), 6)
         if chars_per_second
         else None,
+        "subtitle_style": subtitle_style,
+        "title_style": title_style,
+        "expected_font": EXPECTED_ASS_FONT,
+        "font_supports_japanese": font_supports_japanese,
+        "title_subtitle_vertical_gap": vertical_gap,
+        "title_subtitle_vertical_overlap": vertical_overlap,
         "readability_limits": limits,
         "density_reasons": density_reasons,
         "worst_density_samples": worst_samples,
@@ -534,8 +608,15 @@ def _quality_warnings(
         warnings.append("missing_or_invalid_resolution")
     elif clip_type == "short" and (probe.width, probe.height) != (1080, 1920):
         warnings.append("short_resolution_not_1080x1920")
-    if clip_type == "short" and high_quality_mode and not _plain_text(clip.get("overlay_title") or metadata.get("overlay_title")):
+    overlay_title = _plain_text(clip.get("overlay_title") or metadata.get("overlay_title"))
+    if clip_type == "short" and high_quality_mode and not overlay_title:
         warnings.append("missing_overlay_title")
+    if clip_type == "short" and overlay_title and subtitle.get("title_dialogue_count", 0) <= 0:
+        warnings.append("missing_ass_title_event")
+    if clip_type == "short" and overlay_title and subtitle.get("title_subtitle_vertical_overlap"):
+        warnings.append("title_subtitle_vertical_overlap")
+    if subtitle.get("subtitle_exists") and not subtitle.get("font_supports_japanese"):
+        warnings.append("subtitle_font_missing_japanese_support")
     return warnings
 
 

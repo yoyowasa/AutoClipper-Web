@@ -679,6 +679,55 @@ Task 35b burn-in validation result:
 - subtitle density warnings: normal `0`, short `0`
 - visual frame checks confirmed Japanese subtitles render with glyphs, not boxes.
 
+High-quality overlay title burn-in smoke:
+
+```powershell
+python scripts/smoke_subtitle_burn_in.py `
+  --docker-service worker `
+  --job-id job_HIGH_QUALITY_ID `
+  --mode high_quality `
+  --normal-count 1 `
+  --short-count 2 `
+  --normal-duration-limit 120 `
+  --require-overlay-title `
+  --force-overlay-title "日本語タイトル確認 {number}" `
+  --short-layout center_crop
+```
+
+The script writes representative short frames under:
+
+```text
+storage/outputs/{smoke_job_id}/audit_frames/
+```
+
+To create a new high-quality job first, pass `--video` instead of `--job-id`. This requires `OPENAI_API_KEY` and uses a small `--openai-candidate-limit` by default:
+
+```powershell
+python scripts/smoke_subtitle_burn_in.py `
+  --video path\to\spoken_sample.mp4 `
+  --docker-service worker `
+  --mode high_quality `
+  --openai-candidate-limit 5 `
+  --normal-count 1 `
+  --short-count 2 `
+  --timeout 1800 `
+  --require-overlay-title `
+  --force-overlay-title "日本語タイトル確認 {number}"
+```
+
+Task 35c overlay validation result:
+
+- high_quality source job: `job_dfd13dd8435a401f9ab9773fa217bd18`
+- smoke job: `job_dfd13dd8435a401f9ab9773fa217bd18_task35c_overlay_burnin`
+- normal render: `1/1`
+- short render: `2/2`
+- render failures: `0`
+- shorts: `1080x1920`
+- short overlay titles: `2/2`
+- ASS title/subtitle vertical gap: `1172px`
+- short audit warnings: `0`
+- extracted frames confirmed top title and lower subtitles do not overlap.
+
 ## Compare low_cost and high_quality runs
 
 Use this after running both modes on the same source video. The comparison reads existing artifacts only and does not change selection behavior.
