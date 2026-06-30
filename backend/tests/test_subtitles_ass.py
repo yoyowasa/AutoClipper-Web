@@ -121,6 +121,8 @@ def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None
 
     assert "PlayResX: 1080" in ass
     assert "PlayResY: 1920" in ass
+    assert "Style: Subtitle,Noto Sans CJK JP" in ass
+    assert "Style: Title,Noto Sans CJK JP" in ass
     assert "Dialogue: 1,0:00:00.00,0:00:10.00,Title" in ass
     assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle" in ass
     assert "Dialogue: 0,0:00:05.00,0:00:07.06,Subtitle" in ass
