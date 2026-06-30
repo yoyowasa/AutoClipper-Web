@@ -2160,3 +2160,69 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 - 58分 smoke はASS再生成のみ。MP4焼き込み済み字幕の完全確認には再レンダーが必要。
 - subtitle誤変換そのものは transcription 側の問題であり未対応。
 - missing title、abrupt boundary、short composition は別タスク。
+
+## 2026-06-30 Task 35b: Validate subtitle burn-in after readability improvements
+
+### 目的
+
+- Task 35 の ASS readability 改善が、実際の MP4 焼き込みでも壊れていないか確認する。
+- 既存58分完了jobから小さめの subset を再レンダーする。
+- candidate selection、scoring、manual subtitle editing UI、approve/reject workflow は変更しない。
+
+### 変更ファイル
+
+- `backend/Dockerfile`
+- `backend/app/render/subtitles_ass.py`
+- `backend/tests/test_subtitles_ass.py`
+- `backend/tests/test_smoke_subtitle_burn_in_script.py`
+- `scripts/smoke_subtitle_burn_in.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `scripts/smoke_subtitle_burn_in.py` を追加。
+  - 既存job artifacts から selected clips と transcript を読み込む。
+  - `normal=1`、`short=2` など小さめの実レンダー smoke を実行できる。
+  - host に FFmpeg がなくても `--docker-service worker` で worker container 内の FFmpeg / ffprobe を使える。
+- backend/worker container に `fonts-noto-cjk` と `fontconfig` を追加。
+- ASS subtitle font を `Arial` から `Noto Sans CJK JP` に変更。
+  - 日本語字幕が `□` になる missing-glyph 問題を解消。
+- README に subtitle burn-in smoke command を追記。
+
+### 検証結果
+
+- targeted tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_subtitles_ass.py tests\test_smoke_subtitle_burn_in_script.py`: 14 passed。
+  - `..\.venv\Scripts\python -m ruff check app\render\subtitles_ass.py tests\test_subtitles_ass.py ..\scripts\smoke_subtitle_burn_in.py tests\test_smoke_subtitle_burn_in_script.py`: All checks passed。
+- Docker runtime:
+  - `docker compose up -d --build backend worker`: passed。
+  - `Invoke-RestMethod http://localhost:8000/health`: `{"status":"ok"}`。
+  - worker `fc-match 'Noto Sans CJK JP'`: `NotoSansCJK-Regular.ttc`。
+- Burn-in smoke:
+  - source job: `job_6e0b6c7539644c679e853eccfcb77039`
+  - smoke job: `job_6e0b6c7539644c679e853eccfcb77039_task35b_burnin`
+  - command: `.\.venv\Scripts\python .\scripts\smoke_subtitle_burn_in.py --docker-service worker --source-job-id job_6e0b6c7539644c679e853eccfcb77039 --output-job-id job_6e0b6c7539644c679e853eccfcb77039_task35b_burnin --normal-count 1 --short-count 2 --normal-duration-limit 120 --short-layout center_crop`
+  - normal rendered: `1`
+  - shorts rendered: `2`
+  - render failures: `0`
+  - short dimensions: `1080x1920`
+  - normal dimensions: `1280x720`
+  - ASS files: normal `1`、short `2`
+  - MP4 files: normal `1`、short `2`
+- Audit:
+  - command: `.\.venv\Scripts\python .\scripts\audit_outputs.py --job-id job_6e0b6c7539644c679e853eccfcb77039_task35b_burnin --format both`
+  - result: passed。
+  - generated normal: `1`
+  - generated short: `2`
+  - subtitle_too_dense: normal `0`、short `0`
+  - warnings: `likely_abrupt_start` のみ。
+- Visual frame checks:
+  - `storage/temp/task35b_short_01_frame.png`: Japanese subtitle rendered as glyphs, not boxes。
+  - `storage/temp/task35b_normal_01_frame.png`: normal subtitle rendered correctly。
+
+### 未解決事項
+
+- transcription 誤変換そのものは未対応。
+- short composition / face-aware layout は保留。
+- overlay_title ありの short overlap は今回の low_cost subset では未確認。

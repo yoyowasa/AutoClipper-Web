@@ -649,6 +649,35 @@ Subtitle readability behavior:
 - Very short adjacent transcript segments are merged when the timing gap is small enough.
 - Advanced API settings: `maxCharsPerLineShort`, `maxCharsPerLineNormal`, `maxLines`, `minSubtitleDuration`, `maxSubtitleDuration`, `minGapBetweenSubtitles`.
 - Task 35 subtitle-only 58-minute smoke regenerated ASS files without re-rendering MP4 and reduced subtitle density warnings to normal `1`, short `0`.
+- Backend and worker containers install `fonts-noto-cjk`; generated ASS files use `Noto Sans CJK JP` so Japanese subtitles do not render as missing-glyph boxes.
+
+Subtitle burn-in smoke:
+
+```powershell
+docker compose up -d --build backend worker
+
+python scripts/smoke_subtitle_burn_in.py `
+  --docker-service worker `
+  --source-job-id job_6e0b6c7539644c679e853eccfcb77039 `
+  --output-job-id job_6e0b6c7539644c679e853eccfcb77039_task35b_burnin `
+  --normal-count 1 `
+  --short-count 2 `
+  --normal-duration-limit 120 `
+  --short-layout center_crop
+
+python scripts/audit_outputs.py `
+  --job-id job_6e0b6c7539644c679e853eccfcb77039_task35b_burnin `
+  --format both
+```
+
+Task 35b burn-in validation result:
+
+- normal render: `1/1`
+- short render: `2/2`
+- render failures: `0`
+- shorts: `1080x1920`
+- subtitle density warnings: normal `0`, short `0`
+- visual frame checks confirmed Japanese subtitles render with glyphs, not boxes.
 
 ## Compare low_cost and high_quality runs
 

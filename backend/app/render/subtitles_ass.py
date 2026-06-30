@@ -18,6 +18,7 @@ DEFAULT_SUBTITLE_MAX_LINES = 2
 DEFAULT_MIN_SUBTITLE_DURATION = 1.1
 DEFAULT_MAX_SUBTITLE_DURATION = 4.2
 DEFAULT_MIN_GAP_BETWEEN_SUBTITLES = 0.08
+DEFAULT_ASS_FONT = "Noto Sans CJK JP"
 PUNCTUATION_BREAKS = "。、！？!?"
 PHRASE_BREAKS = "、，, "
 SOFT_JA_BOUNDARIES = "でにはをがともやへ"
@@ -419,7 +420,7 @@ def _style_line(
     margin_v: int,
 ) -> str:
     return (
-        f"Style: {name},Arial,{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        f"Style: {name},{DEFAULT_ASS_FONT},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
         f"1,0,0,0,100,100,0,0,1,{layout.outline},{layout.shadow},{alignment},"
         f"{layout.margin_x},{layout.margin_x},{margin_v},1"
     )
