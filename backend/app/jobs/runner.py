@@ -21,6 +21,7 @@ from app.audio.transcribe_faster_whisper import (
 )
 from app.audio.volume_features import AudioFeatures, audio_features_output_path, compute_audio_features, write_audio_features
 from app.candidates.deduplicate import time_overlap_ratio
+from app.candidates.boundary_refinement import refine_selected_candidates
 from app.candidates.generate_normal_candidates import generate_normal_candidates_with_summary
 from app.candidates.generate_short_candidates import generate_short_candidates_with_summary
 from app.candidates.merge_boundaries import (
@@ -894,6 +895,39 @@ def _selection_with_fallback_titles(
     )
 
 
+def _selection_with_refined_boundaries(
+    selection: CandidateSelection,
+    scored_candidates: Sequence[Candidate],
+    *,
+    transcript_segments: Sequence[TranscriptSegment],
+    silence_segments: Sequence[SilenceSegment],
+    scene_segments: Sequence[SceneSegment],
+    settings: dict[str, Any],
+    timeline_duration: float,
+) -> tuple[CandidateSelection, list[Candidate]]:
+    normal_clips = refine_selected_candidates(
+        selection.normal_clips,
+        transcript_segments=transcript_segments,
+        silence_segments=silence_segments,
+        scene_segments=scene_segments,
+        settings=settings,
+        timeline_duration=timeline_duration,
+    )
+    shorts = refine_selected_candidates(
+        selection.shorts,
+        transcript_segments=transcript_segments,
+        silence_segments=silence_segments,
+        scene_segments=scene_segments,
+        settings=settings,
+        timeline_duration=timeline_duration,
+    )
+    replacements = {candidate.id: candidate for candidate in [*normal_clips, *shorts]}
+    return (
+        selection.model_copy(update={"normal_clips": normal_clips, "shorts": shorts}),
+        _replace_scored_candidates(scored_candidates, replacements),
+    )
+
+
 def _candidate_needs_finalist_scoring(candidate: Candidate) -> bool:
     if candidate.used_ai_score is True and candidate.ai_score is not None:
         return False
@@ -1391,6 +1425,15 @@ def run_autoclipper_job(
                 visual_quality=visual_quality,
                 scorer=scoring_result.openai_scorer,
                 openai_summary=openai_scoring_summary,
+            )
+            selection, scored_candidates = _selection_with_refined_boundaries(
+                selection,
+                scored_candidates,
+                transcript_segments=transcript_segments,
+                silence_segments=silence_segments,
+                scene_segments=scene_segments,
+                settings=settings,
+                timeline_duration=duration,
             )
             selection, scored_candidates = _selection_with_fallback_titles(
                 selection,

@@ -81,6 +81,14 @@ class JobSettings(BaseModel):
     openai_fallback_to_rule_score: bool = Field(default=True, alias="openaiFallbackToRuleScore")
     ensure_selected_openai_scored: bool | None = Field(default=None, alias="ensureSelectedOpenAIScored")
     openai_finalist_scoring_limit: int | None = Field(default=None, ge=0, alias="openaiFinalistScoringLimit")
+    enable_boundary_refinement: bool = Field(default=True, alias="enableBoundaryRefinement")
+    boundary_leading_padding_seconds: float = Field(default=0.4, ge=0, alias="boundaryLeadingPaddingSeconds")
+    boundary_trailing_padding_seconds: float = Field(default=0.6, ge=0, alias="boundaryTrailingPaddingSeconds")
+    max_boundary_expansion_seconds: float = Field(default=3.0, ge=0, alias="maxBoundaryExpansionSeconds")
+    allow_boundary_expansion_beyond_max_duration: bool = Field(
+        default=False,
+        alias="allowBoundaryExpansionBeyondMaxDuration",
+    )
     e2e_fixture_transcript: bool = Field(default=False, alias="e2eFixtureTranscript")
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")

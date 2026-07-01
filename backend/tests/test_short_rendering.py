@@ -248,6 +248,9 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert short_metadata["title"] == "First short"
     assert short_metadata["overlay_title"] == "First short overlay"
     assert short_metadata["title_source"] == "existing"
+    assert "original_start" in short_metadata
+    assert "refined_start" in short_metadata
+    assert "boundary_refined" in short_metadata
     assert short_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/shorts/short_01.ass")
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")

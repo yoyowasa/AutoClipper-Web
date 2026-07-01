@@ -520,7 +520,12 @@ Troubleshooting:
     "openaiModel": "gpt-5.5",
     "openaiFallbackToRuleScore": true,
     "ensureSelectedOpenAIScored": true,
-    "openaiFinalistScoringLimit": 7
+    "openaiFinalistScoringLimit": 7,
+    "enableBoundaryRefinement": true,
+    "boundaryLeadingPaddingSeconds": 0.4,
+    "boundaryTrailingPaddingSeconds": 0.6,
+    "maxBoundaryExpansionSeconds": 3,
+    "allowBoundaryExpansionBeyondMaxDuration": false
   }
 }
 ```
@@ -547,6 +552,11 @@ Production-safe defaults remain:
 - `openaiFallbackToRuleScore`: `true`
 - `ensureSelectedOpenAIScored`: `true` in `high_quality`, `false` in `low_cost`
 - `openaiFinalistScoringLimit`: requested output count plus a small buffer by default
+- `enableBoundaryRefinement`: `true`
+- `boundaryLeadingPaddingSeconds`: `0.4`
+- `boundaryTrailingPaddingSeconds`: `0.6`
+- `maxBoundaryExpansionSeconds`: `3`
+- `allowBoundaryExpansionBeyondMaxDuration`: `false`
 
 For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.
 
@@ -557,6 +567,15 @@ Selection policy:
 - Normal clips deduplicate against normal clips. Shorts deduplicate against shorts. By default, normal and short outputs do not block each other by overlap because they serve different formats.
 - Set `crossTypeOverlapDedupe=true` only when you explicitly want normal and short selections to block each other by timeline overlap.
 - Long-video selection prefers time diversity. Candidates are bucketed into timeline clusters, and the selector takes the best candidate per cluster before taking additional candidates from the same cluster.
+
+Boundary refinement:
+
+- Runs after final candidate selection and before rendering.
+- Expands selected clip boundaries to nearby transcript segment starts/ends when the clip starts or ends inside speech.
+- Adds small leading/trailing padding when safe.
+- Can expand earlier when the first text starts with weak continuation markers such as `だから`, `それで`, `まあ`, `あの`, or `そうですね`.
+- Keeps `normalMinDuration` / `normalMaxDuration` and `shortMinDuration` / `shortMaxDuration` unless `allowBoundaryExpansionBeyondMaxDuration=true`.
+- Selected clip metadata records `original_start`, `original_end`, `refined_start`, `refined_end`, `boundary_refined`, `boundary_refinement_reason`, and `boundary_expansion_seconds`.
 
 ## Generation Diagnostics
 
@@ -573,7 +592,7 @@ Summary files:
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
 - `openai_scoring_summary.json`: model, initial candidate limit, finalist scoring limit, eligible/selected/sent counts, preselection/finalist counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, selected clip score source counts, and not-scored reasons.
 - `rejection_summary.json`: quality gate rejection counts, high-overlap counts by type, cross-type overlap counts, and render failure counts.
-- `selected_clips_summary.json`: requested/selected normal/short counts, unfilled counts, selected IDs, durations, scores, quality warnings, selection reasons, overlap relaxation flags, timeline clusters, and output paths.
+- `selected_clips_summary.json`: requested/selected normal/short counts, unfilled counts, selected IDs, durations, scores, quality warnings, selection reasons, boundary refinement fields, overlap relaxation flags, timeline clusters, and output paths.
 
 The E2E scripts print these summaries:
 

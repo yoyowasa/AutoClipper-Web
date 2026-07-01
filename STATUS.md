@@ -2457,3 +2457,76 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - 既存の生成済みjobは旧レイアウトの `.ass` が残るため、再生成しない限りプレイヤー自動読込リスクが残る。
 - 今回のsmokeではshortに `missing_ass_title_event=2` が残る。二重字幕原因ではないため、overlay title burn-in側の別件として扱う。
+
+## 2026-07-02 Task 36: Improve abrupt start and end boundaries
+
+### 目的
+
+- selected clip の start/end を render 前に保守的に補正し、会話途中で始まる/終わる出力を減らす。
+- scoring weights、hard gates、OpenAI scoring、title fallback、subtitle layout、subtitle sidecar layout、manual review UI、approve/reject workflow は変更しない。
+
+### 変更ファイル
+
+- `backend/app/candidates/boundary_refinement.py`
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/summaries.py`
+- `backend/app/render/render_normal.py`
+- `backend/app/render/render_short.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_boundary_refinement.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_render_normal_selected.py`
+- `backend/tests/test_short_rendering.py`
+- `frontend/lib/types.ts`
+- `frontend/components/SettingsPanel.tsx`
+- `scripts/audit_outputs.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `enableBoundaryRefinement` を追加。default `true`。
+- boundary 設定を追加。
+  - `boundaryLeadingPaddingSeconds`: `0.4`
+  - `boundaryTrailingPaddingSeconds`: `0.6`
+  - `maxBoundaryExpansionSeconds`: `3`
+  - `allowBoundaryExpansionBeyondMaxDuration`: `false`
+- `selecting_clips` 後、render 前に selected candidate のみ boundary refinement を実行。
+- transcript segment start/end、弱い継続マーカー、scene boundary、隣接 silence interval を使って境界を補正。
+- `normalMinDuration` / `normalMaxDuration`、`shortMinDuration` / `shortMaxDuration` を維持。
+- selected clip / render metadata / summary / audit に以下を出力。
+  - `original_start`
+  - `original_end`
+  - `refined_start`
+  - `refined_end`
+  - `boundary_refined`
+  - `boundary_refinement_reason`
+  - `boundary_expansion_seconds`
+- `audit_outputs.py` は refined boundary を有効境界として扱い、original/refined range をレポートに出す。
+
+### 検証結果
+
+- targeted ruff:
+  - `..\.venv\Scripts\python -m ruff check app\candidates\boundary_refinement.py app\candidates\merge_boundaries.py app\jobs\runner.py app\jobs\summaries.py app\schemas.py app\render\render_normal.py app\render\render_short.py tests\test_boundary_refinement.py tests\test_audit_outputs_script.py tests\test_real_pipeline.py tests\test_render_normal_selected.py tests\test_short_rendering.py ..\scripts\audit_outputs.py`: All checks passed。
+- targeted tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_boundary_refinement.py tests\test_audit_outputs_script.py tests\test_real_pipeline.py tests\test_render_normal_selected.py tests\test_short_rendering.py`: 42 passed。
+- backend CI checks:
+  - `..\.venv\Scripts\python -m ruff check .`: All checks passed。
+  - `..\.venv\Scripts\python -m pytest`: 175 passed, 1 skipped。
+- frontend CI checks:
+  - `npm run lint`: pass。
+  - `npm run typecheck`: pass。
+  - `npm run build`: pass。
+- synthetic E2E:
+  - `python .\scripts\e2e_sample_video.py --start --duration 25 --timeout-seconds 300`: E2E PASSED。
+  - job: `job_ed6d1222e0994400ba75d621259d1eb0`
+  - output: short `1/1`, `1080x1920`
+  - `selected_clips.json` / `short_01.json` に boundary metadata が出力されることを確認。
+  - audit warning: `missing_ass_title_event=1`。boundary 起因ではなく low_cost overlay title 非焼き込みの既存警告。
+
+### 未解決事項
+
+- representative 58分 job の likely_abrupt_start/end 低減確認は未実施。既存 job は再renderしない限り boundary refinement metadata を持たない。
+- `scripts` 全体を ruff 対象に含めた追加確認では、今回未変更の `scripts/compare_runs.py` 既存長行で `E501` が出る。CI対象の `backend && ruff check .` は通過済み。

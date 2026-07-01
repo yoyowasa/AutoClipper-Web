@@ -123,11 +123,23 @@ def _clip_items(selected_payload: dict[str, Any]) -> list[dict[str, Any]]:
             if not isinstance(raw, dict):
                 continue
             clip = dict(raw)
+            effective_start = _number(raw.get("refined_start"))
+            if effective_start is None:
+                effective_start = _number(raw.get("start"))
+            effective_end = _number(raw.get("refined_end"))
+            if effective_end is None:
+                effective_end = _number(raw.get("end"))
             clip["id"] = str(raw.get("id", ""))
             clip["type"] = str(raw.get("type") or default_type)
-            clip["start"] = _number(raw.get("start"))
-            clip["end"] = _number(raw.get("end"))
+            clip["start"] = effective_start
+            clip["end"] = effective_end
             clip["duration"] = _number(raw.get("duration"))
+            clip["original_start"] = _number(raw.get("original_start"))
+            clip["original_end"] = _number(raw.get("original_end"))
+            clip["refined_start"] = _number(raw.get("refined_start"))
+            clip["refined_end"] = _number(raw.get("refined_end"))
+            clip["boundary_refined"] = _bool(raw.get("boundary_refined"))
+            clip["boundary_expansion_seconds"] = _number(raw.get("boundary_expansion_seconds"))
             clip["rule_score"] = _number(raw.get("rule_score"))
             clip["ai_score"] = _number(raw.get("ai_score"))
             clip["final_score"] = _number(raw.get("final_score"))
@@ -346,6 +358,14 @@ def _plain_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _first_number(*values: Any) -> float | None:
+    for value in values:
+        parsed = _number(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _transcript_excerpt(segments: Sequence[dict[str, Any]], clip: dict[str, Any]) -> dict[str, Any]:
@@ -679,6 +699,10 @@ def _clip_report(
     title_source = clip.get("title_source") or metadata.get("title_source")
     overlay_title = clip.get("overlay_title") or metadata.get("overlay_title")
     duration = _number(clip.get("duration")) or probe.duration
+    original_start = _first_number(clip.get("original_start"), metadata.get("original_start"))
+    original_end = _first_number(clip.get("original_end"), metadata.get("original_end"))
+    refined_start = _first_number(clip.get("refined_start"), metadata.get("refined_start"))
+    refined_end = _first_number(clip.get("refined_end"), metadata.get("refined_end"))
     return {
         "id": clip.get("id"),
         "type": clip.get("type"),
@@ -693,6 +717,18 @@ def _clip_report(
         },
         "selected_start": clip.get("start"),
         "selected_end": clip.get("end"),
+        "original_start": original_start,
+        "original_end": original_end,
+        "refined_start": refined_start,
+        "refined_end": refined_end,
+        "boundary_refined": clip.get("boundary_refined") or _bool(metadata.get("boundary_refined")),
+        "boundary_refinement_reason": (
+            clip.get("boundary_refinement_reason") or metadata.get("boundary_refinement_reason")
+        ),
+        "boundary_expansion_seconds": _first_number(
+            clip.get("boundary_expansion_seconds"),
+            metadata.get("boundary_expansion_seconds"),
+        ),
         "transcript_text_length": transcript["transcript_text_length"],
         "first_transcript_text": transcript["first_transcript_text"],
         "last_transcript_text": transcript["last_transcript_text"],
@@ -847,8 +883,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Generated Clips",
             "",
-            "| Type | Clip | Range | Duration | Resolution | Final | Selection | Warnings | Title | Title Source | Overlay |",
-            "| --- | --- | --- | ---: | --- | ---: | --- | --- | --- | --- | --- |",
+            "| Type | Clip | Range | Original Range | Duration | Resolution | Final | "
+            "Selection | Boundary | Warnings | Title | Title Source | Overlay |",
+            "| --- | --- | --- | --- | ---: | --- | ---: | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for clip in report["clips"]:
@@ -856,16 +893,21 @@ def render_markdown(report: dict[str, Any]) -> str:
         width = resolution.get("width")
         height = resolution.get("height")
         resolution_text = f"{width}x{height}" if width and height else "unknown"
+        original_range = ""
+        if clip.get("original_start") is not None and clip.get("original_end") is not None:
+            original_range = f"{_markdown_value(clip.get('original_start'))}-{_markdown_value(clip.get('original_end'))}"
         lines.append(
             "| "
             f"{_markdown_value(clip.get('type'))} | "
             f"`{_markdown_value(clip.get('id'), limit=48)}` | "
             f"{_markdown_value(clip.get('selected_start'))}-"
             f"{_markdown_value(clip.get('selected_end'))} | "
+            f"{_markdown_value(original_range)} | "
             f"{_markdown_value(clip.get('duration'))} | "
             f"{resolution_text} | "
             f"{_markdown_value(clip.get('final_score'))} | "
             f"{_markdown_value(clip.get('selection_reason'))} | "
+            f"{_markdown_value(clip.get('boundary_refinement_reason'))} | "
             f"{_markdown_value(clip.get('warnings'), limit=160)} | "
             f"{_markdown_value(clip.get('title'))} | "
             f"{_markdown_value(clip.get('title_source'))} | "
