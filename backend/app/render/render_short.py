@@ -238,6 +238,18 @@ def shorts_output_dir(paths: StoragePaths, job_id: str) -> Path:
     return output_dir
 
 
+def shorts_subtitle_dir(paths: StoragePaths, job_id: str) -> Path:
+    return paths.job_subtitles(job_id, "short")
+
+
+def _remove_autoload_sidecar(output_path: Path, subtitle_path: Path | None) -> None:
+    sidecar_path = output_path.with_suffix(".ass")
+    if subtitle_path is not None and sidecar_path.resolve() == subtitle_path.resolve():
+        return
+    if sidecar_path.is_file():
+        sidecar_path.unlink()
+
+
 def _candidate_score(candidate: Candidate) -> float:
     for score in (candidate.final_score, candidate.ai_score, candidate.rule_score):
         if score is not None:
@@ -331,6 +343,7 @@ def render_selected_short_candidates(
 ) -> ShortRenderBatchResult:
     storage_paths = paths or get_storage_paths()
     output_dir = shorts_output_dir(storage_paths, job.id)
+    subtitle_dir = shorts_subtitle_dir(storage_paths, job.id)
     exports: list[ExportItem] = []
     failures: list[ShortRenderFailure] = []
 
@@ -345,7 +358,7 @@ def render_selected_short_candidates(
         try:
             title = _candidate_title(candidate, index)
             if burn_subtitles:
-                subtitle_path = output_dir / f"short_{index:02d}.ass"
+                subtitle_path = subtitle_dir / f"short_{index:02d}.ass"
                 write_ass_for_candidate(
                     candidate,
                     _subtitle_segments_for_candidate(candidate, transcript_segments),
@@ -368,6 +381,7 @@ def render_selected_short_candidates(
                 source_height=source_height,
             )
             rendered_path = _rendered_path(render_result)
+            _remove_autoload_sidecar(output_path, subtitle_path)
             _write_export_metadata(
                 metadata_path,
                 export_id=export_id,

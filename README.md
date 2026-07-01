@@ -812,6 +812,36 @@ Container paths used by both backend and worker:
 
 `docker-compose.yml` mounts the same host `./storage` directory into backend and worker as `/app/storage`.
 
+Generated clip outputs avoid same-folder subtitle sidecars because common video players auto-load
+`short_01.ass` when opening `short_01.mp4`, causing duplicate subtitles after burn-in.
+
+```text
+storage/outputs/{job_id}/normal/normal_01.mp4
+storage/outputs/{job_id}/normal/normal_01.json
+storage/outputs/{job_id}/shorts/short_01.mp4
+storage/outputs/{job_id}/shorts/short_01.json
+storage/outputs/{job_id}/subtitles/normal/normal_01.ass
+storage/outputs/{job_id}/subtitles/shorts/short_01.ass
+```
+
+ZIP downloads use the same separation:
+
+```text
+videos/normal/*.mp4
+videos/shorts/*.mp4
+subtitles/normal/*.ass
+subtitles/shorts/*.ass
+metadata/normal/*.json
+metadata/shorts/*.json
+metadata/*.json
+```
+
+Check a completed job for subtitle sidecars that players may auto-load:
+
+```powershell
+python scripts/check_subtitle_sidecar_risk.py --job-id job_ID
+```
+
 ## Runtime Requirements Inside Containers
 
 Backend and worker are built from `backend/Dockerfile`.

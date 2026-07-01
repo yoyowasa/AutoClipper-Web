@@ -143,13 +143,16 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     assert all(call["normalize_audio"] is True for call in renderer_calls)
 
     normal_dir = storage.outputs / created["jobId"] / "normal"
+    subtitle_dir = storage.outputs / created["jobId"] / "subtitles" / "normal"
     assert (normal_dir / "normal_01.mp4").is_file()
-    assert (normal_dir / "normal_01.ass").is_file()
+    assert not (normal_dir / "normal_01.ass").exists()
+    assert (subtitle_dir / "normal_01.ass").is_file()
     assert not (normal_dir / "normal_02.mp4").is_file()
     assert (normal_dir / "normal_03.mp4").is_file()
     normal_metadata = json.loads((normal_dir / "normal_01.json").read_text(encoding="utf-8"))
     assert normal_metadata["title"] == "First normal"
     assert normal_metadata["title_source"] == "existing"
+    assert normal_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/normal/normal_01.ass")
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200

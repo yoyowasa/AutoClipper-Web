@@ -67,6 +67,7 @@ ABRUPT_END_SUFFIXES = (
 )
 GENERIC_TITLE_PATTERN = re.compile(r"^(Normal\s+[Cc]lip|Short)\s+\d+$")
 EXPECTED_ASS_FONT = "Noto Sans CJK JP"
+AUTOLOAD_SUBTITLE_SUFFIXES = (".ass", ".srt", ".vtt")
 
 
 @dataclass(frozen=True)
@@ -313,6 +314,16 @@ def _resolve_subtitle_path(clip: dict[str, Any], metadata: dict[str, Any], *, ro
             if candidate.exists():
                 host_path = candidate
     return host_path, str(container_path) if container_path else None
+
+
+def same_basename_subtitle_sidecars(video_path: Path | None) -> list[Path]:
+    if video_path is None or video_path.suffix.lower() != ".mp4":
+        return []
+    return [
+        candidate
+        for suffix in AUTOLOAD_SUBTITLE_SUFFIXES
+        if (candidate := video_path.with_suffix(suffix)).is_file()
+    ]
 
 
 def _segments_for_clip(segments: Sequence[dict[str, Any]], clip: dict[str, Any]) -> list[dict[str, Any]]:
@@ -586,6 +597,7 @@ def _quality_warnings(
     transcript: dict[str, Any],
     probe: ProbeResult,
     subtitle: dict[str, Any],
+    external_subtitle_autoload_risks: Sequence[Path],
     high_quality_mode: bool,
 ) -> list[str]:
     warnings: list[str] = []
@@ -632,6 +644,8 @@ def _quality_warnings(
         warnings.append("title_subtitle_vertical_overlap")
     if subtitle.get("subtitle_exists") and not subtitle.get("font_supports_japanese"):
         warnings.append("subtitle_font_missing_japanese_support")
+    if external_subtitle_autoload_risks:
+        warnings.append("external_subtitle_autoload_risk")
     return warnings
 
 
@@ -645,6 +659,7 @@ def _clip_report(
 ) -> dict[str, Any]:
     host_path, container_video_path = _resolve_video_path(clip, metadata, root=root)
     subtitle_path, container_subtitle_path = _resolve_subtitle_path(clip, metadata, root=root)
+    external_subtitle_autoload_risks = same_basename_subtitle_sidecars(host_path)
     metadata_probe = _metadata_probe(metadata)
     probe = metadata_probe
     if probe.width is None or probe.height is None or probe.duration is None:
@@ -657,6 +672,7 @@ def _clip_report(
         transcript=transcript,
         probe=probe,
         subtitle=subtitle,
+        external_subtitle_autoload_risks=external_subtitle_autoload_risks,
         high_quality_mode=high_quality_mode,
     )
     title = clip.get("title") or metadata.get("title")
@@ -692,6 +708,7 @@ def _clip_report(
         "openai_fallback_used": clip.get("openai_fallback_used"),
         "subtitle_file_path": str(subtitle_path) if subtitle_path is not None else None,
         "container_subtitle_file_path": container_subtitle_path,
+        "external_subtitle_autoload_risk_files": [str(path) for path in external_subtitle_autoload_risks],
         "subtitle": subtitle,
         "title": title,
         "overlay_title": overlay_title,

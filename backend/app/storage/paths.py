@@ -39,6 +39,12 @@ class StoragePaths:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def job_subtitles(self, job_id: str, clip_type: str) -> Path:
+        folder_name = "shorts" if clip_type == "short" else "normal"
+        path = self.job_outputs(job_id) / "subtitles" / folder_name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
 
 def get_storage_paths() -> StoragePaths:
     paths = StoragePaths(Path(get_settings().storage_root).resolve())

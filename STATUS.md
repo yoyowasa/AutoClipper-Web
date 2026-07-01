@@ -2386,3 +2386,74 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - 既存 artifact は再renderしていないため、title 内容は generic fallback のまま。新規生成では transcript fallback title が metadata に入る。
 - likely abrupt start/end は未対応。次タスクは boundary refinement。
+
+## 2026-07-01 Task 36a: Move subtitle sidecar files away from rendered MP4 files
+
+### 目的
+
+- 焼き込み済みMP4と同じフォルダ・同じbasenameの `.ass` が動画プレイヤーに外部字幕として自動読込され、字幕が二重表示される問題を防ぐ。
+- candidate selection、scoring、字幕テキスト分割、manual review UI、approve/reject workflow は変更しない。
+
+### 変更ファイル
+
+- `backend/app/storage/paths.py`
+- `backend/app/render/render_normal.py`
+- `backend/app/render/render_short.py`
+- `backend/app/jobs/runner.py`
+- `scripts/audit_outputs.py`
+- `scripts/check_subtitle_sidecar_risk.py`
+- `scripts/smoke_subtitle_burn_in.py`
+- `backend/tests/test_render_normal_selected.py`
+- `backend/tests/test_short_rendering.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `.ass` 生成先をMP4横から分離。
+  - `outputs/{job_id}/subtitles/normal/normal_XX.ass`
+  - `outputs/{job_id}/subtitles/shorts/short_XX.ass`
+- `normal/` と `shorts/` にはMP4とJSONだけを残す。
+- ExportItem / clip metadata の `subtitle_path` を新しいsubtitleディレクトリへ更新。
+- ZIP内レイアウトを分離。
+  - `videos/normal/*.mp4`
+  - `videos/shorts/*.mp4`
+  - `subtitles/normal/*.ass`
+  - `subtitles/shorts/*.ass`
+  - `metadata/normal/*.json`
+  - `metadata/shorts/*.json`
+  - `metadata/*.json`
+- auditに `external_subtitle_autoload_risk` warning を追加。
+- `scripts/check_subtitle_sidecar_risk.py` を追加。
+  - job IDからMP4横の同名 `.ass/.srt/.vtt` を検出する。
+- subtitle burn-in smoke scriptも新レイアウトに更新。
+
+### 検証結果
+
+- targeted ruff:
+  - `..\.venv\Scripts\python -m ruff check app\storage\paths.py app\render\render_normal.py app\render\render_short.py app\jobs\runner.py tests\test_render_normal_selected.py tests\test_short_rendering.py tests\test_real_pipeline.py tests\test_audit_outputs_script.py ..\scripts\audit_outputs.py ..\scripts\check_subtitle_sidecar_risk.py ..\scripts\smoke_subtitle_burn_in.py`: All checks passed。
+- targeted tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_render_normal_selected.py tests\test_short_rendering.py tests\test_audit_outputs_script.py tests\test_real_pipeline.py tests\test_smoke_subtitle_burn_in_script.py`: 38 passed。
+- full backend checks:
+  - `..\.venv\Scripts\python -m ruff check . ..\scripts\audit_outputs.py ..\scripts\check_subtitle_sidecar_risk.py ..\scripts\smoke_subtitle_burn_in.py`: All checks passed。
+  - `..\.venv\Scripts\python -m pytest`: 164 passed, 1 skipped。
+- frontend checks:
+  - `npm run lint`: pass。
+  - `npm run typecheck`: pass。
+  - `npm run build`: pass。
+- real-video smoke:
+  - input: `C:\Users\peace.YAGURUMAGIKUHM\Desktop\解説_後藤直義、森川潤）.mp4`
+  - job: `job_6a67dd0097e64d47bce4ed5ddc58ef1b`
+  - mode: `low_cost`
+  - output: normal `1/1`, short `2/2`, job `completed`
+  - ffprobe: normal `1280x720`, shorts `1080x1920`
+  - layout: `normal/normal_01.ass=False`, `shorts/short_01.ass=False`, `subtitles/normal/normal_01.ass=True`, `subtitles/shorts/short_01.ass=True`
+  - `scripts/check_subtitle_sidecar_risk.py --job-id job_6a67dd0097e64d47bce4ed5ddc58ef1b --json`: `risk_count=0`
+  - `scripts/audit_outputs.py --job-id job_6a67dd0097e64d47bce4ed5ddc58ef1b --format both`: `external_subtitle_autoload_risk=0`
+
+### 未解決事項
+
+- 既存の生成済みjobは旧レイアウトの `.ass` が残るため、再生成しない限りプレイヤー自動読込リスクが残る。
+- 今回のsmokeではshortに `missing_ass_title_event=2` が残る。二重字幕原因ではないため、overlay title burn-in側の別件として扱う。

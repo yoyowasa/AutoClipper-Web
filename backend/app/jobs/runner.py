@@ -1035,6 +1035,21 @@ def _render_failures_to_jsonable(
     return payload
 
 
+def _zip_type_dir(export_type: str) -> str:
+    return "shorts" if export_type == "short" else "normal"
+
+
+def _zip_export_arcname(export: ExportItem, path: Path, source_value: str) -> str:
+    type_dir = _zip_type_dir(export.type)
+    if source_value == export.video_path:
+        return f"videos/{type_dir}/{path.name}"
+    if source_value == export.subtitle_path:
+        return f"subtitles/{type_dir}/{path.name}"
+    if source_value == export.metadata_path:
+        return f"metadata/{type_dir}/{path.name}"
+    return f"metadata/{path.name}"
+
+
 def _create_zip(zip_path: Path, exports: Sequence[ExportItem], metadata_files: Sequence[Path] | None = None) -> None:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as archive:
@@ -1044,10 +1059,10 @@ def _create_zip(zip_path: Path, exports: Sequence[ExportItem], metadata_files: S
                     continue
                 path = Path(value)
                 if path.is_file():
-                    archive.write(path, arcname=path.name)
+                    archive.write(path, arcname=_zip_export_arcname(export, path, value))
         for metadata_file in metadata_files or []:
             if metadata_file.is_file():
-                archive.write(metadata_file, arcname=metadata_file.name)
+                archive.write(metadata_file, arcname=f"metadata/{metadata_file.name}")
 
 
 def _write_placeholder_mp4(path: Path, label: str) -> None:

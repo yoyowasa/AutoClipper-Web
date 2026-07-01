@@ -117,6 +117,18 @@ def normal_output_dir(paths: StoragePaths, job_id: str) -> Path:
     return output_dir
 
 
+def normal_subtitle_dir(paths: StoragePaths, job_id: str) -> Path:
+    return paths.job_subtitles(job_id, "normal")
+
+
+def _remove_autoload_sidecar(output_path: Path, subtitle_path: Path | None) -> None:
+    sidecar_path = output_path.with_suffix(".ass")
+    if subtitle_path is not None and sidecar_path.resolve() == subtitle_path.resolve():
+        return
+    if sidecar_path.is_file():
+        sidecar_path.unlink()
+
+
 def _candidate_score(candidate: Candidate) -> float:
     for score in (candidate.final_score, candidate.ai_score, candidate.rule_score):
         if score is not None:
@@ -194,6 +206,7 @@ def render_selected_normal_candidates(
 ) -> NormalRenderBatchResult:
     storage_paths = paths or get_storage_paths()
     output_dir = normal_output_dir(storage_paths, job.id)
+    subtitle_dir = normal_subtitle_dir(storage_paths, job.id)
     exports: list[ExportItem] = []
     failures: list[NormalRenderFailure] = []
 
@@ -208,7 +221,7 @@ def render_selected_normal_candidates(
         try:
             title = _candidate_title(candidate, index)
             if burn_subtitles:
-                subtitle_path = output_dir / f"normal_{index:02d}.ass"
+                subtitle_path = subtitle_dir / f"normal_{index:02d}.ass"
                 write_ass_for_candidate(
                     candidate,
                     _subtitle_segments_for_candidate(candidate, transcript_segments),
@@ -230,6 +243,7 @@ def render_selected_normal_candidates(
                 normalize_audio=normalize_audio,
                 ffmpeg_bin=ffmpeg_bin,
             )
+            _remove_autoload_sidecar(output_path, subtitle_path)
             _write_export_metadata(
                 metadata_path,
                 export_id=export_id,

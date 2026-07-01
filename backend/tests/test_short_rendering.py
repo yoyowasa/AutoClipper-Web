@@ -238,14 +238,17 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert all(call["source_width"] == 1920 for call in renderer_calls)
 
     shorts_dir = storage.outputs / created["jobId"] / "shorts"
+    subtitle_dir = storage.outputs / created["jobId"] / "subtitles" / "shorts"
     assert (shorts_dir / "short_01.mp4").is_file()
-    assert (shorts_dir / "short_01.ass").is_file()
+    assert not (shorts_dir / "short_01.ass").exists()
+    assert (subtitle_dir / "short_01.ass").is_file()
     assert not (shorts_dir / "short_02.mp4").is_file()
     assert (shorts_dir / "short_03.mp4").is_file()
     short_metadata = json.loads((shorts_dir / "short_01.json").read_text(encoding="utf-8"))
     assert short_metadata["title"] == "First short"
     assert short_metadata["overlay_title"] == "First short overlay"
     assert short_metadata["title_source"] == "existing"
+    assert short_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/shorts/short_01.ass")
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200
@@ -308,5 +311,7 @@ def test_render_selected_short_candidates_writes_fallback_title_metadata(client:
     assert short_metadata["title"] == "インフレの見方が変わる重要な場面です"
     assert short_metadata["overlay_title"] == "インフレの見方が変わる重要な場面です"
     assert short_metadata["title_source"] == "transcript_fallback"
-    ass_text = (shorts_dir / "short_01.ass").read_text(encoding="utf-8")
+    subtitle_dir = storage.outputs / created["jobId"] / "subtitles" / "shorts"
+    assert not (shorts_dir / "short_01.ass").exists()
+    ass_text = (subtitle_dir / "short_01.ass").read_text(encoding="utf-8")
     assert ",Title,," not in ass_text

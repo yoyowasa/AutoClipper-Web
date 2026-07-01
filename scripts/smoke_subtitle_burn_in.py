@@ -61,8 +61,9 @@ def write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def container_output_path(job_id: str, folder: str, filename: str) -> str:
-    return f"/app/storage/outputs/{job_id}/{folder}/{filename}"
+def container_output_path(job_id: str, *parts: str) -> str:
+    suffix = "/".join(parts)
+    return f"/app/storage/outputs/{job_id}/{suffix}"
 
 
 def host_path_from_artifact(path_value: str | None, *, root: Path = ROOT) -> Path | None:
@@ -483,9 +484,13 @@ def run(args: argparse.Namespace) -> int:
     transcript_segments = [TranscriptSegment(**segment) for segment in transcript_payload]
     normal_dir = output_dir / "normal"
     shorts_dir = output_dir / "shorts"
+    normal_subtitle_dir = output_dir / "subtitles" / "normal"
+    short_subtitle_dir = output_dir / "subtitles" / "shorts"
     frames_dir = output_dir / "audit_frames"
     normal_dir.mkdir(parents=True, exist_ok=True)
     shorts_dir.mkdir(parents=True, exist_ok=True)
+    normal_subtitle_dir.mkdir(parents=True, exist_ok=True)
+    short_subtitle_dir.mkdir(parents=True, exist_ok=True)
     frames_dir.mkdir(parents=True, exist_ok=True)
 
     write_json(output_dir / "selected_clips.json", subset)
@@ -525,7 +530,7 @@ def run(args: argparse.Namespace) -> int:
 
     for index, candidate in enumerate(normal_candidates, start=1):
         try:
-            subtitle_path = normal_dir / f"normal_{index:02d}.ass"
+            subtitle_path = normal_subtitle_dir / f"normal_{index:02d}.ass"
             output_path = normal_dir / f"normal_{index:02d}.mp4"
             write_ass_for_candidate(
                 candidate,
@@ -555,7 +560,12 @@ def run(args: argparse.Namespace) -> int:
                 "width": probe.width,
                 "height": probe.height,
                 "video_path": container_output_path(output_job_id, "normal", output_path.name),
-                "subtitle_path": container_output_path(output_job_id, "normal", subtitle_path.name),
+                "subtitle_path": container_output_path(
+                    output_job_id,
+                    "subtitles",
+                    "normal",
+                    subtitle_path.name,
+                ),
             }
             write_json(normal_dir / f"normal_{index:02d}.json", metadata)
             rendered.append({"candidate_id": candidate.id, "type": "normal", **metadata})
@@ -565,7 +575,7 @@ def run(args: argparse.Namespace) -> int:
     for index, candidate in enumerate(short_candidates, start=1):
         try:
             layout = SubtitleLayout.short()
-            subtitle_path = shorts_dir / f"short_{index:02d}.ass"
+            subtitle_path = short_subtitle_dir / f"short_{index:02d}.ass"
             output_path = shorts_dir / f"short_{index:02d}.mp4"
             write_ass_for_candidate(
                 candidate,
@@ -610,7 +620,12 @@ def run(args: argparse.Namespace) -> int:
                 )
             inspection_payload = {
                 "candidate_id": candidate.id,
-                "subtitle_path": container_output_path(output_job_id, "shorts", subtitle_path.name),
+                "subtitle_path": container_output_path(
+                    output_job_id,
+                    "subtitles",
+                    "shorts",
+                    subtitle_path.name,
+                ),
                 **ass_inspection.__dict__,
             }
             ass_inspections.append(inspection_payload)
@@ -629,7 +644,12 @@ def run(args: argparse.Namespace) -> int:
                 "width": probe.width,
                 "height": probe.height,
                 "video_path": container_output_path(output_job_id, "shorts", rendered_path.name),
-                "subtitle_path": container_output_path(output_job_id, "shorts", subtitle_path.name),
+                "subtitle_path": container_output_path(
+                    output_job_id,
+                    "subtitles",
+                    "shorts",
+                    subtitle_path.name,
+                ),
                 "frame_path": container_output_path(output_job_id, "audit_frames", frame_path.name)
                 if frame_path is not None
                 else None,
