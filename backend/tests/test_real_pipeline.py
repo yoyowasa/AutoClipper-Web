@@ -431,25 +431,35 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert rejection_summary["render_failure_count"] == 0
     assert (job_dir / "normal" / "normal_01.json").is_file()
     assert (job_dir / "shorts" / "short_01.json").is_file()
+    assert not (job_dir / "normal" / "normal_01.ass").exists()
+    assert not (job_dir / "shorts" / "short_01.ass").exists()
+    assert (job_dir / "subtitles" / "normal" / "normal_01.ass").is_file()
+    assert (job_dir / "subtitles" / "shorts" / "short_01.ass").is_file()
     normal_metadata = json.loads((job_dir / "normal" / "normal_01.json").read_text(encoding="utf-8"))
     short_metadata = json.loads((job_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))
     assert normal_metadata["title"]
     assert normal_metadata["title_source"] == "transcript_fallback"
+    assert normal_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/normal/normal_01.ass")
     assert short_metadata["title"]
     assert short_metadata["overlay_title"]
     assert short_metadata["title_source"] == "transcript_fallback"
+    assert short_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/shorts/short_01.ass")
 
     zip_path = storage.zip_path(created["jobId"])
     assert zip_path.is_file()
     with ZipFile(zip_path) as archive:
         names = set(archive.namelist())
-    assert "normal_01.mp4" in names
-    assert "short_01.mp4" in names
-    assert "normal_01.json" in names
-    assert "short_01.json" in names
-    assert "selected_clips.json" in names
-    assert "transcript_summary.json" in names
-    assert "selected_clips_summary.json" in names
+    assert "videos/normal/normal_01.mp4" in names
+    assert "videos/shorts/short_01.mp4" in names
+    assert "subtitles/normal/normal_01.ass" in names
+    assert "subtitles/shorts/short_01.ass" in names
+    assert "metadata/normal/normal_01.json" in names
+    assert "metadata/shorts/short_01.json" in names
+    assert "metadata/selected_clips.json" in names
+    assert "metadata/transcript_summary.json" in names
+    assert "metadata/selected_clips_summary.json" in names
+    assert "normal_01.mp4" not in names
+    assert "short_01.ass" not in names
 
 
 def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_duration_settings(

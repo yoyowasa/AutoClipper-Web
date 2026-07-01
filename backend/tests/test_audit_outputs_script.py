@@ -10,6 +10,7 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import audit_outputs  # noqa: E402
+import check_subtitle_sidecar_risk  # noqa: E402
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -129,6 +130,7 @@ def write_audit_job(root: Path, job_id: str) -> Path:
             "subtitle_path": "/app/storage/outputs/job_audit/normal/normal_01.ass",
         },
     )
+    (output_dir / "normal" / "normal_01.mp4").write_bytes(b"normal mp4")
     write_json(
         output_dir / "shorts" / "short_01.json",
         {
@@ -145,6 +147,7 @@ def write_audit_job(root: Path, job_id: str) -> Path:
             "subtitle_path": "/app/storage/outputs/job_audit/shorts/short_01.ass",
         },
     )
+    (output_dir / "shorts" / "short_01.mp4").write_bytes(b"short mp4")
     write_ass(output_dir / "normal" / "normal_01.ass", dense=True)
     return output_dir
 
@@ -161,6 +164,7 @@ def test_audit_outputs_builds_quality_report(tmp_path: Path) -> None:
     assert summary["warnings_by_type"]["normal"]["very_short_transcript_text"] == 1
     assert summary["warnings_by_type"]["normal"]["subtitle_too_dense"] == 1
     assert summary["warnings_by_type"]["normal"]["backfilled_clip"] == 1
+    assert summary["warnings_by_type"]["normal"]["external_subtitle_autoload_risk"] == 1
     assert summary["warnings_by_type"]["short"]["short_resolution_not_1080x1920"] == 1
     assert summary["warnings_by_type"]["short"]["no_subtitle_file"] == 1
     assert summary["warnings_by_type"]["short"]["rule_only_clip_in_high_quality_mode"] == 1
@@ -172,8 +176,45 @@ def test_audit_outputs_builds_quality_report(tmp_path: Path) -> None:
     assert normal_clip["title"] == "Normal clip 1"
     assert "missing_title" not in normal_clip["warnings"]
     assert "generic_fallback_title" in normal_clip["warnings"]
+    assert "external_subtitle_autoload_risk" in normal_clip["warnings"]
+    assert normal_clip["external_subtitle_autoload_risk_files"]
     assert short_clip["resolution"]["height"] == 1280
     assert "missing_overlay_title" in short_clip["warnings"]
+
+
+def test_audit_reports_no_sidecar_risk_for_separated_subtitle_layout(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    subtitle_dir = output_dir / "subtitles" / "normal"
+    subtitle_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "normal" / "normal_01.ass").replace(subtitle_dir / "normal_01.ass")
+    normal_metadata = json.loads((output_dir / "normal" / "normal_01.json").read_text(encoding="utf-8"))
+    normal_metadata["subtitle_path"] = "/app/storage/outputs/job_audit/subtitles/normal/normal_01.ass"
+    write_json(output_dir / "normal" / "normal_01.json", normal_metadata)
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+    normal_clip = next(clip for clip in report["clips"] if clip["type"] == "normal")
+
+    assert "external_subtitle_autoload_risk" not in normal_clip["warnings"]
+    assert normal_clip["external_subtitle_autoload_risk_files"] == []
+
+
+def test_sidecar_risk_smoke_scan_reports_same_basename_subtitles(tmp_path: Path) -> None:
+    output_dir = tmp_path / "storage" / "outputs" / "job_scan" / "shorts"
+    output_dir.mkdir(parents=True)
+    (output_dir / "short_01.mp4").write_bytes(b"mp4")
+    (output_dir / "short_01.ass").write_text("subtitle", encoding="utf-8")
+    separated_dir = tmp_path / "storage" / "outputs" / "job_scan" / "subtitles" / "shorts"
+    separated_dir.mkdir(parents=True)
+    (separated_dir / "short_02.ass").write_text("safe subtitle", encoding="utf-8")
+
+    risks = check_subtitle_sidecar_risk.scan_sidecar_risks("job_scan", root=tmp_path)
+
+    assert risks == [
+        {
+            "video_path": str(output_dir / "short_01.mp4"),
+            "subtitle_path": str(output_dir / "short_01.ass"),
+        }
+    ]
 
 
 def test_audit_outputs_writes_json_and_markdown(tmp_path: Path) -> None:
