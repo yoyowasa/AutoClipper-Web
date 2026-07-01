@@ -170,7 +170,8 @@ def test_audit_outputs_builds_quality_report(tmp_path: Path) -> None:
     assert normal_clip["first_transcript_text"] == "だから短い"
     assert normal_clip["resolution"]["width"] == 1280
     assert normal_clip["title"] == "Normal clip 1"
-    assert "missing_title" in normal_clip["warnings"]
+    assert "missing_title" not in normal_clip["warnings"]
+    assert "generic_fallback_title" in normal_clip["warnings"]
     assert short_clip["resolution"]["height"] == 1280
     assert "missing_overlay_title" in short_clip["warnings"]
 
@@ -269,6 +270,45 @@ def test_audit_warns_when_overlay_title_has_no_ass_title_event(tmp_path: Path) -
     short_clip = next(clip for clip in report["clips"] if clip["type"] == "short")
 
     assert "missing_ass_title_event" in short_clip["warnings"]
+
+
+def test_audit_does_not_report_missing_title_when_fallback_title_exists(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    selected = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    selected["normalClips"][0]["title"] = "物価上昇で投資判断が変わる場面"
+    selected["normalClips"][0]["title_source"] = "transcript_fallback"
+    write_json(output_dir / "selected_clips.json", selected)
+    normal_metadata = json.loads((output_dir / "normal" / "normal_01.json").read_text(encoding="utf-8"))
+    normal_metadata["title"] = "物価上昇で投資判断が変わる場面"
+    normal_metadata["title_source"] = "transcript_fallback"
+    write_json(output_dir / "normal" / "normal_01.json", normal_metadata)
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+    normal_clip = next(clip for clip in report["clips"] if clip["type"] == "normal")
+
+    assert normal_clip["title"] == "物価上昇で投資判断が変わる場面"
+    assert normal_clip["title_source"] == "transcript_fallback"
+    assert "missing_title" not in normal_clip["warnings"]
+    assert "generic_fallback_title" not in normal_clip["warnings"]
+
+
+def test_audit_reports_generic_fallback_title_without_missing_title(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    selected = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    selected["shorts"][0]["title"] = "Short 01"
+    selected["shorts"][0]["title_source"] = "deterministic_fallback"
+    write_json(output_dir / "selected_clips.json", selected)
+    short_metadata = json.loads((output_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))
+    short_metadata["title"] = "Short 01"
+    short_metadata["title_source"] = "deterministic_fallback"
+    write_json(output_dir / "shorts" / "short_01.json", short_metadata)
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+    short_clip = next(clip for clip in report["clips"] if clip["type"] == "short")
+
+    assert short_clip["title_source"] == "deterministic_fallback"
+    assert "missing_title" not in short_clip["warnings"]
+    assert "generic_fallback_title" in short_clip["warnings"]
 
 
 def test_audit_outputs_output_path_suffixes(tmp_path: Path) -> None:

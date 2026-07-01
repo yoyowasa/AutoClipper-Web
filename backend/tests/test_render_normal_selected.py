@@ -1,4 +1,5 @@
 from collections.abc import Generator
+import json
 from pathlib import Path
 from typing import Any
 
@@ -146,6 +147,9 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     assert (normal_dir / "normal_01.ass").is_file()
     assert not (normal_dir / "normal_02.mp4").is_file()
     assert (normal_dir / "normal_03.mp4").is_file()
+    normal_metadata = json.loads((normal_dir / "normal_01.json").read_text(encoding="utf-8"))
+    assert normal_metadata["title"] == "First normal"
+    assert normal_metadata["title_source"] == "existing"
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200
@@ -156,3 +160,54 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     download_response = client.get(normal_clips[0]["downloadUrl"])
     assert download_response.status_code == 200
     assert download_response.content.startswith(b"rendered normal_")
+
+
+def test_render_selected_normal_candidates_uses_transcript_fallback_title(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_renderer(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).write_bytes(b"rendered normal")
+        return Path(output_path)
+
+    candidate = Candidate(
+        id="cand_normal_title_fallback",
+        type="normal",
+        start=0.0,
+        end=120.0,
+        duration=120.0,
+        transcript_text="えっと 物価上昇で投資判断が変わる場面です。",
+        final_score=80.0,
+    )
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        result = render_selected_normal_candidates(
+            db=db,
+            job=job,
+            input_path=Path(storage.uploads) / "sample.mp4",
+            selected_candidates=[candidate],
+            burn_subtitles=False,
+            paths=storage,
+            renderer=fake_renderer,
+        )
+        exports = db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all()
+
+    assert result.exports[0].title == "物価上昇で投資判断が変わる場面です"
+    assert exports[0].title == "物価上昇で投資判断が変わる場面です"
+    normal_dir = storage.outputs / created["jobId"] / "normal"
+    normal_metadata = json.loads((normal_dir / "normal_01.json").read_text(encoding="utf-8"))
+    assert normal_metadata["title"] == "物価上昇で投資判断が変わる場面です"
+    assert normal_metadata["title_source"] == "transcript_fallback"

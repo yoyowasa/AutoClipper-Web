@@ -267,6 +267,7 @@ def test_finalist_on_demand_scores_selected_rule_only_candidates() -> None:
     assert len(selected) == 2
     assert all(candidate.used_ai_score is True for candidate in selected)
     assert {candidate.openai_score_source for candidate in selected} == {"preselection_pool", "finalist_on_demand"}
+    assert {candidate.title_source for candidate in selected} == {"openai"}
     assert updated_summary is not None
     assert updated_summary["candidates_sent_preselection"] == 1
     assert updated_summary["candidates_sent_as_finalists"] == 1
@@ -387,6 +388,13 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     selected_payload = json.loads((job_dir / "selected_clips.json").read_text(encoding="utf-8"))
     assert len(selected_payload["normalClips"]) == 1
     assert len(selected_payload["shorts"]) == 1
+    selected_normal = selected_payload["normalClips"][0]
+    selected_short = selected_payload["shorts"][0]
+    assert selected_normal["title"]
+    assert selected_normal["title_source"] == "transcript_fallback"
+    assert selected_short["title"]
+    assert selected_short["overlay_title"]
+    assert selected_short["title_source"] == "transcript_fallback"
     transcript_summary = json.loads((job_dir / "transcript_summary.json").read_text(encoding="utf-8"))
     assert transcript_summary["segment_count"] == 4
     assert transcript_summary["total_text_length"] > 20
@@ -411,6 +419,11 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert selected_summary["selected_normal_count"] == 1
     assert selected_summary["selected_short_count"] == 1
     assert len(selected_summary["selected_ids"]) == 2
+    assert selected_summary["normal"][0]["title"]
+    assert selected_summary["normal"][0]["title_source"] == "transcript_fallback"
+    assert selected_summary["shorts"][0]["title"]
+    assert selected_summary["shorts"][0]["overlay_title"]
+    assert selected_summary["shorts"][0]["title_source"] == "transcript_fallback"
     assert all(path["video_path"] for path in selected_summary["output_paths"].values())
 
     rejection_summary = json.loads((job_dir / "rejection_summary.json").read_text(encoding="utf-8"))
@@ -418,6 +431,13 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert rejection_summary["render_failure_count"] == 0
     assert (job_dir / "normal" / "normal_01.json").is_file()
     assert (job_dir / "shorts" / "short_01.json").is_file()
+    normal_metadata = json.loads((job_dir / "normal" / "normal_01.json").read_text(encoding="utf-8"))
+    short_metadata = json.loads((job_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))
+    assert normal_metadata["title"]
+    assert normal_metadata["title_source"] == "transcript_fallback"
+    assert short_metadata["title"]
+    assert short_metadata["overlay_title"]
+    assert short_metadata["title_source"] == "transcript_fallback"
 
     zip_path = storage.zip_path(created["jobId"])
     assert zip_path.is_file()

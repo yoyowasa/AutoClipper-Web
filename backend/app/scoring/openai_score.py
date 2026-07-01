@@ -328,6 +328,7 @@ def apply_openai_score_to_candidate(candidate: Candidate, score: ClipCandidateSc
             "should_use": score.should_use,
             "title": score.title,
             "overlay_title": score.overlay_title,
+            "title_source": "openai",
             "reason": score.reason,
             "risk_flags": score.risk_flags,
             "reject_reason": reject_reason,

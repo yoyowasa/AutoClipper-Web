@@ -20,6 +20,12 @@ OpenAIScoreSource = Literal[
     "fallback_rule_score",
     "not_scored",
 ]
+TitleSource = Literal[
+    "openai",
+    "transcript_fallback",
+    "deterministic_fallback",
+    "existing",
+]
 
 
 class Candidate(BaseModel):
@@ -40,6 +46,7 @@ class Candidate(BaseModel):
     should_use: bool | None = None
     title: str | None = None
     overlay_title: str | None = None
+    title_source: TitleSource | None = None
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
     reject_reason: str | None = None

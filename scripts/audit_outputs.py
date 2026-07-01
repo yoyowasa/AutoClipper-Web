@@ -65,7 +65,7 @@ ABRUPT_END_SUFFIXES = (
     " but",
     " because",
 )
-GENERIC_TITLE_PATTERN = re.compile(r"^(Normal clip|Short) \d+$")
+GENERIC_TITLE_PATTERN = re.compile(r"^(Normal\s+[Cc]lip|Short)\s+\d+$")
 EXPECTED_ASS_FONT = "Noto Sans CJK JP"
 
 
@@ -540,12 +540,25 @@ def analyze_ass_subtitles(path: Path | None, *, clip_type: str | None = None) ->
     }
 
 
-def _has_generic_or_missing_title(selected_title: Any, metadata_title: Any) -> bool:
-    selected = _plain_text(selected_title)
-    if selected:
+def _resolved_title(clip: dict[str, Any], metadata: dict[str, Any]) -> str:
+    return _plain_text(clip.get("title") or metadata.get("title"))
+
+
+def _resolved_title_source(clip: dict[str, Any], metadata: dict[str, Any]) -> str:
+    return _plain_text(clip.get("title_source") or metadata.get("title_source"))
+
+
+def _missing_title(clip: dict[str, Any], metadata: dict[str, Any]) -> bool:
+    return not _resolved_title(clip, metadata)
+
+
+def _has_generic_title(clip: dict[str, Any], metadata: dict[str, Any]) -> bool:
+    title = _resolved_title(clip, metadata)
+    if not title:
         return False
-    metadata = _plain_text(metadata_title)
-    return not metadata or bool(GENERIC_TITLE_PATTERN.match(metadata))
+    if _resolved_title_source(clip, metadata) == "deterministic_fallback":
+        return True
+    return bool(GENERIC_TITLE_PATTERN.match(title))
 
 
 def _likely_abrupt_start(clip: dict[str, Any], transcript: dict[str, Any]) -> bool:
@@ -589,8 +602,10 @@ def _quality_warnings(
         warnings.append("subtitle_too_dense")
     if not subtitle.get("subtitle_exists"):
         warnings.append("no_subtitle_file")
-    if _has_generic_or_missing_title(clip.get("title"), metadata.get("title")):
+    if _missing_title(clip, metadata):
         warnings.append("missing_title")
+    elif _has_generic_title(clip, metadata):
+        warnings.append("generic_fallback_title")
     if clip.get("below_quality_threshold"):
         warnings.append("below_quality_threshold")
     if "backfill" in str(clip.get("selection_reason") or ""):
@@ -645,6 +660,7 @@ def _clip_report(
         high_quality_mode=high_quality_mode,
     )
     title = clip.get("title") or metadata.get("title")
+    title_source = clip.get("title_source") or metadata.get("title_source")
     overlay_title = clip.get("overlay_title") or metadata.get("overlay_title")
     duration = _number(clip.get("duration")) or probe.duration
     return {
@@ -679,6 +695,7 @@ def _clip_report(
         "subtitle": subtitle,
         "title": title,
         "overlay_title": overlay_title,
+        "title_source": title_source,
         "metadata_path": metadata.get("_metadata_path"),
         "warnings": warnings,
         "requires_human_visual_inspection": bool(warnings),
@@ -813,8 +830,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Generated Clips",
             "",
-            "| Type | Clip | Range | Duration | Resolution | Final | Selection | Warnings | Title | Overlay |",
-            "| --- | --- | --- | ---: | --- | ---: | --- | --- | --- | --- |",
+            "| Type | Clip | Range | Duration | Resolution | Final | Selection | Warnings | Title | Title Source | Overlay |",
+            "| --- | --- | --- | ---: | --- | ---: | --- | --- | --- | --- | --- |",
         ]
     )
     for clip in report["clips"]:
@@ -834,6 +851,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"{_markdown_value(clip.get('selection_reason'))} | "
             f"{_markdown_value(clip.get('warnings'), limit=160)} | "
             f"{_markdown_value(clip.get('title'))} | "
+            f"{_markdown_value(clip.get('title_source'))} | "
             f"{_markdown_value(clip.get('overlay_title'))} |"
         )
 
