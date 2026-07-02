@@ -2707,6 +2707,24 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
   - `..\.venv\Scripts\python -m pytest`: 182 passed, 1 skipped。
 - frontend build:
   - `npm run build`: pass。
+- merge前 runtime smoke:
+  - `docker compose up -d --build`: backend / worker / frontend / redis 起動。
+  - `Invoke-RestMethod http://localhost:8000/health`: `{"status":"ok"}`。
+  - `Invoke-WebRequest http://localhost:3000 -UseBasicParsing`: `200`。
+- 既存58分 auditあり job results確認:
+  - job: `job_e9a049ee5e3446c0b92943429fa8918a`
+  - `GET /api/jobs/{job_id}/results`: `200`。
+  - result: normal `5`, short `10`, `auditSummary` present。
+  - audit warning counts: `likely_abrupt_start=4`, `likely_abrupt_ending=1`, `below_quality_threshold=1`, `backfilled_clip=1`, `subtitle_too_dense=2`。
+  - first clip metadata: `titleSource=transcript_fallback`, `selectionReason=above_quality_threshold`, `metadataUrl` present, `subtitleUrl` present。
+  - `GET /api/exports/{export_id}/metadata`: `200`、metadata title / boundary field を確認。
+  - `GET /api/exports/{export_id}/subtitle`: `200`、ASS file downloaded、`[Script Info]` を確認。
+  - `GET http://localhost:3000/results/{job_id}`: `200`。
+- auditなし completed job確認:
+  - job: `job_aeea2831f0d7486dac106cd9462a94fe`
+  - `GET /api/jobs/{job_id}/results`: `200`。
+  - result: normal `3`, short `5`, `auditSummary=null`。
+  - `GET http://localhost:3000/results/{job_id}`: `200`。
 
 ### 未解決事項
 
