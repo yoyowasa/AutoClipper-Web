@@ -247,6 +247,16 @@ def apply_overlay_title_policy(
     return updated
 
 
+def overlay_title_expected_for_mode(*, mode: str | None, short_overlay_title_mode: str, require_overlay_title: bool) -> bool:
+    if require_overlay_title:
+        return True
+    if short_overlay_title_mode == "always":
+        return True
+    if short_overlay_title_mode == "never":
+        return False
+    return (mode or "high_quality") == "high_quality"
+
+
 def selected_subset(
     selected: dict[str, Any],
     *,
@@ -288,6 +298,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ffprobe-bin", default="ffprobe")
     parser.add_argument("--require-overlay-title", action="store_true")
     parser.add_argument("--force-overlay-title", default=None)
+    parser.add_argument(
+        "--short-overlay-title-mode",
+        choices=["auto", "always", "high_quality_only", "never"],
+        default="auto",
+    )
     parser.add_argument("--extract-short-frames", dest="extract_short_frames", action="store_true", default=True)
     parser.add_argument("--no-extract-short-frames", dest="extract_short_frames", action="store_false")
     parser.add_argument("--run-audit", dest="run_audit", action="store_true", default=True)
@@ -421,6 +436,8 @@ def run_in_docker(args: argparse.Namespace) -> int:
         forwarded.append("--require-overlay-title")
     if args.force_overlay_title:
         forwarded.extend(["--force-overlay-title", str(args.force_overlay_title)])
+    if args.short_overlay_title_mode:
+        forwarded.extend(["--short-overlay-title-mode", str(args.short_overlay_title_mode)])
     if not args.extract_short_frames:
         forwarded.append("--no-extract-short-frames")
 
@@ -467,9 +484,14 @@ def run(args: argparse.Namespace) -> int:
         short_count=max(0, args.short_count),
         normal_duration_limit=args.normal_duration_limit,
     )
+    overlay_title_expected = overlay_title_expected_for_mode(
+        mode=args.mode,
+        short_overlay_title_mode=str(args.short_overlay_title_mode),
+        require_overlay_title=bool(args.require_overlay_title),
+    )
     subset = apply_overlay_title_policy(
         subset,
-        require_overlay_title=bool(args.require_overlay_title or args.mode == "high_quality"),
+        require_overlay_title=overlay_title_expected,
         force_overlay_title=args.force_overlay_title,
     )
     source_overlay_titles = {
@@ -582,7 +604,7 @@ def run(args: argparse.Namespace) -> int:
                 transcript_segments,
                 subtitle_path,
                 layout=layout,
-                top_title=candidate.overlay_title,
+                top_title=(candidate.overlay_title or "") if overlay_title_expected else "",
             )
             ass_inspection = inspect_ass_layout(subtitle_path, layout)
             if not ass_inspection.safe_vertical_positions:
@@ -635,6 +657,9 @@ def run(args: argparse.Namespace) -> int:
                 "candidate_id": candidate.id,
                 "title": candidate.title or f"Short Burn-in {index:02d}",
                 "overlay_title": candidate.overlay_title,
+                "overlay_title_expected": overlay_title_expected,
+                "overlay_title_rendered": bool(overlay_title_expected and candidate.overlay_title),
+                "overlay_title_mode": str(args.short_overlay_title_mode),
                 "source_overlay_title": source_overlay_titles.get(candidate.id),
                 "start": candidate.start,
                 "end": candidate.end,

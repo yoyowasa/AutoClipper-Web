@@ -156,6 +156,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--normal-max-duration", type=positive_float, default=None)
     parser.add_argument("--short-min-duration", type=positive_float, default=None)
     parser.add_argument("--short-max-duration", type=positive_float, default=None)
+    parser.add_argument(
+        "--short-overlay-title-mode",
+        default="auto",
+        choices=["auto", "always", "high_quality_only", "never"],
+    )
     parser.add_argument("--selection-policy", default=None, choices=["fill_requested", "strict_quality"])
     parser.add_argument("--use-openai-scoring", nargs="?", const=True, default=None, type=parse_bool)
     parser.add_argument("--openai-candidate-limit", type=non_negative_int, default=None)
@@ -222,6 +227,7 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "selectionPolicy": args.selection_policy,
         "burnSubtitles": bool(args.burn_subtitles),
         "shortLayout": "auto",
+        "shortOverlayTitleMode": args.short_overlay_title_mode,
         "useOpenAIScoring": use_openai_scoring,
         "openaiCandidateLimit": args.openai_candidate_limit,
         "openaiModel": args.openai_model,

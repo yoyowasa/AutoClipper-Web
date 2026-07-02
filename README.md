@@ -667,8 +667,11 @@ Title fallback behavior:
 - Low-cost and rule-only clips get deterministic local titles without calling OpenAI.
 - Fallback priority is existing/OpenAI title, candidate transcript text, transcript segments within the clip range, then deterministic labels such as `Normal Clip 01` or `Short 01`.
 - Generated `selected_clips.json`, `normal_XX.json`, and `short_XX.json` include `title` and `title_source`.
-- Short metadata also includes `overlay_title`; fallback overlay titles are metadata only unless an existing/OpenAI overlay title is already part of the render path.
+- Short metadata also includes `overlay_title`, `overlay_title_expected`, `overlay_title_rendered`, and `overlay_title_mode`.
+- `shortOverlayTitleMode` controls short title burn-in: `auto`, `always`, `high_quality_only`, or `never`.
+- In `auto`, high-quality runs expect a burned-in overlay title; low-cost runs keep overlay titles as metadata and do not force title burn-in.
 - Audit treats an empty title as `missing_title`; deterministic labels are reported as the weaker `generic_fallback_title`.
+- Audit only reports `missing_ass_title_event` when overlay title burn-in is expected but the ASS title event is missing.
 
 Subtitle readability behavior:
 
@@ -720,6 +723,7 @@ python scripts/smoke_subtitle_burn_in.py `
   --normal-duration-limit 120 `
   --require-overlay-title `
   --force-overlay-title "日本語タイトル確認 {number}" `
+  --short-overlay-title-mode always `
   --short-layout center_crop
 ```
 

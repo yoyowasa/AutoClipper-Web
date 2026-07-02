@@ -28,6 +28,7 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.normal_max_duration == 600.0
     assert args.short_min_duration == 20.0
     assert args.short_max_duration == 75.0
+    assert args.short_overlay_title_mode == "auto"
     assert args.selection_policy == "fill_requested"
     assert args.use_openai_scoring is None
     assert args.openai_candidate_limit == 20
@@ -148,6 +149,8 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "300",
             "--candidate-chunk-overlap-seconds",
             "75",
+            "--short-overlay-title-mode",
+            "always",
             "--no-openai-fallback-to-rule-score",
             "--no-burn-subtitles",
         ]
@@ -162,6 +165,7 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["normalMaxDuration"] == 60.0
     assert settings["shortMinDuration"] == 15.0
     assert settings["shortMaxDuration"] == 45.0
+    assert settings["shortOverlayTitleMode"] == "always"
     assert settings["selectionPolicy"] == "strict_quality"
     assert settings["useOpenAIScoring"] is True
     assert settings["openaiCandidateLimit"] == 7

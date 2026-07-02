@@ -33,7 +33,8 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   minSubtitleDuration: 1.1,
   maxSubtitleDuration: 4.2,
   minGapBetweenSubtitles: 0.08,
-  shortLayout: "auto"
+  shortLayout: "auto",
+  shortOverlayTitleMode: "auto"
 };
 
 export function SettingsPanel({
@@ -145,6 +146,26 @@ export function SettingsPanel({
             }
           />
           <span className="text-sm font-medium text-neutral-700">Burn subtitles</span>
+        </label>
+
+        <label className="flex flex-col gap-2 md:col-span-2">
+          <span className="text-sm font-medium text-neutral-700">Short overlay title</span>
+          <select
+            className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+            disabled={disabled}
+            value={settings.shortOverlayTitleMode}
+            onChange={(event) =>
+              onChange({
+                ...settings,
+                shortOverlayTitleMode: event.target.value as ClipSettings["shortOverlayTitleMode"]
+              })
+            }
+          >
+            <option value="auto">Auto</option>
+            <option value="always">Always</option>
+            <option value="high_quality_only">High quality only</option>
+            <option value="never">Never</option>
+          </select>
         </label>
 
         <details className="md:col-span-2">

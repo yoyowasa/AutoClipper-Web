@@ -348,6 +348,94 @@ def test_audit_warns_when_overlay_title_has_no_ass_title_event(tmp_path: Path) -
     assert "missing_ass_title_event" in short_clip["warnings"]
 
 
+def test_audit_does_not_warn_missing_ass_title_event_when_low_cost_overlay_disabled(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    (output_dir / "openai_scoring_summary.json").unlink()
+    short_metadata = json.loads((output_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))
+    short_metadata.update(
+        {
+            "overlay_title": "日本語タイトル",
+            "overlay_title_mode": "auto",
+            "overlay_title_expected": False,
+            "overlay_title_rendered": False,
+        }
+    )
+    write_json(output_dir / "shorts" / "short_01.json", short_metadata)
+    selected = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    selected["shorts"][0]["overlay_title"] = "日本語タイトル"
+    selected["shorts"][0]["overlay_title_mode"] = "auto"
+    selected["shorts"][0]["overlay_title_expected"] = False
+    selected["shorts"][0]["overlay_title_rendered"] = False
+    write_json(output_dir / "selected_clips.json", selected)
+    write_ass(output_dir / "shorts" / "short_01.ass", dense=False)
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+    short_clip = next(clip for clip in report["clips"] if clip["type"] == "short")
+
+    assert short_clip["overlay_title_expected"] is False
+    assert short_clip["overlay_title_rendered"] is False
+    assert short_clip["overlay_title_not_rendered"] is True
+    assert "missing_ass_title_event" not in short_clip["warnings"]
+    assert "missing_overlay_title" not in short_clip["warnings"]
+
+
+def test_audit_warns_when_overlay_title_expected_but_missing(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    short_metadata = json.loads((output_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))
+    short_metadata["overlay_title_expected"] = True
+    write_json(output_dir / "shorts" / "short_01.json", short_metadata)
+    selected = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    selected["shorts"][0]["overlay_title_expected"] = True
+    write_json(output_dir / "selected_clips.json", selected)
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+    short_clip = next(clip for clip in report["clips"] if clip["type"] == "short")
+
+    assert "missing_overlay_title" in short_clip["warnings"]
+
+
+def test_audit_warns_title_subtitle_overlap_when_title_event_exists(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    short_metadata = json.loads((output_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))
+    short_metadata.update(
+        {
+            "overlay_title": "日本語タイトル",
+            "overlay_title_expected": True,
+            "overlay_title_rendered": True,
+        }
+    )
+    write_json(output_dir / "shorts" / "short_01.json", short_metadata)
+    selected = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    selected["shorts"][0]["overlay_title"] = "日本語タイトル"
+    selected["shorts"][0]["overlay_title_expected"] = True
+    selected["shorts"][0]["overlay_title_rendered"] = True
+    write_json(output_dir / "selected_clips.json", selected)
+    (output_dir / "shorts" / "short_01.ass").write_text(
+        "[Script Info]\n"
+        "PlayResY: 1920\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Subtitle,Noto Sans CJK JP,76,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,1,5,2,2,86,86,800,1\n"
+        "Style: Title,Noto Sans CJK JP,88,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        "1,0,0,0,100,100,0,0,1,5,2,8,86,86,800,1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 1,0:00:00.00,0:00:10.00,Title,,0,0,0,,日本語タイトル\n"
+        "Dialogue: 0,0:00:01.00,0:00:03.00,Subtitle,,0,0,0,,日本語字幕\n",
+        encoding="utf-8",
+    )
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+    short_clip = next(clip for clip in report["clips"] if clip["type"] == "short")
+
+    assert "title_subtitle_vertical_overlap" in short_clip["warnings"]
+
+
 def test_audit_does_not_report_missing_title_when_fallback_title_exists(tmp_path: Path) -> None:
     output_dir = write_audit_job(tmp_path, "job_audit")
     selected = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
