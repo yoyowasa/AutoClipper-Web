@@ -72,16 +72,54 @@ export type JobStatusResponse = {
 export type ResultExportItem = {
   id: string;
   type: ExportType;
+  candidateId: string | null;
   title: string;
+  titleSource: string | null;
   duration: number;
   score: number;
+  finalScore: number | null;
+  ruleScore: number | null;
+  aiScore: number | null;
+  selectionReason: string | null;
+  belowQualityThreshold: boolean | null;
+  qualityWarning: string | null;
+  openaiScoreSource: string | null;
+  boundaryRefined: boolean | null;
+  overlayTitleExpected: boolean | null;
+  overlayTitleRendered: boolean | null;
+  start: number | null;
+  end: number | null;
+  originalStart: number | null;
+  originalEnd: number | null;
+  refinedStart: number | null;
+  refinedEnd: number | null;
+  resolution: {
+    width?: number | null;
+    height?: number | null;
+    source?: string | null;
+  } | null;
+  auditWarnings: string[];
+  subtitlePath: string | null;
+  subtitleUrl: string | null;
+  metadataPath: string | null;
+  metadataUrl: string | null;
   videoUrl: string;
   downloadUrl: string;
+};
+
+export type JobAuditSummary = {
+  available: boolean;
+  generatedNormalCount: number | null;
+  generatedShortCount: number | null;
+  clipsRequiringHumanVisualInspectionCount: number | null;
+  warningsByType: Record<string, Record<string, number>>;
+  warningCounts: Record<string, number>;
 };
 
 export type JobResultsResponse = {
   jobId: string;
   zipDownloadUrl: string;
+  auditSummary: JobAuditSummary | null;
   normalClips: ResultExportItem[];
   shorts: ResultExportItem[];
 };

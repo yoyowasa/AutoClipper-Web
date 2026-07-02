@@ -167,6 +167,8 @@ Read results:
 curl.exe http://localhost:8000/api/jobs/JOB_ID_FROM_CREATE/results
 ```
 
+The results response includes per-clip metadata when available: title source, scores, selection reason, boundary refinement status, resolution, audit warnings, subtitle link, and metadata JSON link. If `audit/output_audit_report.json` exists for the job, the response also includes `auditSummary`.
+
 For a full real-content E2E, use a short video that has audible speech. A generated tone-only smoke video is useful for upload/probe checks, but may not produce usable clips because candidate generation depends on transcript and speech features.
 
 ## Real Sample Video E2E

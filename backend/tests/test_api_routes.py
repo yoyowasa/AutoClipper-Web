@@ -1,5 +1,6 @@
 from collections.abc import Generator
 from datetime import timedelta
+import json
 from pathlib import Path
 
 import pytest
@@ -355,10 +356,75 @@ def test_results_zip_download_and_export_download(client: TestClient) -> None:
     job_output_dir.mkdir(parents=True, exist_ok=True)
     normal_path = job_output_dir / "normal.mp4"
     short_path = job_output_dir / "short.mp4"
+    normal_metadata_path = job_output_dir / "normal.json"
+    normal_subtitle_path = job_output_dir / "normal.ass"
     zip_path = job_output_dir / "download.zip"
     normal_path.write_bytes(b"normal mp4")
     short_path.write_bytes(b"short mp4")
+    normal_subtitle_path.write_text("[Script Info]\n", encoding="utf-8")
+    normal_metadata_path.write_text(
+        json.dumps(
+            {
+                "title_source": "transcript_fallback",
+                "start": 12.5,
+                "end": 133.0,
+                "original_start": 13.0,
+                "original_end": 132.0,
+                "refined_start": 12.5,
+                "refined_end": 133.0,
+                "boundary_refined": True,
+                "score": 84.0,
+                "subtitle_path": str(normal_subtitle_path),
+            }
+        ),
+        encoding="utf-8",
+    )
     zip_path.write_bytes(b"zip bytes")
+    (job_output_dir / "audit").mkdir()
+    (job_output_dir / "selected_clips.json").write_text(
+        json.dumps(
+            {
+                "normalClips": [
+                    {
+                        "id": "cand_normal",
+                        "type": "normal",
+                        "rule_score": 70.0,
+                        "ai_score": 84.0,
+                        "final_score": 84.0,
+                        "selection_reason": "above_quality_threshold",
+                        "below_quality_threshold": False,
+                        "quality_warning": None,
+                        "openai_score_source": "finalist_on_demand",
+                        "boundary_refined": True,
+                    }
+                ],
+                "shorts": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (job_output_dir / "audit" / "output_audit_report.json").write_text(
+        json.dumps(
+            {
+                "aggregate_summary": {
+                    "generated_normal_count": 1,
+                    "generated_short_count": 1,
+                    "clips_requiring_human_visual_inspection_count": 1,
+                    "warnings_by_type": {"normal": {"likely_abrupt_start": 1}},
+                },
+                "clips": [
+                    {
+                        "id": "cand_normal",
+                        "type": "normal",
+                        "resolution": {"width": 1280, "height": 720},
+                        "warnings": ["likely_abrupt_start"],
+                        "final_score": 84.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     with next(app.dependency_overrides[get_db]()) as db:
         video = db.get(Video, upload["videoId"])
@@ -369,12 +435,14 @@ def test_results_zip_download_and_export_download(client: TestClient) -> None:
                     id="exp_normal",
                     job_id=created["jobId"],
                     video_id=video.id,
-                    candidate_id=None,
+                    candidate_id="cand_normal",
                     type="normal",
                     title="Normal Clip",
                     duration=120.5,
                     score=84.0,
                     video_path=str(normal_path),
+                    subtitle_path=str(normal_subtitle_path),
+                    metadata_path=str(normal_metadata_path),
                 ),
                 ExportItem(
                     id="exp_short",
@@ -397,7 +465,20 @@ def test_results_zip_download_and_export_download(client: TestClient) -> None:
     results = results_response.json()
     assert results["jobId"] == created["jobId"]
     assert results["zipDownloadUrl"] == f"/api/jobs/{created['jobId']}/download.zip"
+    assert results["auditSummary"]["warningCounts"]["likely_abrupt_start"] == 1
     assert results["normalClips"][0]["downloadUrl"] == "/api/exports/exp_normal/download"
+    assert results["normalClips"][0]["candidateId"] == "cand_normal"
+    assert results["normalClips"][0]["titleSource"] == "transcript_fallback"
+    assert results["normalClips"][0]["finalScore"] == 84.0
+    assert results["normalClips"][0]["ruleScore"] == 70.0
+    assert results["normalClips"][0]["aiScore"] == 84.0
+    assert results["normalClips"][0]["selectionReason"] == "above_quality_threshold"
+    assert results["normalClips"][0]["openaiScoreSource"] == "finalist_on_demand"
+    assert results["normalClips"][0]["boundaryRefined"] is True
+    assert results["normalClips"][0]["resolution"] == {"width": 1280, "height": 720}
+    assert results["normalClips"][0]["auditWarnings"] == ["likely_abrupt_start"]
+    assert results["normalClips"][0]["subtitleUrl"] == "/api/exports/exp_normal/subtitle"
+    assert results["normalClips"][0]["metadataUrl"] == "/api/exports/exp_normal/metadata"
     assert results["shorts"][0]["videoUrl"] == "/api/exports/exp_short/download"
 
     zip_response = client.get(f"/api/jobs/{created['jobId']}/download.zip")
@@ -407,6 +488,14 @@ def test_results_zip_download_and_export_download(client: TestClient) -> None:
     normal_download = client.get("/api/exports/exp_normal/download")
     assert normal_download.status_code == 200
     assert normal_download.content == b"normal mp4"
+
+    metadata_download = client.get("/api/exports/exp_normal/metadata")
+    assert metadata_download.status_code == 200
+    assert metadata_download.json()["boundary_refined"] is True
+
+    subtitle_download = client.get("/api/exports/exp_normal/subtitle")
+    assert subtitle_download.status_code == 200
+    assert b"Script Info" in subtitle_download.content
 
     short_download = client.get("/api/exports/exp_short/download")
     assert short_download.status_code == 200

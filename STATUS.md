@@ -2646,3 +2646,68 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - 新規の実動画 render E2E は未実行。既存 58分 low_cost artifact の audit再実行で Task 37 の主目的は確認済み。
 - high_quality overlay title smoke は実動画では未実行。unit/script tests で policy と ASS title event 条件を確認済み。
+
+## 2026-07-02 Task 38: Display clip metadata and audit warnings in results UI
+
+### 目的
+
+- results UI を品質確認に使えるように、clip metadata と audit warning を表示する。
+- 手動 trimming、approve/reject、subtitle editing、candidate selection、scoring、rendering は変更しない。
+
+### 変更ファイル
+
+- `backend/app/api/jobs.py`
+- `backend/app/api/exports.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_api_routes.py`
+- `frontend/app/results/[jobId]/page.tsx`
+- `frontend/components/ResultVideoCard.tsx`
+- `frontend/lib/types.ts`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `GET /api/jobs/{job_id}/results` に clip metadata を追加。
+  - `candidateId`
+  - `titleSource`
+  - `finalScore`
+  - `ruleScore`
+  - `aiScore`
+  - `selectionReason`
+  - `belowQualityThreshold`
+  - `qualityWarning`
+  - `openaiScoreSource`
+  - `boundaryRefined`
+  - `overlayTitleExpected`
+  - `overlayTitleRendered`
+  - `start` / `end` / `originalStart` / `originalEnd` / `refinedStart` / `refinedEnd`
+  - `resolution`
+  - `auditWarnings`
+  - `subtitlePath` / `subtitleUrl`
+  - `metadataPath` / `metadataUrl`
+- `audit/output_audit_report.json` が存在する場合、results response に `auditSummary` を追加。
+- `GET /api/exports/{export_id}/metadata` を追加。
+- `GET /api/exports/{export_id}/subtitle` を追加。
+- results page に job-level audit summary を表示。
+- result card に title、duration、score、warning badges、title source、score source、boundary refined、short overlay title status を表示。
+- card details に range、original range、selection reason、quality warning、subtitle path、metadata/subtitle links を表示。
+
+### 検証結果
+
+- targeted backend tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_api_routes.py tests\test_render_normal_selected.py tests\test_short_rendering.py`: 24 passed。
+- targeted backend ruff:
+  - `..\.venv\Scripts\python -m ruff check app\api\jobs.py app\api\exports.py app\schemas.py tests\test_api_routes.py`: All checks passed。
+- frontend checks:
+  - `npm run typecheck`: pass。
+  - `npm run lint`: pass。
+- backend CI checks:
+  - `..\.venv\Scripts\python -m ruff check .`: All checks passed。
+  - `..\.venv\Scripts\python -m pytest`: 182 passed, 1 skipped。
+- frontend build:
+  - `npm run build`: pass。
+
+### 未解決事項
+
+- audit warning は `audit/output_audit_report.json` が存在する場合だけ results API に出る。HTTP handler 内で重い audit/ffprobe は実行しない。
