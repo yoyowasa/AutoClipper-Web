@@ -155,15 +155,52 @@ class ExportItemRead(BaseModel):
 class ResultExportItem(BaseModel):
     id: str
     type: ExportType
+    candidate_id: str | None = Field(default=None, alias="candidateId")
     title: str
+    title_source: str | None = Field(default=None, alias="titleSource")
     duration: float
     score: float
+    final_score: float | None = Field(default=None, alias="finalScore")
+    rule_score: float | None = Field(default=None, alias="ruleScore")
+    ai_score: float | None = Field(default=None, alias="aiScore")
+    selection_reason: str | None = Field(default=None, alias="selectionReason")
+    below_quality_threshold: bool | None = Field(default=None, alias="belowQualityThreshold")
+    quality_warning: str | None = Field(default=None, alias="qualityWarning")
+    openai_score_source: str | None = Field(default=None, alias="openaiScoreSource")
+    boundary_refined: bool | None = Field(default=None, alias="boundaryRefined")
+    overlay_title_expected: bool | None = Field(default=None, alias="overlayTitleExpected")
+    overlay_title_rendered: bool | None = Field(default=None, alias="overlayTitleRendered")
+    start: float | None = None
+    end: float | None = None
+    original_start: float | None = Field(default=None, alias="originalStart")
+    original_end: float | None = Field(default=None, alias="originalEnd")
+    refined_start: float | None = Field(default=None, alias="refinedStart")
+    refined_end: float | None = Field(default=None, alias="refinedEnd")
+    resolution: dict[str, Any] | None = None
+    audit_warnings: list[str] = Field(default_factory=list, alias="auditWarnings")
+    subtitle_path: str | None = Field(default=None, alias="subtitlePath")
+    subtitle_url: str | None = Field(default=None, alias="subtitleUrl")
+    metadata_path: str | None = Field(default=None, alias="metadataPath")
+    metadata_url: str | None = Field(default=None, alias="metadataUrl")
     video_url: str = Field(alias="videoUrl")
     download_url: str = Field(alias="downloadUrl")
+
+
+class JobAuditSummary(BaseModel):
+    available: bool = True
+    generated_normal_count: int | None = Field(default=None, alias="generatedNormalCount")
+    generated_short_count: int | None = Field(default=None, alias="generatedShortCount")
+    clips_requiring_human_visual_inspection_count: int | None = Field(
+        default=None,
+        alias="clipsRequiringHumanVisualInspectionCount",
+    )
+    warnings_by_type: dict[str, dict[str, int]] = Field(default_factory=dict, alias="warningsByType")
+    warning_counts: dict[str, int] = Field(default_factory=dict, alias="warningCounts")
 
 
 class JobResultsResponse(BaseModel):
     job_id: str = Field(alias="jobId")
     zip_download_url: str = Field(alias="zipDownloadUrl")
+    audit_summary: JobAuditSummary | None = Field(default=None, alias="auditSummary")
     normal_clips: list[ResultExportItem] = Field(alias="normalClips")
     shorts: list[ResultExportItem]
