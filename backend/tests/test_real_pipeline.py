@@ -392,9 +392,15 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     selected_short = selected_payload["shorts"][0]
     assert selected_normal["title"]
     assert selected_normal["title_source"] == "transcript_fallback"
+    assert selected_normal["original_start"] is not None
+    assert selected_normal["refined_start"] is not None
+    assert selected_normal["boundary_refined"] is not None
     assert selected_short["title"]
     assert selected_short["overlay_title"]
     assert selected_short["title_source"] == "transcript_fallback"
+    assert selected_short["original_start"] is not None
+    assert selected_short["refined_start"] is not None
+    assert selected_short["boundary_refined"] is not None
     transcript_summary = json.loads((job_dir / "transcript_summary.json").read_text(encoding="utf-8"))
     assert transcript_summary["segment_count"] == 4
     assert transcript_summary["total_text_length"] > 20
@@ -421,9 +427,13 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert len(selected_summary["selected_ids"]) == 2
     assert selected_summary["normal"][0]["title"]
     assert selected_summary["normal"][0]["title_source"] == "transcript_fallback"
+    assert selected_summary["normal"][0]["original_start"] is not None
+    assert selected_summary["normal"][0]["refined_start"] is not None
     assert selected_summary["shorts"][0]["title"]
     assert selected_summary["shorts"][0]["overlay_title"]
     assert selected_summary["shorts"][0]["title_source"] == "transcript_fallback"
+    assert selected_summary["shorts"][0]["original_start"] is not None
+    assert selected_summary["shorts"][0]["refined_start"] is not None
     assert all(path["video_path"] for path in selected_summary["output_paths"].values())
 
     rejection_summary = json.loads((job_dir / "rejection_summary.json").read_text(encoding="utf-8"))
@@ -439,10 +449,14 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     short_metadata = json.loads((job_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))
     assert normal_metadata["title"]
     assert normal_metadata["title_source"] == "transcript_fallback"
+    assert normal_metadata["original_start"] is not None
+    assert normal_metadata["refined_start"] is not None
     assert normal_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/normal/normal_01.ass")
     assert short_metadata["title"]
     assert short_metadata["overlay_title"]
     assert short_metadata["title_source"] == "transcript_fallback"
+    assert short_metadata["original_start"] is not None
+    assert short_metadata["refined_start"] is not None
     assert short_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/shorts/short_01.ass")
 
     zip_path = storage.zip_path(created["jobId"])

@@ -2457,3 +2457,121 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - 既存の生成済みjobは旧レイアウトの `.ass` が残るため、再生成しない限りプレイヤー自動読込リスクが残る。
 - 今回のsmokeではshortに `missing_ass_title_event=2` が残る。二重字幕原因ではないため、overlay title burn-in側の別件として扱う。
+
+## 2026-07-02 Task 36: Improve abrupt start and end boundaries
+
+### 目的
+
+- selected clip の start/end を render 前に保守的に補正し、会話途中で始まる/終わる出力を減らす。
+- scoring weights、hard gates、OpenAI scoring、title fallback、subtitle layout、subtitle sidecar layout、manual review UI、approve/reject workflow は変更しない。
+
+### 変更ファイル
+
+- `backend/app/candidates/boundary_refinement.py`
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/summaries.py`
+- `backend/app/render/render_normal.py`
+- `backend/app/render/render_short.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_boundary_refinement.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_render_normal_selected.py`
+- `backend/tests/test_short_rendering.py`
+- `frontend/lib/types.ts`
+- `frontend/components/SettingsPanel.tsx`
+- `scripts/audit_outputs.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `enableBoundaryRefinement` を追加。default `true`。
+- boundary 設定を追加。
+  - `boundaryLeadingPaddingSeconds`: `0.4`
+  - `boundaryTrailingPaddingSeconds`: `0.6`
+  - `maxBoundaryExpansionSeconds`: `3`
+  - `allowBoundaryExpansionBeyondMaxDuration`: `false`
+- `selecting_clips` 後、render 前に selected candidate のみ boundary refinement を実行。
+- transcript segment start/end、弱い継続マーカー、scene boundary、隣接 silence interval を使って境界を補正。
+- `normalMinDuration` / `normalMaxDuration`、`shortMinDuration` / `shortMaxDuration` を維持。
+- selected clip / render metadata / summary / audit に以下を出力。
+  - `original_start`
+  - `original_end`
+  - `refined_start`
+  - `refined_end`
+  - `boundary_refined`
+  - `boundary_refinement_reason`
+  - `boundary_expansion_seconds`
+- `audit_outputs.py` は refined boundary を有効境界として扱い、original/refined range をレポートに出す。
+
+### 検証結果
+
+- targeted ruff:
+  - `..\.venv\Scripts\python -m ruff check app\candidates\boundary_refinement.py app\candidates\merge_boundaries.py app\jobs\runner.py app\jobs\summaries.py app\schemas.py app\render\render_normal.py app\render\render_short.py tests\test_boundary_refinement.py tests\test_audit_outputs_script.py tests\test_real_pipeline.py tests\test_render_normal_selected.py tests\test_short_rendering.py ..\scripts\audit_outputs.py`: All checks passed。
+- targeted tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_boundary_refinement.py tests\test_audit_outputs_script.py tests\test_real_pipeline.py tests\test_render_normal_selected.py tests\test_short_rendering.py`: 42 passed。
+- backend CI checks:
+  - `..\.venv\Scripts\python -m ruff check .`: All checks passed。
+  - `..\.venv\Scripts\python -m pytest`: 175 passed, 1 skipped。
+- frontend CI checks:
+  - `npm run lint`: pass。
+  - `npm run typecheck`: pass。
+  - `npm run build`: pass。
+- synthetic E2E:
+  - `python .\scripts\e2e_sample_video.py --start --duration 25 --timeout-seconds 300`: E2E PASSED。
+  - job: `job_ed6d1222e0994400ba75d621259d1eb0`
+  - output: short `1/1`, `1080x1920`
+  - `selected_clips.json` / `short_01.json` に boundary metadata が出力されることを確認。
+  - audit warning: `missing_ass_title_event=1`。boundary 起因ではなく low_cost overlay title 非焼き込みの既存警告。
+- docker compose rebuild:
+  - `docker compose up --build -d`: backend / worker / frontend を PR #13 ブランチのコードで再build。
+  - `docker compose ps`: backend / frontend / redis / worker 起動。
+  - `GET http://localhost:8000/health`: `ok`。
+- short real-video E2E:
+  - input: `C:\Users\peace.YAGURUMAGIKUHM\Desktop\解説_後藤直義、森川潤）.mp4`
+  - command: `python .\scripts\e2e_real_video.py --mode low_cost --normal-count 1 --short-count 2 --normal-min-duration 20 --normal-max-duration 120 --short-min-duration 20 --short-max-duration 75 --selection-policy fill_requested --timeout 1800`
+  - job: `job_5b228a81145b4422a4f3d2265541f2bc`
+  - result: `REAL VIDEO E2E PASSED`
+  - output: normal `1/1`, short `2/2`, render failures `0`
+  - shorts: all `1080x1920`
+  - ZIP size: `37600578` bytes
+  - runtime: total `197.578s`, transcription `115.390s`, candidate generation `26.406s`, normal render `2.047s`, short render `10.234s`
+  - boundary metadata: `original_start/end`, `refined_start/end`, `boundary_refined`, `boundary_refinement_reason`, `boundary_expansion_seconds` 出力確認。
+  - boundary refined: `2/3`
+  - `scripts/audit_outputs.py --job-id job_5b228a81145b4422a4f3d2265541f2bc --format both`: reports written。
+  - `scripts/check_subtitle_sidecar_risk.py --job-id job_5b228a81145b4422a4f3d2265541f2bc --json`: `risk_count=0`
+  - audit warnings: `likely_abrupt_start=1`, `likely_abrupt_ending=1`, `missing_ass_title_event=2`
+  - `missing_title=0`, `subtitle_too_dense=0`, `title_subtitle_overlap=0`, `external_subtitle_autoload_risk=0`
+- 58-minute real-video E2E:
+  - input: `C:\Users\peace.YAGURUMAGIKUHM\Desktop\【朝倉慶vs西田真澄】物価が牙をむく！？株高の代償…フジメディアHG大株主・ダルトンアクティビストが語るインフレの悲劇とは？【ReHacQ】 - ReHacQ−リハック−【公式】 (720p, h264).mp4`
+  - command: `python .\scripts\e2e_real_video.py --mode low_cost --normal-count 5 --short-count 10 --selection-policy fill_requested --timeout 14400`
+  - job: `job_e9a049ee5e3446c0b92943429fa8918a`
+  - result: `REAL VIDEO E2E PASSED`
+  - output: normal `5/5`, short `10/10`, render failures `0`
+  - shorts: all `1080x1920`
+  - normal durations: all within `90-600s`
+  - short durations: all within `20-75s`
+  - ZIP size: `388844740` bytes
+  - runtime: total `594.859s`, transcription `236.750s`, scene detection `105.500s`, candidate generation `66.860s`, normal render `64.859s`, short render `71.266s`, zip packaging `22.250s`
+  - candidate generation: chunks `12`, raw considered `500000`, kept `normal=600 / short=800`, peak memory `406.035MB`, memory guard `False`
+  - selected: normal `5/5`, short `10/10`, backfill `1`, overlap relaxed `0`
+  - boundary metadata: all `15/15` clips include original/refined boundary fields.
+  - boundary refined: `8/15`
+  - `scripts/audit_outputs.py --job-id job_e9a049ee5e3446c0b92943429fa8918a --format both`: reports written。
+  - `scripts/check_subtitle_sidecar_risk.py --job-id job_e9a049ee5e3446c0b92943429fa8918a --json`: `risk_count=0`
+  - audit warnings: `likely_abrupt_start=4`, `likely_abrupt_ending=1`, `subtitle_too_dense=2`, `missing_ass_title_event=10`, `below_quality_threshold=1`, `backfilled_clip=1`
+  - `missing_title=0`, `title_subtitle_overlap=0`, `external_subtitle_autoload_risk=0`
+- 58-minute before/after comparison:
+  - before reference: `job_e6369a199f9945d7bdbef9f5bad5bb32`
+  - before abrupt warnings: `likely_abrupt_start=1`, `likely_abrupt_ending=7`, total `8`
+  - after abrupt warnings: `likely_abrupt_start=4`, `likely_abrupt_ending=1`, total `5`
+  - 判断: end boundary は大きく改善。start warning は増えたが、合計 abrupt warning は減少。
+
+### 未解決事項
+
+- 58分auditで残った `likely_abrupt_start=4` / `likely_abrupt_ending=1` はゼロではない。境界補正は保守的に維持し、過剰拡張はしない。
+- 58分auditで `subtitle_too_dense=2` が出たが、該当2clipはいずれも `boundary_refined=false`。Task36の境界補正起因ではないため、字幕密度側の別件として扱う。
+- low_cost shorts の `missing_ass_title_event` は overlay title burn-in 非使用の既存警告。Task36の境界補正対象外。
+- `scripts` 全体を ruff 対象に含めた追加確認では、今回未変更の `scripts/compare_runs.py` 既存長行で `E501` が出る。CI対象の `backend && ruff check .` は通過済み。

@@ -62,6 +62,13 @@ class Candidate(BaseModel):
     openai_fallback_used: bool | None = None
     openai_score_source: OpenAIScoreSource | None = None
     openai_not_scored_reason: str | None = None
+    original_start: float | None = Field(default=None, ge=0)
+    original_end: float | None = Field(default=None, ge=0)
+    refined_start: float | None = Field(default=None, ge=0)
+    refined_end: float | None = Field(default=None, ge=0)
+    boundary_refined: bool | None = None
+    boundary_refinement_reason: str | None = None
+    boundary_expansion_seconds: float | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_range(self) -> "Candidate":

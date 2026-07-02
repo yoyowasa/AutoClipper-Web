@@ -152,6 +152,9 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     normal_metadata = json.loads((normal_dir / "normal_01.json").read_text(encoding="utf-8"))
     assert normal_metadata["title"] == "First normal"
     assert normal_metadata["title_source"] == "existing"
+    assert "original_start" in normal_metadata
+    assert "refined_start" in normal_metadata
+    assert "boundary_refined" in normal_metadata
     assert normal_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/normal/normal_01.ass")
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")

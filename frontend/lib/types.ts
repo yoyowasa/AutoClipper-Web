@@ -29,6 +29,11 @@ export type ClipSettings = {
   crossTypeOverlapDedupe: boolean;
   ensureSelectedOpenAIScored?: boolean;
   openaiFinalistScoringLimit?: number;
+  enableBoundaryRefinement: boolean;
+  boundaryLeadingPaddingSeconds: number;
+  boundaryTrailingPaddingSeconds: number;
+  maxBoundaryExpansionSeconds: number;
+  allowBoundaryExpansionBeyondMaxDuration: boolean;
   burnSubtitles: boolean;
   maxCharsPerLineShort: number;
   maxCharsPerLineNormal: number;

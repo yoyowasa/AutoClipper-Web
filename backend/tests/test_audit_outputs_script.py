@@ -198,6 +198,41 @@ def test_audit_reports_no_sidecar_risk_for_separated_subtitle_layout(tmp_path: P
     assert normal_clip["external_subtitle_autoload_risk_files"] == []
 
 
+def test_audit_reports_refined_boundaries_without_abrupt_false_positive(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    selected = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    selected["normalClips"][0].update(
+        {
+            "start": 9.5,
+            "end": 90.0,
+            "duration": 80.5,
+            "original_start": 10.0,
+            "original_end": 90.0,
+            "refined_start": 9.5,
+            "refined_end": 90.0,
+            "boundary_refined": True,
+            "boundary_refinement_reason": "start_to_transcript_segment_start",
+            "boundary_expansion_seconds": 0.5,
+            "transcript_text": "自然な開始",
+            "transcript_char_count": 5,
+        }
+    )
+    write_json(output_dir / "selected_clips.json", selected)
+    write_json(
+        output_dir / "transcript_segments.json",
+        [{"start": 9.5, "end": 13.0, "text": "自然な開始"}],
+    )
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+    normal_clip = next(clip for clip in report["clips"] if clip["type"] == "normal")
+
+    assert normal_clip["original_start"] == 10.0
+    assert normal_clip["refined_start"] == 9.5
+    assert normal_clip["boundary_refined"] is True
+    assert normal_clip["boundary_refinement_reason"] == "start_to_transcript_segment_start"
+    assert "likely_abrupt_start" not in normal_clip["warnings"]
+
+
 def test_sidecar_risk_smoke_scan_reports_same_basename_subtitles(tmp_path: Path) -> None:
     output_dir = tmp_path / "storage" / "outputs" / "job_scan" / "shorts"
     output_dir.mkdir(parents=True)
