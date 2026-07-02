@@ -2729,3 +2729,61 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 ### 未解決事項
 
 - audit warning は `audit/output_audit_report.json` が存在する場合だけ results API に出る。HTTP handler 内で重い audit/ffprobe は実行しない。
+
+## 2026-07-03 Task 39 v1 release smoke checklist
+
+### 目的
+
+- v1 release 前の確認項目、実行順、合格条件を固定化する。
+- 実動画処理・selection・scoring・rendering の挙動は変更しない。
+
+### 変更ファイル
+
+- `docs/V1_RELEASE_CHECKLIST.md`
+- `scripts/v1_smoke_check.py`
+- `backend/tests/test_v1_smoke_check_script.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- v1 release smoke checklist を追加。
+  - `docker compose up -d --build`
+  - backend `/health`
+  - frontend reachable
+  - low_cost real-video E2E
+  - optional high_quality OpenAI smoke
+  - `audit_outputs.py`
+  - `check_subtitle_sidecar_risk.py`
+  - results UI
+  - metadata endpoint
+  - subtitle endpoint
+  - ZIP download
+- `scripts/v1_smoke_check.py` を追加。
+  - backend health / frontend reachability を確認。
+  - 任意 `--job-id` で results API、metadata、subtitle、MP4、ZIP、local sidecar risk を確認。
+  - `OPENAI_API_KEY` は要求しない。
+- README から v1 checklist と smoke helper に誘導。
+
+### 検証結果
+
+- script syntax/help:
+  - `python -m py_compile scripts\v1_smoke_check.py`: pass。
+  - `python .\scripts\v1_smoke_check.py --help`: pass。
+- targeted backend tests:
+  - `..\.venv\Scripts\python -m pytest tests\test_v1_smoke_check_script.py`: 5 passed。
+- backend CI checks:
+  - `..\.venv\Scripts\python -m ruff check .`: All checks passed。
+  - `..\.venv\Scripts\python -m pytest`: 187 passed, 1 skipped。
+- frontend CI checks:
+  - `npm run lint`: pass。
+  - `npm run typecheck`: pass。
+  - `npm run build`: pass。
+- docker runtime確認:
+  - `docker compose ps`: Docker Desktop daemon 未起動で失敗。
+  - error: `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine`。
+  - そのため、この変更ブランチでは runtime smoke / 実動画E2E は未実行。
+
+### 未解決事項
+
+- v1 smoke helper は実動画 E2E 自体は実行しない。実動画生成は既存 `scripts/e2e_real_video.py` を使う。

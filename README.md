@@ -132,6 +132,22 @@ Generated file:
 storage/temp/smoke_runtime/smoke.mp4
 ```
 
+For the v1 release smoke checklist, see:
+
+```text
+docs/V1_RELEASE_CHECKLIST.md
+```
+
+After a real-video E2E job completes, run the lightweight release smoke helper:
+
+```powershell
+python scripts/v1_smoke_check.py --job-id JOB_ID
+```
+
+This verifies backend health, frontend reachability, results metadata, subtitle
+and ZIP download endpoints, and local subtitle sidecar autoload risk. It does
+not require `OPENAI_API_KEY` by default.
+
 ## Upload A Small Test Video
 
 With the app running, open:
