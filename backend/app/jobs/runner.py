@@ -1477,6 +1477,8 @@ def run_autoclipper_job(
                 source_width=metadata.width,
                 source_height=metadata.height,
                 subtitle_settings=settings,
+                mode=settings.get("mode"),
+                short_overlay_title_mode=settings.get("shortOverlayTitleMode"),
             )
 
             render_failures_path = _write_json(

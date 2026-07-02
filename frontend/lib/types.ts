@@ -42,6 +42,7 @@ export type ClipSettings = {
   maxSubtitleDuration: number;
   minGapBetweenSubtitles: number;
   shortLayout: "auto" | "center_crop" | "blur_background";
+  shortOverlayTitleMode: "auto" | "always" | "high_quality_only" | "never";
 };
 
 export type VideoUploadResponse = {

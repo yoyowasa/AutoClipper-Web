@@ -592,6 +592,45 @@ def _has_generic_title(clip: dict[str, Any], metadata: dict[str, Any]) -> bool:
     return bool(GENERIC_TITLE_PATTERN.match(title))
 
 
+def _metadata_bool(clip: dict[str, Any], metadata: dict[str, Any], key: str) -> bool | None:
+    for source in (clip, metadata):
+        if key not in source:
+            continue
+        value = source.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes"}:
+                return True
+            if normalized in {"false", "0", "no"}:
+                return False
+    return None
+
+
+def _overlay_title_mode(clip: dict[str, Any], metadata: dict[str, Any]) -> str:
+    value = clip.get("overlay_title_mode") or metadata.get("overlay_title_mode") or "auto"
+    mode = str(value).strip()
+    return mode if mode in {"auto", "always", "high_quality_only", "never"} else "auto"
+
+
+def _overlay_title_expected(
+    clip: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    high_quality_mode: bool,
+) -> bool:
+    explicit = _metadata_bool(clip, metadata, "overlay_title_expected")
+    if explicit is not None:
+        return explicit
+    mode = _overlay_title_mode(clip, metadata)
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    return high_quality_mode
+
+
 def _likely_abrupt_start(clip: dict[str, Any], transcript: dict[str, Any]) -> bool:
     start = _number(clip.get("start"))
     first_segment_start = _number(transcript.get("first_segment_start"))
@@ -656,11 +695,13 @@ def _quality_warnings(
     elif clip_type == "short" and (probe.width, probe.height) != (1080, 1920):
         warnings.append("short_resolution_not_1080x1920")
     overlay_title = _plain_text(clip.get("overlay_title") or metadata.get("overlay_title"))
-    if clip_type == "short" and high_quality_mode and not overlay_title:
+    overlay_expected = _overlay_title_expected(clip, metadata, high_quality_mode=high_quality_mode)
+    title_dialogue_count = int(subtitle.get("title_dialogue_count", 0) or 0)
+    if clip_type == "short" and overlay_expected and not overlay_title:
         warnings.append("missing_overlay_title")
-    if clip_type == "short" and overlay_title and subtitle.get("title_dialogue_count", 0) <= 0:
+    if clip_type == "short" and overlay_expected and overlay_title and title_dialogue_count <= 0:
         warnings.append("missing_ass_title_event")
-    if clip_type == "short" and overlay_title and subtitle.get("title_subtitle_vertical_overlap"):
+    if clip_type == "short" and title_dialogue_count > 0 and subtitle.get("title_subtitle_vertical_overlap"):
         warnings.append("title_subtitle_vertical_overlap")
     if subtitle.get("subtitle_exists") and not subtitle.get("font_supports_japanese"):
         warnings.append("subtitle_font_missing_japanese_support")
@@ -698,6 +739,12 @@ def _clip_report(
     title = clip.get("title") or metadata.get("title")
     title_source = clip.get("title_source") or metadata.get("title_source")
     overlay_title = clip.get("overlay_title") or metadata.get("overlay_title")
+    overlay_title_mode = _overlay_title_mode(clip, metadata)
+    overlay_title_expected = _overlay_title_expected(clip, metadata, high_quality_mode=high_quality_mode)
+    overlay_title_rendered = _metadata_bool(clip, metadata, "overlay_title_rendered")
+    if overlay_title_rendered is None:
+        overlay_title_rendered = bool(subtitle.get("title_dialogue_count", 0))
+    overlay_title_not_rendered = bool(overlay_title and not overlay_title_rendered)
     duration = _number(clip.get("duration")) or probe.duration
     original_start = _first_number(clip.get("original_start"), metadata.get("original_start"))
     original_end = _first_number(clip.get("original_end"), metadata.get("original_end"))
@@ -748,6 +795,10 @@ def _clip_report(
         "subtitle": subtitle,
         "title": title,
         "overlay_title": overlay_title,
+        "overlay_title_expected": overlay_title_expected,
+        "overlay_title_rendered": overlay_title_rendered,
+        "overlay_title_mode": overlay_title_mode,
+        "overlay_title_not_rendered": overlay_title_not_rendered,
         "title_source": title_source,
         "metadata_path": metadata.get("_metadata_path"),
         "warnings": warnings,

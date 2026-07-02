@@ -26,6 +26,7 @@ ClipMode = Literal["low_cost", "fast", "high_quality"]
 ClipProfile = Literal["auto", "talk", "gameplay", "lecture"]
 ShortLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
 SelectionPolicy = Literal["fill_requested", "strict_quality"]
+ShortOverlayTitleMode = Literal["auto", "always", "high_quality_only", "never"]
 
 
 class VideoRead(BaseModel):
@@ -73,6 +74,7 @@ class JobSettings(BaseModel):
     min_gap_between_subtitles: float = Field(default=0.08, ge=0, alias="minGapBetweenSubtitles")
     normalize_audio: bool = Field(default=False, alias="normalizeAudio")
     short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
+    short_overlay_title_mode: ShortOverlayTitleMode = Field(default="auto", alias="shortOverlayTitleMode")
     selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
     cross_type_overlap_dedupe: bool = Field(default=False, alias="crossTypeOverlapDedupe")
     use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")

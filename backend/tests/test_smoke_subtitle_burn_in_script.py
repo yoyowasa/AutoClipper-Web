@@ -53,6 +53,7 @@ def test_parse_args_defaults() -> None:
     assert args.timeout == 1800
     assert args.extract_short_frames is True
     assert args.run_audit is True
+    assert args.short_overlay_title_mode == "auto"
 
 
 def test_host_path_from_artifact_resolves_container_storage(tmp_path: Path) -> None:
@@ -120,6 +121,34 @@ def test_apply_overlay_title_policy_can_require_or_force_titles() -> None:
     assert forced["shorts"][0]["overlay_title"] == "日本語タイトル01"
     assert forced["shorts"][1]["overlay_title"] == "日本語タイトル02"
     assert forced["shorts"][0]["source_overlay_title"] == "確認用タイトル"
+
+
+def test_overlay_title_expected_for_mode() -> None:
+    assert script.overlay_title_expected_for_mode(
+        mode="low_cost",
+        short_overlay_title_mode="auto",
+        require_overlay_title=False,
+    ) is False
+    assert script.overlay_title_expected_for_mode(
+        mode="high_quality",
+        short_overlay_title_mode="auto",
+        require_overlay_title=False,
+    ) is True
+    assert script.overlay_title_expected_for_mode(
+        mode="low_cost",
+        short_overlay_title_mode="always",
+        require_overlay_title=False,
+    ) is True
+    assert script.overlay_title_expected_for_mode(
+        mode="high_quality",
+        short_overlay_title_mode="never",
+        require_overlay_title=False,
+    ) is False
+    assert script.overlay_title_expected_for_mode(
+        mode="low_cost",
+        short_overlay_title_mode="never",
+        require_overlay_title=True,
+    ) is True
 
 
 def test_candidates_from_subset_and_container_output_path() -> None:

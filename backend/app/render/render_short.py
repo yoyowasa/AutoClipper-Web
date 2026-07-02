@@ -27,6 +27,8 @@ from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center, detect_faces_for_clip
 from app.video.probe import VideoMetadata, probe_metadata
 
+SHORT_OVERLAY_TITLE_MODES = {"auto", "always", "high_quality_only", "never"}
+
 
 @dataclass(frozen=True)
 class ShortRenderResult:
@@ -261,10 +263,37 @@ def _candidate_title(candidate: Candidate, index: int) -> str:
     return resolve_candidate_title(candidate, index=index).title
 
 
-def _overlay_title_for_burn(candidate: Candidate) -> str | None:
-    if candidate.title_source in {"openai", "existing"}:
-        return candidate.overlay_title
-    return ""
+def _setting_text(settings: SubtitleRenderSettings | dict[str, Any] | None, key: str) -> str | None:
+    if isinstance(settings, dict):
+        value = settings.get(key)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def _normalize_overlay_title_mode(value: str | None) -> str:
+    mode = (value or "auto").strip()
+    return mode if mode in SHORT_OVERLAY_TITLE_MODES else "auto"
+
+
+def _render_mode(settings: SubtitleRenderSettings | dict[str, Any] | None, explicit_mode: str | None) -> str:
+    return (explicit_mode or _setting_text(settings, "mode") or "high_quality").strip()
+
+
+def _overlay_title_expected(*, mode: str, overlay_title_mode: str) -> bool:
+    if overlay_title_mode == "always":
+        return True
+    if overlay_title_mode == "never":
+        return False
+    if overlay_title_mode in {"auto", "high_quality_only"}:
+        return mode == "high_quality"
+    return mode == "high_quality"
+
+
+def _overlay_title_for_burn(candidate: Candidate, *, expected: bool, fallback_title: str) -> str:
+    if not expected:
+        return ""
+    return (candidate.overlay_title or fallback_title).strip()
 
 
 def _write_export_metadata(
@@ -275,6 +304,9 @@ def _write_export_metadata(
     video_path: Path,
     subtitle_path: Path | None,
     strategy: str | None,
+    overlay_title_expected: bool,
+    overlay_title_rendered: bool,
+    overlay_title_mode: str,
 ) -> Path:
     path.write_text(
         json.dumps(
@@ -284,6 +316,9 @@ def _write_export_metadata(
                 "candidate_id": candidate.id,
                 "title": title,
                 "overlay_title": candidate.overlay_title,
+                "overlay_title_expected": overlay_title_expected,
+                "overlay_title_rendered": overlay_title_rendered,
+                "overlay_title_mode": overlay_title_mode,
                 "title_source": candidate.title_source,
                 "start": candidate.start,
                 "end": candidate.end,
@@ -347,12 +382,19 @@ def render_selected_short_candidates(
     source_width: int | None = None,
     source_height: int | None = None,
     subtitle_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
+    mode: str | None = None,
+    short_overlay_title_mode: str | None = None,
 ) -> ShortRenderBatchResult:
     storage_paths = paths or get_storage_paths()
     output_dir = shorts_output_dir(storage_paths, job.id)
     subtitle_dir = shorts_subtitle_dir(storage_paths, job.id)
     exports: list[ExportItem] = []
     failures: list[ShortRenderFailure] = []
+    resolved_mode = _render_mode(subtitle_settings, mode)
+    overlay_title_mode = _normalize_overlay_title_mode(
+        short_overlay_title_mode or _setting_text(subtitle_settings, "shortOverlayTitleMode")
+    )
+    overlay_expected = _overlay_title_expected(mode=resolved_mode, overlay_title_mode=overlay_title_mode)
 
     short_candidates = [candidate for candidate in selected_candidates if candidate.type == "short"]
     for index, candidate in enumerate(short_candidates, start=1):
@@ -364,6 +406,8 @@ def render_selected_short_candidates(
 
         try:
             title = _candidate_title(candidate, index)
+            top_title = _overlay_title_for_burn(candidate, expected=overlay_expected, fallback_title=title)
+            overlay_rendered = bool(burn_subtitles and top_title)
             if burn_subtitles:
                 subtitle_path = subtitle_dir / f"short_{index:02d}.ass"
                 write_ass_for_candidate(
@@ -371,7 +415,7 @@ def render_selected_short_candidates(
                     _subtitle_segments_for_candidate(candidate, transcript_segments),
                     subtitle_path,
                     layout=SubtitleLayout.short(settings=subtitle_settings),
-                    top_title=_overlay_title_for_burn(candidate),
+                    top_title=top_title,
                     subtitle_settings=subtitle_settings,
                 )
 
@@ -397,6 +441,9 @@ def render_selected_short_candidates(
                 video_path=rendered_path,
                 subtitle_path=subtitle_path,
                 strategy=render_result.strategy if isinstance(render_result, ShortRenderResult) else None,
+                overlay_title_expected=overlay_expected,
+                overlay_title_rendered=overlay_rendered,
+                overlay_title_mode=overlay_title_mode,
             )
 
             export = ExportItem(

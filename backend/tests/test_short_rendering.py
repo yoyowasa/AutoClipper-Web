@@ -304,6 +304,7 @@ def test_render_selected_short_candidates_writes_fallback_title_metadata(client:
             burn_subtitles=True,
             paths=storage,
             renderer=fake_renderer,
+            mode="low_cost",
         )
         exports = db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all()
 
@@ -314,7 +315,80 @@ def test_render_selected_short_candidates_writes_fallback_title_metadata(client:
     assert short_metadata["title"] == "インフレの見方が変わる重要な場面です"
     assert short_metadata["overlay_title"] == "インフレの見方が変わる重要な場面です"
     assert short_metadata["title_source"] == "transcript_fallback"
+    assert short_metadata["overlay_title_expected"] is False
+    assert short_metadata["overlay_title_rendered"] is False
+    assert short_metadata["overlay_title_mode"] == "auto"
     subtitle_dir = storage.outputs / created["jobId"] / "subtitles" / "shorts"
     assert not (shorts_dir / "short_01.ass").exists()
     ass_text = (subtitle_dir / "short_01.ass").read_text(encoding="utf-8")
     assert ",Title,," not in ass_text
+
+
+@pytest.mark.parametrize(
+    ("mode", "overlay_mode", "expect_title_event"),
+    [
+        ("high_quality", "auto", True),
+        ("low_cost", "always", True),
+        ("high_quality", "never", False),
+    ],
+)
+def test_render_selected_short_candidates_applies_overlay_title_policy(
+    client: TestClient,
+    mode: str,
+    overlay_mode: str,
+    expect_title_event: bool,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_renderer(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> ShortRenderResult:
+        Path(output_path).write_bytes(b"rendered short")
+        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+
+    candidate = Candidate(
+        id="cand_short_overlay_policy",
+        type="short",
+        start=0.0,
+        end=45.0,
+        duration=45.0,
+        transcript_text="投資判断が変わる場面です。",
+        title="投資判断の転換点",
+        overlay_title="投資判断の転換点",
+        final_score=82.0,
+    )
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        result = render_selected_short_candidates(
+            db=db,
+            job=job,
+            input_path=Path(storage.uploads) / "sample.mp4",
+            selected_candidates=[candidate],
+            burn_subtitles=True,
+            paths=storage,
+            renderer=fake_renderer,
+            mode=mode,
+            short_overlay_title_mode=overlay_mode,
+        )
+
+    assert len(result.exports) == 1
+    output_dir = storage.outputs / created["jobId"]
+    short_metadata = json.loads((output_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))
+    ass_text = (output_dir / "subtitles" / "shorts" / "short_01.ass").read_text(encoding="utf-8")
+
+    assert short_metadata["overlay_title_expected"] is expect_title_event
+    assert short_metadata["overlay_title_rendered"] is expect_title_event
+    assert short_metadata["overlay_title_mode"] == overlay_mode
+    assert (",Title,," in ass_text) is expect_title_event

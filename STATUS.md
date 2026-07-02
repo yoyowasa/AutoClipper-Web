@@ -2575,3 +2575,74 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 - 58分auditで `subtitle_too_dense=2` が出たが、該当2clipはいずれも `boundary_refined=false`。Task36の境界補正起因ではないため、字幕密度側の別件として扱う。
 - low_cost shorts の `missing_ass_title_event` は overlay title burn-in 非使用の既存警告。Task36の境界補正対象外。
 - `scripts` 全体を ruff 対象に含めた追加確認では、今回未変更の `scripts/compare_runs.py` 既存長行で `E501` が出る。CI対象の `backend && ruff check .` は通過済み。
+
+## 2026-07-02 Task 37: Clarify short overlay title policy and audit semantics
+
+### 目的
+
+- low_cost short で overlay title を metadata として持つが ASS に焼かないケースを正式な挙動として扱う。
+- `missing_ass_title_event` は overlay title burn-in が期待される場合だけ warning にする。
+- candidate selection、scoring、subtitle splitting、boundary refinement、manual review UI、approve/reject workflow は変更しない。
+
+### 変更ファイル
+
+- `backend/app/schemas.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/render/render_short.py`
+- `backend/tests/test_short_rendering.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `backend/tests/test_smoke_subtitle_burn_in_script.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `frontend/lib/types.ts`
+- `frontend/components/SettingsPanel.tsx`
+- `scripts/audit_outputs.py`
+- `scripts/e2e_real_video.py`
+- `scripts/smoke_subtitle_burn_in.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `shortOverlayTitleMode` を追加。
+  - `auto`
+  - `always`
+  - `high_quality_only`
+  - `never`
+- default は `auto`。
+  - `high_quality`: overlay title burn-in を期待。
+  - `low_cost`: overlay title は metadata に保持し、明示指定がなければ焼き込まない。
+- short metadata に以下を追加。
+  - `overlay_title_expected`
+  - `overlay_title_rendered`
+  - `overlay_title_mode`
+- `audit_outputs.py` は `overlay_title_expected=true` の場合だけ `missing_ass_title_event` を warning にする。
+- overlay title が存在するが意図的に焼かれていない場合は `overlay_title_not_rendered=true` として情報に残す。
+- smoke / E2E script に `--short-overlay-title-mode` を追加。
+- frontend settings に short overlay title mode の選択肢を追加。
+
+### 検証結果
+
+- targeted checks:
+  - `..\.venv\Scripts\python -m ruff check app\render\render_short.py app\jobs\runner.py app\schemas.py tests\test_short_rendering.py tests\test_audit_outputs_script.py tests\test_smoke_subtitle_burn_in_script.py tests\test_e2e_real_video_script.py ..\scripts\audit_outputs.py ..\scripts\smoke_subtitle_burn_in.py ..\scripts\e2e_real_video.py`: All checks passed。
+  - `..\.venv\Scripts\python -m pytest tests\test_short_rendering.py tests\test_audit_outputs_script.py tests\test_smoke_subtitle_burn_in_script.py tests\test_e2e_real_video_script.py`: 44 passed。
+- backend CI checks:
+  - `..\.venv\Scripts\python -m ruff check .`: All checks passed。
+  - `..\.venv\Scripts\python -m pytest`: 182 passed, 1 skipped。
+- frontend CI checks:
+  - `npm run lint`: pass。
+  - `npm run typecheck`: pass。
+  - `npm run build`: pass。
+- 既存58分 low_cost job audit再実行:
+  - job: `job_e9a049ee5e3446c0b92943429fa8918a`
+  - `..\.venv\Scripts\python ..\scripts\audit_outputs.py --job-id job_e9a049ee5e3446c0b92943429fa8918a --format both`
+  - generated clips: normal `5`, short `10`
+  - `missing_ass_title_event=0`
+  - short `overlay_title_not_rendered=10`
+  - short `overlay_title_expected=0`
+  - short `overlay_title_rendered=0`
+  - 判断: low_cost short で overlay title を metadata に持つが焼かないケースは warning ではなく情報として扱われる。
+
+### 未解決事項
+
+- 新規の実動画 render E2E は未実行。既存 58分 low_cost artifact の audit再実行で Task 37 の主目的は確認済み。
+- high_quality overlay title smoke は実動画では未実行。unit/script tests で policy と ASS title event 条件を確認済み。
