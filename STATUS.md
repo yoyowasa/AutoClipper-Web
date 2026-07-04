@@ -3036,3 +3036,61 @@ python .\scripts\e2e_real_video.py `
 - normal clip に品質警告が 1 件残るが、smoke profile で `normalMinDuration=20`, `normalMaxDuration=120` を指定した検証用条件のため、API 経路保証の blocker とは扱わない。
 - short crop / composition quality improvement は引き続き保留。
 - subtitle transcription accuracy tuning は未着手。
+
+## 2026-07-04 Task 41 short composition improvement
+
+### 目的
+
+- v1.0.0 後の v1.1 品質改善として、ショート動画の 9:16 クロップ判定を安全寄りに改善する。
+- 顔・人物検出シグナルが弱い場合は既存 fallback を維持する。
+- crop strategy の診断 metadata を残し、結果確認しやすくする。
+
+### 変更ファイル
+
+- `backend/app/render/crop_strategy.py`
+- `backend/app/render/render_short.py`
+- `backend/tests/test_short_rendering.py`
+
+### 変更内容
+
+- `CropPlan` を追加し、short render 前に crop strategy / signal source / confidence / fallback reason / crop x,y / detection count を決めるようにした。
+- 複数顔の横幅が 9:16 crop に収まらない場合は `blur_background` を優先する。
+- 顔シグナルが小さすぎる場合は `center_crop` fallback にする。
+- 顔が字幕安全領域に近い場合は、可能な範囲で crop center を上側に寄せる。
+- `short_XX.json` に以下を追加した。
+  - `crop_strategy`
+  - `crop_signal_source`
+  - `crop_confidence`
+  - `crop_fallback_reason`
+  - `crop_x`
+  - `crop_y`
+  - `crop_detection_count`
+  - `crop_attempted_strategies`
+
+### 検証結果
+
+- `cd backend && ..\.venv\Scripts\python -m ruff check app\render\crop_strategy.py app\render\render_short.py tests\test_short_rendering.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_short_rendering.py`: 12 passed。
+- `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 191 passed, 1 skipped。
+- `cd frontend && npm run lint`: pass。
+- `cd frontend && npm run typecheck`: pass。
+- `cd frontend && npm run build`: pass。
+- `docker compose up -d --build`: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+  - backend/frontend/redis/worker running。
+  - backend/worker DB and storage path match。
+  - backend/worker ffmpeg and ffprobe available。
+- `python scripts/e2e_sample_video.py`: pass。
+  - job: `job_befbb678ce10432f92e27ea41928f762`
+  - selected: normal 0/0, short 1/1。
+  - short output: `1080x1920`。
+  - render failures: 0。
+- `python scripts/check_subtitle_sidecar_risk.py --job-id job_befbb678ce10432f92e27ea41928f762 --json`: pass。
+  - `risk_count`: 0。
+
+### 未解決事項
+
+- 今回は安全な crop planning と診断 metadata の追加まで。
+- 人物ごと・台詞ごとの構図最適化は未実装。
+- 実写 58 分動画での構図主観評価は未実施。
