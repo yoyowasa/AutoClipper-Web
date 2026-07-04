@@ -110,22 +110,21 @@ def test_crop_strategy_filters_target_1080x1920() -> None:
 
 def test_face_center_and_strategy_order() -> None:
     detections = [
-        FaceDetection(start=0, end=0, center_x=0.2, center_y=0.5, width=0.1, height=0.1),
-        FaceDetection(start=1, end=1, center_x=0.8, center_y=0.5, width=0.3, height=0.3),
+        FaceDetection(start=1, end=1, center_x=0.55, center_y=0.5, width=0.2, height=0.2),
     ]
 
     center = best_face_center(detections)
 
     assert center is not None
-    assert center[0] > 0.7
+    assert center[0] > 0.5
     assert strategy_order("auto", detections=detections, source_width=1920, source_height=1080) == [
         "face_tracking_crop",
         "center_crop",
         "blur_background",
     ]
     assert strategy_order("auto", detections=[], source_width=1920, source_height=1080) == [
-        "center_crop",
         "blur_background",
+        "center_crop",
     ]
 
 
@@ -143,15 +142,53 @@ def test_short_crop_plan_uses_blur_background_for_wide_face_group() -> None:
     assert plan.detection_count == 2
 
 
-def test_short_crop_plan_weak_face_signal_uses_center_fallback() -> None:
+def test_short_crop_plan_weak_face_signal_uses_full_frame_fallback_for_landscape() -> None:
     detections = [
         FaceDetection(start=0, end=0, center_x=0.5, center_y=0.5, width=0.01, height=0.01),
     ]
 
     plan = plan_short_crop("auto", detections=detections, source_width=1920, source_height=1080)
 
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
+    assert plan.fallback_reason == "weak_face_signal"
+
+
+def test_short_crop_plan_no_face_landscape_uses_blur_background_before_center_crop() -> None:
+    plan = plan_short_crop("auto", detections=[], source_width=1920, source_height=1080)
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
+    assert plan.fallback_reason == "no_face_detections"
+    assert plan.confidence == 0.0
+    assert plan.detection_count == 0
+
+
+def test_short_crop_plan_no_face_portrait_keeps_center_crop_fallback() -> None:
+    plan = plan_short_crop("auto", detections=[], source_width=1080, source_height=1920)
+
     assert plan.strategy_order == ("center_crop", "blur_background")
     assert plan.signal_source == "center_fallback"
+    assert plan.fallback_reason == "no_face_detections"
+
+
+def test_short_crop_plan_forced_center_crop_keeps_center_first() -> None:
+    plan = plan_short_crop("center_crop", detections=[], source_width=1920, source_height=1080)
+
+    assert plan.strategy_order == ("center_crop", "blur_background")
+    assert plan.signal_source == "forced_layout"
+    assert plan.confidence == 1.0
+
+
+def test_short_crop_plan_forced_face_tracking_weak_signal_uses_safe_fallback() -> None:
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.5, center_y=0.5, width=0.01, height=0.01),
+    ]
+
+    plan = plan_short_crop("face_tracking_crop", detections=detections, source_width=1920, source_height=1080)
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
     assert plan.fallback_reason == "weak_face_signal"
 
 
@@ -243,6 +280,40 @@ def test_render_short_clip_records_composition_diagnostics(tmp_path: Path) -> No
     assert result.crop_signal_source == "face_detection"
     assert result.crop_fallback_reason == "face_group_too_wide_for_9x16_crop"
     assert result.crop_detection_count == 2
+    assert result.crop_attempted_strategies == ("blur_background",)
+    assert "gblur=sigma=24" in commands[0][commands[0].index("-vf") + 1]
+
+
+def test_render_short_clip_no_face_landscape_uses_blur_background(tmp_path: Path) -> None:
+    output_path = tmp_path / "short.mp4"
+    commands: list[list[str]] = []
+
+    def fake_face_detector(_input_path: str | Path, _start: float, _end: float) -> list[FaceDetection]:
+        return []
+
+    def fake_metadata_probe(_input_path: str | Path) -> VideoMetadata:
+        return VideoMetadata(duration=60.0, width=1920, height=1080, fps=30.0, has_audio=True)
+
+    def fake_runner(command: list[str]) -> None:
+        commands.append(command)
+        output_path.write_bytes(b"short mp4")
+
+    result = render_short_clip(
+        "input.mp4",
+        output_path,
+        start=0.0,
+        end=30.0,
+        layout="auto",
+        face_detector=fake_face_detector,
+        metadata_probe=fake_metadata_probe,
+        command_runner=fake_runner,
+    )
+
+    assert result.strategy == "blur_background"
+    assert result.crop_signal_source == "full_frame_fallback"
+    assert result.crop_fallback_reason == "no_face_detections"
+    assert result.crop_confidence == 0.0
+    assert result.crop_detection_count == 0
     assert result.crop_attempted_strategies == ("blur_background",)
     assert "gblur=sigma=24" in commands[0][commands[0].index("-vf") + 1]
 

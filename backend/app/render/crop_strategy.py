@@ -32,6 +32,36 @@ FACE_TARGET_Y = 0.42
 MIN_FACE_AREA = 0.002
 
 
+def _destructive_center_crop_risk(source_width: int | None, source_height: int | None) -> bool:
+    if source_width is None or source_height is None or source_width <= 0 or source_height <= 0:
+        return True
+    return (source_width / source_height) > (SHORT_WIDTH / SHORT_HEIGHT)
+
+
+def _no_subject_signal_plan(
+    fallback_reason: str,
+    source_width: int | None,
+    source_height: int | None,
+    detection_count: int = 0,
+    confidence: float = 0.0,
+) -> CropPlan:
+    if _destructive_center_crop_risk(source_width, source_height):
+        return CropPlan(
+            strategy_order=("blur_background", "center_crop"),
+            signal_source="full_frame_fallback",
+            confidence=confidence,
+            fallback_reason=fallback_reason,
+            detection_count=detection_count,
+        )
+    return CropPlan(
+        strategy_order=("center_crop", "blur_background"),
+        signal_source="center_fallback",
+        confidence=confidence,
+        fallback_reason=fallback_reason,
+        detection_count=detection_count,
+    )
+
+
 def _append_subtitles(video_filter: str, subtitle_path: str | Path | None) -> str:
     if subtitle_path is None:
         return video_filter
@@ -91,20 +121,20 @@ def _plan_face_tracking_crop(
     scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
     weighted_center = best_face_center(detections)
     if weighted_center is None:
-        return CropPlan(
-            strategy_order=("center_crop", "blur_background"),
-            signal_source="center_fallback",
-            fallback_reason="no_face_center",
+        return _no_subject_signal_plan(
+            "no_face_center",
+            source_width,
+            source_height,
             detection_count=len(detections),
         )
 
     dominant_area = _dominant_face_area(detections)
     if dominant_area < MIN_FACE_AREA:
-        return CropPlan(
-            strategy_order=("center_crop", "blur_background"),
-            signal_source="center_fallback",
+        return _no_subject_signal_plan(
+            "weak_face_signal",
+            source_width,
+            source_height,
             confidence=dominant_area / MIN_FACE_AREA,
-            fallback_reason="weak_face_signal",
             detection_count=len(detections),
         )
 
@@ -171,21 +201,21 @@ def plan_short_crop(
     if layout == "center_crop":
         return CropPlan(strategy_order=("center_crop", "blur_background"), signal_source="forced_layout", confidence=1.0)
     if source_width is None or source_height is None or source_width <= 0 or source_height <= 0:
-        return CropPlan(
-            strategy_order=("center_crop", "blur_background"),
-            signal_source="center_fallback",
-            fallback_reason="missing_source_dimensions",
+        return _no_subject_signal_plan(
+            "missing_source_dimensions",
+            source_width,
+            source_height,
             detection_count=len(detections or []),
         )
     if not detections:
-        return CropPlan(
-            strategy_order=("center_crop", "blur_background"),
-            signal_source="center_fallback",
-            fallback_reason="no_face_detections",
-        )
+        return _no_subject_signal_plan("no_face_detections", source_width, source_height)
 
     face_plan = _plan_face_tracking_crop(detections, source_width, source_height)
-    if layout == "face_tracking_crop" and face_plan.strategy_order[0] == "blur_background":
+    if (
+        layout == "face_tracking_crop"
+        and face_plan.strategy_order[0] == "blur_background"
+        and face_plan.fallback_reason == "face_group_too_wide_for_9x16_crop"
+    ):
         return CropPlan(
             strategy_order=("face_tracking_crop", "center_crop", "blur_background"),
             face_center=best_face_center(detections),
@@ -241,26 +271,18 @@ def strategy_order(
     source_width: int | None = None,
     source_height: int | None = None,
 ) -> list[CropStrategy]:
-    can_face_track = (
-        bool(detections)
-        and source_width is not None
-        and source_height is not None
-        and source_width > 0
-        and source_height > 0
-        and best_face_center(detections) is not None
-    )
     if layout == "blur_background":
         return ["blur_background"]
     if layout == "center_crop":
         return ["center_crop", "blur_background"]
-    if layout == "face_tracking_crop":
-        return ["face_tracking_crop", "center_crop", "blur_background"] if can_face_track else [
-            "center_crop",
-            "blur_background",
-        ]
-    if can_face_track:
-        return ["face_tracking_crop", "center_crop", "blur_background"]
-    return ["center_crop", "blur_background"]
+    return list(
+        plan_short_crop(
+            layout,
+            detections=detections,
+            source_width=source_width,
+            source_height=source_height,
+        ).strategy_order
+    )
 
 
 def build_crop_filter(

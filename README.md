@@ -746,6 +746,14 @@ Subtitle readability behavior:
 - Task 35 subtitle-only 58-minute smoke regenerated ASS files without re-rendering MP4 and reduced subtitle density warnings to normal `1`, short `0`.
 - Backend and worker containers install `fonts-noto-cjk`; generated ASS files use `Noto Sans CJK JP` so Japanese subtitles do not render as missing-glyph boxes.
 
+Short composition fallback behavior:
+
+- `shortLayout=auto` first uses reliable face tracking when face detections fit safely inside a 9:16 crop.
+- If face detections are too wide to fit a vertical crop, `blur_background` is preferred to preserve the full frame.
+- If no face is detected, source dimensions are missing, or the face signal is too weak on a landscape video, `blur_background` is preferred before `center_crop`.
+- Explicit `shortLayout=center_crop` still forces center crop first.
+- Short metadata records `crop_strategy`, `crop_signal_source`, `crop_confidence`, `crop_fallback_reason`, `crop_x`, `crop_y`, `crop_detection_count`, and `crop_attempted_strategies`.
+
 Subtitle burn-in smoke:
 
 ```powershell
