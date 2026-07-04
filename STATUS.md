@@ -2870,3 +2870,63 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 
 - high_quality OpenAI smoke は未実行。`OPENAI_API_KEY` は v1 smoke script 上では `false`。
 - no-audit 確認に使った `job_aeea2831f0d7486dac106cd9462a94fe` は古い sidecar 分離前の出力なので、sidecar risk は評価対象外。no-audit API semantics の確認のみに使用。
+
+## 2026-07-04 v1 implementation status confirmation
+
+### 確認日
+
+- 2026-07-04
+
+### 確認対象
+
+- main commit: `88d0a82`
+- current status branch: `codex/task-40-v1-release-smoke-execution`
+- Task 40 status commit: `e0e02ae`
+- base tag: `v0.20-v1-release-smoke-checklist`
+
+### 現時点の実装状態
+
+- v1 core implementation は release candidate 水準まで到達。
+- 実装済み:
+  - Next.js upload / job progress / results UI
+  - FastAPI upload / job / results / metadata / subtitle / MP4 / ZIP download API
+  - RQ worker / Redis / SQLite / local storage
+  - ffmpeg / ffprobe wrappers
+  - faster-whisper transcription
+  - feature extraction
+  - candidate generation
+  - rule scoring
+  - OpenAI Structured Outputs scoring
+  - hard gate / soft selection
+  - normal / short rendering
+  - ASS subtitle burn-in
+  - ZIP packaging
+  - diagnostics summaries
+  - long-video bounded candidate generation
+  - overlap diversity
+  - OpenAI finalist scoring
+  - title fallback
+  - subtitle readability
+  - Japanese subtitle burn-in
+  - subtitle sidecar separation
+  - boundary refinement
+  - overlay title policy
+  - output audit
+  - results metadata / audit warning display
+  - v1 release smoke checklist / script
+- 確認済み:
+  - Docker runtime smoke: pass
+  - sample upload/job lifecycle: pass
+  - generated short: `1080x1920`
+  - metadata / subtitle / MP4 / ZIP download: pass
+  - sidecar risk: 0
+  - PR #17 CI: backend / frontend pass
+
+### 残件
+
+- PR #17 を main に merge。
+- merge 後に main を pull。
+- `v1.0.0` または `v1.0.0-rc.1` tag を作成。
+- high_quality OpenAI smoke は今回未実行。
+- short crop / composition quality improvement は保留。
+- subtitle transcription accuracy tuning は未着手。
