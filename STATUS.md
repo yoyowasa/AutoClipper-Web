@@ -3036,3 +3036,141 @@ python .\scripts\e2e_real_video.py `
 - normal clip に品質警告が 1 件残るが、smoke profile で `normalMinDuration=20`, `normalMaxDuration=120` を指定した検証用条件のため、API 経路保証の blocker とは扱わない。
 - short crop / composition quality improvement は引き続き保留。
 - subtitle transcription accuracy tuning は未着手。
+
+## 2026-07-04 Task 42 Desktop app implementation candidates
+
+### 目的
+
+- AutoClipper Web を「ポチポチしたら使える」形へ近づけるため、デスクトップアプリ化の実装候補を整理する。
+- 現時点では実装しない。設計候補の保存のみ。
+
+### 前提
+
+- v1.0.0 は Web app + Docker runtime として成立済み。
+- 現行 runtime は backend / frontend / worker / redis / SQLite / local storage / ffmpeg / faster-whisper を Docker Compose で起動する。
+- いきなり完全同梱 `.exe` にするより、まず Docker Desktop 前提の Windows launcher が現実的。
+
+### 候補 A: Windows launcher + Docker Compose wrapper
+
+- 推奨度: 高
+- 位置づけ: 最初に作るべき App 化。
+- 方式:
+  - Windows launcher を起動。
+  - Docker Desktop 起動状態を確認。
+  - `docker compose up -d` を実行。
+  - backend `/health` を待つ。
+  - frontend `http://localhost:3000/upload` を開く。
+  - stop / restart / logs / outputs folder open をボタン化する。
+- UI:
+  - Start AutoClipper
+  - Open App
+  - Open Outputs
+  - Open Logs
+  - Stop Services
+  - Health Check
+- 技術候補:
+  - Python + pywebview
+  - Python + Tkinter
+  - PowerShell + WPF
+  - Tauri
+  - Electron
+- 長所:
+  - 既存 Docker runtime をそのまま使える。
+  - backend / worker / ffmpeg / faster-whisper の同梱問題を避けられる。
+  - 変更範囲が小さい。
+- 短所:
+  - Docker Desktop のインストールが前提。
+  - 初回 image build は時間がかかる。
+  - Docker daemon / port conflict / volume permission のエラー表示が必要。
+
+### 候補 B: Tauri desktop app
+
+- 推奨度: 中
+- 方式:
+  - Tauri の WebView で existing frontend を表示。
+  - Rust sidecar から `docker compose` を制御。
+  - app 内に health / logs / outputs 操作を置く。
+- 長所:
+  - Electron より軽い。
+  - Windows app として配布しやすい。
+  - Web UI を大きく作り直さずに使える。
+- 短所:
+  - Rust / Tauri 設定が増える。
+  - Docker 制御と path handling の検証が必要。
+  - 既存 Next.js dev/prod build の扱いを整理する必要がある。
+
+### 候補 C: Electron desktop app
+
+- 推奨度: 中
+- 方式:
+  - Electron BrowserWindow で `localhost:3000` を表示。
+  - Node subprocess から Docker Compose を起動/停止。
+  - menu / tray / logs viewer を作る。
+- 長所:
+  - Web UI との相性が高い。
+  - UI 実装が速い。
+  - Node/Next.js 周辺と統合しやすい。
+- 短所:
+  - app サイズが大きくなる。
+  - updater / installer / code signing を考える必要がある。
+  - Docker Desktop 前提は残る。
+
+### 候補 D: Full bundled desktop app
+
+- 推奨度: 低
+- 方式:
+  - Python backend / worker / Redis相当 / ffmpeg / model / frontend build を全部同梱。
+  - Docker Desktop なしで `.exe` から起動する。
+- 長所:
+  - ユーザー体験は最も分かりやすい。
+  - Docker Desktop が不要。
+- 短所:
+  - packaging が重い。
+  - faster-whisper model / ffmpeg / Redis / SQLite / background worker の同梱と更新が難しい。
+  - Windows Defender / path / permission / GPU/CPU依存の検証が重い。
+  - v1直後にやるにはリスクが高い。
+
+### 最短実装案
+
+1. `apps/desktop-launcher` または `launcher/` を追加。
+2. まず Python + pywebview で最小 launcher を作る。
+3. 機能は以下に限定。
+   - Docker Desktop 検出
+   - `docker compose up -d`
+   - `/health` wait
+   - Web UI open
+   - outputs folder open
+   - logs表示
+   - stop services
+4. `.env` の存在確認と `OPENAI_API_KEY` の有無表示を追加。
+5. `STATUS.md` と README に使い方を追加。
+6. その後、必要なら Tauri/Electron に移行する。
+
+### 初期スコープ外
+
+- 完全同梱 `.exe`
+- 自動アップデータ
+- code signing
+- SNS投稿
+- 認証/課金
+- cloud storage
+- manual trimming UI
+- approve/reject workflow
+
+### 次タスク候補
+
+- `Task 42a: Add Windows desktop launcher spec`
+  - launcher requirements
+  - UI actions
+  - error states
+  - packaging policy
+- `Task 42b: Implement minimal Windows desktop launcher`
+  - Docker Desktop prerequisite
+  - start/stop/open UI/open outputs/logs
+  - health check
+  - README/STATUS update
+
+### 判断
+
+- まずは 候補 A の Windows launcher + Docker Compose wrapper が妥当。
+- 目的は「完全な配布アプリ」ではなく、「コマンドを打たずに起動・確認・停止できる App 体験」を作ること。
