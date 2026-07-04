@@ -398,6 +398,24 @@ python scripts/e2e_real_video.py `
   --max-candidate-generation-memory-mb 9000
 ```
 
+For transcript correction tests, pass a JSON replacement dictionary:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_sample.mp4 `
+  --mode low_cost `
+  --transcript-replacements-json path\to\transcript_replacements.json
+```
+
+The JSON file must be an object:
+
+```json
+{
+  "オープンAI": "OpenAI",
+  "ニューズピックス": "NewsPicks"
+}
+```
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell
@@ -477,8 +495,10 @@ The script:
 Expected outputs:
 
 ```text
+storage/outputs/{job_id}/raw_transcript_segments.json
 storage/outputs/{job_id}/transcript_segments.json
 storage/outputs/{job_id}/transcript_summary.json
+storage/outputs/{job_id}/transcript_postprocess_summary.json
 storage/outputs/{job_id}/audio_feature_summary.json
 storage/outputs/{job_id}/candidate_generation_summary.json
 storage/outputs/{job_id}/candidate_summary.json
@@ -543,7 +563,15 @@ Troubleshooting:
     "boundaryLeadingPaddingSeconds": 0.4,
     "boundaryTrailingPaddingSeconds": 0.6,
     "maxBoundaryExpansionSeconds": 3,
-    "allowBoundaryExpansionBeyondMaxDuration": false
+    "allowBoundaryExpansionBeyondMaxDuration": false,
+    "enableTranscriptPostProcessing": true,
+    "transcriptNormalizeUnicode": true,
+    "transcriptNormalizeWhitespace": true,
+    "transcriptNormalizePunctuation": true,
+    "useDefaultTranscriptDictionary": true,
+    "transcriptReplacements": {
+      "オープンAI": "OpenAI"
+    }
   }
 }
 ```
@@ -575,6 +603,12 @@ Production-safe defaults remain:
 - `boundaryTrailingPaddingSeconds`: `0.6`
 - `maxBoundaryExpansionSeconds`: `3`
 - `allowBoundaryExpansionBeyondMaxDuration`: `false`
+- `enableTranscriptPostProcessing`: `true`
+- `transcriptNormalizeUnicode`: `true`
+- `transcriptNormalizeWhitespace`: `true`
+- `transcriptNormalizePunctuation`: `true`
+- `useDefaultTranscriptDictionary`: `true`
+- `transcriptReplacements`: `{}`
 
 For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.
 
@@ -595,6 +629,16 @@ Boundary refinement:
 - Keeps `normalMinDuration` / `normalMaxDuration` and `shortMinDuration` / `shortMaxDuration` unless `allowBoundaryExpansionBeyondMaxDuration=true`.
 - Selected clip metadata records `original_start`, `original_end`, `refined_start`, `refined_end`, `boundary_refined`, `boundary_refinement_reason`, and `boundary_expansion_seconds`.
 
+Transcript post-processing:
+
+- Runs after transcription and before transcript usability checks, candidate generation, scoring, and subtitle rendering.
+- Keeps the original faster-whisper output in `raw_transcript_segments.json`.
+- Writes corrected text to the existing `transcript_segments.json`.
+- Writes `transcript_postprocess_summary.json` with changed segment counts, before/after character counts, replacement counts, and normalization settings.
+- Default processing is local and deterministic: Unicode NFKC normalization, whitespace cleanup, repeated punctuation cleanup, and a conservative dictionary for common terms such as `OpenAI`, `ChatGPT`, `YouTube`, `NewsPicks`, and `ReHacQ`.
+- Add project-specific replacements with `transcriptReplacements`; this does not call OpenAI.
+- Disable with `enableTranscriptPostProcessing=false` when raw transcription text is needed for debugging.
+
 ## Generation Diagnostics
 
 Each completed or expected-failure job writes compact summary files under:
@@ -606,6 +650,7 @@ storage/outputs/{job_id}/
 Summary files:
 
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
+- `transcript_postprocess_summary.json`: transcript post-processing enablement, changed segment count, before/after character counts, replacement counts, and dictionary settings when transcription reached post-processing.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
 - `openai_scoring_summary.json`: model, initial candidate limit, finalist scoring limit, eligible/selected/sent counts, preselection/finalist counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, selected clip score source counts, and not-scored reasons.

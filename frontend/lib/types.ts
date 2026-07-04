@@ -43,6 +43,12 @@ export type ClipSettings = {
   minGapBetweenSubtitles: number;
   shortLayout: "auto" | "center_crop" | "blur_background";
   shortOverlayTitleMode: "auto" | "always" | "high_quality_only" | "never";
+  enableTranscriptPostProcessing?: boolean;
+  transcriptNormalizeUnicode?: boolean;
+  transcriptNormalizeWhitespace?: boolean;
+  transcriptNormalizePunctuation?: boolean;
+  useDefaultTranscriptDictionary?: boolean;
+  transcriptReplacements?: Record<string, string>;
 };
 
 export type VideoUploadResponse = {

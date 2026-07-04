@@ -3094,3 +3094,76 @@ python .\scripts\e2e_real_video.py `
 - 今回は安全な crop planning と診断 metadata の追加まで。
 - 人物ごと・台詞ごとの構図最適化は未実装。
 - 実写 58 分動画での構図主観評価は未実施。
+
+## 2026-07-04 Task 42 subtitle mistranscription post-processing
+
+### 目的
+
+- faster-whisper の根本精度変更ではなく、字幕に出る明らかな誤変換を後処理で軽減する。
+- 低リスクな正規化と辞書補正を、候補生成・字幕生成の前に適用する。
+- 元 transcript を失わず、補正内容を summary で追跡できるようにする。
+
+### 変更ファイル
+
+- `backend/app/audio/transcript_postprocess.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_transcript_postprocess.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_e2e_real_video_script.py`
+- `frontend/lib/types.ts`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- transcription 後に transcript post-processing を追加。
+- `raw_transcript_segments.json` に元 transcript を保存。
+- `transcript_segments.json` は補正後 transcript として保存。
+- `transcript_postprocess_summary.json` を追加。
+  - enabled
+  - changed segment count
+  - before/after chars
+  - replacement counts
+  - normalization settings
+- 既定のローカル補正を追加。
+  - Unicode NFKC
+  - whitespace 正規化
+  - 連続句読点の圧縮
+  - `OpenAI`, `ChatGPT`, `YouTube`, `NewsPicks`, `ReHacQ` などの保守的な辞書補正
+- API settings を追加。
+  - `enableTranscriptPostProcessing`
+  - `transcriptNormalizeUnicode`
+  - `transcriptNormalizeWhitespace`
+  - `transcriptNormalizePunctuation`
+  - `useDefaultTranscriptDictionary`
+  - `transcriptReplacements`
+- `scripts/e2e_real_video.py` に `--transcript-replacements-json` と postprocess on/off を追加。
+
+### 検証状況
+
+- `ruff` targeted: pass。
+- `pytest tests/test_transcript_postprocess.py tests/test_e2e_real_video_script.py`: 20 passed。
+- `pytest tests/test_real_pipeline.py`: 13 passed。
+- `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 198 passed, 1 skipped。
+- `cd frontend && npm run lint`: pass。
+- `cd frontend && npm run typecheck`: pass。
+- `cd frontend && npm run build`: pass。
+- `docker compose up -d --build`: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- `python scripts/e2e_sample_video.py`: pass。
+  - job: `job_cb173e6521db47b6a5f1e783d740ac64`
+  - `transcript_postprocess_summary.json`: enabled, changed_segments=0。
+  - selected: normal 0/0, short 1/1。
+  - short output: `1080x1920`。
+- `python scripts/check_subtitle_sidecar_risk.py --job-id job_cb173e6521db47b6a5f1e783d740ac64 --json`: pass。
+  - `risk_count`: 0。
+
+### 未解決事項
+
+- OpenAI による字幕校正は未実装。
+- 実動画の誤変換辞書は、実際の出力を見て追加する必要がある。
+- 58分実写での short composition 主観評価は、この Task 42 PR とは分けて実施する。

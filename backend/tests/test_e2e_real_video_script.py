@@ -41,6 +41,8 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.max_candidates_per_time_bucket is None
     assert args.candidate_time_bucket_seconds is None
     assert args.max_candidate_generation_memory_mb is None
+    assert args.enable_transcript_post_processing is None
+    assert args.transcript_replacements_json is None
 
     false_args = script.parse_args(["--video", "spoken.mp4", "--burn-subtitles", "false"])
     assert false_args.burn_subtitles is False
@@ -151,6 +153,7 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "75",
             "--short-overlay-title-mode",
             "always",
+            "--disable-transcript-post-processing",
             "--no-openai-fallback-to-rule-score",
             "--no-burn-subtitles",
         ]
@@ -178,6 +181,7 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["maxRawCandidatesPerType"] == 1000
     assert settings["maxKeptCandidatesPerType"] == 300
     assert settings["maxCandidatesPerTimeBucket"] == 25
+    assert settings["enableTranscriptPostProcessing"] is False
     assert settings["candidateTimeBucketSeconds"] == 120.0
     assert settings["maxCandidateGenerationMemoryMb"] == 2048
     assert settings["candidateChunkSeconds"] == 300.0
@@ -197,6 +201,27 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     )
     with pytest.raises(RuntimeError, match="normal-max-duration"):
         script.build_job_settings(invalid_args)
+
+
+def test_build_job_settings_loads_transcript_replacements_json(tmp_path: Path) -> None:
+    replacements_path = tmp_path / "replacements.json"
+    replacements_path.write_text(json.dumps({"オープンAI": "OpenAI"}), encoding="utf-8")
+
+    args = script.parse_args(
+        [
+            "--video",
+            "spoken.mp4",
+            "--enable-transcript-post-processing",
+            "true",
+            "--transcript-replacements-json",
+            str(replacements_path),
+        ]
+    )
+
+    settings = script.build_job_settings(args)
+
+    assert settings["enableTranscriptPostProcessing"] is True
+    assert settings["transcriptReplacements"] == {"オープンAI": "OpenAI"}
 
 
 def test_runtime_metrics_use_observed_status_transitions() -> None:
@@ -566,6 +591,20 @@ def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: py
         ),
         encoding="utf-8",
     )
+    (output_dir / "transcript_postprocess_summary.json").write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "changed_segment_count": 1,
+                "total_chars_before": 82,
+                "total_chars_after": 80,
+                "replacement_counts": {"オープンAI": 1},
+                "used_default_dictionary": True,
+                "custom_replacement_count": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     line = e2e_summary.summary_line(
         "transcript_summary.json",
@@ -580,6 +619,20 @@ def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: py
     )
     assert "segments=2" in line
     assert "engine=faster_whisper" in line
+    postprocess_line = e2e_summary.summary_line(
+        "transcript_postprocess_summary.json",
+        {
+            "enabled": True,
+            "changed_segment_count": 1,
+            "total_chars_before": 82,
+            "total_chars_after": 80,
+            "replacement_counts": {"オープンAI": 1},
+            "used_default_dictionary": True,
+            "custom_replacement_count": 0,
+        },
+    )
+    assert "changed_segments=1" in postprocess_line
+    assert "オープンAI" in postprocess_line
     openai_line = e2e_summary.summary_line(
         "openai_scoring_summary.json",
         {
@@ -627,5 +680,6 @@ def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: py
     e2e_summary.print_job_summaries(job_id, root=tmp_path)
     output = capsys.readouterr().out
     assert "transcript_summary.json: segments=2" in output
+    assert "transcript_postprocess_summary.json: enabled=True" in output
     assert "candidate_summary.json: total=12" in output
     assert "audio_feature_summary.json: missing" in output
