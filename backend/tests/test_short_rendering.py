@@ -18,6 +18,7 @@ from app.render.crop_strategy import (
     build_blur_background_filter,
     build_center_crop_filter,
     build_face_tracking_crop_filter,
+    build_subject_tracking_crop_filter,
     plan_short_crop,
     strategy_order,
 )
@@ -29,6 +30,7 @@ from app.render.render_short import (
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center
 from app.video.probe import VideoMetadata
+from app.video.subject_detect import SubjectDetection, estimate_subject_from_frames
 
 
 @pytest.fixture()
@@ -107,6 +109,12 @@ def test_crop_strategy_filters_target_1080x1920() -> None:
     assert "gblur=sigma=24" in blur_filter
     assert "ass='subtitles.ass'" in blur_filter
 
+    assert build_subject_tracking_crop_filter(
+        source_width=1920,
+        source_height=1080,
+        subject_center=(0.75, 0.5),
+    ) == "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:2020:0"
+
 
 def test_face_center_and_strategy_order() -> None:
     detections = [
@@ -162,6 +170,48 @@ def test_short_crop_plan_no_face_landscape_uses_blur_background_before_center_cr
     assert plan.fallback_reason == "no_face_detections"
     assert plan.confidence == 0.0
     assert plan.detection_count == 0
+
+
+def test_short_crop_plan_no_face_strong_subject_signal_uses_subject_tracking_crop() -> None:
+    subject = SubjectDetection(center_x=0.76, confidence=0.82, stability_score=0.91, sampled_frames=5)
+
+    plan = plan_short_crop("auto", detections=[], source_width=1920, source_height=1080, subject_signal=subject)
+
+    assert plan.strategy_order == ("subject_tracking_crop", "blur_background", "center_crop")
+    assert plan.signal_source == "motion_edge_saliency"
+    assert plan.fallback_reason == "no_face_subject_signal"
+    assert plan.subject_center is not None
+    assert plan.crop_x == 2054
+    assert plan.crop_y == 0
+    assert plan.sampled_frame_count == 5
+    assert plan.subject_x == 0.76
+    assert plan.stability_score == 0.91
+
+
+def test_short_crop_plan_no_face_weak_subject_signal_uses_blur_background() -> None:
+    subject = SubjectDetection(center_x=0.76, confidence=0.42, stability_score=0.91, sampled_frames=5)
+
+    plan = plan_short_crop("auto", detections=[], source_width=1920, source_height=1080, subject_signal=subject)
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
+    assert plan.fallback_reason == "weak_subject_signal"
+    assert plan.confidence == 0.42
+    assert plan.sampled_frame_count == 5
+    assert plan.subject_x == 0.76
+    assert plan.stability_score == 0.91
+
+
+def test_short_crop_plan_no_face_ambiguous_center_subject_signal_uses_blur_background() -> None:
+    subject = SubjectDetection(center_x=0.52, confidence=0.69, stability_score=0.76, sampled_frames=5)
+
+    plan = plan_short_crop("auto", detections=[], source_width=1920, source_height=1080, subject_signal=subject)
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
+    assert plan.fallback_reason == "ambiguous_subject_signal"
+    assert plan.confidence == 0.69
+    assert plan.subject_x == 0.52
 
 
 def test_short_crop_plan_no_face_portrait_keeps_center_crop_fallback() -> None:
@@ -318,6 +368,63 @@ def test_render_short_clip_no_face_landscape_uses_blur_background(tmp_path: Path
     assert "gblur=sigma=24" in commands[0][commands[0].index("-vf") + 1]
 
 
+def test_render_short_clip_no_face_strong_subject_signal_uses_subject_tracking_crop(tmp_path: Path) -> None:
+    output_path = tmp_path / "short.mp4"
+    commands: list[list[str]] = []
+
+    def fake_face_detector(_input_path: str | Path, _start: float, _end: float) -> list[FaceDetection]:
+        return []
+
+    def fake_subject_detector(_input_path: str | Path, _start: float, _end: float) -> SubjectDetection:
+        return SubjectDetection(center_x=0.74, confidence=0.84, stability_score=0.88, sampled_frames=5)
+
+    def fake_metadata_probe(_input_path: str | Path) -> VideoMetadata:
+        return VideoMetadata(duration=60.0, width=1920, height=1080, fps=30.0, has_audio=True)
+
+    def fake_runner(command: list[str]) -> None:
+        commands.append(command)
+        output_path.write_bytes(b"short mp4")
+
+    result = render_short_clip(
+        "input.mp4",
+        output_path,
+        start=0.0,
+        end=30.0,
+        layout="auto",
+        face_detector=fake_face_detector,
+        subject_detector=fake_subject_detector,
+        metadata_probe=fake_metadata_probe,
+        command_runner=fake_runner,
+    )
+
+    assert result.strategy == "subject_tracking_crop"
+    assert result.crop_signal_source == "motion_edge_saliency"
+    assert result.crop_fallback_reason == "no_face_subject_signal"
+    assert result.crop_confidence == 0.84
+    assert result.crop_sampled_frames == 5
+    assert result.crop_subject_x == 0.74
+    assert result.crop_stability_score == 0.88
+    assert result.crop_attempted_strategies == ("subject_tracking_crop",)
+    assert "crop=1080:1920:1986:0" in commands[0][commands[0].index("-vf") + 1]
+
+
+def test_subject_estimation_uses_off_center_motion_signal() -> None:
+    import numpy as np
+
+    frames = []
+    for offset in (0, 6, 12, 18):
+        frame = np.zeros((180, 320, 3), dtype=np.uint8)
+        frame[55:135, 215 + offset : 260 + offset] = 255
+        frames.append(frame)
+
+    signal = estimate_subject_from_frames(frames, max_width=320)
+
+    assert signal is not None
+    assert signal.center_x > 0.62
+    assert signal.confidence >= 0.5
+    assert signal.sampled_frames == 4
+
+
 def test_render_selected_short_candidates_creates_exports_visible_in_results(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",
@@ -407,6 +514,9 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert short_metadata["crop_strategy"] == "center_crop"
     assert "crop_signal_source" in short_metadata
     assert "crop_fallback_reason" in short_metadata
+    assert "crop_sampled_frames" in short_metadata
+    assert "crop_subject_x" in short_metadata
+    assert "crop_stability_score" in short_metadata
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200
