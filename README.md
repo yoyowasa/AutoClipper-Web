@@ -750,9 +750,10 @@ Short composition fallback behavior:
 
 - `shortLayout=auto` first uses reliable face tracking when face detections fit safely inside a 9:16 crop.
 - If face detections are too wide to fit a vertical crop, `blur_background` is preferred to preserve the full frame.
-- If no face is detected, source dimensions are missing, or the face signal is too weak on a landscape video, `blur_background` is preferred before `center_crop`.
+- If no face is detected, AutoClipper samples lightweight motion / edge / saliency signals and uses `subject_tracking_crop` only when confidence and stability are sufficient.
+- If the no-face subject signal is weak, source dimensions are missing, or the face signal is too weak on a landscape video, `blur_background` is preferred before `center_crop`.
 - Explicit `shortLayout=center_crop` still forces center crop first.
-- Short metadata records `crop_strategy`, `crop_signal_source`, `crop_confidence`, `crop_fallback_reason`, `crop_x`, `crop_y`, `crop_detection_count`, and `crop_attempted_strategies`.
+- Short metadata records `crop_strategy`, `crop_signal_source`, `crop_confidence`, `crop_fallback_reason`, `crop_x`, `crop_y`, `crop_detection_count`, `crop_sampled_frames`, `crop_subject_x`, `crop_stability_score`, and `crop_attempted_strategies`.
 
 Subtitle burn-in smoke:
 

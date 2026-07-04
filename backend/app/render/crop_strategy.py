@@ -4,25 +4,30 @@ from typing import Literal, Sequence
 
 from app.render.filters import ass_filter
 from app.video.face_detect import FaceDetection, best_face_center
+from app.video.subject_detect import SubjectDetection
 
 
 SHORT_WIDTH = 1080
 SHORT_HEIGHT = 1920
 
 CropLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
-CropStrategy = Literal["face_tracking_crop", "center_crop", "blur_background"]
+CropStrategy = Literal["face_tracking_crop", "subject_tracking_crop", "center_crop", "blur_background"]
 
 
 @dataclass(frozen=True)
 class CropPlan:
     strategy_order: tuple[CropStrategy, ...]
     face_center: tuple[float, float] | None = None
+    subject_center: tuple[float, float] | None = None
     signal_source: str = "none"
     confidence: float = 0.0
     fallback_reason: str | None = None
     crop_x: int | None = None
     crop_y: int | None = None
     detection_count: int = 0
+    sampled_frame_count: int = 0
+    subject_x: float | None = None
+    stability_score: float | None = None
 
 
 FACE_SAFE_MARGIN_X = 72
@@ -30,6 +35,10 @@ FACE_SAFE_MARGIN_TOP = 96
 FACE_SAFE_MARGIN_BOTTOM = 360
 FACE_TARGET_Y = 0.42
 MIN_FACE_AREA = 0.002
+SUBJECT_MIN_CONFIDENCE = 0.66
+SUBJECT_MIN_STABILITY = 0.55
+SUBJECT_CENTER_DEADBAND = 0.08
+SUBJECT_CENTER_MIN_CONFIDENCE = 0.82
 
 
 def _destructive_center_crop_risk(source_width: int | None, source_height: int | None) -> bool:
@@ -44,6 +53,9 @@ def _no_subject_signal_plan(
     source_height: int | None,
     detection_count: int = 0,
     confidence: float = 0.0,
+    sampled_frame_count: int = 0,
+    subject_x: float | None = None,
+    stability_score: float | None = None,
 ) -> CropPlan:
     if _destructive_center_crop_risk(source_width, source_height):
         return CropPlan(
@@ -52,6 +64,9 @@ def _no_subject_signal_plan(
             confidence=confidence,
             fallback_reason=fallback_reason,
             detection_count=detection_count,
+            sampled_frame_count=sampled_frame_count,
+            subject_x=subject_x,
+            stability_score=stability_score,
         )
     return CropPlan(
         strategy_order=("center_crop", "blur_background"),
@@ -59,6 +74,9 @@ def _no_subject_signal_plan(
         confidence=confidence,
         fallback_reason=fallback_reason,
         detection_count=detection_count,
+        sampled_frame_count=sampled_frame_count,
+        subject_x=subject_x,
+        stability_score=stability_score,
     )
 
 
@@ -190,11 +208,66 @@ def _plan_face_tracking_crop(
     )
 
 
+def _plan_subject_tracking_crop(
+    subject_signal: SubjectDetection | None,
+    source_width: int,
+    source_height: int,
+    fallback_reason: str,
+) -> CropPlan | None:
+    if subject_signal is None:
+        return None
+    if source_width <= 0 or source_height <= 0:
+        return None
+    if subject_signal.confidence < SUBJECT_MIN_CONFIDENCE or subject_signal.stability_score < SUBJECT_MIN_STABILITY:
+        return None
+    if (
+        abs(subject_signal.center_x - 0.5) < SUBJECT_CENTER_DEADBAND
+        and subject_signal.confidence < SUBJECT_CENTER_MIN_CONFIDENCE
+    ):
+        return None
+
+    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
+    max_crop_x = max(0, scaled_width - SHORT_WIDTH)
+    max_crop_y = max(0, scaled_height - SHORT_HEIGHT)
+    if max_crop_x <= 0 and max_crop_y <= 0:
+        return None
+
+    center_x = min(max(subject_signal.center_x, 0.0), 1.0)
+    crop_x = _clamp_int(scaled_width * center_x - SHORT_WIDTH / 2, 0, max_crop_x)
+    crop_y = _clamp_int((scaled_height - SHORT_HEIGHT) / 2, 0, max_crop_y)
+    planned_center = (
+        min(max((crop_x + SHORT_WIDTH / 2) / scaled_width, 0.0), 1.0),
+        min(max((crop_y + SHORT_HEIGHT / 2) / scaled_height, 0.0), 1.0),
+    )
+    return CropPlan(
+        strategy_order=("subject_tracking_crop", "blur_background", "center_crop"),
+        subject_center=planned_center,
+        signal_source=subject_signal.source,
+        confidence=subject_signal.confidence,
+        fallback_reason=fallback_reason,
+        crop_x=crop_x,
+        crop_y=crop_y,
+        sampled_frame_count=subject_signal.sampled_frames,
+        subject_x=center_x,
+        stability_score=subject_signal.stability_score,
+    )
+
+
+def _subject_fallback_reason(subject_signal: SubjectDetection) -> str:
+    if (
+        abs(subject_signal.center_x - 0.5) < SUBJECT_CENTER_DEADBAND
+        and subject_signal.confidence < SUBJECT_CENTER_MIN_CONFIDENCE
+    ):
+        return "ambiguous_subject_signal"
+    return "weak_subject_signal"
+
+
 def plan_short_crop(
     layout: CropLayout,
     detections: Sequence[FaceDetection] | None = None,
     source_width: int | None = None,
     source_height: int | None = None,
+    subject_signal: SubjectDetection | None = None,
 ) -> CropPlan:
     if layout == "blur_background":
         return CropPlan(strategy_order=("blur_background",), signal_source="forced_layout", confidence=1.0)
@@ -208,9 +281,48 @@ def plan_short_crop(
             detection_count=len(detections or []),
         )
     if not detections:
+        if layout == "auto":
+            subject_plan = _plan_subject_tracking_crop(
+                subject_signal,
+                source_width,
+                source_height,
+                fallback_reason="no_face_subject_signal",
+            )
+            if subject_plan is not None:
+                return subject_plan
+            if subject_signal is not None:
+                return _no_subject_signal_plan(
+                    _subject_fallback_reason(subject_signal),
+                    source_width,
+                    source_height,
+                    confidence=subject_signal.confidence,
+                    sampled_frame_count=subject_signal.sampled_frames,
+                    subject_x=subject_signal.center_x,
+                    stability_score=subject_signal.stability_score,
+                )
         return _no_subject_signal_plan("no_face_detections", source_width, source_height)
 
     face_plan = _plan_face_tracking_crop(detections, source_width, source_height)
+    if layout == "auto" and face_plan.fallback_reason == "weak_face_signal":
+        subject_plan = _plan_subject_tracking_crop(
+            subject_signal,
+            source_width,
+            source_height,
+            fallback_reason="weak_face_subject_signal",
+        )
+        if subject_plan is not None:
+            return subject_plan
+        if subject_signal is not None:
+            return _no_subject_signal_plan(
+                _subject_fallback_reason(subject_signal),
+                source_width,
+                source_height,
+                confidence=subject_signal.confidence,
+                detection_count=len(detections),
+                sampled_frame_count=subject_signal.sampled_frames,
+                subject_x=subject_signal.center_x,
+                stability_score=subject_signal.stability_score,
+            )
     if (
         layout == "face_tracking_crop"
         and face_plan.strategy_order[0] == "blur_background"
@@ -252,6 +364,31 @@ def build_face_tracking_crop_filter(
     )
 
 
+def build_subject_tracking_crop_filter(
+    source_width: int,
+    source_height: int,
+    subject_center: tuple[float, float],
+    subtitle_path: str | Path | None = None,
+) -> str:
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError("source dimensions must be positive")
+
+    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
+    center_x, center_y = subject_center
+    crop_x = round(scaled_width * min(max(center_x, 0.0), 1.0) - SHORT_WIDTH / 2)
+    crop_y = round(scaled_height * min(max(center_y, 0.0), 1.0) - SHORT_HEIGHT / 2)
+    crop_x = min(max(crop_x, 0), max(0, scaled_width - SHORT_WIDTH))
+    crop_y = min(max(crop_y, 0), max(0, scaled_height - SHORT_HEIGHT))
+
+    return _append_subtitles(
+        (
+            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT}:{crop_x}:{crop_y}"
+        ),
+        subtitle_path,
+    )
+
+
 def build_blur_background_filter(subtitle_path: str | Path | None = None) -> str:
     return _append_subtitles(
         (
@@ -270,6 +407,7 @@ def strategy_order(
     detections: Sequence[FaceDetection] | None = None,
     source_width: int | None = None,
     source_height: int | None = None,
+    subject_signal: SubjectDetection | None = None,
 ) -> list[CropStrategy]:
     if layout == "blur_background":
         return ["blur_background"]
@@ -281,6 +419,7 @@ def strategy_order(
             detections=detections,
             source_width=source_width,
             source_height=source_height,
+            subject_signal=subject_signal,
         ).strategy_order
     )
 
@@ -291,11 +430,21 @@ def build_crop_filter(
     source_width: int | None = None,
     source_height: int | None = None,
     face_center: tuple[float, float] | None = None,
+    subject_center: tuple[float, float] | None = None,
 ) -> str:
     if strategy == "center_crop":
         return build_center_crop_filter(subtitle_path)
     if strategy == "blur_background":
         return build_blur_background_filter(subtitle_path)
+    if strategy == "subject_tracking_crop":
+        if source_width is None or source_height is None or subject_center is None:
+            raise ValueError("subject_tracking_crop requires source dimensions and subject center")
+        return build_subject_tracking_crop_filter(
+            source_width,
+            source_height,
+            subject_center,
+            subtitle_path=subtitle_path,
+        )
     if source_width is None or source_height is None or face_center is None:
         raise ValueError("face_tracking_crop requires source dimensions and face center")
     return build_face_tracking_crop_filter(

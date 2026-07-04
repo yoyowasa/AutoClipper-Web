@@ -3225,3 +3225,69 @@ python .\scripts\e2e_real_video.py `
 
 - no-face では顔切れを避けられる一方、blur background の見た目は center crop より情報密度が下がる。
 - 人物ごと・台詞ごとの構図最適化は未実装。
+
+## 2026-07-05 Task 44 subject-aware short composition
+
+### 目的
+
+- no-face 時に lightweight な motion / edge / saliency signal を見て、信頼できる場合だけ `subject_tracking_crop` を使う。
+- signal が弱い、または中心寄りで曖昧な場合は `blur_background` に逃がし、破壊的な crop を避ける。
+- 既存の `face_tracking_crop` と明示 `center_crop` の挙動は維持する。
+
+### 変更ファイル
+
+- `backend/app/video/subject_detect.py`
+- `backend/app/render/crop_strategy.py`
+- `backend/app/render/render_short.py`
+- `backend/tests/test_short_rendering.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `SubjectDetection` と `detect_subject_for_clip()` を追加。
+- clip 内の複数 frame から edge / motion energy を集計し、`center_x`、`confidence`、`stability_score` を推定。
+- `CropStrategy` に `subject_tracking_crop` を追加。
+- `shortLayout=auto` で no-face / weak-face の場合、信頼できる subject signal があれば `subject_tracking_crop` を試す。
+- `confidence < 0.66`、`stability_score < 0.55`、または中心寄りで `confidence < 0.82` の signal は曖昧扱いにして `blur_background` を優先。
+- short metadata に以下を追加。
+  - `crop_sampled_frames`
+  - `crop_subject_x`
+  - `crop_stability_score`
+
+### 検証状況
+
+- `cd backend && ..\.venv\Scripts\python -m ruff check app\video\subject_detect.py app\render\crop_strategy.py app\render\render_short.py tests\test_short_rendering.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_short_rendering.py`: 22 passed。
+- `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 208 passed, 1 skipped。
+- `cd frontend && npm run lint`: pass。
+- `cd frontend && npm run typecheck`: pass。
+- `cd frontend && npm run build`: pass。
+- `docker compose up -d --build`: pass。
+- `python scripts\smoke_runtime.py --skip-video`: pass。
+- `python scripts\e2e_sample_video.py`: pass。
+  - job: `job_21759784e27e490586e7ea488b82855f`
+  - short output: `1080x1920`。
+- `python scripts\check_subtitle_sidecar_risk.py --job-id job_21759784e27e490586e7ea488b82855f --json`: pass。
+  - `risk_count`: 0。
+- 58分実写 low_cost short-only E2E: pass。
+  - input: `C:\Users\peace.YAGURUMAGIKUHM\Desktop\【朝倉慶vs西田真澄】物価が牙をむく！？株高の代償…フジメディアHG大株主・ダルトンアクティビストが語るインフレの悲劇とは？【ReHacQ】 - ReHacQ−リハック−【公式】 (720p, h264).mp4`
+  - job: `job_9895ced289e2457fb01932c200505bbc`
+  - selected: normal 0/0, short 10/10。
+  - render failures: 0。
+  - shorts: all `1080x1920`。
+  - `crop_strategy`: `blur_background` 10/10。
+  - `crop_signal_source`: `full_frame_fallback` 10/10。
+  - `crop_fallback_reason`: `ambiguous_subject_signal` 10/10。
+  - audit inspection count: 3。
+  - sidecar risk: 0。
+  - total runtime: 501.485s。
+  - short render time: 111.593s。
+  - visual contact sheet: `storage/outputs/job_9895ced289e2457fb01932c200505bbc/audit/composition_frames/contact_sheet.jpg`
+
+### 未解決事項
+
+- 58分実写では subject signal が中心寄りで曖昧だったため、`subject_tracking_crop` は採用されなかった。
+- blur background により顔切れは避けられるが、ショートとしての情報密度は低め。
+- 高信頼の no-face subject crop を増やすには、人物検出またはより強い foreground signal が別途必要。

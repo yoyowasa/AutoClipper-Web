@@ -26,6 +26,7 @@ from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, wri
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center, detect_faces_for_clip
 from app.video.probe import VideoMetadata, probe_metadata
+from app.video.subject_detect import SubjectDetection, detect_subject_for_clip
 
 SHORT_OVERLAY_TITLE_MODES = {"auto", "always", "high_quality_only", "never"}
 
@@ -40,6 +41,9 @@ class ShortRenderResult:
     crop_x: int | None = None
     crop_y: int | None = None
     crop_detection_count: int | None = None
+    crop_sampled_frames: int | None = None
+    crop_subject_x: float | None = None
+    crop_stability_score: float | None = None
     crop_attempted_strategies: tuple[CropStrategy, ...] = ()
 
 
@@ -62,6 +66,7 @@ def build_center_crop_filter(subtitle_path: str | Path | None = None) -> str:
 ShortCommandRunner = Callable[[list[str]], None]
 ShortClipRenderer = Callable[..., Path | ShortRenderResult]
 FaceDetector = Callable[[str | Path, float, float], list[FaceDetection]]
+SubjectDetector = Callable[[str | Path, float, float], SubjectDetection | None]
 MetadataProbe = Callable[[str | Path], VideoMetadata]
 
 
@@ -88,6 +93,7 @@ def build_render_short_command(
     source_width: int | None = None,
     source_height: int | None = None,
     face_center: tuple[float, float] | None = None,
+    subject_center: tuple[float, float] | None = None,
 ) -> list[str]:
     command = [
         ffmpeg_bin,
@@ -109,6 +115,7 @@ def build_render_short_command(
             source_width=source_width,
             source_height=source_height,
             face_center=face_center,
+            subject_center=subject_center,
         ),
     ]
 
@@ -187,6 +194,21 @@ def _detect_faces_for_layout(
         return []
 
 
+def _detect_subject_for_layout(
+    layout: CropLayout,
+    input_path: str | Path,
+    start: float,
+    end: float,
+    subject_detector: SubjectDetector,
+) -> SubjectDetection | None:
+    if layout != "auto":
+        return None
+    try:
+        return subject_detector(input_path, start, end)
+    except Exception:
+        return None
+
+
 def render_short_clip(
     input_path: str | Path,
     output_path: str | Path,
@@ -199,6 +221,7 @@ def render_short_clip(
     source_width: int | None = None,
     source_height: int | None = None,
     face_detector: FaceDetector = detect_faces_for_clip,
+    subject_detector: SubjectDetector = detect_subject_for_clip,
     metadata_probe: MetadataProbe = probe_metadata,
     command_runner: ShortCommandRunner = _run_ffmpeg_command,
 ) -> ShortRenderResult:
@@ -215,8 +238,22 @@ def render_short_clip(
         end=end,
         face_detector=face_detector,
     )
-    crop_plan = plan_short_crop(layout, detections=detections, source_width=width, source_height=height)
+    subject_signal = _detect_subject_for_layout(
+        layout,
+        input_path=input_path,
+        start=start,
+        end=end,
+        subject_detector=subject_detector,
+    )
+    crop_plan = plan_short_crop(
+        layout,
+        detections=detections,
+        source_width=width,
+        source_height=height,
+        subject_signal=subject_signal,
+    )
     face_center = crop_plan.face_center or best_face_center(detections)
+    subject_center = crop_plan.subject_center
     last_error: Exception | None = None
     attempted: list[CropStrategy] = []
 
@@ -235,6 +272,7 @@ def render_short_clip(
                 source_width=width,
                 source_height=height,
                 face_center=face_center if strategy == "face_tracking_crop" else None,
+                subject_center=subject_center if strategy == "subject_tracking_crop" else None,
             )
             command_runner(command)
             fallback_reason = crop_plan.fallback_reason
@@ -249,6 +287,9 @@ def render_short_clip(
                 crop_x=crop_plan.crop_x,
                 crop_y=crop_plan.crop_y,
                 crop_detection_count=crop_plan.detection_count,
+                crop_sampled_frames=crop_plan.sampled_frame_count,
+                crop_subject_x=crop_plan.subject_x,
+                crop_stability_score=crop_plan.stability_score,
                 crop_attempted_strategies=tuple(attempted),
             )
         except Exception as exc:
@@ -333,6 +374,9 @@ def _write_export_metadata(
     crop_x: int | None,
     crop_y: int | None,
     crop_detection_count: int | None,
+    crop_sampled_frames: int | None,
+    crop_subject_x: float | None,
+    crop_stability_score: float | None,
     crop_attempted_strategies: Sequence[str],
     overlay_title_expected: bool,
     overlay_title_rendered: bool,
@@ -369,6 +413,9 @@ def _write_export_metadata(
                 "crop_x": crop_x,
                 "crop_y": crop_y,
                 "crop_detection_count": crop_detection_count,
+                "crop_sampled_frames": crop_sampled_frames,
+                "crop_subject_x": crop_subject_x,
+                "crop_stability_score": crop_stability_score,
                 "crop_attempted_strategies": list(crop_attempted_strategies),
                 "video_path": str(video_path),
                 "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,
@@ -485,6 +532,13 @@ def render_selected_short_candidates(
                 crop_x=render_result.crop_x if isinstance(render_result, ShortRenderResult) else None,
                 crop_y=render_result.crop_y if isinstance(render_result, ShortRenderResult) else None,
                 crop_detection_count=render_result.crop_detection_count if isinstance(render_result, ShortRenderResult) else None,
+                crop_sampled_frames=render_result.crop_sampled_frames
+                if isinstance(render_result, ShortRenderResult)
+                else None,
+                crop_subject_x=render_result.crop_subject_x if isinstance(render_result, ShortRenderResult) else None,
+                crop_stability_score=render_result.crop_stability_score
+                if isinstance(render_result, ShortRenderResult)
+                else None,
                 crop_attempted_strategies=render_result.crop_attempted_strategies
                 if isinstance(render_result, ShortRenderResult)
                 else (),
