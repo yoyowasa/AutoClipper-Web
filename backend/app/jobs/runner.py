@@ -13,6 +13,12 @@ from sqlalchemy.orm import Session
 
 from app.audio.extract import extract_mono_wav
 from app.audio.silence_detect import SilenceSegment, detect_silence, silence_output_path, write_silence_segments
+from app.audio.transcript_postprocess import (
+    postprocess_transcript_segments,
+    raw_transcript_output_path,
+    transcript_postprocess_summary_path,
+    write_transcript_postprocess_summary,
+)
 from app.audio.transcribe_faster_whisper import (
     FasterWhisperTranscriptionEngine,
     TranscriptSegment,
@@ -1323,6 +1329,15 @@ def run_autoclipper_job(
                         "transcription_failed",
                         f"Could not transcribe audio: {exc}",
                     ) from exc
+            raw_transcript_path = write_transcript_segments(transcript_segments, raw_transcript_output_path(job_dir))
+            metadata_files.append(raw_transcript_path)
+            postprocess_result = postprocess_transcript_segments(transcript_segments, settings)
+            transcript_segments = postprocess_result.segments
+            postprocess_summary_path = write_transcript_postprocess_summary(
+                postprocess_result.summary,
+                transcript_postprocess_summary_path(job_dir),
+            )
+            metadata_files.append(postprocess_summary_path)
             transcript_path = write_transcript_segments(transcript_segments, transcript_output_path(job_dir))
             metadata_files.append(transcript_path)
             _raise_if_transcript_unusable(transcript_segments)

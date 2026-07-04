@@ -299,6 +299,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
                 "useOpenAIScoring": False,
                 "burnSubtitles": True,
                 "normalizeAudio": True,
+                "transcriptReplacements": {"automation": "AutoClipper"},
             },
         },
     ).json()
@@ -372,6 +373,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     job_dir = storage.outputs / created["jobId"]
     for name in [
         "video_metadata.json",
+        "raw_transcript_segments.json",
         "transcript_segments.json",
         "scene_segments.json",
         "silence_segments.json",
@@ -401,12 +403,23 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert selected_short["original_start"] is not None
     assert selected_short["refined_start"] is not None
     assert selected_short["boundary_refined"] is not None
+    raw_transcript = json.loads((job_dir / "raw_transcript_segments.json").read_text(encoding="utf-8"))
+    processed_transcript = json.loads((job_dir / "transcript_segments.json").read_text(encoding="utf-8"))
+    assert raw_transcript[0]["text"] == "why automation mistakes matter before launch"
+    assert processed_transcript[0]["text"] == "why AutoClipper mistakes matter before launch"
     transcript_summary = json.loads((job_dir / "transcript_summary.json").read_text(encoding="utf-8"))
     assert transcript_summary["segment_count"] == 4
     assert transcript_summary["total_text_length"] > 20
     assert transcript_summary["total_speech_duration"] == 195.0
     assert transcript_summary["transcription_engine"] == "faster_whisper"
     assert transcript_summary["used_fixture_transcript"] is False
+    transcript_postprocess_summary = json.loads(
+        (job_dir / "transcript_postprocess_summary.json").read_text(encoding="utf-8")
+    )
+    assert transcript_postprocess_summary["enabled"] is True
+    assert transcript_postprocess_summary["segment_count"] == 4
+    assert transcript_postprocess_summary["changed_segment_count"] == 1
+    assert transcript_postprocess_summary["replacement_counts"] == {"automation": 1}
 
     audio_summary = json.loads((job_dir / "audio_feature_summary.json").read_text(encoding="utf-8"))
     assert audio_summary["has_audio_features"] is True
@@ -470,7 +483,9 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "metadata/normal/normal_01.json" in names
     assert "metadata/shorts/short_01.json" in names
     assert "metadata/selected_clips.json" in names
+    assert "metadata/raw_transcript_segments.json" in names
     assert "metadata/transcript_summary.json" in names
+    assert "metadata/transcript_postprocess_summary.json" in names
     assert "metadata/selected_clips_summary.json" in names
     assert "normal_01.mp4" not in names
     assert "short_01.ass" not in names

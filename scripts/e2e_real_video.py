@@ -176,6 +176,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-candidate-generation-memory-mb", type=non_negative_int, default=None)
     parser.add_argument("--candidate-chunk-seconds", type=positive_float, default=None)
     parser.add_argument("--candidate-chunk-overlap-seconds", type=non_negative_float, default=None)
+    parser.add_argument("--enable-transcript-post-processing", nargs="?", const=True, default=None, type=parse_bool)
+    parser.add_argument(
+        "--disable-transcript-post-processing",
+        dest="enable_transcript_post_processing",
+        action="store_false",
+    )
+    parser.add_argument(
+        "--transcript-replacements-json",
+        type=Path,
+        default=None,
+        help="Optional JSON object mapping transcript text replacements.",
+    )
     return parser
 
 
@@ -245,8 +257,15 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "maxCandidateGenerationMemoryMb": args.max_candidate_generation_memory_mb,
         "candidateChunkSeconds": args.candidate_chunk_seconds,
         "candidateChunkOverlapSeconds": args.candidate_chunk_overlap_seconds,
+        "enableTranscriptPostProcessing": args.enable_transcript_post_processing,
     }
     settings.update({key: value for key, value in optional_settings.items() if value is not None})
+    if args.transcript_replacements_json is not None:
+        replacements_path = args.transcript_replacements_json.resolve()
+        replacements = json.loads(replacements_path.read_text(encoding="utf-8"))
+        if not isinstance(replacements, dict):
+            raise RuntimeError(f"transcript replacements must be a JSON object: {replacements_path}")
+        settings["transcriptReplacements"] = {str(key): str(value) for key, value in replacements.items()}
     return settings
 
 

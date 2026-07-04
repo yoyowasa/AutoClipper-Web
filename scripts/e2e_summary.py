@@ -9,6 +9,7 @@ from smoke_runtime import ROOT
 
 SUMMARY_FILENAMES = [
     "transcript_summary.json",
+    "transcript_postprocess_summary.json",
     "audio_feature_summary.json",
     "candidate_summary.json",
     "candidate_generation_summary.json",
@@ -35,6 +36,15 @@ def summary_line(filename: str, payload: Any) -> str:
             f"confidence={_value(payload, 'average_confidence')} "
             f"engine={_value(payload, 'transcription_engine')} "
             f"fixture={_value(payload, 'used_fixture_transcript')}"
+        )
+    if filename == "transcript_postprocess_summary.json":
+        return (
+            f"enabled={_value(payload, 'enabled')} "
+            f"changed_segments={_value(payload, 'changed_segment_count')} "
+            f"chars={_value(payload, 'total_chars_before')}->{_value(payload, 'total_chars_after')} "
+            f"replacements={_value(payload, 'replacement_counts')} "
+            f"default_dict={_value(payload, 'used_default_dictionary')} "
+            f"custom_replacements={_value(payload, 'custom_replacement_count')}"
         )
     if filename == "audio_feature_summary.json":
         return (
