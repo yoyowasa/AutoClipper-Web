@@ -18,6 +18,7 @@ from app.render.crop_strategy import (
     build_blur_background_filter,
     build_center_crop_filter,
     build_face_tracking_crop_filter,
+    plan_short_crop,
     strategy_order,
 )
 from app.render.render_short import (
@@ -128,6 +129,50 @@ def test_face_center_and_strategy_order() -> None:
     ]
 
 
+def test_short_crop_plan_uses_blur_background_for_wide_face_group() -> None:
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.18, center_y=0.35, width=0.12, height=0.18),
+        FaceDetection(start=1, end=1, center_x=0.82, center_y=0.35, width=0.12, height=0.18),
+    ]
+
+    plan = plan_short_crop("auto", detections=detections, source_width=1920, source_height=1080)
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "face_detection"
+    assert plan.fallback_reason == "face_group_too_wide_for_9x16_crop"
+    assert plan.detection_count == 2
+
+
+def test_short_crop_plan_weak_face_signal_uses_center_fallback() -> None:
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.5, center_y=0.5, width=0.01, height=0.01),
+    ]
+
+    plan = plan_short_crop("auto", detections=detections, source_width=1920, source_height=1080)
+
+    assert plan.strategy_order == ("center_crop", "blur_background")
+    assert plan.signal_source == "center_fallback"
+    assert plan.fallback_reason == "weak_face_signal"
+
+
+def test_short_crop_plan_moves_low_face_out_of_subtitle_area_when_possible() -> None:
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.5, center_y=0.82, width=0.18, height=0.18),
+    ]
+
+    plan = plan_short_crop("auto", detections=detections, source_width=1080, source_height=2400)
+
+    assert plan.strategy_order[0] == "face_tracking_crop"
+    assert plan.face_center is not None
+    assert plan.crop_y is not None
+    assert plan.crop_y > 0
+    assert plan.signal_source == "face_detection"
+    assert plan.crop_x is not None
+
+    video_filter = build_face_tracking_crop_filter(1080, 2400, plan.face_center)
+    assert f"crop=1080:1920:{plan.crop_x}:{plan.crop_y}" in video_filter
+
+
 def test_render_short_clip_auto_falls_back_to_center_crop(tmp_path: Path) -> None:
     output_path = tmp_path / "short.mp4"
     commands: list[list[str]] = []
@@ -164,6 +209,42 @@ def test_render_short_clip_auto_falls_back_to_center_crop(tmp_path: Path) -> Non
     assert commands[1][commands[1].index("-vf") + 1].startswith(
         "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920"
     )
+
+
+def test_render_short_clip_records_composition_diagnostics(tmp_path: Path) -> None:
+    output_path = tmp_path / "short.mp4"
+    commands: list[list[str]] = []
+
+    def fake_face_detector(_input_path: str | Path, _start: float, _end: float) -> list[FaceDetection]:
+        return [
+            FaceDetection(start=0, end=0, center_x=0.18, center_y=0.35, width=0.12, height=0.18),
+            FaceDetection(start=1, end=1, center_x=0.82, center_y=0.35, width=0.12, height=0.18),
+        ]
+
+    def fake_metadata_probe(_input_path: str | Path) -> VideoMetadata:
+        return VideoMetadata(duration=60.0, width=1920, height=1080, fps=30.0, has_audio=True)
+
+    def fake_runner(command: list[str]) -> None:
+        commands.append(command)
+        output_path.write_bytes(b"short mp4")
+
+    result = render_short_clip(
+        "input.mp4",
+        output_path,
+        start=0.0,
+        end=30.0,
+        layout="auto",
+        face_detector=fake_face_detector,
+        metadata_probe=fake_metadata_probe,
+        command_runner=fake_runner,
+    )
+
+    assert result.strategy == "blur_background"
+    assert result.crop_signal_source == "face_detection"
+    assert result.crop_fallback_reason == "face_group_too_wide_for_9x16_crop"
+    assert result.crop_detection_count == 2
+    assert result.crop_attempted_strategies == ("blur_background",)
+    assert "gblur=sigma=24" in commands[0][commands[0].index("-vf") + 1]
 
 
 def test_render_selected_short_candidates_creates_exports_visible_in_results(client: TestClient) -> None:
@@ -252,6 +333,9 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert "refined_start" in short_metadata
     assert "boundary_refined" in short_metadata
     assert short_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/shorts/short_01.ass")
+    assert short_metadata["crop_strategy"] == "center_crop"
+    assert "crop_signal_source" in short_metadata
+    assert "crop_fallback_reason" in short_metadata
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200

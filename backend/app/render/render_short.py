@@ -19,7 +19,7 @@ from app.render.crop_strategy import (
     CropStrategy,
     build_center_crop_filter as _build_center_crop_filter,
     build_crop_filter,
-    strategy_order,
+    plan_short_crop,
 )
 from app.render.filters import loudnorm_filter
 from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
@@ -34,6 +34,13 @@ SHORT_OVERLAY_TITLE_MODES = {"auto", "always", "high_quality_only", "never"}
 class ShortRenderResult:
     path: Path
     strategy: CropStrategy
+    crop_signal_source: str | None = None
+    crop_confidence: float | None = None
+    crop_fallback_reason: str | None = None
+    crop_x: int | None = None
+    crop_y: int | None = None
+    crop_detection_count: int | None = None
+    crop_attempted_strategies: tuple[CropStrategy, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -208,10 +215,13 @@ def render_short_clip(
         end=end,
         face_detector=face_detector,
     )
-    face_center = best_face_center(detections)
+    crop_plan = plan_short_crop(layout, detections=detections, source_width=width, source_height=height)
+    face_center = crop_plan.face_center or best_face_center(detections)
     last_error: Exception | None = None
+    attempted: list[CropStrategy] = []
 
-    for strategy in strategy_order(layout, detections=detections, source_width=width, source_height=height):
+    for strategy in crop_plan.strategy_order:
+        attempted.append(strategy)
         try:
             command = build_render_short_command(
                 input_path,
@@ -227,7 +237,20 @@ def render_short_clip(
                 face_center=face_center if strategy == "face_tracking_crop" else None,
             )
             command_runner(command)
-            return ShortRenderResult(path=Path(output_path), strategy=strategy)
+            fallback_reason = crop_plan.fallback_reason
+            if len(attempted) > 1 and fallback_reason is None:
+                fallback_reason = f"render_strategy_failed:{attempted[0]}"
+            return ShortRenderResult(
+                path=Path(output_path),
+                strategy=strategy,
+                crop_signal_source=crop_plan.signal_source,
+                crop_confidence=crop_plan.confidence,
+                crop_fallback_reason=fallback_reason,
+                crop_x=crop_plan.crop_x,
+                crop_y=crop_plan.crop_y,
+                crop_detection_count=crop_plan.detection_count,
+                crop_attempted_strategies=tuple(attempted),
+            )
         except Exception as exc:
             last_error = exc
 
@@ -304,6 +327,13 @@ def _write_export_metadata(
     video_path: Path,
     subtitle_path: Path | None,
     strategy: str | None,
+    crop_signal_source: str | None,
+    crop_confidence: float | None,
+    crop_fallback_reason: str | None,
+    crop_x: int | None,
+    crop_y: int | None,
+    crop_detection_count: int | None,
+    crop_attempted_strategies: Sequence[str],
     overlay_title_expected: bool,
     overlay_title_rendered: bool,
     overlay_title_mode: str,
@@ -332,6 +362,14 @@ def _write_export_metadata(
                 "boundary_expansion_seconds": candidate.boundary_expansion_seconds,
                 "score": _candidate_score(candidate),
                 "strategy": strategy,
+                "crop_strategy": strategy,
+                "crop_signal_source": crop_signal_source,
+                "crop_confidence": crop_confidence,
+                "crop_fallback_reason": crop_fallback_reason,
+                "crop_x": crop_x,
+                "crop_y": crop_y,
+                "crop_detection_count": crop_detection_count,
+                "crop_attempted_strategies": list(crop_attempted_strategies),
                 "video_path": str(video_path),
                 "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,
             },
@@ -441,6 +479,15 @@ def render_selected_short_candidates(
                 video_path=rendered_path,
                 subtitle_path=subtitle_path,
                 strategy=render_result.strategy if isinstance(render_result, ShortRenderResult) else None,
+                crop_signal_source=render_result.crop_signal_source if isinstance(render_result, ShortRenderResult) else None,
+                crop_confidence=render_result.crop_confidence if isinstance(render_result, ShortRenderResult) else None,
+                crop_fallback_reason=render_result.crop_fallback_reason if isinstance(render_result, ShortRenderResult) else None,
+                crop_x=render_result.crop_x if isinstance(render_result, ShortRenderResult) else None,
+                crop_y=render_result.crop_y if isinstance(render_result, ShortRenderResult) else None,
+                crop_detection_count=render_result.crop_detection_count if isinstance(render_result, ShortRenderResult) else None,
+                crop_attempted_strategies=render_result.crop_attempted_strategies
+                if isinstance(render_result, ShortRenderResult)
+                else (),
                 overlay_title_expected=overlay_expected,
                 overlay_title_rendered=overlay_rendered,
                 overlay_title_mode=overlay_title_mode,
