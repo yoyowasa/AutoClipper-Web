@@ -3167,3 +3167,61 @@ python .\scripts\e2e_real_video.py `
 - OpenAI による字幕校正は未実装。
 - 実動画の誤変換辞書は、実際の出力を見て追加する必要がある。
 - 58分実写での short composition 主観評価は、この Task 42 PR とは分けて実施する。
+
+## 2026-07-05 Task 43 no-face short composition fallback improvement
+
+### 目的
+
+- no-face / weak-signal の横長動画で、破壊的な `center_crop` を既定安全策にしない。
+- 顔や主被写体の信頼できるシグナルが無い場合は、全体フレームを残す `blur_background` を優先する。
+- 明示 `shortLayout=center_crop` の既存挙動は維持する。
+
+### 変更ファイル
+
+- `backend/app/render/crop_strategy.py`
+- `backend/tests/test_short_rendering.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `shortLayout=auto` / `face_tracking_crop` で横長入力かつ no-face / weak-face / missing-dimensions の場合、`blur_background` を `center_crop` より優先。
+- portrait 入力や明示 `center_crop` では既存 fallback を維持。
+- `crop_signal_source=full_frame_fallback` を追加し、no-face 時に full-frame preservation を選んだことを metadata で追えるようにした。
+- `strategy_order()` を `plan_short_crop()` ベースに揃え、診断と実際の fallback 順を一致させた。
+
+### 検証状況
+
+- `cd backend && ..\.venv\Scripts\python -m ruff check app\render\crop_strategy.py tests\test_short_rendering.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_short_rendering.py`: 17 passed。
+- `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 203 passed, 1 skipped。
+- `cd frontend && npm run lint`: pass。
+- `cd frontend && npm run typecheck`: pass。
+- `cd frontend && npm run build`: pass。
+- `docker compose up -d --build`: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- `python scripts/e2e_sample_video.py`: pass。
+  - job: `job_1b664752629542278ac1b3e614f37801`
+  - short output: `1080x1920`。
+- `python scripts/check_subtitle_sidecar_risk.py --job-id job_1b664752629542278ac1b3e614f37801 --json`: pass。
+  - `risk_count`: 0。
+- 58分実写 low_cost E2E: pass。
+  - input: `C:\Users\peace.YAGURUMAGIKUHM\Desktop\【朝倉慶vs西田真澄】物価が牙をむく！？株高の代償…フジメディアHG大株主・ダルトンアクティビストが語るインフレの悲劇とは？【ReHacQ】 - ReHacQ−リハック−【公式】 (720p, h264).mp4`
+  - job: `job_cb078ecb5fdd4f609fcfe4acf5dac233`
+  - selected: normal 0/0, short 10/10。
+  - render failures: 0。
+  - shorts: all `1080x1920`。
+  - `crop_strategy`: `blur_background` 10/10。
+  - `crop_signal_source`: `full_frame_fallback` 10/10。
+  - `crop_fallback_reason`: `no_face_detections` 10/10。
+  - audit inspection count: 0。
+  - sidecar risk: 0。
+  - total runtime: 533.890s。
+  - short render time: 121.469s。
+  - visual contact sheet: `storage/outputs/job_cb078ecb5fdd4f609fcfe4acf5dac233/audit/composition_frames/contact_sheet.jpg`
+
+### 未解決事項
+
+- no-face では顔切れを避けられる一方、blur background の見た目は center crop より情報密度が下がる。
+- 人物ごと・台詞ごとの構図最適化は未実装。
