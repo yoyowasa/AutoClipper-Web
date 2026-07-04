@@ -2787,3 +2787,146 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 ### 未解決事項
 
 - v1 smoke helper は実動画 E2E 自体は実行しない。実動画生成は既存 `scripts/e2e_real_video.py` を使う。
+
+## 2026-07-04 Task 40 v1 release smoke execution
+
+### 目的
+
+- Task 39 で追加した v1 release smoke checklist / script を Docker runtime 上で実行する。
+- v1 release tag 作成前の可否判断材料を残す。
+- 機能追加、selection、scoring、rendering、UI 挙動変更は行わない。
+
+### 対象
+
+- tested main commit: `88d0a82`
+- base tag: `v0.20-v1-release-smoke-checklist`
+- branch: `codex/task-40-v1-release-smoke-execution`
+
+### 実行内容
+
+- Docker Desktop 起動確認:
+  - 初回 `docker version`: daemon 未起動で失敗。
+  - `Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"` 後、`docker info` が成功。
+- compose rebuild/start:
+  - `docker compose down --remove-orphans`: pass。
+  - `docker compose up -d --build`: pass。
+  - `docker compose ps`: backend / frontend / worker / redis が running。
+  - backend health: `healthy`。
+- endpoint:
+  - `curl.exe -fsS http://localhost:8000/health`: `{"status":"ok"}`。
+  - `curl.exe -fsSI -L http://localhost:3000`: `/` は `/upload` へ 307 redirect 後、200。
+  - `curl.exe -fsSI http://localhost:3000/upload`: 200。
+  - `curl.exe -fsSI http://localhost:3000/results/job_e9a049ee5e3446c0b92943429fa8918a`: 200。
+- runtime script:
+  - `python scripts\smoke_runtime.py --skip-video`: `SMOKE PASSED`。
+  - services: backend / frontend / redis / worker running。
+  - backend/worker DB: `sqlite:////app/storage/autoclipper.db` で一致。
+  - backend/worker storage: `/app/storage/uploads`, `/app/storage/temp`, `/app/storage/outputs` で一致。
+  - backend/worker ffmpeg: `7.1.5-0+deb13u1`。
+  - backend/worker ffprobe: `7.1.5-0+deb13u1`。
+- v1 smoke script:
+  - `python scripts\v1_smoke_check.py`: pass。
+  - `python scripts\v1_smoke_check.py --job-id job_e9a049ee5e3446c0b92943429fa8918a`: pass。
+    - normal: 5
+    - short: 10
+    - `auditSummary`: present
+    - metadata download: pass
+    - subtitle download: pass
+    - MP4 download: pass, first clip bytes `45881151`
+    - ZIP download: pass, bytes `388844740`
+    - `local_sidecar_risk`: 0
+- sample upload/job lifecycle:
+  - `python scripts\e2e_sample_video.py`: `E2E PASSED`。
+  - generated sample: `storage/temp/e2e_sample.mp4`
+  - job: `job_9b1c19028e324691bfe7fc5db2cecb53`
+  - transcript: fixture transcript, `fixture=True`
+  - selected: normal 0/0, short 1/1
+  - render failures: 0
+  - downloaded MP4 ffprobe: `1080,1920`
+  - ZIP download: pass。
+- audit / sidecar:
+  - `python scripts\audit_outputs.py --job-id job_9b1c19028e324691bfe7fc5db2cecb53 --format both`: pass。
+    - report: `storage/outputs/job_9b1c19028e324691bfe7fc5db2cecb53/audit/output_audit_report.json`
+    - report: `storage/outputs/job_9b1c19028e324691bfe7fc5db2cecb53/audit/output_audit_report.md`
+    - generated normal: 0
+    - generated short: 1
+    - inspection: 0
+  - `python scripts\check_subtitle_sidecar_risk.py --job-id job_9b1c19028e324691bfe7fc5db2cecb53 --json`: pass。
+    - `risk_count`: 0
+- no-audit job:
+  - job: `job_aeea2831f0d7486dac106cd9462a94fe`
+  - `GET /api/jobs/{job_id}/results`: 200。
+  - normal: 3
+  - short: 5
+  - `auditSummaryIsNull`: true。
+
+### 判定
+
+- v1 release smoke checklist の Docker runtime 確認は pass。
+- Docker services、health、frontend、worker、redis、DB/storage共有、ffmpeg/ffprobe、upload/job lifecycle、results API、metadata/subtitle/MP4/ZIP download、audit、sidecar risk を確認済み。
+- `v1.0.0` tag はこの STATUS 更新が main に入った後に切るのが整合的。
+
+### 未解決事項
+
+- high_quality OpenAI smoke は未実行。`OPENAI_API_KEY` は v1 smoke script 上では `false`。
+- no-audit 確認に使った `job_aeea2831f0d7486dac106cd9462a94fe` は古い sidecar 分離前の出力なので、sidecar risk は評価対象外。no-audit API semantics の確認のみに使用。
+
+## 2026-07-04 v1 implementation status confirmation
+
+### 確認日
+
+- 2026-07-04
+
+### 確認対象
+
+- main commit: `88d0a82`
+- current status branch: `codex/task-40-v1-release-smoke-execution`
+- Task 40 status commit: `e0e02ae`
+- base tag: `v0.20-v1-release-smoke-checklist`
+
+### 現時点の実装状態
+
+- v1 core implementation は release candidate 水準まで到達。
+- 実装済み:
+  - Next.js upload / job progress / results UI
+  - FastAPI upload / job / results / metadata / subtitle / MP4 / ZIP download API
+  - RQ worker / Redis / SQLite / local storage
+  - ffmpeg / ffprobe wrappers
+  - faster-whisper transcription
+  - feature extraction
+  - candidate generation
+  - rule scoring
+  - OpenAI Structured Outputs scoring
+  - hard gate / soft selection
+  - normal / short rendering
+  - ASS subtitle burn-in
+  - ZIP packaging
+  - diagnostics summaries
+  - long-video bounded candidate generation
+  - overlap diversity
+  - OpenAI finalist scoring
+  - title fallback
+  - subtitle readability
+  - Japanese subtitle burn-in
+  - subtitle sidecar separation
+  - boundary refinement
+  - overlay title policy
+  - output audit
+  - results metadata / audit warning display
+  - v1 release smoke checklist / script
+- 確認済み:
+  - Docker runtime smoke: pass
+  - sample upload/job lifecycle: pass
+  - generated short: `1080x1920`
+  - metadata / subtitle / MP4 / ZIP download: pass
+  - sidecar risk: 0
+  - PR #17 CI: backend / frontend pass
+
+### 残件
+
+- PR #17 を main に merge。
+- merge 後に main を pull。
+- `v1.0.0` または `v1.0.0-rc.1` tag を作成。
+- high_quality OpenAI smoke は今回未実行。
+- short crop / composition quality improvement は保留。
+- subtitle transcription accuracy tuning は未着手。
