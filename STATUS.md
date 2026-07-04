@@ -2930,3 +2930,109 @@ Task 25 の high_quality OpenAI scoring 検証で使った `gpt-4o-mini` が品�
 - high_quality OpenAI smoke は今回未実行。
 - short crop / composition quality improvement は保留。
 - subtitle transcription accuracy tuning は未着手。
+
+## 2026-07-04 high_quality OpenAI smoke execution
+
+### 目的
+
+- `OPENAI_API_KEY` ありの Docker runtime で high_quality OpenAI Structured Outputs 経路を確認する。
+- `v1.0.0` tag 前の外部 API 経路確認として実行する。
+- コード変更、selection tuning、scoring tuning、rendering tuning は行わない。
+
+### 対象
+
+- tested commit: `1ee05a4`
+- base tag: `v1.0.0-rc.1`
+- branch: `codex/task-41-high-quality-openai-smoke-status`
+- input video: `C:\Users\peace.YAGURUMAGIKUHM\Desktop\解説_後藤直義、森川潤）.mp4`
+- input size: 76.6 MB
+
+### 実行コマンド
+
+```powershell
+python .\scripts\e2e_real_video.py `
+  --video "C:\Users\peace.YAGURUMAGIKUHM\Desktop\解説_後藤直義、森川潤）.mp4" `
+  --mode high_quality `
+  --use-openai-scoring true `
+  --openai-candidate-limit 10 `
+  --normal-count 1 `
+  --short-count 2 `
+  --normal-min-duration 20 `
+  --normal-max-duration 120 `
+  --short-min-duration 20 `
+  --short-max-duration 75 `
+  --selection-policy fill_requested `
+  --timeout 3600
+```
+
+### 結果
+
+- result: `REAL VIDEO E2E PASSED`
+- job: `job_c1ac598dad5d439a9e48a3cc0742aa97`
+- fixture transcript: disabled
+- transcription engine: `faster_whisper`
+- transcript: 1231 segments, 9228 chars, speech 1139.5 sec, average confidence 0.707189
+- video duration: 1331.747083 sec
+- selected: normal 1/1, short 2/2
+- render failures: 0
+- ZIP size: 32714119 bytes
+- normal output:
+  - `1280x720`
+  - duration: 79.912 sec
+- short outputs:
+  - short 1: `1080x1920`, duration 47.171 sec
+  - short 2: `1080x1920`, duration 62.353 sec
+
+### OpenAI Structured Outputs 確認
+
+- model: `gpt-5.5`
+- openai candidate limit: 10
+- finalist limit: 5
+- candidates sent: 11
+- successful structured scores: 11
+- failed scores: 0
+- fallback scores: 0
+- schema validation failures: 0
+- API calls: 11
+- average latency: 7.861855 sec
+- max latency: 10.247546 sec
+- selected clips using AI score: 3
+- selected clips using fallback: 0
+- selected clips not scored: 0
+- selected clip OpenAI score source:
+  - normal: `finalist_on_demand`
+  - short 1: `preselection_pool`
+  - short 2: `preselection_pool`
+
+### 追加確認
+
+- `python scripts\audit_outputs.py --job-id job_c1ac598dad5d439a9e48a3cc0742aa97 --format both`: pass。
+  - generated normal: 1
+  - generated short: 2
+  - clips requiring inspection: 1
+  - normal warnings: `likely_abrupt_ending`, `below_quality_threshold`, `normal_duration_outside_recommended_range`
+  - short warnings: none
+- `python scripts\check_subtitle_sidecar_risk.py --job-id job_c1ac598dad5d439a9e48a3cc0742aa97 --json`: pass。
+  - `risk_count`: 0
+- `python scripts\v1_smoke_check.py --job-id job_c1ac598dad5d439a9e48a3cc0742aa97`: pass。
+  - results API: normal 1, short 2
+  - metadata download: pass
+  - subtitle download: pass
+  - MP4 download: pass
+  - ZIP download: pass
+  - local sidecar risk: 0
+- `curl.exe -fsSI http://localhost:3000/results/job_c1ac598dad5d439a9e48a3cc0742aa97`: 200。
+
+### 判定
+
+- high_quality OpenAI API 経路は pass。
+- OpenAI Structured Outputs は全 API call で schema validation 成功。
+- 最終 selected clips は全て AI score を使用。
+- fallback / not_scored は 0。
+- これで `v1.0.0` tag 前に残っていた high_quality OpenAI smoke 未実行は解消。
+
+### 未解決事項
+
+- normal clip に品質警告が 1 件残るが、smoke profile で `normalMinDuration=20`, `normalMaxDuration=120` を指定した検証用条件のため、API 経路保証の blocker とは扱わない。
+- short crop / composition quality improvement は引き続き保留。
+- subtitle transcription accuracy tuning は未着手。
