@@ -25,6 +25,7 @@ from app.render.filters import loudnorm_filter
 from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center, detect_faces_for_clip
+from app.video.person_detect import PersonDetection, detect_person_for_clip
 from app.video.probe import VideoMetadata, probe_metadata
 from app.video.subject_detect import SubjectDetection, detect_subject_for_clip
 
@@ -44,6 +45,9 @@ class ShortRenderResult:
     crop_sampled_frames: int | None = None
     crop_subject_x: float | None = None
     crop_stability_score: float | None = None
+    person_detection_count: int | None = None
+    person_detection_confidence: float | None = None
+    person_box: tuple[float, float, float, float] | None = None
     crop_attempted_strategies: tuple[CropStrategy, ...] = ()
 
 
@@ -66,6 +70,7 @@ def build_center_crop_filter(subtitle_path: str | Path | None = None) -> str:
 ShortCommandRunner = Callable[[list[str]], None]
 ShortClipRenderer = Callable[..., Path | ShortRenderResult]
 FaceDetector = Callable[[str | Path, float, float], list[FaceDetection]]
+PersonDetector = Callable[[str | Path, float, float], PersonDetection | None]
 SubjectDetector = Callable[[str | Path, float, float], SubjectDetection | None]
 MetadataProbe = Callable[[str | Path], VideoMetadata]
 
@@ -93,6 +98,7 @@ def build_render_short_command(
     source_width: int | None = None,
     source_height: int | None = None,
     face_center: tuple[float, float] | None = None,
+    person_center: tuple[float, float] | None = None,
     subject_center: tuple[float, float] | None = None,
 ) -> list[str]:
     command = [
@@ -115,6 +121,7 @@ def build_render_short_command(
             source_width=source_width,
             source_height=source_height,
             face_center=face_center,
+            person_center=person_center,
             subject_center=subject_center,
         ),
     ]
@@ -209,6 +216,25 @@ def _detect_subject_for_layout(
         return None
 
 
+def _detect_person_for_layout(
+    layout: CropLayout,
+    input_path: str | Path,
+    start: float,
+    end: float,
+    person_detector: PersonDetector,
+) -> PersonDetection | None:
+    if layout != "auto":
+        return None
+    try:
+        return person_detector(input_path, start, end)
+    except Exception:
+        return None
+
+
+def _needs_secondary_crop_signals(layout: CropLayout, crop_plan: Any) -> bool:
+    return layout == "auto" and crop_plan.fallback_reason in {"no_face_detections", "weak_face_signal", "no_face_center"}
+
+
 def render_short_clip(
     input_path: str | Path,
     output_path: str | Path,
@@ -221,6 +247,7 @@ def render_short_clip(
     source_width: int | None = None,
     source_height: int | None = None,
     face_detector: FaceDetector = detect_faces_for_clip,
+    person_detector: PersonDetector = detect_person_for_clip,
     subject_detector: SubjectDetector = detect_subject_for_clip,
     metadata_probe: MetadataProbe = probe_metadata,
     command_runner: ShortCommandRunner = _run_ffmpeg_command,
@@ -238,21 +265,37 @@ def render_short_clip(
         end=end,
         face_detector=face_detector,
     )
-    subject_signal = _detect_subject_for_layout(
-        layout,
-        input_path=input_path,
-        start=start,
-        end=end,
-        subject_detector=subject_detector,
-    )
     crop_plan = plan_short_crop(
         layout,
         detections=detections,
         source_width=width,
         source_height=height,
-        subject_signal=subject_signal,
     )
+    if _needs_secondary_crop_signals(layout, crop_plan):
+        person_signal = _detect_person_for_layout(
+            layout,
+            input_path=input_path,
+            start=start,
+            end=end,
+            person_detector=person_detector,
+        )
+        subject_signal = _detect_subject_for_layout(
+            layout,
+            input_path=input_path,
+            start=start,
+            end=end,
+            subject_detector=subject_detector,
+        )
+        crop_plan = plan_short_crop(
+            layout,
+            detections=detections,
+            source_width=width,
+            source_height=height,
+            person_signal=person_signal,
+            subject_signal=subject_signal,
+        )
     face_center = crop_plan.face_center or best_face_center(detections)
+    person_center = crop_plan.person_center
     subject_center = crop_plan.subject_center
     last_error: Exception | None = None
     attempted: list[CropStrategy] = []
@@ -272,6 +315,7 @@ def render_short_clip(
                 source_width=width,
                 source_height=height,
                 face_center=face_center if strategy == "face_tracking_crop" else None,
+                person_center=person_center if strategy == "person_tracking_crop" else None,
                 subject_center=subject_center if strategy == "subject_tracking_crop" else None,
             )
             command_runner(command)
@@ -290,6 +334,9 @@ def render_short_clip(
                 crop_sampled_frames=crop_plan.sampled_frame_count,
                 crop_subject_x=crop_plan.subject_x,
                 crop_stability_score=crop_plan.stability_score,
+                person_detection_count=crop_plan.person_detection_count,
+                person_detection_confidence=crop_plan.person_detection_confidence,
+                person_box=crop_plan.person_box,
                 crop_attempted_strategies=tuple(attempted),
             )
         except Exception as exc:
@@ -377,6 +424,9 @@ def _write_export_metadata(
     crop_sampled_frames: int | None,
     crop_subject_x: float | None,
     crop_stability_score: float | None,
+    person_detection_count: int | None,
+    person_detection_confidence: float | None,
+    person_box: tuple[float, float, float, float] | None,
     crop_attempted_strategies: Sequence[str],
     overlay_title_expected: bool,
     overlay_title_rendered: bool,
@@ -416,6 +466,9 @@ def _write_export_metadata(
                 "crop_sampled_frames": crop_sampled_frames,
                 "crop_subject_x": crop_subject_x,
                 "crop_stability_score": crop_stability_score,
+                "person_detection_count": person_detection_count,
+                "person_detection_confidence": person_detection_confidence,
+                "person_box": list(person_box) if person_box is not None else None,
                 "crop_attempted_strategies": list(crop_attempted_strategies),
                 "video_path": str(video_path),
                 "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,
@@ -539,6 +592,13 @@ def render_selected_short_candidates(
                 crop_stability_score=render_result.crop_stability_score
                 if isinstance(render_result, ShortRenderResult)
                 else None,
+                person_detection_count=render_result.person_detection_count
+                if isinstance(render_result, ShortRenderResult)
+                else None,
+                person_detection_confidence=render_result.person_detection_confidence
+                if isinstance(render_result, ShortRenderResult)
+                else None,
+                person_box=render_result.person_box if isinstance(render_result, ShortRenderResult) else None,
                 crop_attempted_strategies=render_result.crop_attempted_strategies
                 if isinstance(render_result, ShortRenderResult)
                 else (),

@@ -3291,3 +3291,77 @@ python .\scripts\e2e_real_video.py `
 - 58分実写では subject signal が中心寄りで曖昧だったため、`subject_tracking_crop` は採用されなかった。
 - blur background により顔切れは避けられるが、ショートとしての情報密度は低め。
 - 高信頼の no-face subject crop を増やすには、人物検出またはより強い foreground signal が別途必要。
+
+## 2026-07-05 Task 45 person-aware short composition
+
+### 目的
+
+- no-face / weak-face 時に人物検出を追加し、信頼できる人物 box がある場合だけ `person_tracking_crop` を使う。
+- 低信頼、複数人物で曖昧、または不安定な検出では `blur_background` に逃がす。
+- 既存の `face_tracking_crop`、`subject_tracking_crop`、sidecar分離、字幕、選定ロジックは変更しない。
+
+### 変更ファイル
+
+- `backend/app/video/person_detect.py`
+- `backend/app/render/crop_strategy.py`
+- `backend/app/render/render_short.py`
+- `backend/pyproject.toml`
+- `backend/tests/test_short_rendering.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- OpenCV HOG ベースの optional person detector を追加。
+- Docker / CI でも HOG API を使えるよう `opencv-python>=4.10.0,<5.0.0` を明示。
+- clip 内の複数 frame を sampling し、人物 box の confidence / 安定性 / 複数人物の曖昧さを評価。
+- crop 優先順位を以下に整理。
+  - reliable face signal -> `face_tracking_crop`
+  - reliable person signal -> `person_tracking_crop`
+  - reliable lightweight subject signal -> `subject_tracking_crop`
+  - weak / ambiguous signal -> `blur_background`
+  - explicit center only -> `center_crop`
+- short metadata に以下を追加。
+  - `person_detection_count`
+  - `person_detection_confidence`
+  - `person_box`
+
+### 検証状況
+
+- `cd backend && ..\.venv\Scripts\python -m ruff check app\video\person_detect.py app\render\crop_strategy.py app\render\render_short.py tests\test_short_rendering.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_short_rendering.py`: 31 passed, 1 warning。
+- `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 216 passed, 1 skipped, 1 warning。
+- `cd frontend && npm run lint`: pass。
+- `cd frontend && npm run typecheck`: pass。
+- `cd frontend && npm run build`: pass。
+- `docker compose up -d --build`: pass。
+- Docker worker OpenCV check: `cv2 4.13.0`, `HOGDescriptor=True`, `HOGDescriptor_getDefaultPeopleDetector=True`。
+- Docker worker direct person detector check: no exception, `person_signal=None` on the 58分 input first 10s。
+- `python scripts\smoke_runtime.py --skip-video`: pass。
+- `python scripts\e2e_sample_video.py`: pass。
+  - job: `job_ef6b60c148954bc39083e2b8f62568b1`
+  - short output: `1080x1920`。
+- `python scripts\check_subtitle_sidecar_risk.py --job-id job_ef6b60c148954bc39083e2b8f62568b1 --json`: pass。
+  - `risk_count`: 0。
+- 58分実写 low_cost short-only E2E: pass。
+  - input: `C:\Users\peace.YAGURUMAGIKUHM\Desktop\【朝倉慶vs西田真澄】物価が牙をむく！？株高の代償…フジメディアHG大株主・ダルトンアクティビストが語るインフレの悲劇とは？【ReHacQ】 - ReHacQ−リハック−【公式】 (720p, h264).mp4`
+  - job: `job_7325a1bd35eb4d53a7aa9cb7244cfc78`
+  - selected: normal 0/0, short 10/10。
+  - render failures: 0。
+  - shorts: all `1080x1920`。
+  - `crop_strategy`: `blur_background` 10/10。
+  - `crop_signal_source`: `face_detection` 10/10。
+  - `crop_fallback_reason`: `face_group_too_wide_for_9x16_crop` 10/10。
+  - `person_detection_count`: 0/10。
+  - audit inspection count: 5。
+  - sidecar risk: 0。
+  - total runtime: 504.360s。
+  - short render time: 121.562s。
+  - visual contact sheet: `storage/outputs/job_7325a1bd35eb4d53a7aa9cb7244cfc78/audit/composition_frames/contact_sheet.jpg`
+
+### 未解決事項
+
+- 58分実写では顔検出が広すぎる対談構図を検出し、`face_group_too_wide_for_9x16_crop` として `blur_background` に逃がした。
+- `person_tracking_crop` はこの素材では採用されなかった。
+- 見た目は顔切れ回避としては安全だが、情報密度改善には別の人物検出手段が必要。
