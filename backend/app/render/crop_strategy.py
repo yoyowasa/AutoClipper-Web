@@ -5,6 +5,7 @@ from typing import Literal, Sequence
 from app.render.filters import ass_filter
 from app.video.face_detect import FaceDetection, best_face_center
 from app.video.person_detect import PersonDetection
+from app.video.speaker_detect import SpeakerDetection
 from app.video.subject_detect import SubjectDetection
 
 
@@ -14,6 +15,7 @@ SHORT_HEIGHT = 1920
 CropLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
 CropStrategy = Literal[
     "face_tracking_crop",
+    "speaker_tracking_crop",
     "person_tracking_crop",
     "subject_tracking_crop",
     "center_crop",
@@ -25,6 +27,7 @@ CropStrategy = Literal[
 class CropPlan:
     strategy_order: tuple[CropStrategy, ...]
     face_center: tuple[float, float] | None = None
+    speaker_center: tuple[float, float] | None = None
     person_center: tuple[float, float] | None = None
     subject_center: tuple[float, float] | None = None
     signal_source: str = "none"
@@ -39,6 +42,9 @@ class CropPlan:
     person_detection_count: int = 0
     person_detection_confidence: float | None = None
     person_box: tuple[float, float, float, float] | None = None
+    speaker_window_count: int = 0
+    speaker_region_confidence: float | None = None
+    speaker_region_box: tuple[float, float, float, float] | None = None
 
 
 FACE_SAFE_MARGIN_X = 72
@@ -56,6 +62,12 @@ PERSON_SAFE_MARGIN_BOTTOM = 260
 PERSON_MIN_CONFIDENCE = 0.68
 PERSON_MIN_STABILITY = 0.58
 PERSON_MIN_HEIGHT = 0.22
+SPEAKER_SAFE_MARGIN_X = 96
+SPEAKER_SAFE_MARGIN_TOP = 120
+SPEAKER_SAFE_MARGIN_BOTTOM = 340
+SPEAKER_MIN_CONFIDENCE = 0.72
+SPEAKER_MIN_STABILITY = 0.68
+SPEAKER_MIN_HEIGHT = 0.11
 
 
 def _destructive_center_crop_risk(source_width: int | None, source_height: int | None) -> bool:
@@ -76,6 +88,9 @@ def _no_subject_signal_plan(
     person_detection_count: int = 0,
     person_detection_confidence: float | None = None,
     person_box: tuple[float, float, float, float] | None = None,
+    speaker_window_count: int = 0,
+    speaker_region_confidence: float | None = None,
+    speaker_region_box: tuple[float, float, float, float] | None = None,
 ) -> CropPlan:
     if _destructive_center_crop_risk(source_width, source_height):
         return CropPlan(
@@ -90,6 +105,9 @@ def _no_subject_signal_plan(
             person_detection_count=person_detection_count,
             person_detection_confidence=person_detection_confidence,
             person_box=person_box,
+            speaker_window_count=speaker_window_count,
+            speaker_region_confidence=speaker_region_confidence,
+            speaker_region_box=speaker_region_box,
         )
     return CropPlan(
         strategy_order=("center_crop", "blur_background"),
@@ -103,6 +121,9 @@ def _no_subject_signal_plan(
         person_detection_count=person_detection_count,
         person_detection_confidence=person_detection_confidence,
         person_box=person_box,
+        speaker_window_count=speaker_window_count,
+        speaker_region_confidence=speaker_region_confidence,
+        speaker_region_box=speaker_region_box,
     )
 
 
@@ -279,6 +300,79 @@ def _plan_subject_tracking_crop(
     )
 
 
+def _plan_speaker_tracking_crop(
+    speaker_signal: SpeakerDetection | None,
+    source_width: int,
+    source_height: int,
+    fallback_reason: str,
+) -> CropPlan | None:
+    if speaker_signal is None:
+        return None
+    if source_width <= 0 or source_height <= 0:
+        return None
+    if speaker_signal.ambiguous:
+        return None
+    if speaker_signal.confidence < SPEAKER_MIN_CONFIDENCE or speaker_signal.stability_score < SPEAKER_MIN_STABILITY:
+        return None
+    if speaker_signal.height < SPEAKER_MIN_HEIGHT:
+        return None
+
+    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
+    max_crop_x = max(0, scaled_width - SHORT_WIDTH)
+    max_crop_y = max(0, scaled_height - SHORT_HEIGHT)
+    if max_crop_x <= 0 and max_crop_y <= 0:
+        return None
+
+    left, top, right, bottom = speaker_signal.box
+    left *= scaled_width
+    right *= scaled_width
+    top *= scaled_height
+    bottom *= scaled_height
+    region_width = right - left + SPEAKER_SAFE_MARGIN_X * 2
+    region_height = bottom - top + SPEAKER_SAFE_MARGIN_TOP + SPEAKER_SAFE_MARGIN_BOTTOM
+    if region_width > min(SHORT_WIDTH, scaled_width) or region_height > min(SHORT_HEIGHT, scaled_height):
+        return None
+
+    crop_x = round(scaled_width * speaker_signal.center_x - SHORT_WIDTH / 2)
+    crop_y = round(scaled_height * speaker_signal.center_y - SHORT_HEIGHT * FACE_TARGET_Y)
+    if left - SPEAKER_SAFE_MARGIN_X < crop_x:
+        crop_x = round(left - SPEAKER_SAFE_MARGIN_X)
+    if right + SPEAKER_SAFE_MARGIN_X > crop_x + SHORT_WIDTH:
+        crop_x = round(right + SPEAKER_SAFE_MARGIN_X - SHORT_WIDTH)
+    if top - SPEAKER_SAFE_MARGIN_TOP < crop_y:
+        crop_y = round(top - SPEAKER_SAFE_MARGIN_TOP)
+    if bottom + SPEAKER_SAFE_MARGIN_BOTTOM > crop_y + SHORT_HEIGHT:
+        crop_y = round(bottom + SPEAKER_SAFE_MARGIN_BOTTOM - SHORT_HEIGHT)
+
+    crop_x = _clamp_int(crop_x, 0, max_crop_x)
+    crop_y = _clamp_int(crop_y, 0, max_crop_y)
+    planned_center = (
+        min(max((crop_x + SHORT_WIDTH / 2) / scaled_width, 0.0), 1.0),
+        min(max((crop_y + SHORT_HEIGHT / 2) / scaled_height, 0.0), 1.0),
+    )
+    return CropPlan(
+        strategy_order=("speaker_tracking_crop", "blur_background", "center_crop"),
+        speaker_center=planned_center,
+        signal_source=speaker_signal.source,
+        confidence=speaker_signal.confidence,
+        fallback_reason=fallback_reason,
+        crop_x=crop_x,
+        crop_y=crop_y,
+        detection_count=speaker_signal.detection_count,
+        sampled_frame_count=speaker_signal.window_count,
+        stability_score=speaker_signal.stability_score,
+        speaker_window_count=speaker_signal.window_count,
+        speaker_region_confidence=speaker_signal.confidence,
+        speaker_region_box=speaker_signal.box,
+    )
+
+
+def _speaker_fallback_reason(speaker_signal: SpeakerDetection) -> str:
+    if speaker_signal.ambiguous:
+        return "ambiguous_speaker_signal"
+    return "weak_speaker_signal"
+
+
 def _plan_person_tracking_crop(
     person_signal: PersonDetection | None,
     source_width: int,
@@ -365,6 +459,7 @@ def plan_short_crop(
     detections: Sequence[FaceDetection] | None = None,
     source_width: int | None = None,
     source_height: int | None = None,
+    speaker_signal: SpeakerDetection | None = None,
     person_signal: PersonDetection | None = None,
     subject_signal: SubjectDetection | None = None,
 ) -> CropPlan:
@@ -381,6 +476,14 @@ def plan_short_crop(
         )
     if not detections:
         if layout == "auto":
+            speaker_plan = _plan_speaker_tracking_crop(
+                speaker_signal,
+                source_width,
+                source_height,
+                fallback_reason="no_face_speaker_signal",
+            )
+            if speaker_plan is not None:
+                return speaker_plan
             person_plan = _plan_person_tracking_crop(
                 person_signal,
                 source_width,
@@ -409,6 +512,19 @@ def plan_short_crop(
                     person_detection_confidence=person_signal.confidence,
                     person_box=person_signal.box,
                 )
+            if speaker_signal is not None:
+                return _no_subject_signal_plan(
+                    _speaker_fallback_reason(speaker_signal),
+                    source_width,
+                    source_height,
+                    confidence=speaker_signal.confidence,
+                    detection_count=speaker_signal.detection_count,
+                    sampled_frame_count=speaker_signal.window_count,
+                    stability_score=speaker_signal.stability_score,
+                    speaker_window_count=speaker_signal.window_count,
+                    speaker_region_confidence=speaker_signal.confidence,
+                    speaker_region_box=speaker_signal.box,
+                )
             if subject_signal is not None:
                 return _no_subject_signal_plan(
                     _subject_fallback_reason(subject_signal),
@@ -422,7 +538,37 @@ def plan_short_crop(
         return _no_subject_signal_plan("no_face_detections", source_width, source_height)
 
     face_plan = _plan_face_tracking_crop(detections, source_width, source_height)
+    if layout == "auto" and face_plan.fallback_reason == "face_group_too_wide_for_9x16_crop":
+        speaker_plan = _plan_speaker_tracking_crop(
+            speaker_signal,
+            source_width,
+            source_height,
+            fallback_reason="wide_face_group_speaker_signal",
+        )
+        if speaker_plan is not None:
+            return speaker_plan
+        if speaker_signal is not None:
+            return _no_subject_signal_plan(
+                _speaker_fallback_reason(speaker_signal),
+                source_width,
+                source_height,
+                confidence=speaker_signal.confidence,
+                detection_count=len(detections),
+                sampled_frame_count=speaker_signal.window_count,
+                stability_score=speaker_signal.stability_score,
+                speaker_window_count=speaker_signal.window_count,
+                speaker_region_confidence=speaker_signal.confidence,
+                speaker_region_box=speaker_signal.box,
+            )
     if layout == "auto" and face_plan.fallback_reason == "weak_face_signal":
+        speaker_plan = _plan_speaker_tracking_crop(
+            speaker_signal,
+            source_width,
+            source_height,
+            fallback_reason="weak_face_speaker_signal",
+        )
+        if speaker_plan is not None:
+            return speaker_plan
         person_plan = _plan_person_tracking_crop(
             person_signal,
             source_width,
@@ -451,6 +597,19 @@ def plan_short_crop(
                 person_detection_count=person_signal.detection_count,
                 person_detection_confidence=person_signal.confidence,
                 person_box=person_signal.box,
+            )
+        if speaker_signal is not None:
+            return _no_subject_signal_plan(
+                _speaker_fallback_reason(speaker_signal),
+                source_width,
+                source_height,
+                confidence=speaker_signal.confidence,
+                detection_count=len(detections),
+                sampled_frame_count=speaker_signal.window_count,
+                stability_score=speaker_signal.stability_score,
+                speaker_window_count=speaker_signal.window_count,
+                speaker_region_confidence=speaker_signal.confidence,
+                speaker_region_box=speaker_signal.box,
             )
         if subject_signal is not None:
             return _no_subject_signal_plan(
@@ -554,6 +713,31 @@ def build_person_tracking_crop_filter(
     )
 
 
+def build_speaker_tracking_crop_filter(
+    source_width: int,
+    source_height: int,
+    speaker_center: tuple[float, float],
+    subtitle_path: str | Path | None = None,
+) -> str:
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError("source dimensions must be positive")
+
+    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
+    center_x, center_y = speaker_center
+    crop_x = round(scaled_width * min(max(center_x, 0.0), 1.0) - SHORT_WIDTH / 2)
+    crop_y = round(scaled_height * min(max(center_y, 0.0), 1.0) - SHORT_HEIGHT / 2)
+    crop_x = min(max(crop_x, 0), max(0, scaled_width - SHORT_WIDTH))
+    crop_y = min(max(crop_y, 0), max(0, scaled_height - SHORT_HEIGHT))
+
+    return _append_subtitles(
+        (
+            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT}:{crop_x}:{crop_y}"
+        ),
+        subtitle_path,
+    )
+
+
 def build_blur_background_filter(subtitle_path: str | Path | None = None) -> str:
     return _append_subtitles(
         (
@@ -572,6 +756,7 @@ def strategy_order(
     detections: Sequence[FaceDetection] | None = None,
     source_width: int | None = None,
     source_height: int | None = None,
+    speaker_signal: SpeakerDetection | None = None,
     person_signal: PersonDetection | None = None,
     subject_signal: SubjectDetection | None = None,
 ) -> list[CropStrategy]:
@@ -585,6 +770,7 @@ def strategy_order(
             detections=detections,
             source_width=source_width,
             source_height=source_height,
+            speaker_signal=speaker_signal,
             person_signal=person_signal,
             subject_signal=subject_signal,
         ).strategy_order
@@ -597,6 +783,7 @@ def build_crop_filter(
     source_width: int | None = None,
     source_height: int | None = None,
     face_center: tuple[float, float] | None = None,
+    speaker_center: tuple[float, float] | None = None,
     person_center: tuple[float, float] | None = None,
     subject_center: tuple[float, float] | None = None,
 ) -> str:
@@ -604,6 +791,15 @@ def build_crop_filter(
         return build_center_crop_filter(subtitle_path)
     if strategy == "blur_background":
         return build_blur_background_filter(subtitle_path)
+    if strategy == "speaker_tracking_crop":
+        if source_width is None or source_height is None or speaker_center is None:
+            raise ValueError("speaker_tracking_crop requires source dimensions and speaker center")
+        return build_speaker_tracking_crop_filter(
+            source_width,
+            source_height,
+            speaker_center,
+            subtitle_path=subtitle_path,
+        )
     if strategy == "person_tracking_crop":
         if source_width is None or source_height is None or person_center is None:
             raise ValueError("person_tracking_crop requires source dimensions and person center")
