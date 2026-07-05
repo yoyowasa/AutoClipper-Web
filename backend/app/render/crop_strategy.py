@@ -4,6 +4,7 @@ from typing import Literal, Sequence
 
 from app.render.filters import ass_filter
 from app.video.face_detect import FaceDetection, best_face_center
+from app.video.person_detect import PersonDetection
 from app.video.subject_detect import SubjectDetection
 
 
@@ -11,13 +12,20 @@ SHORT_WIDTH = 1080
 SHORT_HEIGHT = 1920
 
 CropLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
-CropStrategy = Literal["face_tracking_crop", "subject_tracking_crop", "center_crop", "blur_background"]
+CropStrategy = Literal[
+    "face_tracking_crop",
+    "person_tracking_crop",
+    "subject_tracking_crop",
+    "center_crop",
+    "blur_background",
+]
 
 
 @dataclass(frozen=True)
 class CropPlan:
     strategy_order: tuple[CropStrategy, ...]
     face_center: tuple[float, float] | None = None
+    person_center: tuple[float, float] | None = None
     subject_center: tuple[float, float] | None = None
     signal_source: str = "none"
     confidence: float = 0.0
@@ -28,6 +36,9 @@ class CropPlan:
     sampled_frame_count: int = 0
     subject_x: float | None = None
     stability_score: float | None = None
+    person_detection_count: int = 0
+    person_detection_confidence: float | None = None
+    person_box: tuple[float, float, float, float] | None = None
 
 
 FACE_SAFE_MARGIN_X = 72
@@ -39,6 +50,12 @@ SUBJECT_MIN_CONFIDENCE = 0.66
 SUBJECT_MIN_STABILITY = 0.55
 SUBJECT_CENTER_DEADBAND = 0.08
 SUBJECT_CENTER_MIN_CONFIDENCE = 0.82
+PERSON_SAFE_MARGIN_X = 96
+PERSON_SAFE_MARGIN_TOP = 96
+PERSON_SAFE_MARGIN_BOTTOM = 260
+PERSON_MIN_CONFIDENCE = 0.68
+PERSON_MIN_STABILITY = 0.58
+PERSON_MIN_HEIGHT = 0.22
 
 
 def _destructive_center_crop_risk(source_width: int | None, source_height: int | None) -> bool:
@@ -56,6 +73,9 @@ def _no_subject_signal_plan(
     sampled_frame_count: int = 0,
     subject_x: float | None = None,
     stability_score: float | None = None,
+    person_detection_count: int = 0,
+    person_detection_confidence: float | None = None,
+    person_box: tuple[float, float, float, float] | None = None,
 ) -> CropPlan:
     if _destructive_center_crop_risk(source_width, source_height):
         return CropPlan(
@@ -67,6 +87,9 @@ def _no_subject_signal_plan(
             sampled_frame_count=sampled_frame_count,
             subject_x=subject_x,
             stability_score=stability_score,
+            person_detection_count=person_detection_count,
+            person_detection_confidence=person_detection_confidence,
+            person_box=person_box,
         )
     return CropPlan(
         strategy_order=("center_crop", "blur_background"),
@@ -77,6 +100,9 @@ def _no_subject_signal_plan(
         sampled_frame_count=sampled_frame_count,
         subject_x=subject_x,
         stability_score=stability_score,
+        person_detection_count=person_detection_count,
+        person_detection_confidence=person_detection_confidence,
+        person_box=person_box,
     )
 
 
@@ -253,6 +279,78 @@ def _plan_subject_tracking_crop(
     )
 
 
+def _plan_person_tracking_crop(
+    person_signal: PersonDetection | None,
+    source_width: int,
+    source_height: int,
+    fallback_reason: str,
+) -> CropPlan | None:
+    if person_signal is None:
+        return None
+    if source_width <= 0 or source_height <= 0:
+        return None
+    if person_signal.ambiguous:
+        return None
+    if person_signal.confidence < PERSON_MIN_CONFIDENCE or person_signal.stability_score < PERSON_MIN_STABILITY:
+        return None
+    if person_signal.height < PERSON_MIN_HEIGHT:
+        return None
+
+    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
+    max_crop_x = max(0, scaled_width - SHORT_WIDTH)
+    max_crop_y = max(0, scaled_height - SHORT_HEIGHT)
+    if max_crop_x <= 0 and max_crop_y <= 0:
+        return None
+
+    left, top, right, bottom = person_signal.box
+    left *= scaled_width
+    right *= scaled_width
+    top *= scaled_height
+    bottom *= scaled_height
+    person_width = right - left + PERSON_SAFE_MARGIN_X * 2
+    person_height = bottom - top + PERSON_SAFE_MARGIN_TOP + PERSON_SAFE_MARGIN_BOTTOM
+    if person_width > min(SHORT_WIDTH, scaled_width) or person_height > min(SHORT_HEIGHT, scaled_height):
+        return None
+
+    crop_x = round(scaled_width * person_signal.center_x - SHORT_WIDTH / 2)
+    crop_y = round(scaled_height * person_signal.center_y - SHORT_HEIGHT / 2)
+    if left - PERSON_SAFE_MARGIN_X < crop_x:
+        crop_x = round(left - PERSON_SAFE_MARGIN_X)
+    if right + PERSON_SAFE_MARGIN_X > crop_x + SHORT_WIDTH:
+        crop_x = round(right + PERSON_SAFE_MARGIN_X - SHORT_WIDTH)
+    if top - PERSON_SAFE_MARGIN_TOP < crop_y:
+        crop_y = round(top - PERSON_SAFE_MARGIN_TOP)
+    if bottom + PERSON_SAFE_MARGIN_BOTTOM > crop_y + SHORT_HEIGHT:
+        crop_y = round(bottom + PERSON_SAFE_MARGIN_BOTTOM - SHORT_HEIGHT)
+
+    crop_x = _clamp_int(crop_x, 0, max_crop_x)
+    crop_y = _clamp_int(crop_y, 0, max_crop_y)
+    planned_center = (
+        min(max((crop_x + SHORT_WIDTH / 2) / scaled_width, 0.0), 1.0),
+        min(max((crop_y + SHORT_HEIGHT / 2) / scaled_height, 0.0), 1.0),
+    )
+    return CropPlan(
+        strategy_order=("person_tracking_crop", "blur_background", "center_crop"),
+        person_center=planned_center,
+        signal_source=person_signal.source,
+        confidence=person_signal.confidence,
+        fallback_reason=fallback_reason,
+        crop_x=crop_x,
+        crop_y=crop_y,
+        sampled_frame_count=person_signal.sampled_frames,
+        stability_score=person_signal.stability_score,
+        person_detection_count=person_signal.detection_count,
+        person_detection_confidence=person_signal.confidence,
+        person_box=person_signal.box,
+    )
+
+
+def _person_fallback_reason(person_signal: PersonDetection) -> str:
+    if person_signal.ambiguous:
+        return "ambiguous_person_signal"
+    return "weak_person_signal"
+
+
 def _subject_fallback_reason(subject_signal: SubjectDetection) -> str:
     if (
         abs(subject_signal.center_x - 0.5) < SUBJECT_CENTER_DEADBAND
@@ -267,6 +365,7 @@ def plan_short_crop(
     detections: Sequence[FaceDetection] | None = None,
     source_width: int | None = None,
     source_height: int | None = None,
+    person_signal: PersonDetection | None = None,
     subject_signal: SubjectDetection | None = None,
 ) -> CropPlan:
     if layout == "blur_background":
@@ -282,6 +381,14 @@ def plan_short_crop(
         )
     if not detections:
         if layout == "auto":
+            person_plan = _plan_person_tracking_crop(
+                person_signal,
+                source_width,
+                source_height,
+                fallback_reason="no_face_person_signal",
+            )
+            if person_plan is not None:
+                return person_plan
             subject_plan = _plan_subject_tracking_crop(
                 subject_signal,
                 source_width,
@@ -290,6 +397,18 @@ def plan_short_crop(
             )
             if subject_plan is not None:
                 return subject_plan
+            if person_signal is not None:
+                return _no_subject_signal_plan(
+                    _person_fallback_reason(person_signal),
+                    source_width,
+                    source_height,
+                    confidence=person_signal.confidence,
+                    sampled_frame_count=person_signal.sampled_frames,
+                    stability_score=person_signal.stability_score,
+                    person_detection_count=person_signal.detection_count,
+                    person_detection_confidence=person_signal.confidence,
+                    person_box=person_signal.box,
+                )
             if subject_signal is not None:
                 return _no_subject_signal_plan(
                     _subject_fallback_reason(subject_signal),
@@ -304,6 +423,14 @@ def plan_short_crop(
 
     face_plan = _plan_face_tracking_crop(detections, source_width, source_height)
     if layout == "auto" and face_plan.fallback_reason == "weak_face_signal":
+        person_plan = _plan_person_tracking_crop(
+            person_signal,
+            source_width,
+            source_height,
+            fallback_reason="weak_face_person_signal",
+        )
+        if person_plan is not None:
+            return person_plan
         subject_plan = _plan_subject_tracking_crop(
             subject_signal,
             source_width,
@@ -312,6 +439,19 @@ def plan_short_crop(
         )
         if subject_plan is not None:
             return subject_plan
+        if person_signal is not None:
+            return _no_subject_signal_plan(
+                _person_fallback_reason(person_signal),
+                source_width,
+                source_height,
+                confidence=person_signal.confidence,
+                detection_count=len(detections),
+                sampled_frame_count=person_signal.sampled_frames,
+                stability_score=person_signal.stability_score,
+                person_detection_count=person_signal.detection_count,
+                person_detection_confidence=person_signal.confidence,
+                person_box=person_signal.box,
+            )
         if subject_signal is not None:
             return _no_subject_signal_plan(
                 _subject_fallback_reason(subject_signal),
@@ -389,6 +529,31 @@ def build_subject_tracking_crop_filter(
     )
 
 
+def build_person_tracking_crop_filter(
+    source_width: int,
+    source_height: int,
+    person_center: tuple[float, float],
+    subtitle_path: str | Path | None = None,
+) -> str:
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError("source dimensions must be positive")
+
+    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
+    center_x, center_y = person_center
+    crop_x = round(scaled_width * min(max(center_x, 0.0), 1.0) - SHORT_WIDTH / 2)
+    crop_y = round(scaled_height * min(max(center_y, 0.0), 1.0) - SHORT_HEIGHT / 2)
+    crop_x = min(max(crop_x, 0), max(0, scaled_width - SHORT_WIDTH))
+    crop_y = min(max(crop_y, 0), max(0, scaled_height - SHORT_HEIGHT))
+
+    return _append_subtitles(
+        (
+            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT}:{crop_x}:{crop_y}"
+        ),
+        subtitle_path,
+    )
+
+
 def build_blur_background_filter(subtitle_path: str | Path | None = None) -> str:
     return _append_subtitles(
         (
@@ -407,6 +572,7 @@ def strategy_order(
     detections: Sequence[FaceDetection] | None = None,
     source_width: int | None = None,
     source_height: int | None = None,
+    person_signal: PersonDetection | None = None,
     subject_signal: SubjectDetection | None = None,
 ) -> list[CropStrategy]:
     if layout == "blur_background":
@@ -419,6 +585,7 @@ def strategy_order(
             detections=detections,
             source_width=source_width,
             source_height=source_height,
+            person_signal=person_signal,
             subject_signal=subject_signal,
         ).strategy_order
     )
@@ -430,12 +597,22 @@ def build_crop_filter(
     source_width: int | None = None,
     source_height: int | None = None,
     face_center: tuple[float, float] | None = None,
+    person_center: tuple[float, float] | None = None,
     subject_center: tuple[float, float] | None = None,
 ) -> str:
     if strategy == "center_crop":
         return build_center_crop_filter(subtitle_path)
     if strategy == "blur_background":
         return build_blur_background_filter(subtitle_path)
+    if strategy == "person_tracking_crop":
+        if source_width is None or source_height is None or person_center is None:
+            raise ValueError("person_tracking_crop requires source dimensions and person center")
+        return build_person_tracking_crop_filter(
+            source_width,
+            source_height,
+            person_center,
+            subtitle_path=subtitle_path,
+        )
     if strategy == "subject_tracking_crop":
         if source_width is None or source_height is None or subject_center is None:
             raise ValueError("subject_tracking_crop requires source dimensions and subject center")

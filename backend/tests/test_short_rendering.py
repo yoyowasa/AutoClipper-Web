@@ -18,6 +18,7 @@ from app.render.crop_strategy import (
     build_blur_background_filter,
     build_center_crop_filter,
     build_face_tracking_crop_filter,
+    build_person_tracking_crop_filter,
     build_subject_tracking_crop_filter,
     plan_short_crop,
     strategy_order,
@@ -29,6 +30,7 @@ from app.render.render_short import (
 )
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center
+from app.video.person_detect import PersonBox, PersonDetection, _create_hog_detector, aggregate_person_detections
 from app.video.probe import VideoMetadata
 from app.video.subject_detect import SubjectDetection, estimate_subject_from_frames
 
@@ -114,6 +116,11 @@ def test_crop_strategy_filters_target_1080x1920() -> None:
         source_height=1080,
         subject_center=(0.75, 0.5),
     ) == "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:2020:0"
+    assert build_person_tracking_crop_filter(
+        source_width=1920,
+        source_height=1080,
+        person_center=(0.75, 0.5),
+    ) == "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:2020:0"
 
 
 def test_face_center_and_strategy_order() -> None:
@@ -170,6 +177,115 @@ def test_short_crop_plan_no_face_landscape_uses_blur_background_before_center_cr
     assert plan.fallback_reason == "no_face_detections"
     assert plan.confidence == 0.0
     assert plan.detection_count == 0
+
+
+def reliable_person_detection() -> PersonDetection:
+    return PersonDetection(
+        center_x=0.72,
+        center_y=0.52,
+        width=0.22,
+        height=0.52,
+        confidence=0.83,
+        stability_score=0.82,
+        sampled_frames=3,
+        detection_count=3,
+        box=(0.61, 0.26, 0.83, 0.78),
+    )
+
+
+def test_short_crop_plan_no_face_reliable_person_signal_uses_person_tracking_crop() -> None:
+    person = reliable_person_detection()
+
+    plan = plan_short_crop("auto", detections=[], source_width=1920, source_height=1080, person_signal=person)
+
+    assert plan.strategy_order == ("person_tracking_crop", "blur_background", "center_crop")
+    assert plan.signal_source == "person_detection"
+    assert plan.fallback_reason == "no_face_person_signal"
+    assert plan.person_center is not None
+    assert plan.crop_x == 1917
+    assert plan.crop_y == 0
+    assert plan.sampled_frame_count == 3
+    assert plan.stability_score == 0.82
+    assert plan.person_detection_count == 3
+    assert plan.person_detection_confidence == 0.83
+    assert plan.person_box == (0.61, 0.26, 0.83, 0.78)
+
+
+def test_short_crop_plan_no_face_person_signal_takes_priority_over_subject_signal() -> None:
+    person = reliable_person_detection()
+    subject = SubjectDetection(center_x=0.76, confidence=0.84, stability_score=0.88, sampled_frames=5)
+
+    plan = plan_short_crop(
+        "auto",
+        detections=[],
+        source_width=1920,
+        source_height=1080,
+        person_signal=person,
+        subject_signal=subject,
+    )
+
+    assert plan.strategy_order[0] == "person_tracking_crop"
+    assert plan.signal_source == "person_detection"
+
+
+def test_short_crop_plan_reliable_face_signal_keeps_face_priority_over_person_signal() -> None:
+    detections = [FaceDetection(start=0, end=0, center_x=0.35, center_y=0.45, width=0.18, height=0.2)]
+
+    plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1920,
+        source_height=1080,
+        person_signal=reliable_person_detection(),
+    )
+
+    assert plan.strategy_order[0] == "face_tracking_crop"
+    assert plan.signal_source == "face_detection"
+
+
+def test_short_crop_plan_ambiguous_person_signal_uses_blur_background() -> None:
+    person = PersonDetection(
+        center_x=0.72,
+        center_y=0.52,
+        width=0.22,
+        height=0.52,
+        confidence=0.86,
+        stability_score=0.82,
+        sampled_frames=3,
+        detection_count=6,
+        box=(0.61, 0.26, 0.83, 0.78),
+        ambiguous=True,
+    )
+
+    plan = plan_short_crop("auto", detections=[], source_width=1920, source_height=1080, person_signal=person)
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
+    assert plan.fallback_reason == "ambiguous_person_signal"
+    assert plan.person_detection_count == 6
+    assert plan.person_detection_confidence == 0.86
+    assert plan.person_box == (0.61, 0.26, 0.83, 0.78)
+
+
+def test_short_crop_plan_low_confidence_person_signal_uses_blur_background() -> None:
+    person = PersonDetection(
+        center_x=0.72,
+        center_y=0.52,
+        width=0.22,
+        height=0.52,
+        confidence=0.42,
+        stability_score=0.82,
+        sampled_frames=3,
+        detection_count=3,
+        box=(0.61, 0.26, 0.83, 0.78),
+    )
+
+    plan = plan_short_crop("auto", detections=[], source_width=1920, source_height=1080, person_signal=person)
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
+    assert plan.fallback_reason == "weak_person_signal"
+    assert plan.confidence == 0.42
 
 
 def test_short_crop_plan_no_face_strong_subject_signal_uses_subject_tracking_crop() -> None:
@@ -408,6 +524,92 @@ def test_render_short_clip_no_face_strong_subject_signal_uses_subject_tracking_c
     assert "crop=1080:1920:1986:0" in commands[0][commands[0].index("-vf") + 1]
 
 
+def test_render_short_clip_no_face_reliable_person_signal_uses_person_tracking_crop(tmp_path: Path) -> None:
+    output_path = tmp_path / "short.mp4"
+    commands: list[list[str]] = []
+
+    def fake_face_detector(_input_path: str | Path, _start: float, _end: float) -> list[FaceDetection]:
+        return []
+
+    def fake_person_detector(_input_path: str | Path, _start: float, _end: float) -> PersonDetection:
+        return reliable_person_detection()
+
+    def fake_subject_detector(_input_path: str | Path, _start: float, _end: float) -> SubjectDetection:
+        return SubjectDetection(center_x=0.76, confidence=0.84, stability_score=0.88, sampled_frames=5)
+
+    def fake_metadata_probe(_input_path: str | Path) -> VideoMetadata:
+        return VideoMetadata(duration=60.0, width=1920, height=1080, fps=30.0, has_audio=True)
+
+    def fake_runner(command: list[str]) -> None:
+        commands.append(command)
+        output_path.write_bytes(b"short mp4")
+
+    result = render_short_clip(
+        "input.mp4",
+        output_path,
+        start=0.0,
+        end=30.0,
+        layout="auto",
+        face_detector=fake_face_detector,
+        person_detector=fake_person_detector,
+        subject_detector=fake_subject_detector,
+        metadata_probe=fake_metadata_probe,
+        command_runner=fake_runner,
+    )
+
+    assert result.strategy == "person_tracking_crop"
+    assert result.crop_signal_source == "person_detection"
+    assert result.crop_fallback_reason == "no_face_person_signal"
+    assert result.crop_confidence == 0.83
+    assert result.person_detection_count == 3
+    assert result.person_detection_confidence == 0.83
+    assert result.person_box == (0.61, 0.26, 0.83, 0.78)
+    assert result.crop_attempted_strategies == ("person_tracking_crop",)
+    assert "crop=1080:1920:1917:0" in commands[0][commands[0].index("-vf") + 1]
+
+
+def test_person_detection_aggregation_rejects_ambiguous_multi_person_layout() -> None:
+    boxes = [
+        [
+            PersonBox(center_x=0.28, center_y=0.55, width=0.2, height=0.5, confidence=0.9),
+            PersonBox(center_x=0.74, center_y=0.55, width=0.2, height=0.5, confidence=0.88),
+        ],
+        [
+            PersonBox(center_x=0.29, center_y=0.55, width=0.2, height=0.5, confidence=0.9),
+            PersonBox(center_x=0.75, center_y=0.55, width=0.2, height=0.5, confidence=0.88),
+        ],
+    ]
+
+    signal = aggregate_person_detections(boxes)
+
+    assert signal is not None
+    assert signal.ambiguous is True
+    assert signal.detection_count == 4
+
+
+def test_person_detection_aggregation_accepts_stable_single_person_layout() -> None:
+    boxes = [
+        [PersonBox(center_x=0.7, center_y=0.55, width=0.2, height=0.5, confidence=0.9)],
+        [PersonBox(center_x=0.71, center_y=0.55, width=0.2, height=0.51, confidence=0.88)],
+        [PersonBox(center_x=0.7, center_y=0.54, width=0.2, height=0.5, confidence=0.9)],
+    ]
+
+    signal = aggregate_person_detections(boxes)
+
+    assert signal is not None
+    assert signal.ambiguous is False
+    assert signal.center_x > 0.68
+    assert signal.confidence > 0.75
+    assert signal.stability_score > 0.9
+
+
+def test_person_detector_returns_unavailable_when_hog_api_is_missing() -> None:
+    class FakeCv2:
+        pass
+
+    assert _create_hog_detector(FakeCv2()) is None
+
+
 def test_subject_estimation_uses_off_center_motion_signal() -> None:
     import numpy as np
 
@@ -517,6 +719,9 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert "crop_sampled_frames" in short_metadata
     assert "crop_subject_x" in short_metadata
     assert "crop_stability_score" in short_metadata
+    assert "person_detection_count" in short_metadata
+    assert "person_detection_confidence" in short_metadata
+    assert "person_box" in short_metadata
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200
