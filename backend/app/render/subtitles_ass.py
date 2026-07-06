@@ -185,8 +185,9 @@ def _coerce_str(value: Any, default: str) -> str:
 
 def _first_value(mapping: dict[str, Any], *keys: str) -> Any:
     for key in keys:
-        if key in mapping:
-            return mapping[key]
+        value = mapping.get(key)
+        if value is not None:
+            return value
     return None
 
 

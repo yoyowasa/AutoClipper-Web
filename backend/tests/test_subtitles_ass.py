@@ -168,6 +168,28 @@ def test_short_subtitle_style_can_be_overridden_from_settings() -> None:
     assert ",1,4,0,8,30,30,120,1" in ass
 
 
+def test_common_subtitle_style_overrides_ignore_type_specific_nulls() -> None:
+    layout = SubtitleLayout.short(
+        settings={
+            "subtitleFontName": "Noto Sans CJK JP",
+            "subtitleFontSize": 54,
+            "subtitleOutline": 1,
+            "subtitleLowerMargin": 500,
+            "subtitleAlignment": 8,
+            "shortSubtitleFontSize": None,
+            "shortSubtitleOutline": None,
+            "shortSubtitleLowerMargin": None,
+            "shortSubtitleAlignment": None,
+        }
+    )
+
+    assert layout.font_name == "Noto Sans CJK JP"
+    assert layout.font_size == 54
+    assert layout.outline == 1
+    assert layout.lower_margin == 500
+    assert layout.subtitle_alignment == 8
+
+
 def test_normal_subtitle_style_can_be_overridden_from_settings() -> None:
     layout = SubtitleLayout.normal(
         width=1280,

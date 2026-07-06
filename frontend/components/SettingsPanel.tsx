@@ -220,7 +220,7 @@ export function SettingsPanel({
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={disabled}
                 min={1}
-                step={5}
+                step={1}
                 type="number"
                 value={settings.normalMinDuration}
                 onChange={(event) =>
@@ -238,7 +238,7 @@ export function SettingsPanel({
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={disabled}
                 min={1}
-                step={5}
+                step={1}
                 type="number"
                 value={settings.normalMaxDuration}
                 onChange={(event) =>
@@ -256,7 +256,7 @@ export function SettingsPanel({
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={disabled}
                 min={1}
-                step={5}
+                step={1}
                 type="number"
                 value={settings.shortMinDuration}
                 onChange={(event) =>
@@ -274,7 +274,7 @@ export function SettingsPanel({
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={disabled}
                 min={1}
-                step={5}
+                step={1}
                 type="number"
                 value={settings.shortMaxDuration}
                 onChange={(event) =>

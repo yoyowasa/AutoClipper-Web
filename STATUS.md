@@ -3568,3 +3568,56 @@ python .\scripts\e2e_real_video.py `
 
 - UI経由で任意値を変えた実動画レンダリング確認は未実施。default path の smoke / sample E2E は pass。
 - short / normal 個別 style override は backend API では対応済みだが、UIでは共通 override のみ露出。
+
+## 2026-07-07 Task 49b duration input validation fix
+
+### 目的
+
+- Task 49 merge後のUI override確認中に、duration入力のHTML validationでジョブ作成が止まる問題を修正する。
+- `normalMinDuration=20` / `normalMaxDuration=30` など、backendで有効な秒数指定をUIから送れるようにする。
+
+### 対象
+
+- `frontend/components/SettingsPanel.tsx`
+- `backend/app/render/subtitles_ass.py`
+- `backend/tests/test_subtitles_ass.py`
+- `STATUS.md`
+
+### 修正内容
+
+- Advanced durations の4項目を `step={5}` から `step={1}` に変更。
+  - `normalMinDuration`
+  - `normalMaxDuration`
+  - `shortMinDuration`
+  - `shortMaxDuration`
+- `min={1}` は維持。
+- `subtitleFontSize` などの共通 override が、`shortSubtitleFontSize: null` / `normalSubtitleFontSize: null` によって無効化される問題を修正。
+- `_first_value()` は `None` をスキップし、共通 override へ fallback する。
+- type別nullを含むPydantic dump相当の回帰テストを追加。
+
+### 検証結果
+
+- `cd frontend && npm run typecheck`: pass。
+- `cd frontend && npm run lint`: pass。
+- `cd frontend && npm run build`: pass。
+- `cd backend && ..\.venv\Scripts\python -m ruff check app\render\subtitles_ass.py tests\test_subtitles_ass.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_subtitles_ass.py`: 13 passed。
+- `docker compose up -d --build`: pass。
+- UI form validation確認: `normalMinDuration=20` / `normalMaxDuration=60` / `shortMinDuration=20` / `shortMaxDuration=30` で `formValid=true`。
+- UI override render確認: job `job_2d23ea3b1dcd4f22878788fde8f2a58b` completed。
+  - request settings: `subtitleFontSize=54`, `subtitleOutline=1`, `subtitleLowerMargin=500`, `subtitleAlignment=8`。
+  - short ASS: `Style: Subtitle,Noto Sans CJK JP,54,...,1,1,2,8,86,86,500,1`。
+  - normal ASS: `Style: Subtitle,Noto Sans CJK JP,54,...,1,1,1,8,51,51,500,1`。
+  - short output: `1080x1920`。
+  - normal output: `640x360`。
+  - `python scripts/check_subtitle_sidecar_risk.py --job-id job_2d23ea3b1dcd4f22878788fde8f2a58b --json`: `risk_count=0`。
+  - ZIP / normal MP4 / short MP4 download: HTTP 200。
+  - extracted frame: `storage/temp/ui_override_short_frame.jpg` で字幕位置の反映を確認。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- `python scripts/e2e_sample_video.py`: pass。job `job_656992418eb745bea065d9b80c026bef`、short `1/1`、`1080x1920`。
+- `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 227 passed, 1 skipped, 1 warning。
+
+### 未解決事項
+
+- UI override renderはTTS生成の短い検証動画で確認。実写素材での主観確認は別途。
