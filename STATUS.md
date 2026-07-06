@@ -3444,3 +3444,36 @@ python .\scripts\e2e_real_video.py `
 - 58分実写では `speaker_tracking_crop` 採用は 0/10。3本で speaker signal を評価したが、`ambiguous_speaker_signal` または `weak_speaker_signal` と判定し `blur_background` に逃がした。
 - transcript timing だけでは本当の active speaker を確定できないため、曖昧な対談構図では `blur_background` を維持する。
 - visual density 改善は限定的。今回の成果は、話者領域が弱い/曖昧な場合に破壊的 crop を避ける safety gate の追加。
+
+## 2026-07-07 Task 47-75 local sample editing triage
+
+### 目的
+
+- Task 47-75 のローカル案件サンプル編集ログを、本体 pipeline の実装履歴から分離する。
+- 詳細な試行錯誤は未コミット stash に保持し、main へは要約と安全な ignore ルールだけを入れる。
+
+### 対象
+
+- `.gitignore`
+- `storage/fonts/.gitkeep`
+- `STATUS.md`
+
+### 整理内容
+
+- Task 47-75 は、クライアント素材を使ったローカル編集試行として扱う。
+- 本体 runtime の正式仕様変更にはまだ含めない。
+- 字幕 style 調整、breath-cut 派生スクリプト、insert-image 派生スクリプト、ローカル font 使用は個別に triage してから product 化を判断する。
+- font binary は commit 対象外とし、`storage/fonts/.gitkeep` だけで配置先を保持する。
+
+### 検証結果
+
+- `git check-ignore -v storage/fonts/SourceHanSansJP-Heavy.otf`: `.gitignore:24:storage/fonts/*` により font binary が ignore 対象。
+- `git check-ignore -v storage/fonts/.gitkeep`: `.gitignore:30:!storage/fonts/.gitkeep` により `.gitkeep` 例外を確認。
+- `git status --short --untracked-files=all`: `storage/fonts/.gitkeep` のみ追跡候補として表示され、font binary は表示なし。
+- runtime behavior 変更なし。Docker / E2E 再実行は不要。
+
+### 未解決事項
+
+- `backend/app/render/subtitles_ass.py` の outline 変更は未採用。別タスクで configurable subtitle style として扱う。
+- `scripts/create_breath_cut_deliverable.py` は未採用。別タスクでローカルツール化または product 化を判断する。
+- `scripts/create_insert_image_deliverable.py` は未採用。別タスクでローカルツール化または product 化を判断する。
