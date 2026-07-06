@@ -21,11 +21,13 @@ build/
 storage/uploads/*
 storage/temp/*
 storage/outputs/*
+storage/fonts/*
 storage/*.db
 storage/*.db-*
 !storage/uploads/.gitkeep
 !storage/temp/.gitkeep
 !storage/outputs/.gitkeep
+!storage/fonts/.gitkeep
 
 # Logs
 *.log
