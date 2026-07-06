@@ -3526,3 +3526,45 @@ python .\scripts\e2e_real_video.py `
 
 - UI にはまだ字幕 style 設定を出していない。API / scripts / E2E settings からの指定を先に対応。
 - font binary は commit 対象外。実フォントは `storage/fonts/` などローカル配置前提。
+
+## 2026-07-07 Task 49 subtitle style UI
+
+### 目的
+
+- Task 48 で追加した字幕 style override を upload 設定UIから指定できるようにする。
+- 未指定時は既存 default のままにし、通常の生成結果を変えない。
+
+### 対象
+
+- `frontend/components/SettingsPanel.tsx`
+- `frontend/lib/types.ts`
+- `STATUS.md`
+
+### 変更内容
+
+- Upload の `SettingsPanel` に `Subtitle style` 折りたたみ設定を追加。
+- UIから以下の共通 override を送信可能にした。
+  - `subtitleFontName`
+  - `subtitleFontSize`
+  - `subtitleOutline`
+  - `subtitleLowerMargin`
+  - `subtitleAlignment`
+- 空欄の項目は `undefined` にし、JSON送信時に省略されるため backend default が使われる。
+- 案件用 script、font binary、生成物は含めていない。
+
+### 検証結果
+
+- `cd frontend && npm run typecheck`: pass。
+- `cd frontend && npm run lint`: pass。
+- `cd frontend && npm run build`: pass。
+- `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 226 passed, 1 skipped, 1 warning。
+- `docker compose up -d --build`: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- `python scripts/e2e_sample_video.py`: pass。job `job_de83253db0ea4c8d870032ddb8d39671`、short `1/1`、`1080x1920`。
+- `Invoke-WebRequest http://localhost:3000/upload`: `Subtitle style` / `Font name` / `Lower margin` / `Position` の表示を確認。
+
+### 未解決事項
+
+- UI経由で任意値を変えた実動画レンダリング確認は未実施。default path の smoke / sample E2E は pass。
+- short / normal 個別 style override は backend API では対応済みだが、UIでは共通 override のみ露出。

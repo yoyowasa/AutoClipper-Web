@@ -41,6 +41,11 @@ export type ClipSettings = {
   minSubtitleDuration: number;
   maxSubtitleDuration: number;
   minGapBetweenSubtitles: number;
+  subtitleFontName?: string;
+  subtitleFontSize?: number;
+  subtitleOutline?: number;
+  subtitleLowerMargin?: number;
+  subtitleAlignment?: number;
   shortLayout: "auto" | "center_crop" | "blur_background";
   shortOverlayTitleMode: "auto" | "always" | "high_quality_only" | "never";
   enableTranscriptPostProcessing?: boolean;
