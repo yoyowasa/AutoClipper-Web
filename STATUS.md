@@ -3477,3 +3477,52 @@ python .\scripts\e2e_real_video.py `
 - `backend/app/render/subtitles_ass.py` の outline 変更は未採用。別タスクで configurable subtitle style として扱う。
 - `scripts/create_breath_cut_deliverable.py` は未採用。別タスクでローカルツール化または product 化を判断する。
 - `scripts/create_insert_image_deliverable.py` は未採用。別タスクでローカルツール化または product 化を判断する。
+
+## 2026-07-07 Task 48 configurable subtitle style
+
+### 目的
+
+- Task 47-75 の案件サンプルで必要になった字幕 outline / font size / margin / alignment 調整を hardcode せず、Job settings から上書きできるようにする。
+- 既存 default は維持し、通常 pipeline の見た目を予告なく変えない。
+
+### 対象
+
+- `backend/app/render/subtitles_ass.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_subtitles_ass.py`
+- `backend/tests/test_api_routes.py`
+- `STATUS.md`
+
+### 変更内容
+
+- `SubtitleRenderSettings` に字幕 style override を追加。
+  - font name
+  - subtitle/title font size
+  - outline
+  - shadow
+  - margin
+  - ASS alignment
+- short / normal の個別 override と、共通 `subtitle*` override をサポート。
+- `JobSettings` に advanced subtitle style fields を追加し、OpenAPI に露出。
+- default short subtitle style は従来互換のまま維持。
+  - font: `Noto Sans CJK JP`
+  - font size: `76`
+  - outline: `5`
+  - shadow: `2`
+  - alignment: `2`
+  - lower margin: `250`
+
+### 検証結果
+
+- `cd backend && ..\.venv\Scripts\python -m ruff check app\render\subtitles_ass.py app\schemas.py tests\test_subtitles_ass.py tests\test_api_routes.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_subtitles_ass.py tests\test_api_routes.py`: 26 passed, 1 warning。
+- `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 226 passed, 1 skipped, 1 warning。
+- `cd frontend && npm run lint`: pass。
+- `cd frontend && npm run typecheck`: pass。
+- `cd frontend && npm run build`: pass。
+
+### 未解決事項
+
+- UI にはまだ字幕 style 設定を出していない。API / scripts / E2E settings からの指定を先に対応。
+- font binary は commit 対象外。実フォントは `storage/fonts/` などローカル配置前提。

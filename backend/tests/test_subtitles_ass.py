@@ -129,6 +129,65 @@ def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None
     assert "Dialogue: 0,0:00:07.14,0:00:10.00,Subtitle" in ass
 
 
+def test_short_subtitle_style_defaults_remain_stable() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 4.0, overlay_title="Top title")
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="short subtitle")]
+
+    ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
+
+    assert "Style: Subtitle,Noto Sans CJK JP,76" in ass
+    assert "Style: Title,Noto Sans CJK JP,88" in ass
+    assert ",1,5,2,2,86,86,250,1" in ass
+    assert ",1,5,2,8,86,86,150,1" in ass
+
+
+def test_short_subtitle_style_can_be_overridden_from_settings() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 4.0, overlay_title="Top title")
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="short subtitle")]
+    layout = SubtitleLayout.short(
+        settings={
+            "subtitleFontName": "Source Han Sans JP Heavy",
+            "subtitleTitleFontName": "Source Han Sans JP Heavy",
+            "shortSubtitleFontSize": 86,
+            "shortTitleFontSize": 92,
+            "shortSubtitleOutline": 4,
+            "shortSubtitleShadow": 0,
+            "shortSubtitleMarginX": 30,
+            "shortSubtitleLowerMargin": 680,
+            "shortTitleTopMargin": 120,
+            "shortSubtitleAlignment": 5,
+            "shortTitleAlignment": 8,
+        }
+    )
+
+    ass = build_ass_document(candidate, segments, layout=layout)
+
+    assert "Style: Subtitle,Source Han Sans JP Heavy,86" in ass
+    assert "Style: Title,Source Han Sans JP Heavy,92" in ass
+    assert ",1,4,0,5,30,30,680,1" in ass
+    assert ",1,4,0,8,30,30,120,1" in ass
+
+
+def test_normal_subtitle_style_can_be_overridden_from_settings() -> None:
+    layout = SubtitleLayout.normal(
+        width=1280,
+        height=720,
+        settings={
+            "subtitleFontSize": 60,
+            "subtitleOutline": 4,
+            "subtitleMarginX": 70,
+            "subtitleLowerMargin": 110,
+            "subtitleAlignment": 2,
+        },
+    )
+
+    assert layout.font_size == 60
+    assert layout.outline == 4
+    assert layout.margin_x == 70
+    assert layout.lower_margin == 110
+    assert layout.subtitle_alignment == 2
+
+
 def test_build_ass_document_limits_short_subtitles_to_two_lines() -> None:
     candidate = make_candidate("short_1", "short", 0.0, 12.0, overlay_title="Top title")
     segments = [

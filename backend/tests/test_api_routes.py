@@ -198,6 +198,15 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "minSubtitleDuration": 1.25,
                 "maxSubtitleDuration": 3.75,
                 "minGapBetweenSubtitles": 0.12,
+                "subtitleFontName": "Source Han Sans JP Heavy",
+                "subtitleTitleFontName": "Source Han Sans JP Heavy",
+                "shortSubtitleFontSize": 86,
+                "shortSubtitleOutline": 4,
+                "shortSubtitleLowerMargin": 680,
+                "shortSubtitleAlignment": 5,
+                "normalSubtitleFontSize": 60,
+                "normalSubtitleOutline": 4,
+                "normalSubtitleLowerMargin": 110,
                 "selectionPolicy": "strict_quality",
                 "crossTypeOverlapDedupe": True,
                 "useOpenAIScoring": True,
@@ -234,6 +243,15 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["minSubtitleDuration"] == 1.25
         assert job.settings_json["maxSubtitleDuration"] == 3.75
         assert job.settings_json["minGapBetweenSubtitles"] == 0.12
+        assert job.settings_json["subtitleFontName"] == "Source Han Sans JP Heavy"
+        assert job.settings_json["subtitleTitleFontName"] == "Source Han Sans JP Heavy"
+        assert job.settings_json["shortSubtitleFontSize"] == 86
+        assert job.settings_json["shortSubtitleOutline"] == 4
+        assert job.settings_json["shortSubtitleLowerMargin"] == 680
+        assert job.settings_json["shortSubtitleAlignment"] == 5
+        assert job.settings_json["normalSubtitleFontSize"] == 60
+        assert job.settings_json["normalSubtitleOutline"] == 4
+        assert job.settings_json["normalSubtitleLowerMargin"] == 110
         assert job.settings_json["selectionPolicy"] == "strict_quality"
         assert job.settings_json["crossTypeOverlapDedupe"] is True
         assert job.settings_json["useOpenAIScoring"] is True
@@ -308,6 +326,12 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["openaiFallbackToRuleScore"]["default"] is True
     assert "ensureSelectedOpenAIScored" in properties
     assert "openaiFinalistScoringLimit" in properties
+    assert "subtitleFontName" in properties
+    assert "subtitleOutline" in properties
+    assert "shortSubtitleFontSize" in properties
+    assert "shortSubtitleLowerMargin" in properties
+    assert "normalSubtitleFontSize" in properties
+    assert "normalSubtitleLowerMargin" in properties
 
 
 def test_stale_running_job_is_marked_failed_on_status_poll(client: TestClient) -> None:
