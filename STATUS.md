@@ -3365,3 +3365,82 @@ python .\scripts\e2e_real_video.py `
 - 58分実写では顔検出が広すぎる対談構図を検出し、`face_group_too_wide_for_9x16_crop` として `blur_background` に逃がした。
 - `person_tracking_crop` はこの素材では採用されなかった。
 - 見た目は顔切れ回避としては安全だが、情報密度改善には別の人物検出手段が必要。
+
+## 2026-07-05 Task 46 dialogue-aware short composition
+
+### 目的
+
+- 横に広い顔 / 人物グループで `blur_background` に逃がす前に、transcript timing から安定した単一話者領域があるか確認する。
+- 信頼できる dialogue / speaker region がある場合だけ `speaker_tracking_crop` を使う。
+- 複数話者が同程度、話者領域が不安定、または9:16に安全に収まらない場合は `blur_background` を維持する。
+
+### 変更ファイル
+
+- `backend/app/video/speaker_detect.py`
+- `backend/app/render/crop_strategy.py`
+- `backend/app/render/render_short.py`
+- `backend/tests/test_short_rendering.py`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- transcript segment overlap から `DialogueWindow` を生成。
+- dialogue window ごとに face / person signal を見て、安定した単一 region のみ `SpeakerDetection` として集計。
+- `CropStrategy` に `speaker_tracking_crop` を追加。
+- crop 優先順位を以下に整理。
+  - reliable single-speaker face signal -> `face_tracking_crop`
+  - reliable dialogue / speaker region -> `speaker_tracking_crop`
+  - reliable person signal -> `person_tracking_crop`
+  - reliable subject signal -> `subject_tracking_crop`
+  - wide group / ambiguous signal -> `blur_background`
+  - explicit center only -> `center_crop`
+- short metadata に以下を追加。
+  - `speaker_window_count`
+  - `speaker_region_confidence`
+  - `speaker_region_box`
+
+### 検証状況
+
+- `cd backend && ..\.venv\Scripts\python -m ruff check app\video\speaker_detect.py app\render\crop_strategy.py app\render\render_short.py tests\test_short_rendering.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_short_rendering.py`: 37 passed, 1 warning。
+- `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 223 passed, 1 skipped, 1 warning。
+- `cd frontend && npm run lint`: pass。
+- `cd frontend && npm run typecheck`: pass。
+- `cd frontend && npm run build`: pass。
+- `docker compose up -d --build`: pass。backend / frontend / redis / worker 起動。
+- `.\.venv\Scripts\python scripts\smoke_runtime.py --skip-video`: pass。
+- `.\.venv\Scripts\python scripts\e2e_sample_video.py`: pass。
+  - job: `job_fa4d41e337b34268ac963316a9918d7e`
+  - short: 1/1, 1080x1920
+- `.\.venv\Scripts\python scripts\check_subtitle_sidecar_risk.py --job-id job_fa4d41e337b34268ac963316a9918d7e --json`: `risk_count=0`。
+- 58分実写 E2E:
+  - command: `.\.venv\Scripts\python scripts\e2e_real_video.py --video <58min ReHacQ sample> --mode low_cost --normal-count 0 --short-count 10 --selection-policy fill_requested --timeout 14400`
+  - job: `job_c3490513a8d2425ba1a8c00f03111651`
+  - result: pass
+  - total_time: 593.109s
+  - transcription_time: 214.282s
+  - scene_detection_time: 97.390s
+  - candidate_generation_time: 58.797s
+  - short_render_time: 188.688s
+  - selected: normal 0/0, short 10/10
+  - render_failures: 0
+  - shorts: all 1080x1920
+  - zip_size_bytes: 106485177
+  - sidecar risk: 0
+  - audit: normal 0, short 10, inspection 3
+  - audit warnings: `likely_abrupt_start=2`, `likely_abrupt_ending=1`, `subtitle_too_dense=1`
+- 58分 crop strategy distribution:
+  - `blur_background`: 10
+  - `speaker_tracking_crop`: 0
+  - `center_crop`: 0
+  - fallback reasons: `face_group_too_wide_for_9x16_crop=7`, `ambiguous_speaker_signal=2`, `weak_speaker_signal=1`
+  - speaker windows detected: 3/10 clips
+  - visual contact sheet: `storage/outputs/job_c3490513a8d2425ba1a8c00f03111651/audit/composition_frames/contact_sheet.jpg`
+
+### 未解決事項
+
+- 58分実写では `speaker_tracking_crop` 採用は 0/10。3本で speaker signal を評価したが、`ambiguous_speaker_signal` または `weak_speaker_signal` と判定し `blur_background` に逃がした。
+- transcript timing だけでは本当の active speaker を確定できないため、曖昧な対談構図では `blur_background` を維持する。
+- visual density 改善は限定的。今回の成果は、話者領域が弱い/曖昧な場合に破壊的 crop を避ける safety gate の追加。

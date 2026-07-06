@@ -19,6 +19,7 @@ from app.render.crop_strategy import (
     build_center_crop_filter,
     build_face_tracking_crop_filter,
     build_person_tracking_crop_filter,
+    build_speaker_tracking_crop_filter,
     build_subject_tracking_crop_filter,
     plan_short_crop,
     strategy_order,
@@ -32,6 +33,13 @@ from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center
 from app.video.person_detect import PersonBox, PersonDetection, _create_hog_detector, aggregate_person_detections
 from app.video.probe import VideoMetadata
+from app.video.speaker_detect import (
+    DialogueWindow,
+    SpeakerDetection,
+    SpeakerRegion,
+    aggregate_speaker_regions,
+    dialogue_windows_for_clip,
+)
 from app.video.subject_detect import SubjectDetection, estimate_subject_from_frames
 
 
@@ -121,6 +129,11 @@ def test_crop_strategy_filters_target_1080x1920() -> None:
         source_height=1080,
         person_center=(0.75, 0.5),
     ) == "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:2020:0"
+    assert build_speaker_tracking_crop_filter(
+        source_width=1920,
+        source_height=1080,
+        speaker_center=(0.75, 0.5),
+    ) == "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:2020:0"
 
 
 def test_face_center_and_strategy_order() -> None:
@@ -191,6 +204,77 @@ def reliable_person_detection() -> PersonDetection:
         detection_count=3,
         box=(0.61, 0.26, 0.83, 0.78),
     )
+
+
+def reliable_speaker_detection() -> SpeakerDetection:
+    return SpeakerDetection(
+        center_x=0.72,
+        center_y=0.42,
+        width=0.14,
+        height=0.2,
+        confidence=0.86,
+        stability_score=0.84,
+        window_count=3,
+        detection_count=3,
+        box=(0.65, 0.32, 0.79, 0.52),
+    )
+
+
+def test_short_crop_plan_wide_face_group_reliable_speaker_uses_speaker_tracking_crop() -> None:
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.25, center_y=0.38, width=0.18, height=0.22),
+        FaceDetection(start=0, end=0, center_x=0.75, center_y=0.38, width=0.18, height=0.22),
+    ]
+
+    plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1920,
+        source_height=1080,
+        speaker_signal=reliable_speaker_detection(),
+    )
+
+    assert plan.strategy_order == ("speaker_tracking_crop", "blur_background", "center_crop")
+    assert plan.signal_source == "dialogue_face_person"
+    assert plan.fallback_reason == "wide_face_group_speaker_signal"
+    assert plan.speaker_center is not None
+    assert plan.speaker_window_count == 3
+    assert plan.speaker_region_confidence == 0.86
+    assert plan.speaker_region_box == (0.65, 0.32, 0.79, 0.52)
+
+
+def test_short_crop_plan_ambiguous_speaker_signal_uses_blur_background() -> None:
+    speaker = SpeakerDetection(
+        center_x=0.72,
+        center_y=0.42,
+        width=0.14,
+        height=0.2,
+        confidence=0.86,
+        stability_score=0.84,
+        window_count=3,
+        detection_count=6,
+        box=(0.65, 0.32, 0.79, 0.52),
+        ambiguous=True,
+    )
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.25, center_y=0.38, width=0.18, height=0.22),
+        FaceDetection(start=0, end=0, center_x=0.75, center_y=0.38, width=0.18, height=0.22),
+    ]
+
+    plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1920,
+        source_height=1080,
+        speaker_signal=speaker,
+    )
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
+    assert plan.fallback_reason == "ambiguous_speaker_signal"
+    assert plan.speaker_window_count == 3
+    assert plan.speaker_region_confidence == 0.86
+    assert plan.speaker_region_box == (0.65, 0.32, 0.79, 0.52)
 
 
 def test_short_crop_plan_no_face_reliable_person_signal_uses_person_tracking_crop() -> None:
@@ -568,6 +652,68 @@ def test_render_short_clip_no_face_reliable_person_signal_uses_person_tracking_c
     assert "crop=1080:1920:1917:0" in commands[0][commands[0].index("-vf") + 1]
 
 
+def test_render_short_clip_wide_face_group_reliable_speaker_uses_speaker_tracking_crop(tmp_path: Path) -> None:
+    output_path = tmp_path / "short.mp4"
+    commands: list[list[str]] = []
+
+    def fake_face_detector(_input_path: str | Path, _start: float, _end: float) -> list[FaceDetection]:
+        return [
+            FaceDetection(start=0, end=0, center_x=0.25, center_y=0.38, width=0.18, height=0.22),
+            FaceDetection(start=0, end=0, center_x=0.75, center_y=0.38, width=0.18, height=0.22),
+        ]
+
+    def fake_speaker_detector(
+        _input_path: str | Path,
+        _start: float,
+        _end: float,
+        dialogue_windows: list[DialogueWindow],
+        **_kwargs: Any,
+    ) -> SpeakerDetection:
+        assert len(dialogue_windows) == 2
+        return reliable_speaker_detection()
+
+    def fake_person_detector(_input_path: str | Path, _start: float, _end: float) -> PersonDetection:
+        raise AssertionError("person detector should not be needed when speaker signal is reliable")
+
+    def fake_subject_detector(_input_path: str | Path, _start: float, _end: float) -> SubjectDetection:
+        raise AssertionError("subject detector should not be needed when speaker signal is reliable")
+
+    def fake_metadata_probe(_input_path: str | Path) -> VideoMetadata:
+        return VideoMetadata(duration=60.0, width=1920, height=1080, fps=30.0, has_audio=True)
+
+    def fake_runner(command: list[str]) -> None:
+        commands.append(command)
+        output_path.write_bytes(b"short mp4")
+
+    result = render_short_clip(
+        "input.mp4",
+        output_path,
+        start=0.0,
+        end=30.0,
+        layout="auto",
+        face_detector=fake_face_detector,
+        speaker_detector=fake_speaker_detector,
+        person_detector=fake_person_detector,
+        subject_detector=fake_subject_detector,
+        metadata_probe=fake_metadata_probe,
+        command_runner=fake_runner,
+        dialogue_windows=[
+            DialogueWindow(start=4.0, end=6.0, text_length=8),
+            DialogueWindow(start=12.0, end=14.0, text_length=10),
+        ],
+    )
+
+    assert result.strategy == "speaker_tracking_crop"
+    assert result.crop_signal_source == "dialogue_face_person"
+    assert result.crop_fallback_reason == "wide_face_group_speaker_signal"
+    assert result.crop_confidence == 0.86
+    assert result.speaker_window_count == 3
+    assert result.speaker_region_confidence == 0.86
+    assert result.speaker_region_box == (0.65, 0.32, 0.79, 0.52)
+    assert result.crop_attempted_strategies == ("speaker_tracking_crop",)
+    assert "crop=1080:1920:1917:0" in commands[0][commands[0].index("-vf") + 1]
+
+
 def test_person_detection_aggregation_rejects_ambiguous_multi_person_layout() -> None:
     boxes = [
         [
@@ -600,6 +746,49 @@ def test_person_detection_aggregation_accepts_stable_single_person_layout() -> N
     assert signal.ambiguous is False
     assert signal.center_x > 0.68
     assert signal.confidence > 0.75
+    assert signal.stability_score > 0.9
+
+
+def test_dialogue_windows_for_clip_prefers_overlapping_text_segments() -> None:
+    segments = [
+        TranscriptSegment(start=0.0, end=1.0, text="outside"),
+        TranscriptSegment(start=5.0, end=7.0, text="short"),
+        TranscriptSegment(start=10.0, end=15.0, text="very important dialogue"),
+        TranscriptSegment(start=20.0, end=21.0, text="tiny"),
+    ]
+
+    windows = dialogue_windows_for_clip(4.0, 18.0, segments, max_windows=2)
+
+    assert [(window.start, window.end) for window in windows] == [(5.0, 7.0), (10.0, 15.0)]
+    assert [window.text_length for window in windows] == [5, 23]
+
+
+def test_speaker_region_aggregation_rejects_ambiguous_layout() -> None:
+    regions = [
+        SpeakerRegion(center_x=0.70, center_y=0.42, width=0.12, height=0.18, confidence=0.9, source="dialogue_face"),
+        SpeakerRegion(center_x=0.71, center_y=0.43, width=0.12, height=0.18, confidence=0.88, source="dialogue_face"),
+    ]
+
+    signal = aggregate_speaker_regions(regions, window_count=2, detection_count=4, ambiguous_windows=1)
+
+    assert signal is not None
+    assert signal.ambiguous is True
+    assert signal.detection_count == 4
+
+
+def test_speaker_region_aggregation_accepts_stable_single_region() -> None:
+    regions = [
+        SpeakerRegion(center_x=0.70, center_y=0.42, width=0.12, height=0.18, confidence=0.9, source="dialogue_face"),
+        SpeakerRegion(center_x=0.71, center_y=0.43, width=0.12, height=0.18, confidence=0.88, source="dialogue_face"),
+        SpeakerRegion(center_x=0.70, center_y=0.42, width=0.13, height=0.19, confidence=0.89, source="dialogue_face"),
+    ]
+
+    signal = aggregate_speaker_regions(regions, window_count=3, detection_count=3)
+
+    assert signal is not None
+    assert signal.ambiguous is False
+    assert signal.center_x > 0.68
+    assert signal.confidence > 0.78
     assert signal.stability_score > 0.9
 
 
@@ -722,6 +911,11 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert "person_detection_count" in short_metadata
     assert "person_detection_confidence" in short_metadata
     assert "person_box" in short_metadata
+    assert "speaker_window_count" in short_metadata
+    assert "speaker_region_confidence" in short_metadata
+    assert "speaker_region_box" in short_metadata
+    assert renderer_calls[0]["dialogue_windows"]
+    assert isinstance(renderer_calls[0]["dialogue_windows"][0], DialogueWindow)
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200

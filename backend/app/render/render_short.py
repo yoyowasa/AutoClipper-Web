@@ -27,6 +27,7 @@ from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center, detect_faces_for_clip
 from app.video.person_detect import PersonDetection, detect_person_for_clip
 from app.video.probe import VideoMetadata, probe_metadata
+from app.video.speaker_detect import DialogueWindow, SpeakerDetection, detect_speaker_for_clip, dialogue_windows_for_clip
 from app.video.subject_detect import SubjectDetection, detect_subject_for_clip
 
 SHORT_OVERLAY_TITLE_MODES = {"auto", "always", "high_quality_only", "never"}
@@ -48,6 +49,9 @@ class ShortRenderResult:
     person_detection_count: int | None = None
     person_detection_confidence: float | None = None
     person_box: tuple[float, float, float, float] | None = None
+    speaker_window_count: int | None = None
+    speaker_region_confidence: float | None = None
+    speaker_region_box: tuple[float, float, float, float] | None = None
     crop_attempted_strategies: tuple[CropStrategy, ...] = ()
 
 
@@ -70,6 +74,7 @@ def build_center_crop_filter(subtitle_path: str | Path | None = None) -> str:
 ShortCommandRunner = Callable[[list[str]], None]
 ShortClipRenderer = Callable[..., Path | ShortRenderResult]
 FaceDetector = Callable[[str | Path, float, float], list[FaceDetection]]
+SpeakerDetector = Callable[..., SpeakerDetection | None]
 PersonDetector = Callable[[str | Path, float, float], PersonDetection | None]
 SubjectDetector = Callable[[str | Path, float, float], SubjectDetection | None]
 MetadataProbe = Callable[[str | Path], VideoMetadata]
@@ -98,6 +103,7 @@ def build_render_short_command(
     source_width: int | None = None,
     source_height: int | None = None,
     face_center: tuple[float, float] | None = None,
+    speaker_center: tuple[float, float] | None = None,
     person_center: tuple[float, float] | None = None,
     subject_center: tuple[float, float] | None = None,
 ) -> list[str]:
@@ -121,6 +127,7 @@ def build_render_short_command(
             source_width=source_width,
             source_height=source_height,
             face_center=face_center,
+            speaker_center=speaker_center,
             person_center=person_center,
             subject_center=subject_center,
         ),
@@ -231,8 +238,38 @@ def _detect_person_for_layout(
         return None
 
 
+def _detect_speaker_for_layout(
+    layout: CropLayout,
+    input_path: str | Path,
+    start: float,
+    end: float,
+    dialogue_windows: Sequence[DialogueWindow] | None,
+    speaker_detector: SpeakerDetector,
+    face_detector: FaceDetector,
+    person_detector: PersonDetector,
+) -> SpeakerDetection | None:
+    if layout != "auto" or not dialogue_windows:
+        return None
+    try:
+        return speaker_detector(
+            input_path,
+            start,
+            end,
+            dialogue_windows,
+            face_detector=face_detector,
+            person_detector=person_detector,
+        )
+    except Exception:
+        return None
+
+
 def _needs_secondary_crop_signals(layout: CropLayout, crop_plan: Any) -> bool:
-    return layout == "auto" and crop_plan.fallback_reason in {"no_face_detections", "weak_face_signal", "no_face_center"}
+    return layout == "auto" and crop_plan.fallback_reason in {
+        "no_face_detections",
+        "weak_face_signal",
+        "no_face_center",
+        "face_group_too_wide_for_9x16_crop",
+    }
 
 
 def render_short_clip(
@@ -247,10 +284,12 @@ def render_short_clip(
     source_width: int | None = None,
     source_height: int | None = None,
     face_detector: FaceDetector = detect_faces_for_clip,
+    speaker_detector: SpeakerDetector = detect_speaker_for_clip,
     person_detector: PersonDetector = detect_person_for_clip,
     subject_detector: SubjectDetector = detect_subject_for_clip,
     metadata_probe: MetadataProbe = probe_metadata,
     command_runner: ShortCommandRunner = _run_ffmpeg_command,
+    dialogue_windows: Sequence[DialogueWindow] | None = None,
 ) -> ShortRenderResult:
     width, height = _source_dimensions(
         input_path,
@@ -272,6 +311,16 @@ def render_short_clip(
         source_height=height,
     )
     if _needs_secondary_crop_signals(layout, crop_plan):
+        speaker_signal = _detect_speaker_for_layout(
+            layout,
+            input_path=input_path,
+            start=start,
+            end=end,
+            dialogue_windows=dialogue_windows,
+            speaker_detector=speaker_detector,
+            face_detector=face_detector,
+            person_detector=person_detector,
+        )
         person_signal = _detect_person_for_layout(
             layout,
             input_path=input_path,
@@ -291,10 +340,12 @@ def render_short_clip(
             detections=detections,
             source_width=width,
             source_height=height,
+            speaker_signal=speaker_signal,
             person_signal=person_signal,
             subject_signal=subject_signal,
         )
     face_center = crop_plan.face_center or best_face_center(detections)
+    speaker_center = crop_plan.speaker_center
     person_center = crop_plan.person_center
     subject_center = crop_plan.subject_center
     last_error: Exception | None = None
@@ -315,6 +366,7 @@ def render_short_clip(
                 source_width=width,
                 source_height=height,
                 face_center=face_center if strategy == "face_tracking_crop" else None,
+                speaker_center=speaker_center if strategy == "speaker_tracking_crop" else None,
                 person_center=person_center if strategy == "person_tracking_crop" else None,
                 subject_center=subject_center if strategy == "subject_tracking_crop" else None,
             )
@@ -337,6 +389,9 @@ def render_short_clip(
                 person_detection_count=crop_plan.person_detection_count,
                 person_detection_confidence=crop_plan.person_detection_confidence,
                 person_box=crop_plan.person_box,
+                speaker_window_count=crop_plan.speaker_window_count,
+                speaker_region_confidence=crop_plan.speaker_region_confidence,
+                speaker_region_box=crop_plan.speaker_region_box,
                 crop_attempted_strategies=tuple(attempted),
             )
         except Exception as exc:
@@ -427,6 +482,9 @@ def _write_export_metadata(
     person_detection_count: int | None,
     person_detection_confidence: float | None,
     person_box: tuple[float, float, float, float] | None,
+    speaker_window_count: int | None,
+    speaker_region_confidence: float | None,
+    speaker_region_box: tuple[float, float, float, float] | None,
     crop_attempted_strategies: Sequence[str],
     overlay_title_expected: bool,
     overlay_title_rendered: bool,
@@ -469,6 +527,9 @@ def _write_export_metadata(
                 "person_detection_count": person_detection_count,
                 "person_detection_confidence": person_detection_confidence,
                 "person_box": list(person_box) if person_box is not None else None,
+                "speaker_window_count": speaker_window_count,
+                "speaker_region_confidence": speaker_region_confidence,
+                "speaker_region_box": list(speaker_region_box) if speaker_region_box is not None else None,
                 "crop_attempted_strategies": list(crop_attempted_strategies),
                 "video_path": str(video_path),
                 "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,
@@ -568,6 +629,7 @@ def render_selected_short_candidates(
                 layout=layout,
                 source_width=source_width,
                 source_height=source_height,
+                dialogue_windows=dialogue_windows_for_clip(candidate.start, candidate.end, transcript_segments),
             )
             rendered_path = _rendered_path(render_result)
             _remove_autoload_sidecar(output_path, subtitle_path)
@@ -599,6 +661,13 @@ def render_selected_short_candidates(
                 if isinstance(render_result, ShortRenderResult)
                 else None,
                 person_box=render_result.person_box if isinstance(render_result, ShortRenderResult) else None,
+                speaker_window_count=render_result.speaker_window_count
+                if isinstance(render_result, ShortRenderResult)
+                else None,
+                speaker_region_confidence=render_result.speaker_region_confidence
+                if isinstance(render_result, ShortRenderResult)
+                else None,
+                speaker_region_box=render_result.speaker_region_box if isinstance(render_result, ShortRenderResult) else None,
                 crop_attempted_strategies=render_result.crop_attempted_strategies
                 if isinstance(render_result, ShortRenderResult)
                 else (),
