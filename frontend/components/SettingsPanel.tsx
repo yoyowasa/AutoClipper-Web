@@ -37,6 +37,29 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   shortOverlayTitleMode: "auto"
 };
 
+function withOptionalNumber(
+  settings: ClipSettings,
+  key: keyof ClipSettings,
+  rawValue: string
+): ClipSettings {
+  return {
+    ...settings,
+    [key]: rawValue === "" ? undefined : Number(rawValue)
+  };
+}
+
+function withOptionalText(
+  settings: ClipSettings,
+  key: keyof ClipSettings,
+  rawValue: string
+): ClipSettings {
+  const value = rawValue.trim();
+  return {
+    ...settings,
+    [key]: value === "" ? undefined : value
+  };
+}
+
 export function SettingsPanel({
   settings,
   disabled = false,
@@ -261,6 +284,94 @@ export function SettingsPanel({
                   })
                 }
               />
+            </label>
+          </div>
+        </details>
+
+        <details className="md:col-span-2">
+          <summary className="cursor-pointer text-sm font-medium text-neutral-700">
+            Subtitle style
+          </summary>
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <label className="flex flex-col gap-2 sm:col-span-2">
+              <span className="text-sm font-medium text-neutral-700">Font name</span>
+              <input
+                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                disabled={disabled}
+                placeholder="Noto Sans CJK JP"
+                type="text"
+                value={settings.subtitleFontName ?? ""}
+                onChange={(event) =>
+                  onChange(withOptionalText(settings, "subtitleFontName", event.target.value))
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">Font size</span>
+              <input
+                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                disabled={disabled}
+                max={220}
+                min={12}
+                step={2}
+                type="number"
+                value={settings.subtitleFontSize ?? ""}
+                onChange={(event) =>
+                  onChange(withOptionalNumber(settings, "subtitleFontSize", event.target.value))
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">Outline</span>
+              <input
+                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                disabled={disabled}
+                max={20}
+                min={0}
+                step={1}
+                type="number"
+                value={settings.subtitleOutline ?? ""}
+                onChange={(event) =>
+                  onChange(withOptionalNumber(settings, "subtitleOutline", event.target.value))
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">Lower margin</span>
+              <input
+                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                disabled={disabled}
+                max={1600}
+                min={0}
+                step={10}
+                type="number"
+                value={settings.subtitleLowerMargin ?? ""}
+                onChange={(event) =>
+                  onChange(
+                    withOptionalNumber(settings, "subtitleLowerMargin", event.target.value)
+                  )
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">Position</span>
+              <select
+                className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+                disabled={disabled}
+                value={settings.subtitleAlignment?.toString() ?? ""}
+                onChange={(event) =>
+                  onChange(withOptionalNumber(settings, "subtitleAlignment", event.target.value))
+                }
+              >
+                <option value="">Default</option>
+                <option value="2">Bottom</option>
+                <option value="5">Center</option>
+                <option value="8">Top</option>
+              </select>
             </label>
           </div>
         </details>
