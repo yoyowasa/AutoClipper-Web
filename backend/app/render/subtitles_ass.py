@@ -19,6 +19,15 @@ DEFAULT_MIN_SUBTITLE_DURATION = 1.1
 DEFAULT_MAX_SUBTITLE_DURATION = 4.2
 DEFAULT_MIN_GAP_BETWEEN_SUBTITLES = 0.08
 DEFAULT_ASS_FONT = "Noto Sans CJK JP"
+DEFAULT_SHORT_SUBTITLE_FONT_SIZE = 76
+DEFAULT_SHORT_TITLE_FONT_SIZE = 88
+DEFAULT_SHORT_SUBTITLE_OUTLINE = 5
+DEFAULT_SHORT_SUBTITLE_SHADOW = 2
+DEFAULT_SHORT_MARGIN_X = 86
+DEFAULT_SHORT_LOWER_MARGIN = 250
+DEFAULT_SHORT_TOP_MARGIN = 150
+DEFAULT_SUBTITLE_ALIGNMENT = 2
+DEFAULT_TITLE_ALIGNMENT = 8
 PUNCTUATION_BREAKS = "。、！？!?"
 PHRASE_BREAKS = "、，, "
 SOFT_JA_BOUNDARIES = "でにはをがともやへ"
@@ -32,6 +41,26 @@ class SubtitleRenderSettings:
     min_subtitle_duration: float = DEFAULT_MIN_SUBTITLE_DURATION
     max_subtitle_duration: float = DEFAULT_MAX_SUBTITLE_DURATION
     min_gap_between_subtitles: float = DEFAULT_MIN_GAP_BETWEEN_SUBTITLES
+    subtitle_font_name: str = DEFAULT_ASS_FONT
+    title_font_name: str = DEFAULT_ASS_FONT
+    short_font_size: int | None = None
+    short_title_font_size: int | None = None
+    short_outline: int | None = None
+    short_shadow: int | None = None
+    short_margin_x: int | None = None
+    short_lower_margin: int | None = None
+    short_top_margin: int | None = None
+    short_subtitle_alignment: int | None = None
+    short_title_alignment: int | None = None
+    normal_font_size: int | None = None
+    normal_title_font_size: int | None = None
+    normal_outline: int | None = None
+    normal_shadow: int | None = None
+    normal_margin_x: int | None = None
+    normal_lower_margin: int | None = None
+    normal_top_margin: int | None = None
+    normal_subtitle_alignment: int | None = None
+    normal_title_alignment: int | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +74,8 @@ class SubtitleEvent:
 class SubtitleLayout:
     width: int
     height: int
+    font_name: str
+    title_font_name: str
     font_size: int
     title_font_size: int
     outline: int
@@ -52,6 +83,8 @@ class SubtitleLayout:
     margin_x: int
     lower_margin: int
     top_margin: int
+    subtitle_alignment: int
+    title_alignment: int
     max_chars_per_line: int
     max_lines: int
     min_subtitle_duration: float
@@ -64,13 +97,17 @@ class SubtitleLayout:
         return cls(
             width=SHORT_WIDTH,
             height=SHORT_HEIGHT,
-            font_size=76,
-            title_font_size=88,
-            outline=5,
-            shadow=2,
-            margin_x=86,
-            lower_margin=250,
-            top_margin=150,
+            font_name=parsed_settings.subtitle_font_name,
+            title_font_name=parsed_settings.title_font_name,
+            font_size=parsed_settings.short_font_size or DEFAULT_SHORT_SUBTITLE_FONT_SIZE,
+            title_font_size=parsed_settings.short_title_font_size or DEFAULT_SHORT_TITLE_FONT_SIZE,
+            outline=parsed_settings.short_outline if parsed_settings.short_outline is not None else DEFAULT_SHORT_SUBTITLE_OUTLINE,
+            shadow=parsed_settings.short_shadow if parsed_settings.short_shadow is not None else DEFAULT_SHORT_SUBTITLE_SHADOW,
+            margin_x=parsed_settings.short_margin_x or DEFAULT_SHORT_MARGIN_X,
+            lower_margin=parsed_settings.short_lower_margin or DEFAULT_SHORT_LOWER_MARGIN,
+            top_margin=parsed_settings.short_top_margin or DEFAULT_SHORT_TOP_MARGIN,
+            subtitle_alignment=parsed_settings.short_subtitle_alignment or DEFAULT_SUBTITLE_ALIGNMENT,
+            title_alignment=parsed_settings.short_title_alignment or DEFAULT_TITLE_ALIGNMENT,
             max_chars_per_line=parsed_settings.max_chars_per_line_short,
             max_lines=parsed_settings.max_lines,
             min_subtitle_duration=parsed_settings.min_subtitle_duration,
@@ -88,17 +125,21 @@ class SubtitleLayout:
         parsed_settings = parse_subtitle_settings(settings)
         safe_width = max(320, int(width))
         safe_height = max(240, int(height))
-        font_size = max(42, min(72, round(safe_height * 0.06)))
+        font_size = parsed_settings.normal_font_size or max(42, min(72, round(safe_height * 0.06)))
         return cls(
             width=safe_width,
             height=safe_height,
+            font_name=parsed_settings.subtitle_font_name,
+            title_font_name=parsed_settings.title_font_name,
             font_size=font_size,
-            title_font_size=max(font_size + 6, round(safe_height * 0.07)),
-            outline=max(3, round(safe_height * 0.004)),
-            shadow=max(1, round(safe_height * 0.002)),
-            margin_x=round(safe_width * 0.08),
-            lower_margin=round(safe_height * 0.08),
-            top_margin=round(safe_height * 0.08),
+            title_font_size=parsed_settings.normal_title_font_size or max(font_size + 6, round(safe_height * 0.07)),
+            outline=parsed_settings.normal_outline if parsed_settings.normal_outline is not None else max(3, round(safe_height * 0.004)),
+            shadow=parsed_settings.normal_shadow if parsed_settings.normal_shadow is not None else max(1, round(safe_height * 0.002)),
+            margin_x=parsed_settings.normal_margin_x or round(safe_width * 0.08),
+            lower_margin=parsed_settings.normal_lower_margin or round(safe_height * 0.08),
+            top_margin=parsed_settings.normal_top_margin or round(safe_height * 0.08),
+            subtitle_alignment=parsed_settings.normal_subtitle_alignment or DEFAULT_SUBTITLE_ALIGNMENT,
+            title_alignment=parsed_settings.normal_title_alignment or DEFAULT_TITLE_ALIGNMENT,
             max_chars_per_line=parsed_settings.max_chars_per_line_normal,
             max_lines=parsed_settings.max_lines,
             min_subtitle_duration=parsed_settings.min_subtitle_duration,
@@ -125,6 +166,30 @@ def _coerce_float(value: Any, default: float, *, minimum: float, maximum: float)
     return max(minimum, min(maximum, parsed))
 
 
+def _coerce_optional_int(value: Any, *, minimum: int, maximum: int) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(minimum, min(maximum, parsed))
+
+
+def _coerce_str(value: Any, default: str) -> str:
+    if value is None:
+        return default
+    parsed = str(value).strip()
+    return parsed or default
+
+
+def _first_value(mapping: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping:
+            return mapping[key]
+    return None
+
+
 def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | None) -> SubtitleRenderSettings:
     if settings is None:
         return SubtitleRenderSettings()
@@ -138,6 +203,38 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
         "minSubtitleDuration": "min_subtitle_duration",
         "maxSubtitleDuration": "max_subtitle_duration",
         "minGapBetweenSubtitles": "min_gap_between_subtitles",
+        "subtitleFontName": "subtitle_font_name",
+        "titleFontName": "title_font_name",
+        "subtitleTitleFontName": "title_font_name",
+        "subtitleFontSize": "subtitle_font_size",
+        "titleFontSize": "title_font_size",
+        "subtitleTitleFontSize": "title_font_size",
+        "subtitleOutline": "subtitle_outline",
+        "subtitleShadow": "subtitle_shadow",
+        "subtitleMarginX": "subtitle_margin_x",
+        "subtitleLowerMargin": "subtitle_lower_margin",
+        "subtitleTopMargin": "subtitle_top_margin",
+        "subtitleAlignment": "subtitle_alignment",
+        "titleAlignment": "title_alignment",
+        "subtitleTitleAlignment": "title_alignment",
+        "shortSubtitleFontSize": "short_font_size",
+        "shortTitleFontSize": "short_title_font_size",
+        "shortSubtitleOutline": "short_outline",
+        "shortSubtitleShadow": "short_shadow",
+        "shortSubtitleMarginX": "short_margin_x",
+        "shortSubtitleLowerMargin": "short_lower_margin",
+        "shortTitleTopMargin": "short_top_margin",
+        "shortSubtitleAlignment": "short_subtitle_alignment",
+        "shortTitleAlignment": "short_title_alignment",
+        "normalSubtitleFontSize": "normal_font_size",
+        "normalTitleFontSize": "normal_title_font_size",
+        "normalSubtitleOutline": "normal_outline",
+        "normalSubtitleShadow": "normal_shadow",
+        "normalSubtitleMarginX": "normal_margin_x",
+        "normalSubtitleLowerMargin": "normal_lower_margin",
+        "normalTitleTopMargin": "normal_top_margin",
+        "normalSubtitleAlignment": "normal_subtitle_alignment",
+        "normalTitleAlignment": "normal_title_alignment",
     }
     normalized = {aliases.get(key, key): value for key, value in settings.items()}
     min_duration = _coerce_float(
@@ -178,6 +275,98 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
             DEFAULT_MIN_GAP_BETWEEN_SUBTITLES,
             minimum=0.0,
             maximum=2.0,
+        ),
+        subtitle_font_name=_coerce_str(normalized.get("subtitle_font_name"), DEFAULT_ASS_FONT),
+        title_font_name=_coerce_str(normalized.get("title_font_name"), DEFAULT_ASS_FONT),
+        short_font_size=_coerce_optional_int(
+            _first_value(normalized, "short_font_size", "subtitle_font_size"),
+            minimum=20,
+            maximum=220,
+        ),
+        short_title_font_size=_coerce_optional_int(
+            _first_value(normalized, "short_title_font_size", "title_font_size"),
+            minimum=20,
+            maximum=220,
+        ),
+        short_outline=_coerce_optional_int(
+            _first_value(normalized, "short_outline", "subtitle_outline"),
+            minimum=0,
+            maximum=20,
+        ),
+        short_shadow=_coerce_optional_int(
+            _first_value(normalized, "short_shadow", "subtitle_shadow"),
+            minimum=0,
+            maximum=20,
+        ),
+        short_margin_x=_coerce_optional_int(
+            _first_value(normalized, "short_margin_x", "subtitle_margin_x"),
+            minimum=0,
+            maximum=800,
+        ),
+        short_lower_margin=_coerce_optional_int(
+            _first_value(normalized, "short_lower_margin", "subtitle_lower_margin"),
+            minimum=0,
+            maximum=1600,
+        ),
+        short_top_margin=_coerce_optional_int(
+            _first_value(normalized, "short_top_margin", "subtitle_top_margin"),
+            minimum=0,
+            maximum=1600,
+        ),
+        short_subtitle_alignment=_coerce_optional_int(
+            _first_value(normalized, "short_subtitle_alignment", "subtitle_alignment"),
+            minimum=1,
+            maximum=9,
+        ),
+        short_title_alignment=_coerce_optional_int(
+            _first_value(normalized, "short_title_alignment", "title_alignment"),
+            minimum=1,
+            maximum=9,
+        ),
+        normal_font_size=_coerce_optional_int(
+            _first_value(normalized, "normal_font_size", "subtitle_font_size"),
+            minimum=12,
+            maximum=180,
+        ),
+        normal_title_font_size=_coerce_optional_int(
+            _first_value(normalized, "normal_title_font_size", "title_font_size"),
+            minimum=12,
+            maximum=180,
+        ),
+        normal_outline=_coerce_optional_int(
+            _first_value(normalized, "normal_outline", "subtitle_outline"),
+            minimum=0,
+            maximum=20,
+        ),
+        normal_shadow=_coerce_optional_int(
+            _first_value(normalized, "normal_shadow", "subtitle_shadow"),
+            minimum=0,
+            maximum=20,
+        ),
+        normal_margin_x=_coerce_optional_int(
+            _first_value(normalized, "normal_margin_x", "subtitle_margin_x"),
+            minimum=0,
+            maximum=1200,
+        ),
+        normal_lower_margin=_coerce_optional_int(
+            _first_value(normalized, "normal_lower_margin", "subtitle_lower_margin"),
+            minimum=0,
+            maximum=900,
+        ),
+        normal_top_margin=_coerce_optional_int(
+            _first_value(normalized, "normal_top_margin", "subtitle_top_margin"),
+            minimum=0,
+            maximum=900,
+        ),
+        normal_subtitle_alignment=_coerce_optional_int(
+            _first_value(normalized, "normal_subtitle_alignment", "subtitle_alignment"),
+            minimum=1,
+            maximum=9,
+        ),
+        normal_title_alignment=_coerce_optional_int(
+            _first_value(normalized, "normal_title_alignment", "title_alignment"),
+            minimum=1,
+            maximum=9,
         ),
     )
 
@@ -414,13 +603,14 @@ def subtitle_events_for_candidate(
 
 def _style_line(
     name: str,
+    font_name: str,
     font_size: int,
     layout: SubtitleLayout,
     alignment: int,
     margin_v: int,
 ) -> str:
     return (
-        f"Style: {name},{DEFAULT_ASS_FONT},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        f"Style: {name},{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
         f"1,0,0,0,100,100,0,0,1,{layout.outline},{layout.shadow},{alignment},"
         f"{layout.margin_x},{layout.margin_x},{margin_v},1"
     )
@@ -454,8 +644,22 @@ def build_ass_document(
             "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
             "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
         ),
-        _style_line("Subtitle", active_layout.font_size, active_layout, alignment=2, margin_v=active_layout.lower_margin),
-        _style_line("Title", active_layout.title_font_size, active_layout, alignment=8, margin_v=active_layout.top_margin),
+        _style_line(
+            "Subtitle",
+            active_layout.font_name,
+            active_layout.font_size,
+            active_layout,
+            alignment=active_layout.subtitle_alignment,
+            margin_v=active_layout.lower_margin,
+        ),
+        _style_line(
+            "Title",
+            active_layout.title_font_name,
+            active_layout.title_font_size,
+            active_layout,
+            alignment=active_layout.title_alignment,
+            margin_v=active_layout.top_margin,
+        ),
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
