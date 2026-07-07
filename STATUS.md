@@ -3621,3 +3621,46 @@ python .\scripts\e2e_real_video.py `
 ### 未解決事項
 
 - UI override renderはTTS生成の短い検証動画で確認。実写素材での主観確認は別途。
+
+## 2026-07-07 Task 50 breath-cut deliverable script triage
+
+### 目的
+
+- ローカル案件編集用に退避していた breath-cut script を確認し、main に入れるか判断する。
+- 本体 pipeline と案件固有作業を混ぜず、汎用補助 script として成立する範囲だけ整理する。
+
+### 対象
+
+- `scripts/create_breath_cut_deliverable.py`
+- `backend/tests/test_breath_cut_deliverable_script.py`
+- `docs/BREATH_CUT_SCRIPT.md`
+- `STATUS.md`
+
+### 判断
+
+- `create_breath_cut_deliverable.py` は、案件名・固定素材名・固定絶対パスを含まないため、完了済み job に対する任意の納品補助 CLI として main に入れる。
+- 本体の upload / worker / scoring / rendering / results pipeline には接続しない。
+- `scripts/create_insert_image_deliverable.py` と subtitle style のローカル差分は Task50 に含めない。
+- font binary、client media、生成物は commit 対象外。
+
+### 変更内容
+
+- breath-cut script を `scripts/` に追加。
+- `--dry-run` を追加し、`breath_cut_plan.json` / ASS / filter script だけを生成して ffmpeg render を省略できるようにした。
+- render時のみ `--source-container-path` を必須にした。
+- `--docker-service` を追加し、ffmpeg 実行対象 service を明示できるようにした。
+- ffmpeg command construction を関数化し、単体テスト可能にした。
+- 使用方法と scope を `docs/BREATH_CUT_SCRIPT.md` に記録。
+
+### 検証結果
+
+- `cd backend && ..\.venv\Scripts\python -m ruff check ..\scripts\create_breath_cut_deliverable.py tests\test_breath_cut_deliverable_script.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_breath_cut_deliverable_script.py`: 5 passed。
+- `python scripts\create_breath_cut_deliverable.py --job-id job_9b53fb3d98d54dc4a2c6e3b862e073b8 --dry-run`: pass。`breath_cut_plan.json` 生成確認。
+- `cd backend && ..\.venv\Scripts\python -m ruff check . ..\scripts\create_breath_cut_deliverable.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 232 passed, 1 skipped, 1 warning。
+
+### 未解決事項
+
+- 実動画での breath-cut render は未実施。必要時に既存完了 job に対して `--dry-run` から確認する。
+- insert-image deliverable script は Task51 で別途 triage する。
