@@ -316,6 +316,22 @@ def build_contact_sheet_command(frame_paths: list[str], contact_container_path: 
         "ffmpeg",
         "-y",
     ]
+    if len(frame_paths) == 1:
+        command.extend(
+            [
+                "-i",
+                frame_paths[0],
+                "-vf",
+                "scale=360:640",
+                "-frames:v",
+                "1",
+                "-update",
+                "1",
+                contact_container_path,
+            ]
+        )
+        return command
+
     for frame_path in frame_paths:
         command.extend(["-i", frame_path])
     cols = 2
