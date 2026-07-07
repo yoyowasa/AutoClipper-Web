@@ -3664,3 +3664,49 @@ python .\scripts\e2e_real_video.py `
 
 - 実動画での breath-cut render は未実施。必要時に既存完了 job に対して `--dry-run` から確認する。
 - insert-image deliverable script は Task51 で別途 triage する。
+
+## 2026-07-07 Task 51 insert-image deliverable script triage
+
+### 目的
+
+- ローカル案件編集用に退避していた insert-image script を確認し、main に入れるか判断する。
+- 本体 pipeline と案件固有作業を混ぜず、汎用補助 script として成立する範囲だけ整理する。
+
+### 対象
+
+- `scripts/create_insert_image_deliverable.py`
+- `backend/tests/test_insert_image_deliverable_script.py`
+- `docs/INSERT_IMAGE_SCRIPT.md`
+- `STATUS.md`
+
+### 判断
+
+- `create_insert_image_deliverable.py` は、案件名・固定素材名・固定絶対パスを含まないため、完了済み job に対する任意の納品補助 CLI として main に入れる。
+- `--duration 46.673` のような案件寄り default は廃止し、未指定時は source video を ffprobe して duration を取得する。
+- 本体の upload / worker / scoring / rendering / results pipeline には接続しない。
+- breath-cut helper とは連携可能だが、production pipeline には組み込まない。
+- font binary、client media、生成物は commit 対象外。
+
+### 変更内容
+
+- insert-image script を `scripts/` に追加。
+- `--dry-run` を追加し、assets copy / filter script / manifest だけを生成して ffmpeg render を省略できるようにした。
+- render時のみ `--source-container-path` を必須にした。
+- `--docker-service` を追加し、ffmpeg / ffprobe 実行対象 service を明示できるようにした。
+- `--duration` 未指定時は source video の ffprobe duration を使うようにした。
+- asset name の path traversal と unsupported image extension を拒否する validation を追加。
+- ffmpeg / ffprobe command construction を関数化し、単体テスト可能にした。
+- 使用方法と scope を `docs/INSERT_IMAGE_SCRIPT.md` に記録。
+
+### 検証結果
+
+- `cd backend && ..\.venv\Scripts\python -m ruff check ..\scripts\create_insert_image_deliverable.py tests\test_insert_image_deliverable_script.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_insert_image_deliverable_script.py`: 7 passed。
+- `python scripts\create_insert_image_deliverable.py --job-id job_9b53fb3d98d54dc4a2c6e3b862e073b8 --base-filter storage\outputs\job_9b53fb3d98d54dc4a2c6e3b862e073b8\breath_cut\filter_complex.txt --subtitle storage\outputs\job_9b53fb3d98d54dc4a2c6e3b862e073b8\breath_cut\short_01_breath_cut.ass --output-subdir inserts_task51_dry_run --image <local image> insert_01.jpg 0.5 1.5 test --dry-run`: pass。`insert_manifest.json` 生成確認。
+- `cd backend && ..\.venv\Scripts\python -m ruff check . ..\scripts\create_insert_image_deliverable.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 239 passed, 1 skipped, 1 warning。
+
+### 未解決事項
+
+- 実動画での insert-image render は未実施。必要時に既存完了 job に対して `--dry-run` から確認する。
+- local font files と subtitle style の残stashは未処理。
