@@ -3710,3 +3710,58 @@ python .\scripts\e2e_real_video.py `
 
 - 実動画での insert-image render は未実施。必要時に既存完了 job に対して `--dry-run` から確認する。
 - local font files と subtitle style の残stashは未処理。
+
+## 2026-07-08 Task 52 deliverable helper actual render validation
+
+### 目的
+
+- Task50 / Task51 で追加した補助 script の実render経路を、ignored sample artifacts で確認する。
+- 本体 pipeline は変更せず、補助 script の ffmpeg 実行・出力MP4・ffprobe確認まで行う。
+
+### 対象
+
+- `scripts/create_insert_image_deliverable.py`
+- `backend/tests/test_insert_image_deliverable_script.py`
+- `STATUS.md`
+
+### 事前整理
+
+- 開始時点で `STATUS.md` と `storage/transcripts/` に別作業の未コミット差分があった。
+- Task52 PR に混ぜないため、`git stash push -u -m "pre-task52-existing-transcript-work"` で退避した。
+
+### 実render結果
+
+- 使用job: `job_9b53fb3d98d54dc4a2c6e3b862e073b8`
+- source short: `/app/storage/outputs/job_9b53fb3d98d54dc4a2c6e3b862e073b8/shorts/short_01.mp4`
+  - ffprobe: `1080x1920`, duration `25.000000`
+- breath-cut actual render:
+  - command: `python scripts\create_breath_cut_deliverable.py --job-id job_9b53fb3d98d54dc4a2c6e3b862e073b8 --source-container-path /app/storage/outputs/job_9b53fb3d98d54dc4a2c6e3b862e073b8/shorts/short_01.mp4 --output-name short_01_breath_cut_task52.mp4`
+  - output: `storage/outputs/job_9b53fb3d98d54dc4a2c6e3b862e073b8/breath_cut/short_01_breath_cut_task52.mp4`
+  - ffprobe: `1080x1920`, duration `25.000000`
+- insert-image sample asset:
+  - generated ignored file: `storage/temp/task52_insert.png`
+- insert-image actual render:
+  - command: `python scripts\create_insert_image_deliverable.py --job-id job_9b53fb3d98d54dc4a2c6e3b862e073b8 --source-container-path /app/storage/outputs/job_9b53fb3d98d54dc4a2c6e3b862e073b8/breath_cut/short_01_breath_cut_task52.mp4 --base-filter storage\outputs\job_9b53fb3d98d54dc4a2c6e3b862e073b8\breath_cut\filter_complex.txt --subtitle storage\outputs\job_9b53fb3d98d54dc4a2c6e3b862e073b8\breath_cut\short_01_breath_cut.ass --output-subdir inserts_task52_render --output-name short_01_insert_task52.mp4 --image storage\temp\task52_insert.png insert_task52.png 0.5 2.0 task52`
+  - output: `storage/outputs/job_9b53fb3d98d54dc4a2c6e3b862e073b8/inserts_task52_render/short_01_insert_task52.mp4`
+  - ffprobe video: `1080x1920`, duration `25.000000`
+  - ffprobe audio: `aac`, `16000Hz`, `1ch`
+  - manifest: `insert_manifest.json` generated
+  - contact sheet: `insert_contact_sheet.jpg` generated
+
+### 修正内容
+
+- insert-image helper の contact sheet 生成で、insert画像が1枚のとき `xstack=inputs=1` になりFFmpegが失敗した。
+- 1枚の場合は `xstack` を使わず、単純に `scale=360:640` で contact sheet を作るよう修正。
+- 1枚insert用の回帰テストを追加。
+
+### 検証結果
+
+- `cd backend && ..\.venv\Scripts\python -m ruff check ..\scripts\create_insert_image_deliverable.py tests\test_insert_image_deliverable_script.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest tests\test_insert_image_deliverable_script.py`: 8 passed。
+- `cd backend && ..\.venv\Scripts\python -m ruff check . ..\scripts\create_insert_image_deliverable.py`: pass。
+- `cd backend && ..\.venv\Scripts\python -m pytest`: 240 passed, 1 skipped, 1 warning。
+
+### 未解決事項
+
+- 退避した `pre-task52-existing-transcript-work` stash は未復元。Task52に混ぜないため保持。
+- 生成MP4、contact sheet、sample image は ignored storage 配下にあり commit 対象外。

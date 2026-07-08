@@ -133,6 +133,20 @@ def test_build_ffmpeg_command_uses_configured_docker_service() -> None:
     assert command[-1] == "/app/storage/outputs/job/inserts/short_01_insert_p0.mp4"
 
 
+def test_build_contact_sheet_command_handles_single_frame_without_xstack() -> None:
+    command = script.build_contact_sheet_command(
+        ["/app/storage/outputs/job/inserts/insert_frame_01.jpg"],
+        "/app/storage/outputs/job/inserts/insert_contact_sheet.jpg",
+        docker_service="worker",
+    )
+
+    assert command[:6] == ["docker", "compose", "exec", "-T", "worker", "ffmpeg"]
+    assert "-vf" in command
+    assert "scale=360:640" in command
+    assert all("xstack" not in part for part in command)
+    assert command[-1] == "/app/storage/outputs/job/inserts/insert_contact_sheet.jpg"
+
+
 def test_duration_from_probe_reads_format_duration() -> None:
     assert script.duration_from_probe({"format": {"duration": "12.345"}}) == 12.345
 
