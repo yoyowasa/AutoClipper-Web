@@ -22,12 +22,20 @@ storage/uploads/*
 storage/temp/*
 storage/outputs/*
 storage/fonts/*
+storage/transcripts/*
 storage/*.db
 storage/*.db-*
 !storage/uploads/.gitkeep
 !storage/temp/.gitkeep
 !storage/outputs/.gitkeep
 !storage/fonts/.gitkeep
+!storage/transcripts/.gitkeep
+
+# Local case-work helpers and temporary dependency drops
+.codex_tmp/
+scripts/make_plotwith_*.ps1
+scripts/make_plotwith_*.py
+ID146_*/
 
 # Logs
 *.log

@@ -3765,3 +3765,46 @@ python .\scripts\e2e_real_video.py `
 
 - 退避した `pre-task52-existing-transcript-work` stash は未復元。Task52に混ぜないため保持。
 - 生成MP4、contact sheet、sample image は ignored storage 配下にあり commit 対象外。
+
+## 2026-07-09 Task 53 transcript work triage
+
+### 目的
+
+- 退避していた transcript 関連のローカル作業を確認し、main に入れるものと local-only に残すものを分ける。
+- 実案件の文字起こし成果物や一時依存展開を、本体 pipeline / helper script PR に混ぜない。
+
+### 対象
+
+- `.gitignore`
+- `storage/transcripts/.gitkeep`
+- `STATUS.md`
+
+### 判断
+
+- `storage/transcripts/*.md` / `*.json` は実案件由来の生成物のため main 非投入。
+- `.codex_tmp/` は一時依存展開のため main 非投入。
+- `scripts/make_plotwith_*.ps1` / `scripts/make_plotwith_*.py` は案件別編集scriptのため main 非投入。汎用化する場合は別Taskで個別triageする。
+- `ID146_*/` は案件素材の展開フォルダのため main 非投入。
+- `STATUS.md` に戻っていた個別案件の詳細ログは main 非投入。ここでは要約のみ記録する。
+
+### 変更内容
+
+- `.gitignore` に local-only 対象を追加。
+  - `storage/transcripts/*`
+  - `!storage/transcripts/.gitkeep`
+  - `.codex_tmp/`
+  - `scripts/make_plotwith_*.ps1`
+  - `scripts/make_plotwith_*.py`
+  - `ID146_*/`
+- `storage/transcripts/.gitkeep` を追加し、ローカル transcript 保存先だけを維持。
+- stash の transcript / Plotwith / `.codex_tmp` ファイルを apply し、ignored 扱いになることを確認。
+
+### 検証結果
+
+- `git stash apply stash@{0}` 後、transcript成果物、Plotwith scripts、案件素材フォルダ、`.codex_tmp/` が ignored 表示になることを確認。
+- `STATUS.md` の案件詳細ログは `git restore -- STATUS.md` で除外し、Task53要約だけを追記。
+
+### 未解決事項
+
+- `stash@{0}: pre-pr32-merge-local-work-20260709` と `stash@{1}: pre-task52-existing-transcript-work` はバックアップとして未削除。
+- Plotwith系scriptを汎用補助scriptにするかは未判断。必要なら別Task。
