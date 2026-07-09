@@ -691,6 +691,24 @@ def _duration_policy(
     }
 
 
+def _selection_summary_context(selected_summary: dict[str, Any], clip_type: str) -> dict[str, Any]:
+    requested_key = "requested_short_count" if clip_type == "short" else "requested_normal_count"
+    selected_key = "selected_short_count" if clip_type == "short" else "selected_normal_count"
+    hard_gate_key = "short_hard_gate_passed_count" if clip_type == "short" else "normal_hard_gate_passed_count"
+    unfilled_counts = selected_summary.get("unfilled_requested_counts")
+    unfilled_count = None
+    if isinstance(unfilled_counts, dict):
+        unfilled_count = unfilled_counts.get(clip_type)
+    return {
+        "requested_count": selected_summary.get(requested_key),
+        "selected_count": selected_summary.get(selected_key),
+        "hard_gate_passed_count": selected_summary.get(hard_gate_key),
+        "selected_above_threshold_count": selected_summary.get("selected_above_threshold_count"),
+        "selected_below_threshold_backfill_count": selected_summary.get("selected_below_threshold_backfill_count"),
+        "unfilled_requested_count": unfilled_count,
+    }
+
+
 def _quality_warnings(
     *,
     clip: dict[str, Any],
@@ -773,6 +791,7 @@ def _warning_details(
     probe: ProbeResult,
     subtitle: dict[str, Any],
     duration_policy: dict[str, Any],
+    selected_summary: dict[str, Any],
     external_subtitle_autoload_risks: Sequence[Path],
 ) -> dict[str, dict[str, Any]]:
     details: dict[str, dict[str, Any]] = {}
@@ -810,6 +829,7 @@ def _warning_details(
             "quality_warning": clip.get("quality_warning"),
             "selection_reason": clip.get("selection_reason"),
             "reason": "selected clip is below min final score",
+            "selection_summary": _selection_summary_context(selected_summary, str(clip.get("type") or "")),
         }
         if "backfill" in str(clip.get("selection_reason") or ""):
             details["below_quality_threshold"]["selection_context"] = (
@@ -851,6 +871,7 @@ def _clip_report(
     metadata: dict[str, Any],
     transcript_segments: Sequence[dict[str, Any]],
     candidate_generation_summary: dict[str, Any],
+    selected_summary: dict[str, Any],
     high_quality_mode: bool,
     root: Path,
 ) -> dict[str, Any]:
@@ -884,6 +905,7 @@ def _clip_report(
         probe=probe,
         subtitle=subtitle,
         duration_policy=duration_policy,
+        selected_summary=selected_summary,
         external_subtitle_autoload_risks=external_subtitle_autoload_risks,
     )
     title = clip.get("title") or metadata.get("title")
@@ -997,6 +1019,7 @@ def build_audit_report(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
             candidate_generation_summary=(
                 candidate_generation_summary if isinstance(candidate_generation_summary, dict) else {}
             ),
+            selected_summary=selected_summary if isinstance(selected_summary, dict) else {},
             high_quality_mode=high_quality_mode,
             root=root,
         )
