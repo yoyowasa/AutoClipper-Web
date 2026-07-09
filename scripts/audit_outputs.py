@@ -649,6 +649,48 @@ def _likely_abrupt_ending(clip: dict[str, Any], transcript: dict[str, Any]) -> b
     return last_text.endswith(ABRUPT_END_SUFFIXES)
 
 
+def _configured_duration_range_for_type(
+    candidate_generation_summary: dict[str, Any],
+    clip_type: str,
+) -> dict[str, Any] | None:
+    ranges = candidate_generation_summary.get("configured_duration_ranges")
+    if isinstance(ranges, dict) and isinstance(ranges.get(clip_type), dict):
+        return ranges[clip_type]
+    by_type = candidate_generation_summary.get("by_type")
+    if isinstance(by_type, dict):
+        type_summary = by_type.get(clip_type)
+        if isinstance(type_summary, dict) and isinstance(type_summary.get("configured_duration_range"), dict):
+            return type_summary["configured_duration_range"]
+    return None
+
+
+def _duration_policy(
+    *,
+    clip_type: str,
+    candidate_generation_summary: dict[str, Any],
+) -> dict[str, Any]:
+    default_min, default_max = (
+        SHORT_RECOMMENDED_RANGE if clip_type == "short" else NORMAL_RECOMMENDED_RANGE
+    )
+    configured = _configured_duration_range_for_type(candidate_generation_summary, clip_type)
+    if configured is not None:
+        configured_min = _number(configured.get("min_duration"))
+        configured_max = _number(configured.get("max_duration"))
+        if configured_min is not None and configured_max is not None:
+            return {
+                "min_duration": configured_min,
+                "max_duration": configured_max,
+                "source": "candidate_generation_summary",
+                "label": "configured_duration_range",
+            }
+    return {
+        "min_duration": default_min,
+        "max_duration": default_max,
+        "source": "default_recommended_range",
+        "label": "default_recommended_range",
+    }
+
+
 def _quality_warnings(
     *,
     clip: dict[str, Any],
@@ -656,12 +698,15 @@ def _quality_warnings(
     transcript: dict[str, Any],
     probe: ProbeResult,
     subtitle: dict[str, Any],
+    duration_policy: dict[str, Any],
     external_subtitle_autoload_risks: Sequence[Path],
     high_quality_mode: bool,
 ) -> list[str]:
     warnings: list[str] = []
     clip_type = str(clip.get("type"))
     duration = _number(clip.get("duration")) or probe.duration
+    duration_min = _number(duration_policy.get("min_duration"))
+    duration_max = _number(duration_policy.get("max_duration"))
 
     if transcript["transcript_text_length"] < VERY_SHORT_TRANSCRIPT_TEXT.get(clip_type, 80):
         warnings.append("very_short_transcript_text")
@@ -685,9 +730,19 @@ def _quality_warnings(
         warnings.append("rule_only_clip_in_high_quality_mode")
     if duration is None or duration <= 0:
         warnings.append("invalid_duration")
-    elif clip_type == "short" and not (SHORT_RECOMMENDED_RANGE[0] <= duration <= SHORT_RECOMMENDED_RANGE[1]):
+    elif (
+        clip_type == "short"
+        and duration_min is not None
+        and duration_max is not None
+        and not (duration_min <= duration <= duration_max)
+    ):
         warnings.append("short_duration_outside_recommended_range")
-    elif clip_type == "normal" and not (NORMAL_RECOMMENDED_RANGE[0] <= duration <= NORMAL_RECOMMENDED_RANGE[1]):
+    elif (
+        clip_type == "normal"
+        and duration_min is not None
+        and duration_max is not None
+        and not (duration_min <= duration <= duration_max)
+    ):
         warnings.append("normal_duration_outside_recommended_range")
 
     if probe.width is None or probe.height is None or probe.width <= 0 or probe.height <= 0:
@@ -710,11 +765,92 @@ def _quality_warnings(
     return warnings
 
 
+def _warning_details(
+    *,
+    warnings: Sequence[str],
+    clip: dict[str, Any],
+    transcript: dict[str, Any],
+    probe: ProbeResult,
+    subtitle: dict[str, Any],
+    duration_policy: dict[str, Any],
+    external_subtitle_autoload_risks: Sequence[Path],
+) -> dict[str, dict[str, Any]]:
+    details: dict[str, dict[str, Any]] = {}
+    duration = _number(clip.get("duration")) or probe.duration
+    boundary_context = {
+        "boundary_refined": clip.get("boundary_refined"),
+        "boundary_refinement_reason": clip.get("boundary_refinement_reason"),
+        "boundary_expansion_seconds": clip.get("boundary_expansion_seconds"),
+        "original_start": clip.get("original_start"),
+        "original_end": clip.get("original_end"),
+        "refined_start": clip.get("refined_start"),
+        "refined_end": clip.get("refined_end"),
+    }
+    if "likely_abrupt_start" in warnings:
+        details["likely_abrupt_start"] = {
+            **boundary_context,
+            "selected_start": clip.get("start"),
+            "first_segment_start": transcript.get("first_segment_start"),
+            "first_transcript_text": transcript.get("first_transcript_text"),
+            "reason": "clip may start after the first overlapping transcript segment or with a continuation marker",
+        }
+    if "likely_abrupt_ending" in warnings:
+        details["likely_abrupt_ending"] = {
+            **boundary_context,
+            "selected_end": clip.get("end"),
+            "last_segment_end": transcript.get("last_segment_end"),
+            "last_transcript_text": transcript.get("last_transcript_text"),
+            "reason": "clip may end before the last overlapping transcript segment or on an incomplete phrase",
+        }
+    if "below_quality_threshold" in warnings:
+        details["below_quality_threshold"] = {
+            "final_score": clip.get("final_score"),
+            "rule_score": clip.get("rule_score"),
+            "ai_score": clip.get("ai_score"),
+            "quality_warning": clip.get("quality_warning"),
+            "selection_reason": clip.get("selection_reason"),
+            "reason": "selected clip is below min final score",
+        }
+        if "backfill" in str(clip.get("selection_reason") or ""):
+            details["below_quality_threshold"]["selection_context"] = (
+                "fill_requested backfilled this clip because the requested count was not filled by higher-scoring candidates"
+            )
+    if "backfilled_clip" in warnings:
+        details["backfilled_clip"] = {
+            "selection_reason": clip.get("selection_reason"),
+            "quality_warning": clip.get("quality_warning"),
+            "below_quality_threshold": clip.get("below_quality_threshold"),
+            "overlap_relaxed": clip.get("overlap_relaxed"),
+            "overlap_ratio_used": clip.get("overlap_ratio_used"),
+        }
+    for warning in ("short_duration_outside_recommended_range", "normal_duration_outside_recommended_range"):
+        if warning in warnings:
+            details[warning] = {
+                "duration": duration,
+                "min_duration": duration_policy.get("min_duration"),
+                "max_duration": duration_policy.get("max_duration"),
+                "duration_policy_source": duration_policy.get("source"),
+                "duration_policy_label": duration_policy.get("label"),
+                "reason": "clip duration is outside the active audit duration policy",
+            }
+    if "subtitle_too_dense" in warnings:
+        details["subtitle_too_dense"] = {
+            "density_reasons": subtitle.get("density_reasons"),
+            "worst_density_samples": subtitle.get("worst_density_samples"),
+        }
+    if "external_subtitle_autoload_risk" in warnings:
+        details["external_subtitle_autoload_risk"] = {
+            "sidecar_files": [str(path) for path in external_subtitle_autoload_risks],
+        }
+    return details
+
+
 def _clip_report(
     *,
     clip: dict[str, Any],
     metadata: dict[str, Any],
     transcript_segments: Sequence[dict[str, Any]],
+    candidate_generation_summary: dict[str, Any],
     high_quality_mode: bool,
     root: Path,
 ) -> dict[str, Any]:
@@ -727,14 +863,28 @@ def _clip_report(
         probe = probe_video(host_path=host_path, container_path=container_video_path, root=root)
     transcript = _transcript_excerpt(transcript_segments, clip)
     subtitle = analyze_ass_subtitles(subtitle_path, clip_type=str(clip.get("type") or ""))
+    duration_policy = _duration_policy(
+        clip_type=str(clip.get("type") or ""),
+        candidate_generation_summary=candidate_generation_summary,
+    )
     warnings = _quality_warnings(
         clip=clip,
         metadata=metadata,
         transcript=transcript,
         probe=probe,
         subtitle=subtitle,
+        duration_policy=duration_policy,
         external_subtitle_autoload_risks=external_subtitle_autoload_risks,
         high_quality_mode=high_quality_mode,
+    )
+    warning_details = _warning_details(
+        warnings=warnings,
+        clip=clip,
+        transcript=transcript,
+        probe=probe,
+        subtitle=subtitle,
+        duration_policy=duration_policy,
+        external_subtitle_autoload_risks=external_subtitle_autoload_risks,
     )
     title = clip.get("title") or metadata.get("title")
     title_source = clip.get("title_source") or metadata.get("title_source")
@@ -756,6 +906,7 @@ def _clip_report(
         "file_path": str(host_path) if host_path is not None else None,
         "container_file_path": container_video_path,
         "duration": duration,
+        "duration_policy": duration_policy,
         "resolution": {
             "width": probe.width,
             "height": probe.height,
@@ -802,6 +953,7 @@ def _clip_report(
         "title_source": title_source,
         "metadata_path": metadata.get("_metadata_path"),
         "warnings": warnings,
+        "warning_details": warning_details,
         "requires_human_visual_inspection": bool(warnings),
     }
 
@@ -828,6 +980,7 @@ def build_audit_report(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
 
     selected_summary = read_json(output_dir / "selected_clips_summary.json", {})
     candidate_summary = read_json(output_dir / "candidate_summary.json", {})
+    candidate_generation_summary = read_json(output_dir / "candidate_generation_summary.json", {})
     transcript_segments = read_json(output_dir / "transcript_segments.json", [])
     openai_summary = read_json(output_dir / "openai_scoring_summary.json", None)
     if not isinstance(transcript_segments, list):
@@ -841,6 +994,9 @@ def build_audit_report(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
             clip=clip,
             metadata=export_metadata.get(str(clip.get("id")), {}),
             transcript_segments=transcript_segments,
+            candidate_generation_summary=(
+                candidate_generation_summary if isinstance(candidate_generation_summary, dict) else {}
+            ),
             high_quality_mode=high_quality_mode,
             root=root,
         )
@@ -854,6 +1010,7 @@ def build_audit_report(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
             "type": clip.get("type"),
             "file_path": clip.get("file_path"),
             "warnings": clip.get("warnings"),
+            "warning_details": clip.get("warning_details"),
         }
         for clip in clip_reports
         if clip.get("requires_human_visual_inspection")
@@ -877,6 +1034,9 @@ def build_audit_report(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
         "source_artifacts": {
             "selected_clips_summary": selected_summary if isinstance(selected_summary, dict) else {},
             "candidate_summary": candidate_summary if isinstance(candidate_summary, dict) else {},
+            "candidate_generation_summary": (
+                candidate_generation_summary if isinstance(candidate_generation_summary, dict) else {}
+            ),
             "openai_scoring_summary": openai_summary if isinstance(openai_summary, dict) else None,
         },
     }
@@ -964,6 +1124,32 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"{_markdown_value(clip.get('title_source'))} | "
             f"{_markdown_value(clip.get('overlay_title'))} |"
         )
+
+    detail_clips = [
+        clip
+        for clip in report["clips"]
+        if isinstance(clip.get("warning_details"), dict) and clip.get("warning_details")
+    ]
+    if detail_clips:
+        lines.extend(
+            [
+                "",
+                "## Warning Details",
+                "",
+                "| Type | Clip | Warning | Details |",
+                "| --- | --- | --- | --- |",
+            ]
+        )
+        for clip in detail_clips:
+            warning_details = clip.get("warning_details") or {}
+            for warning, details in sorted(warning_details.items()):
+                lines.append(
+                    "| "
+                    f"{_markdown_value(clip.get('type'))} | "
+                    f"`{_markdown_value(clip.get('id'), limit=48)}` | "
+                    f"`{_markdown_value(warning)}` | "
+                    f"{_markdown_value(details, limit=220)} |"
+                )
 
     dense_clips = [
         clip

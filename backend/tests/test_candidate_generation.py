@@ -130,6 +130,41 @@ def test_generate_normal_candidates_can_use_shorter_configured_duration() -> Non
     assert all(candidate.type == "normal" for candidate in configured_candidates)
 
 
+def test_candidate_generation_summary_records_configured_duration_range() -> None:
+    transcript_segments = [
+        TranscriptSegment(
+            start=0.0,
+            end=60.0,
+            text="why automation teams need a complete launch checklist before publishing a video workflow",
+        )
+    ]
+    result = generate_normal_candidates_with_summary(
+        transcript_segments=transcript_segments,
+        scene_segments=[SceneSegment(start=0.0, end=60.0)],
+        silence_segments=[],
+        settings={
+            "normalMinDuration": 20,
+            "normalMaxDuration": 60,
+            "normalStepSeconds": 10,
+            "speechBoundaryTolerance": 6,
+        },
+    )
+
+    duration_range = result.summary["configured_duration_range"]
+    assert duration_range == {
+        "min_duration": 20.0,
+        "max_duration": 60.0,
+        "step_seconds": 10.0,
+        "speech_boundary_tolerance": 6.0,
+    }
+    merged = merge_candidate_generation_summaries(
+        [result.summary],
+        video_duration=60.0,
+        transcript_segment_count=1,
+    )
+    assert merged["configured_duration_ranges"]["normal"]["min_duration"] == 20.0
+
+
 def test_candidate_limit_is_spread_across_timeline() -> None:
     transcript_segments = [
         TranscriptSegment(start=float(start), end=float(start + 20), text=f"segment {start}")

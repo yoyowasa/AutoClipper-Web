@@ -597,6 +597,21 @@ def _candidate_end_targets(
     return sorted(targets)
 
 
+def _configured_duration_range(
+    *,
+    min_duration: float,
+    max_duration: float,
+    step_seconds: float,
+    speech_boundary_tolerance: float,
+) -> dict[str, float]:
+    return {
+        "min_duration": round(float(min_duration), 6),
+        "max_duration": round(float(max_duration), 6),
+        "step_seconds": round(float(step_seconds), 6),
+        "speech_boundary_tolerance": round(float(speech_boundary_tolerance), 6),
+    }
+
+
 def _chunk_ranges(
     timeline_duration: float,
     chunk_seconds: float,
@@ -648,6 +663,12 @@ def generate_window_candidates_with_summary(
     heartbeat: Callable[[dict[str, Any]], None] | None = None,
 ) -> CandidateGenerationResult:
     parsed_settings = settings or CandidateGenerationSettings(max_candidates=max_candidates)
+    configured_duration_range = _configured_duration_range(
+        min_duration=min_duration,
+        max_duration=max_duration,
+        step_seconds=step_seconds,
+        speech_boundary_tolerance=speech_boundary_tolerance,
+    )
     timeline_duration = infer_timeline_duration(
         transcript_segments,
         scene_segments,
@@ -668,6 +689,7 @@ def generate_window_candidates_with_summary(
                 "peak_memory_mb": _current_rss_mb(),
                 "memory_guard_triggered": False,
                 "configured_caps": parsed_settings.model_dump(),
+                "configured_duration_range": configured_duration_range,
             },
         )
 
@@ -692,6 +714,7 @@ def generate_window_candidates_with_summary(
                 "peak_memory_mb": _current_rss_mb(),
                 "memory_guard_triggered": False,
                 "configured_caps": parsed_settings.model_dump(),
+                "configured_duration_range": configured_duration_range,
             },
         )
 
@@ -796,6 +819,7 @@ def generate_window_candidates_with_summary(
 
     candidates = keeper.materialize(transcript_index)
     summary = keeper.summary()
+    summary["configured_duration_range"] = configured_duration_range
     summary["candidates_kept_by_type"] = {candidate_type: len(candidates)}
     summary["raw_candidate_caps_by_chunk"] = raw_candidate_caps_by_chunk
     summary["stopped_due_to_raw_candidate_cap"] = False
@@ -837,6 +861,11 @@ def merge_candidate_generation_summaries(
         (summary.get("configured_caps") for summary in summaries if isinstance(summary.get("configured_caps"), dict)),
         {},
     )
+    configured_duration_ranges = {
+        candidate_type: duration_range
+        for candidate_type, summary in by_type.items()
+        if isinstance(duration_range := summary.get("configured_duration_range"), dict)
+    }
     return {
         "video_duration": round(video_duration, 6),
         "transcript_segment_count": transcript_segment_count,
@@ -864,6 +893,7 @@ def merge_candidate_generation_summaries(
         ),
         "memory_guard_triggered": any(bool(summary.get("memory_guard_triggered")) for summary in summaries),
         "configured_caps": configured_caps,
+        "configured_duration_ranges": configured_duration_ranges,
         "by_type": by_type,
     }
 
