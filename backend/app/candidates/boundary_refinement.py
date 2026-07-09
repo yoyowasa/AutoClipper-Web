@@ -132,6 +132,21 @@ def _segment_containing(
     return None
 
 
+def _segment_cut_by_end(
+    start: float,
+    end: float,
+    transcript_segments: Sequence[TranscriptSegment],
+) -> TranscriptSegment | None:
+    for segment in transcript_segments:
+        if not segment.text.strip():
+            continue
+        segment_start = float(segment.start)
+        segment_end = float(segment.end)
+        if segment_start < end < segment_end and segment_end > start:
+            return segment
+    return None
+
+
 def _overlapping_segments(
     start: float,
     end: float,
@@ -400,6 +415,13 @@ def refine_candidate_boundaries(
 
     desired_start = max(min_start, desired_start)
     desired_end = min(max_end, desired_end)
+    final_cut_segment = _segment_cut_by_end(desired_start, desired_end, transcript_segments)
+    if final_cut_segment is not None:
+        final_segment_end = float(final_cut_segment.end)
+        if final_segment_end <= max_end and final_segment_end - original_end <= max_expansion:
+            desired_end = final_segment_end
+            reasons.append("end_to_final_transcript_segment_end")
+
     refined_start, refined_end = _apply_duration_constraints(
         original_start=original_start,
         original_end=original_end,

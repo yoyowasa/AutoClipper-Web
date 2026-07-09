@@ -68,6 +68,32 @@ def test_end_inside_transcript_segment_adjusts_to_segment_end() -> None:
     assert "end_to_transcript_segment_end" in str(refined.boundary_refinement_reason)
 
 
+def test_final_refined_end_does_not_cut_newly_overlapped_transcript_segment() -> None:
+    candidate = make_candidate("normal_1", "normal", 0.0, 10.0)
+    refined = refine_candidate_boundaries(
+        candidate,
+        transcript_segments=[
+            TranscriptSegment(start=0.0, end=9.8, text="前段は完結します。"),
+            TranscriptSegment(start=10.1, end=10.7, text="補正後に重なる発話です。"),
+        ],
+        scene_segments=[SceneSegment(start=0.0, end=10.2)],
+        settings={
+            "normalMinDuration": 5,
+            "normalMaxDuration": 20,
+            "boundaryLeadingPaddingSeconds": 0,
+            "boundaryTrailingPaddingSeconds": 0.1,
+            "maxBoundaryExpansionSeconds": 2,
+        },
+        timeline_duration=20,
+    )
+
+    assert refined.end == 10.7
+    assert refined.boundary_refined is True
+    assert "end_to_scene_boundary" in str(refined.boundary_refinement_reason)
+    assert "trailing_padding" in str(refined.boundary_refinement_reason)
+    assert "end_to_final_transcript_segment_end" in str(refined.boundary_refinement_reason)
+
+
 def test_leading_and_trailing_padding_are_applied_within_bounds() -> None:
     candidate = make_candidate("short_1", "short", 10.5, 39.5)
     refined = refine_candidate_boundaries(

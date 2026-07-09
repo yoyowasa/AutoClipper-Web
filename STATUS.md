@@ -3887,3 +3887,90 @@ python .\scripts\e2e_real_video.py `
 
 - 既存代表ジョブの warning 件数自体は減っていない。今回の主改善は、必要な warning を説明可能にすること。
 - 実写 normal clip の境界そのものをさらに自然にする場合は、別Taskで boundary/selection 改善を行う。
+
+## 2026-07-10 Task 55 normal clip warning reduction
+
+### 目的
+
+- Task54 の `warning_details` を使い、消せる normal clip warning は境界補正で減らす。
+- 消せない warning は隠さず、採用理由をより明確にする。
+- 対象 warning:
+  - `likely_abrupt_ending`
+  - `below_quality_threshold`
+  - `normal_duration_outside_recommended_range`
+
+### 対象
+
+- `backend/app/candidates/boundary_refinement.py`
+- `scripts/audit_outputs.py`
+- `backend/tests/test_boundary_refinement.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `STATUS.md`
+
+### 変更内容
+
+- boundary refinement の最終段に、補正後の end が新たに重なった transcript segment の途中で止まっていないかを確認する処理を追加。
+  - 条件を満たす場合は transcript segment end まで延長。
+  - 追加理由: `end_to_final_transcript_segment_end`
+  - `maxBoundaryExpansionSeconds` / duration constraints は維持。
+- `audit_outputs.py` の `below_quality_threshold` detail に selection summary を追加。
+  - requested count
+  - selected count
+  - hard gate passed count
+  - selected above threshold count
+  - selected below threshold backfill count
+  - unfilled requested count
+- warning は非表示化していない。
+
+### 代表ジョブ確認
+
+- 代表ジョブ: `job_e9a049ee5e3446c0b92943429fa8918a`
+- before:
+  - normal:
+    - `likely_abrupt_start`: 1
+    - `likely_abrupt_ending`: 1
+    - `below_quality_threshold`: 1
+    - `backfilled_clip`: 1
+  - short:
+    - `likely_abrupt_start`: 3
+    - `subtitle_too_dense`: 2
+- after existing artifact audit:
+  - warning count は同一。
+  - 理由: 既存jobの `selected_clips.json` / rendered metadata は再生成されないため。
+- 再補正予測:
+  - 対象 clip: `cand_normal_1200920_1548060_ca4dab94c0`
+  - old end: `1550.248`
+  - new end: `1550.9`
+  - new reason: `incomplete_ending_expanded_end, end_to_scene_boundary, trailing_padding, end_to_final_transcript_segment_end`
+  - `last_segment_end` まで届くため、この類型の `likely_abrupt_ending` は新規生成で減る見込み。
+- `below_quality_threshold` detail 確認:
+  - 対象 clip: `cand_normal_1823200_2181780_6a480db9c7`
+  - `requested_count=5`
+  - `selected_count=5`
+  - `hard_gate_passed_count=600`
+  - `selected_below_threshold_backfill_count=1`
+  - `unfilled_requested_count=0`
+  - 残る warning は、fill_requested の本数充足 backfill として説明可能。
+
+### 新規 sample E2E 確認
+
+- rebuild 後 job: `job_a747767391054272bad9ce146f41a40e`
+- `scripts/e2e_sample_video.py`: pass。
+- `scripts/check_subtitle_sidecar_risk.py --job-id job_a747767391054272bad9ce146f41a40e --json`: `risk_count=0`。
+
+### 検証結果
+
+- `pytest backend/tests/test_boundary_refinement.py backend/tests/test_audit_outputs_script.py`: 27 passed。
+- `cd backend && ruff check .`: pass。
+- `ruff check scripts/audit_outputs.py`: pass。
+- `cd backend && pytest`: 243 passed, 1 skipped。
+- `docker compose up -d --build`: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- `python scripts/e2e_sample_video.py`: pass。
+- `python scripts/check_subtitle_sidecar_risk.py --job-id job_a747767391054272bad9ce146f41a40e --json`: `risk_count=0`。
+
+### 未解決事項
+
+- 既存代表ジョブの warning count は、artifact 再生成なしでは変わらない。
+- `below_quality_threshold` は品質警告として残す。今回の変更は採用理由の明確化。
+- `normal_duration_outside_recommended_range` は代表ジョブで発生なし。Task54 の duration policy 表示を維持。

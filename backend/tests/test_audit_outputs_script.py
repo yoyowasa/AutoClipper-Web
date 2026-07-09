@@ -89,6 +89,11 @@ def write_audit_job(root: Path, job_id: str) -> Path:
             "selected_short_count": 1,
             "requested_normal_count": 1,
             "requested_short_count": 1,
+            "normal_hard_gate_passed_count": 4,
+            "short_hard_gate_passed_count": 2,
+            "selected_above_threshold_count": 1,
+            "selected_below_threshold_backfill_count": 1,
+            "unfilled_requested_counts": {"normal": 0, "short": 0},
         },
     )
     write_json(
@@ -181,6 +186,14 @@ def test_audit_outputs_builds_quality_report(tmp_path: Path) -> None:
     assert normal_clip["warning_details"]["below_quality_threshold"]["selection_context"].startswith(
         "fill_requested backfilled"
     )
+    assert normal_clip["warning_details"]["below_quality_threshold"]["selection_summary"] == {
+        "requested_count": 1,
+        "selected_count": 1,
+        "hard_gate_passed_count": 4,
+        "selected_above_threshold_count": 1,
+        "selected_below_threshold_backfill_count": 1,
+        "unfilled_requested_count": 0,
+    }
     assert normal_clip["warning_details"]["backfilled_clip"]["selection_reason"] == "backfill_below_quality_threshold"
     assert normal_clip["warning_details"]["likely_abrupt_start"]["first_segment_start"] == 9.5
     assert short_clip["resolution"]["height"] == 1280
