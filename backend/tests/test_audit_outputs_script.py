@@ -178,8 +178,39 @@ def test_audit_outputs_builds_quality_report(tmp_path: Path) -> None:
     assert "generic_fallback_title" in normal_clip["warnings"]
     assert "external_subtitle_autoload_risk" in normal_clip["warnings"]
     assert normal_clip["external_subtitle_autoload_risk_files"]
+    assert normal_clip["warning_details"]["below_quality_threshold"]["selection_context"].startswith(
+        "fill_requested backfilled"
+    )
+    assert normal_clip["warning_details"]["backfilled_clip"]["selection_reason"] == "backfill_below_quality_threshold"
+    assert normal_clip["warning_details"]["likely_abrupt_start"]["first_segment_start"] == 9.5
     assert short_clip["resolution"]["height"] == 1280
     assert "missing_overlay_title" in short_clip["warnings"]
+
+
+def test_audit_uses_configured_normal_duration_policy_when_available(tmp_path: Path) -> None:
+    output_dir = write_audit_job(tmp_path, "job_audit")
+    write_json(
+        output_dir / "candidate_generation_summary.json",
+        {
+            "configured_duration_ranges": {
+                "normal": {
+                    "min_duration": 20.0,
+                    "max_duration": 120.0,
+                    "step_seconds": 30.0,
+                    "speech_boundary_tolerance": 8.0,
+                }
+            }
+        },
+    )
+
+    report = audit_outputs.build_audit_report("job_audit", root=tmp_path)
+    normal_clip = next(clip for clip in report["clips"] if clip["type"] == "normal")
+
+    assert normal_clip["duration"] == 80.0
+    assert normal_clip["duration_policy"]["source"] == "candidate_generation_summary"
+    assert normal_clip["duration_policy"]["min_duration"] == 20.0
+    assert normal_clip["duration_policy"]["max_duration"] == 120.0
+    assert "normal_duration_outside_recommended_range" not in normal_clip["warnings"]
 
 
 def test_audit_reports_no_sidecar_risk_for_separated_subtitle_layout(tmp_path: Path) -> None:

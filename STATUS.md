@@ -3808,3 +3808,82 @@ python .\scripts\e2e_real_video.py `
 
 - `stash@{0}: pre-pr32-merge-local-work-20260709` と `stash@{1}: pre-task52-existing-transcript-work` はバックアップとして未削除。
 - Plotwith系scriptを汎用補助scriptにするかは未判断。必要なら別Task。
+
+## 2026-07-10 Task 54 normal clip quality warning improvements
+
+### 目的
+
+- normal clip の audit warning を隠さず、原因確認に使える詳細へ改善する。
+- 対象 warning:
+  - `likely_abrupt_ending`
+  - `below_quality_threshold`
+  - `normal_duration_outside_recommended_range`
+
+### 対象
+
+- `backend/app/candidates/merge_boundaries.py`
+- `scripts/audit_outputs.py`
+- `backend/tests/test_audit_outputs_script.py`
+- `backend/tests/test_candidate_generation.py`
+- `STATUS.md`
+
+### 変更内容
+
+- `candidate_generation_summary.json` に type 別 `configured_duration_ranges` を追加。
+  - `min_duration`
+  - `max_duration`
+  - `step_seconds`
+  - `speech_boundary_tolerance`
+- `audit_outputs.py` が `candidate_generation_summary.json` の duration policy を読むよう変更。
+  - 新規ジョブでは、設定された normal/short duration range を優先。
+  - 既存ジョブで設定情報がない場合は従来の推奨値を使用。
+- 各 clip report に `duration_policy` と `warning_details` を追加。
+  - abrupt warning: transcript segment 境界、original/refined boundary、boundary refinement 理由を記録。
+  - below quality warning: score、`selection_reason`、`quality_warning`、backfill context を記録。
+  - duration warning: 実duration、min/max、policy source を記録。
+- Markdown audit report に `Warning Details` セクションを追加。
+
+### 代表ジョブ確認
+
+- 代表ジョブ: `job_e9a049ee5e3446c0b92943429fa8918a`
+- before:
+  - normal:
+    - `likely_abrupt_start`: 1
+    - `likely_abrupt_ending`: 1
+    - `below_quality_threshold`: 1
+    - `backfilled_clip`: 1
+  - short:
+    - `likely_abrupt_start`: 3
+    - `subtitle_too_dense`: 2
+- after:
+  - warning count は同一。
+  - normal の `likely_abrupt_ending` に boundary refinement / transcript end 詳細が出ることを確認。
+  - normal の `below_quality_threshold` / `backfilled_clip` に `selection_reason=backfill_below_quality_threshold` と backfill context が出ることを確認。
+- 生成確認:
+  - `.codex_tmp/task54_after_job_e9a/output_audit_report.json`
+  - `.codex_tmp/task54_after_job_e9a/output_audit_report.md`
+
+### 新規 sample E2E 確認
+
+- rebuild 後 job: `job_760dd150c4084868b12e9a262e1bdb8a`
+- `scripts/e2e_sample_video.py`: pass。
+- `scripts/check_subtitle_sidecar_risk.py --job-id job_760dd150c4084868b12e9a262e1bdb8a --json`: `risk_count=0`。
+- `scripts/audit_outputs.py --job-id job_760dd150c4084868b12e9a262e1bdb8a`: pass。
+- 新規 `candidate_generation_summary.json` で以下を確認。
+  - normal: `90.0-600.0`
+  - short: `20.0-25.0`
+
+### 検証結果
+
+- `cd backend && ruff check .`: pass。
+- `cd backend && pytest`: 242 passed, 1 skipped。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- `python scripts/e2e_sample_video.py`: pass。
+- `docker compose up -d --build`: pass。
+- rebuild 後 `python scripts/smoke_runtime.py --skip-video`: pass。
+- rebuild 後 `python scripts/e2e_sample_video.py`: pass。
+
+### 未解決事項
+
+- 既存代表ジョブの warning 件数自体は減っていない。今回の主改善は、必要な warning を説明可能にすること。
+- 実写 normal clip の境界そのものをさらに自然にする場合は、別Taskで boundary/selection 改善を行う。
