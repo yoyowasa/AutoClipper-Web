@@ -3783,7 +3783,8 @@ python .\scripts\e2e_real_video.py `
 
 - `storage/transcripts/*.md` / `*.json` は実案件由来の生成物のため main 非投入。
 - `.codex_tmp/` は一時依存展開のため main 非投入。
-- `scripts/make_plotwith_*.ps1` は案件別編集scriptのため main 非投入。汎用化する場合は別Taskで個別triageする。
+- `scripts/make_plotwith_*.ps1` / `scripts/make_plotwith_*.py` は案件別編集scriptのため main 非投入。汎用化する場合は別Taskで個別triageする。
+- `ID146_*/` は案件素材の展開フォルダのため main 非投入。
 - `STATUS.md` に戻っていた個別案件の詳細ログは main 非投入。ここでは要約のみ記録する。
 
 ### 変更内容
@@ -3793,12 +3794,14 @@ python .\scripts\e2e_real_video.py `
   - `!storage/transcripts/.gitkeep`
   - `.codex_tmp/`
   - `scripts/make_plotwith_*.ps1`
+  - `scripts/make_plotwith_*.py`
+  - `ID146_*/`
 - `storage/transcripts/.gitkeep` を追加し、ローカル transcript 保存先だけを維持。
 - stash の transcript / Plotwith / `.codex_tmp` ファイルを apply し、ignored 扱いになることを確認。
 
 ### 検証結果
 
-- `git stash apply stash@{0}` 後、transcript成果物、Plotwith scripts、`.codex_tmp/` が ignored 表示になることを確認。
+- `git stash apply stash@{0}` 後、transcript成果物、Plotwith scripts、案件素材フォルダ、`.codex_tmp/` が ignored 表示になることを確認。
 - `STATUS.md` の案件詳細ログは `git restore -- STATUS.md` で除外し、Task53要約だけを追記。
 
 ### 未解決事項
