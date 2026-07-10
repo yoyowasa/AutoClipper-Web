@@ -8,7 +8,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 
 - stable release `v1.1.0` 公開済み。
 - Task 56 representative normal warning regeneration check 完了、PR #36 merge済み。
-- Task 57 Windows launcher MVP を実装・検証済み。PR化前のTask branch状態。
+- Task 57 Windows launcher MVP を実装・検証済み。Draft PR #37、CI pass。
 - Task 01 Repository scaffold の実装完了。
 - Git repository 初期化と GitHub remote 接続完了。
 - GitHub Actions backend ruff F401 修正完了。
@@ -4149,6 +4149,7 @@ python .\scripts\e2e_real_video.py `
   - `cd frontend && npm run lint`: pass。
   - `cd frontend && npm run typecheck`: pass。
   - `cd frontend && npm run build`: pass。
+  - GitHub Actions PR #37: backend / frontend pass。
 - GUI startup:
   - Tkinter GUIを実表示し、2秒後に自動終了するstartup smoke: pass。
 - launcher actual runtime:
