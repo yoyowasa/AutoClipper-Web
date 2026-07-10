@@ -4185,3 +4185,96 @@ python .\scripts\e2e_real_video.py `
 - production defaultは互換性と非日本語入力を考慮し `base + auto` を維持。
 - `small + ja` を日本語高精度optionとして推奨。人間音声CERの正解原稿がないため、TTS結果だけではdefault変更しない。
 - OpenAI字幕校正はTask60候補。本Taskには含めない。
+
+## 2026-07-11 Task 60 OpenAI subtitle correction
+
+### 目的
+
+- deterministic後処理済み字幕をOpenAI Structured Outputsで任意校正する。
+- segment数・順序・timestampを変えず、API失敗時は部分適用せず全文をdeterministic字幕へfallbackする。
+
+### 変更
+
+- `JobSettings` / Upload UIへ以下を追加。
+  - `subtitleCorrectionMode`: `off|openai`、default `off`。
+  - `subtitleCorrectionModel`: default `gpt-5.5`。
+  - `subtitleCorrectionMinConfidence`: default `0.9`。
+  - `subtitleCorrectionBatchSize`: default `40`。
+  - `subtitleCorrectionContextSegments`: default `2`。
+  - `subtitleCorrectionFallbackEnabled`: default `true`。
+- 校正APIへ送る対象を字幕text・ASR confidence・前後text context・辞書語だけに限定。動画・音声・pathは送らない。
+- strict JSON schemaでindex、原文、校正文、変更有無、理由、confidenceを検証。
+- transient error retry、schema validation error、missing key、fallback disabledの明確なerror codeを追加。
+- 数値token変更を`numeric_expression`以外の理由で適用しないsafety gateを追加。
+- raw / deterministic / OpenAI校正後 / final transcriptを分離保存。
+- `transcript_correction_summary.json`と`transcript_correction_diff.md`を追加し、ZIPへ格納。
+- `scripts/e2e_real_video.py`へ校正設定・artifact・timestamp検証を追加。
+- `scripts/e2e_summary.py`へ校正summary表示を追加。
+
+### 変更ファイル
+
+- `backend/app/audio/openai_transcript_correction.py`
+- `backend/app/audio/transcript_correction_schema.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/schemas.py`
+- `frontend/components/SettingsPanel.tsx`
+- `frontend/lib/types.ts`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- backend tests
+- `README.md`
+- `STATUS.md`
+
+### 自動検証
+
+- backend `ruff`: pass。
+- backend pytest: `264 passed, 1 skipped`。OpenAI校正test単体: `12 passed`。
+- frontend lint / typecheck / build: pass。
+- `docker compose up -d --build`: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- default校正OFF synthetic E2E: pass (`job_65c624c6c02241f084cc9dd491ac7056`)。
+- 校正schema、timestamp維持、低confidence拒否、数値変更safety gate、retry、missing key、全体fallback、fallback無効時error、artifact、ZIP layoutをtest済み。
+
+### 短尺実API E2E
+
+- input: Task59の実話者 `123.706917s` local sample。mediaはcommitしない。
+- job: `job_d67a4d38c98144e0988bcec183fe74fb`。
+- transcription: `small + ja`、48 segments。
+- OpenAI correction: `gpt-5.5`、batch `40`、confidence `0.9`。
+- result: corrected `9`、unchanged `39`、low-confidence reject `4`、safety reject `1`、fallback `0`、schema failure `0`、API calls `2`。
+- short: `1/1`、`1080x1920`、render failure `0`。
+- segment数・timestamp・final transcript一致: pass。
+- ZIP correction artifacts: pass。
+- sidecar risk: `0`。
+
+### 58分実API E2E
+
+- input duration: `3495.8924s` local real video。mediaはcommitしない。
+- job: `job_0caea4d85baf4e9cbca9a84adaf0be80`。
+- transcription: `small + ja`、1695 segments。
+- OpenAI correction: `gpt-5.5`、batch `100`、confidence `0.9`。
+- correction result:
+  - corrected: `273`。
+  - unchanged: `1422`。
+  - low-confidence reject: `117`。
+  - safety reject: `5`。
+  - fallback: `0`。
+  - schema failure: `0`。
+  - API calls: `17`。
+  - correction time: `1582.563s`。
+- output:
+  - normal: `1/1`、`1280x720`。
+  - short: `2/2`、すべて`1080x1920`。
+  - render failure: `0`。
+  - ZIP: `73,201,537` bytes。
+  - total runtime: `2195.156s`。
+- segment数・timestamp・final transcript一致: pass。
+- ZIP correction artifacts: pass。
+- sidecar risk: `0`。
+- 273変更の最大文字数差: `6`。極端な長文化なし。
+
+### 未解決事項
+
+- OpenAI correctionは長尺で処理時間を支配する。58分素材では校正だけで約26.4分。default `off`を維持する。
+- 校正品質は素材依存。raw / deterministic / corrected / diffを保持し、目視監査可能にする。
+- 長尺校正中もheartbeatはbatchごとに更新されるが、job表示は`transcribing 30%`のまま。校正専用progress表示は未実装。

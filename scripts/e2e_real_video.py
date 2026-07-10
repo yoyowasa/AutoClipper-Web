@@ -135,6 +135,20 @@ def non_negative_float(value: str) -> float:
     return parsed
 
 
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be > 0")
+    return parsed
+
+
+def probability_float(value: str) -> float:
+    parsed = float(value)
+    if not 0 <= parsed <= 1:
+        raise argparse.ArgumentTypeError("value must be between 0 and 1")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run a real spoken-video E2E without fixture transcript.")
     parser.add_argument("--video", type=Path, required=True, help="Path to an MP4 with clear spoken audio.")
@@ -161,6 +175,17 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         choices=["auto", "ja"],
         help="Use auto detection or force Japanese transcription.",
+    )
+    parser.add_argument("--subtitle-correction-mode", default="off", choices=["off", "openai"])
+    parser.add_argument("--subtitle-correction-model", default="gpt-5.5")
+    parser.add_argument("--subtitle-correction-min-confidence", type=probability_float, default=0.9)
+    parser.add_argument("--subtitle-correction-batch-size", type=positive_int, default=40)
+    parser.add_argument("--subtitle-correction-context-segments", type=non_negative_int, default=2)
+    parser.add_argument("--subtitle-correction-fallback-enabled", nargs="?", const=True, default=True, type=parse_bool)
+    parser.add_argument(
+        "--no-subtitle-correction-fallback",
+        dest="subtitle_correction_fallback_enabled",
+        action="store_false",
     )
     parser.add_argument("--burn-subtitles", nargs="?", const=True, default=True, type=parse_bool)
     parser.add_argument("--no-burn-subtitles", dest="burn_subtitles", action="store_false")
@@ -244,6 +269,12 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "profile": args.profile,
         "whisperModelSize": args.whisper_model_size,
         "transcriptionLanguage": args.transcription_language,
+        "subtitleCorrectionMode": args.subtitle_correction_mode,
+        "subtitleCorrectionModel": args.subtitle_correction_model,
+        "subtitleCorrectionMinConfidence": args.subtitle_correction_min_confidence,
+        "subtitleCorrectionBatchSize": args.subtitle_correction_batch_size,
+        "subtitleCorrectionContextSegments": args.subtitle_correction_context_segments,
+        "subtitleCorrectionFallbackEnabled": args.subtitle_correction_fallback_enabled,
         "normalClipCount": args.normal_count,
         "shortCount": args.short_count,
         "normalMinDuration": args.normal_min_duration,
@@ -539,13 +570,16 @@ def use_openai_scoring(settings: dict[str, Any]) -> bool:
     return bool(settings.get("useOpenAIScoring"))
 
 
+def use_openai_subtitle_correction(settings: dict[str, Any]) -> bool:
+    return settings.get("subtitleCorrectionMode") == "openai"
+
+
 def check_openai_api_key_available(env: dict[str, str]) -> None:
     try:
         compose_exec("worker", ["sh", "-lc", 'test -n "${OPENAI_API_KEY:-}"'], env=env)
     except Exception as exc:
         raise RuntimeError(
-            "openai_configuration_missing: OPENAI_API_KEY is required for "
-            "--mode high_quality / --use-openai-scoring true. "
+            "openai_configuration_missing: OPENAI_API_KEY is required for OpenAI scoring or subtitle correction. "
             "Set OPENAI_API_KEY in .env, then run docker compose up -d --build."
         ) from exc
 
@@ -595,6 +629,45 @@ def validate_openai_scoring_summary(output_dir: Path) -> dict[str, Any]:
         f"not_scored_reasons={payload.get('selected_not_scored_reason_counts')}"
     )
     return payload
+
+
+def validate_transcript_correction_summary(output_dir: Path) -> dict[str, Any]:
+    summary_path = output_dir / "transcript_correction_summary.json"
+    deterministic_path = output_dir / "deterministic_transcript_segments.json"
+    corrected_path = output_dir / "openai_corrected_transcript_segments.json"
+    final_path = output_dir / "transcript_segments.json"
+    diff_path = output_dir / "transcript_correction_diff.md"
+    for path in (summary_path, deterministic_path, corrected_path, final_path, diff_path):
+        if not path.is_file():
+            raise RuntimeError(f"subtitle correction artifact not found: {path}")
+    summary = read_json(summary_path)
+    deterministic = read_json(deterministic_path)
+    corrected = read_json(corrected_path)
+    final = read_json(final_path)
+    if not isinstance(summary, dict) or not summary.get("enabled"):
+        raise RuntimeError("transcript correction summary does not show enabled correction")
+    if not all(isinstance(value, list) for value in (deterministic, corrected, final)):
+        raise RuntimeError("transcript correction artifacts must contain segment lists")
+    if len(deterministic) != len(corrected) or len(corrected) != len(final):
+        raise RuntimeError("subtitle correction changed the segment count")
+    for before, after in zip(deterministic, corrected, strict=True):
+        if before.get("start") != after.get("start") or before.get("end") != after.get("end"):
+            raise RuntimeError("subtitle correction changed segment timestamps")
+    if corrected != final:
+        raise RuntimeError("final transcript does not match corrected transcript")
+    if not summary.get("fallback_used") and int(summary.get("api_call_count") or 0) <= 0:
+        raise RuntimeError("subtitle correction summary shows zero API calls")
+    print(
+        "subtitle correction: "
+        f"model={summary.get('model')} "
+        f"segments={summary.get('input_segment_count')} "
+        f"corrected={summary.get('corrected_segment_count')} "
+        f"unchanged={summary.get('unchanged_segment_count')} "
+        f"fallback={summary.get('fallback_used')} "
+        f"calls={summary.get('api_call_count')} "
+        f"seconds={summary.get('processing_seconds')}"
+    )
+    return summary
 
 
 def transcript_text_from_segments(segments: Any) -> str:
@@ -820,13 +893,23 @@ def run_e2e(args: argparse.Namespace) -> int:
         f"model={settings['whisperModelSize']} "
         f"language={settings['transcriptionLanguage']}"
     )
-    if use_openai_scoring(settings):
+    if use_openai_scoring(settings) or use_openai_subtitle_correction(settings):
         check_openai_api_key_available(env)
+    if use_openai_scoring(settings):
         print(
             "openai scoring: enabled "
             f"model={settings['openaiModel']} "
             f"candidate_limit={settings['openaiCandidateLimit']} "
             f"fallback={settings['openaiFallbackToRuleScore']}"
+        )
+    if use_openai_subtitle_correction(settings):
+        print(
+            "subtitle correction: enabled "
+            f"model={settings['subtitleCorrectionModel']} "
+            f"confidence={settings['subtitleCorrectionMinConfidence']} "
+            f"batch_size={settings['subtitleCorrectionBatchSize']} "
+            f"context={settings['subtitleCorrectionContextSegments']} "
+            f"fallback={settings['subtitleCorrectionFallbackEnabled']}"
         )
 
     upload_started_at = time.monotonic()
@@ -877,6 +960,8 @@ def run_e2e(args: argparse.Namespace) -> int:
     print_job_summaries(job_id)
     if use_openai_scoring(settings):
         validate_openai_scoring_summary(output_dir)
+    if use_openai_subtitle_correction(settings):
+        validate_transcript_correction_summary(output_dir)
     print_pipeline_metrics(pipeline_metrics(output_dir))
     download_and_probe_outputs(backend_url=args.backend_url, job_id=job_id, results=results, env=env)
     print_runtime_metrics(

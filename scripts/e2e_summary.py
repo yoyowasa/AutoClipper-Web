@@ -10,6 +10,7 @@ from smoke_runtime import ROOT
 SUMMARY_FILENAMES = [
     "transcript_summary.json",
     "transcript_postprocess_summary.json",
+    "transcript_correction_summary.json",
     "audio_feature_summary.json",
     "candidate_summary.json",
     "candidate_generation_summary.json",
@@ -45,6 +46,19 @@ def summary_line(filename: str, payload: Any) -> str:
             f"replacements={_value(payload, 'replacement_counts')} "
             f"default_dict={_value(payload, 'used_default_dictionary')} "
             f"custom_replacements={_value(payload, 'custom_replacement_count')}"
+        )
+    if filename == "transcript_correction_summary.json":
+        return (
+            f"enabled={_value(payload, 'enabled')} "
+            f"model={_value(payload, 'model')} "
+            f"corrected={_value(payload, 'corrected_segment_count')} "
+            f"unchanged={_value(payload, 'unchanged_segment_count')} "
+            f"low_confidence_rejected={_value(payload, 'low_confidence_rejected_count')} "
+            f"safety_rejected={_value(payload, 'safety_rejected_count')} "
+            f"fallback={_value(payload, 'fallback_used')} "
+            f"calls={_value(payload, 'api_call_count')} "
+            f"schema_failures={_value(payload, 'schema_validation_failures')} "
+            f"seconds={_value(payload, 'processing_seconds')}"
         )
     if filename == "audio_feature_summary.json":
         return (

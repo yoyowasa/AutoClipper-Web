@@ -326,6 +326,12 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["openaiFallbackToRuleScore"]["default"] is True
     assert properties["whisperModelSize"]["default"] == "base"
     assert properties["transcriptionLanguage"]["default"] == "auto"
+    assert properties["subtitleCorrectionMode"]["default"] == "off"
+    assert properties["subtitleCorrectionModel"]["default"] == "gpt-5.5"
+    assert properties["subtitleCorrectionMinConfidence"]["default"] == 0.9
+    assert properties["subtitleCorrectionBatchSize"]["default"] == 40
+    assert properties["subtitleCorrectionContextSegments"]["default"] == 2
+    assert properties["subtitleCorrectionFallbackEnabled"]["default"] is True
     assert "ensureSelectedOpenAIScored" in properties
     assert "openaiFinalistScoringLimit" in properties
     assert "subtitleFontName" in properties
