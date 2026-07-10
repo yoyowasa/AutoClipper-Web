@@ -374,7 +374,10 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     for name in [
         "video_metadata.json",
         "raw_transcript_segments.json",
+        "deterministic_transcript_segments.json",
         "transcript_segments.json",
+        "transcript_correction_summary.json",
+        "transcript_correction_diff.md",
         "scene_segments.json",
         "silence_segments.json",
         "audio_features.json",
@@ -415,6 +418,9 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert transcript_summary["transcription_model"] == "base"
     assert transcript_summary["transcription_language"] == "auto"
     assert transcript_summary["used_fixture_transcript"] is False
+    correction_summary = json.loads((job_dir / "transcript_correction_summary.json").read_text(encoding="utf-8"))
+    assert correction_summary["enabled"] is False
+    assert correction_summary["api_call_count"] == 0
     transcript_postprocess_summary = json.loads(
         (job_dir / "transcript_postprocess_summary.json").read_text(encoding="utf-8")
     )
@@ -486,6 +492,9 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "metadata/shorts/short_01.json" in names
     assert "metadata/selected_clips.json" in names
     assert "metadata/raw_transcript_segments.json" in names
+    assert "metadata/deterministic_transcript_segments.json" in names
+    assert "metadata/transcript_correction_summary.json" in names
+    assert "metadata/transcript_correction_diff.md" in names
     assert "metadata/transcript_summary.json" in names
     assert "metadata/transcript_postprocess_summary.json" in names
     assert "metadata/selected_clips_summary.json" in names

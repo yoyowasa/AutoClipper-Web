@@ -12,8 +12,21 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from sqlalchemy.orm import Session
 
 from app.audio.extract import extract_mono_wav
+from app.audio.openai_transcript_correction import (
+    OpenAITranscriptCorrector,
+    TranscriptCorrectionResult,
+    correction_diff_output_path,
+    correction_summary_output_path,
+    deterministic_transcript_output_path,
+    disabled_correction_result,
+    fallback_correction_result,
+    write_corrected_transcript,
+    write_correction_diff,
+    write_correction_summary,
+)
 from app.audio.silence_detect import SilenceSegment, detect_silence, silence_output_path, write_silence_segments
 from app.audio.transcript_postprocess import (
+    DEFAULT_TRANSCRIPT_REPLACEMENTS,
     postprocess_transcript_segments,
     raw_transcript_output_path,
     transcript_postprocess_summary_path,
@@ -120,6 +133,7 @@ class AutoClipperPipelineDependencies:
     normal_renderer: Callable[..., Path] = render_normal_clip
     short_renderer: Callable[..., Any] = render_short_clip
     openai_scorer: OpenAICandidateScorer | None = None
+    transcript_corrector: OpenAITranscriptCorrector | None = None
 
 
 class PipelineExpectedError(Exception):
@@ -144,6 +158,76 @@ def _transcription_language_setting(settings: dict[str, Any]) -> str:
     value = settings.get("transcriptionLanguage") or settings.get("transcription_language") or "auto"
     normalized = str(value).strip().lower()
     return normalized if normalized in TRANSCRIPTION_LANGUAGES else "auto"
+
+
+def _subtitle_correction_mode_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("subtitleCorrectionMode") or settings.get("subtitle_correction_mode") or "off"
+    normalized = str(value).strip().lower()
+    return normalized if normalized in {"off", "openai"} else "off"
+
+
+def _subtitle_correction_model_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("subtitleCorrectionModel") or settings.get("subtitle_correction_model") or "gpt-5.5"
+    normalized = str(value).strip()
+    return normalized or "gpt-5.5"
+
+
+def _float_setting(settings: dict[str, Any], key: str, default: float) -> float:
+    try:
+        return float(settings.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _transcript_correction_glossary(settings: dict[str, Any]) -> list[str]:
+    terms: list[str] = []
+    if _bool_setting(settings, "useDefaultTranscriptDictionary", True):
+        terms.extend(DEFAULT_TRANSCRIPT_REPLACEMENTS.values())
+    replacements = settings.get("transcriptReplacements")
+    if isinstance(replacements, dict):
+        terms.extend(str(value).strip() for value in replacements.values())
+    return list(dict.fromkeys(term for term in terms if term))
+
+
+def _apply_transcript_correction(
+    segments: Sequence[TranscriptSegment],
+    settings: dict[str, Any],
+    *,
+    corrector: OpenAITranscriptCorrector | None = None,
+    heartbeat: Callable[[], None] | None = None,
+) -> TranscriptCorrectionResult:
+    mode = _subtitle_correction_mode_setting(settings)
+    model = _subtitle_correction_model_setting(settings)
+    if mode == "off":
+        return disabled_correction_result(segments, model)
+    if corrector is None and not os.getenv("OPENAI_API_KEY"):
+        raise PipelineExpectedError(
+            "openai_configuration_missing",
+            "OPENAI_API_KEY is required when subtitleCorrectionMode is openai.",
+            details={"setting": "OPENAI_API_KEY", "feature": "subtitle_correction"},
+        )
+
+    active_corrector = corrector or OpenAITranscriptCorrector(model=model)
+    min_confidence = max(0.0, min(1.0, _float_setting(settings, "subtitleCorrectionMinConfidence", 0.9)))
+    batch_size = max(1, min(100, _int_setting(settings, "subtitleCorrectionBatchSize", 40)))
+    context_segments = min(10, _int_setting(settings, "subtitleCorrectionContextSegments", 2))
+    try:
+        return active_corrector.correct_segments(
+            segments,
+            min_confidence=min_confidence,
+            batch_size=batch_size,
+            context_segments=context_segments,
+            glossary=_transcript_correction_glossary(settings),
+            heartbeat=heartbeat,
+        )
+    except Exception as exc:
+        if _bool_setting(settings, "subtitleCorrectionFallbackEnabled", True):
+            return fallback_correction_result(segments, active_corrector, exc)
+        raise PipelineExpectedError(
+            "openai_subtitle_correction_failed",
+            f"OpenAI subtitle correction failed: {exc}",
+            details={"model": model, "fallback_enabled": False},
+        ) from exc
 
 
 def _truthy_setting(settings: dict[str, Any], key: str) -> bool:
@@ -1367,6 +1451,31 @@ def run_autoclipper_job(
                 transcript_postprocess_summary_path(job_dir),
             )
             metadata_files.append(postprocess_summary_path)
+            deterministic_path = write_transcript_segments(
+                transcript_segments,
+                deterministic_transcript_output_path(job_dir),
+            )
+            metadata_files.append(deterministic_path)
+
+            correction_result = _apply_transcript_correction(
+                transcript_segments,
+                settings,
+                corrector=deps.transcript_corrector,
+                heartbeat=lambda: _heartbeat_job(db, job),
+            )
+            correction_summary_path = write_correction_summary(
+                correction_result.summary,
+                correction_summary_output_path(job_dir),
+            )
+            correction_diff_path = write_correction_diff(
+                correction_result,
+                correction_diff_output_path(job_dir),
+            )
+            metadata_files.extend([correction_summary_path, correction_diff_path])
+            if _subtitle_correction_mode_setting(settings) == "openai":
+                metadata_files.append(write_corrected_transcript(correction_result, job_dir))
+
+            transcript_segments = correction_result.segments
             transcript_path = write_transcript_segments(transcript_segments, transcript_output_path(job_dir))
             metadata_files.append(transcript_path)
             _raise_if_transcript_unusable(transcript_segments)

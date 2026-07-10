@@ -54,6 +54,14 @@ export type ClipSettings = {
   transcriptNormalizePunctuation?: boolean;
   useDefaultTranscriptDictionary?: boolean;
   transcriptReplacements?: Record<string, string>;
+  whisperModelSize: "base" | "small" | "medium" | "large-v3";
+  transcriptionLanguage: "auto" | "ja";
+  subtitleCorrectionMode: "off" | "openai";
+  subtitleCorrectionModel: string;
+  subtitleCorrectionMinConfidence: number;
+  subtitleCorrectionBatchSize: number;
+  subtitleCorrectionContextSegments: number;
+  subtitleCorrectionFallbackEnabled: boolean;
 };
 
 export type VideoUploadResponse = {

@@ -29,6 +29,7 @@ SelectionPolicy = Literal["fill_requested", "strict_quality"]
 ShortOverlayTitleMode = Literal["auto", "always", "high_quality_only", "never"]
 WhisperModelSize = Literal["base", "small", "medium", "large-v3"]
 TranscriptionLanguage = Literal["auto", "ja"]
+SubtitleCorrectionMode = Literal["off", "openai"]
 
 
 class VideoRead(BaseModel):
@@ -114,6 +115,12 @@ class JobSettings(BaseModel):
     transcript_replacements: dict[str, str] = Field(default_factory=dict, alias="transcriptReplacements")
     whisper_model_size: WhisperModelSize = Field(default="base", alias="whisperModelSize")
     transcription_language: TranscriptionLanguage = Field(default="auto", alias="transcriptionLanguage")
+    subtitle_correction_mode: SubtitleCorrectionMode = Field(default="off", alias="subtitleCorrectionMode")
+    subtitle_correction_model: str = Field(default="gpt-5.5", min_length=1, alias="subtitleCorrectionModel")
+    subtitle_correction_min_confidence: float = Field(default=0.9, ge=0, le=1, alias="subtitleCorrectionMinConfidence")
+    subtitle_correction_batch_size: int = Field(default=40, ge=1, le=100, alias="subtitleCorrectionBatchSize")
+    subtitle_correction_context_segments: int = Field(default=2, ge=0, le=10, alias="subtitleCorrectionContextSegments")
+    subtitle_correction_fallback_enabled: bool = Field(default=True, alias="subtitleCorrectionFallbackEnabled")
     selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
     cross_type_overlap_dedupe: bool = Field(default=False, alias="crossTypeOverlapDedupe")
     use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")

@@ -461,6 +461,38 @@ First execution may include model download time; rerun after models are cached b
 The Task 59 reference result is documented in `docs/TRANSCRIPTION_BENCHMARK_2026-07-10.md`.
 The current production default remains `base + auto`; `small + ja` is the recommended high-accuracy Japanese option.
 
+### OpenAI subtitle correction
+
+OpenAI subtitle correction is optional and disabled by default. It sends deterministic transcript text, nearby text context, confidence, and preferred terms only. It does not send audio, video, or rendered files. Segment count, order, and timestamps are preserved.
+
+Set `OPENAI_API_KEY` in `.env`, rebuild the services, then enable correction from the Upload UI or the E2E script:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_sample.mp4 `
+  --mode low_cost `
+  --whisper-model-size small `
+  --transcription-language ja `
+  --subtitle-correction-mode openai `
+  --subtitle-correction-model gpt-5.5 `
+  --subtitle-correction-min-confidence 0.9 `
+  --subtitle-correction-batch-size 40 `
+  --subtitle-correction-context-segments 2
+```
+
+The worker preserves each correction stage:
+
+```text
+raw_transcript_segments.json
+deterministic_transcript_segments.json
+openai_corrected_transcript_segments.json
+transcript_segments.json
+transcript_correction_summary.json
+transcript_correction_diff.md
+```
+
+When `subtitleCorrectionFallbackEnabled=true`, transient API or schema failures use the complete deterministic transcript and record `fallback_used=true`; partial OpenAI corrections are discarded. Disable fallback only when the job must fail with `openai_subtitle_correction_failed`. Missing `OPENAI_API_KEY` fails early with `openai_configuration_missing`.
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell
@@ -535,15 +567,20 @@ The script:
 - prints runtime metrics: upload, transcription, scene detection, candidate generation, scoring, selection, normal render, short render, ZIP packaging, and total time
 - prints pipeline metrics: video duration, transcript length, candidate counts, candidate generation chunks/raw/kept/dropped/caps, hard-gate counts, selected counts, backfilled count, render failure count, and ZIP size
 - validates `openai_scoring_summary.json` when OpenAI scoring is enabled and prints model, candidate limit, finalist limit, preselection/finalist call counts, success/failure/fallback counts, schema failures, latency, text-size proxy, and selected clip score source counts
+- validates `transcript_correction_summary.json` and timestamp/count preservation when OpenAI subtitle correction is enabled
 - prints diagnostic summary JSON files when they exist
 
 Expected outputs:
 
 ```text
 storage/outputs/{job_id}/raw_transcript_segments.json
+storage/outputs/{job_id}/deterministic_transcript_segments.json
+storage/outputs/{job_id}/openai_corrected_transcript_segments.json
 storage/outputs/{job_id}/transcript_segments.json
 storage/outputs/{job_id}/transcript_summary.json
 storage/outputs/{job_id}/transcript_postprocess_summary.json
+storage/outputs/{job_id}/transcript_correction_summary.json
+storage/outputs/{job_id}/transcript_correction_diff.md
 storage/outputs/{job_id}/audio_feature_summary.json
 storage/outputs/{job_id}/candidate_generation_summary.json
 storage/outputs/{job_id}/candidate_summary.json
@@ -556,6 +593,8 @@ storage/temp/e2e_real_{job_id}.zip
 storage/temp/e2e_real_{job_id}_*.mp4
 ```
 
+`openai_corrected_transcript_segments.json` is written only when `subtitleCorrectionMode=openai`. The correction summary and diff are written for both enabled and disabled runs so the selected path remains auditable.
+
 Troubleshooting:
 
 - `audio_silent_or_unusable`: the audio track is silent, near-silent, or has too little measurable speech.
@@ -566,6 +605,7 @@ Troubleshooting:
 - `worker_terminated_unexpectedly`: the worker heartbeat stopped while a job was running. Check `docker compose logs worker` for RQ work-horse termination, signal 9, or container restart.
 - `quality gate rejection`: check `selected_clips.json` and `rejection_summary.json`; in `strict_quality` mode, low scores can intentionally leave selected outputs at zero.
 - `openai_configuration_missing`: `OPENAI_API_KEY` is missing in the worker container. Update `.env`, then recreate services with `docker compose up -d --build`.
+- `openai_subtitle_correction_failed`: subtitle correction failed and fallback was disabled. Check `transcript_correction_summary.json`, `transcript_correction_diff.md`, and worker logs.
 - `openai_scoring_failed`: OpenAI scoring failed and fallback was disabled. Check `openai_scoring_summary.json` and `docker compose logs worker`.
 - OpenAI rate limit / timeout: lower `--openai-candidate-limit`, retry later, or use `--openai-fallback-to-rule-score true`.
 - Structured output validation failure: check `openai_scoring_summary.json` error fields and keep the default strict schema.
@@ -616,7 +656,15 @@ Troubleshooting:
     "useDefaultTranscriptDictionary": true,
     "transcriptReplacements": {
       "オープンAI": "OpenAI"
-    }
+    },
+    "whisperModelSize": "base",
+    "transcriptionLanguage": "auto",
+    "subtitleCorrectionMode": "off",
+    "subtitleCorrectionModel": "gpt-5.5",
+    "subtitleCorrectionMinConfidence": 0.9,
+    "subtitleCorrectionBatchSize": 40,
+    "subtitleCorrectionContextSegments": 2,
+    "subtitleCorrectionFallbackEnabled": true
   }
 }
 ```
@@ -654,6 +702,14 @@ Production-safe defaults remain:
 - `transcriptNormalizePunctuation`: `true`
 - `useDefaultTranscriptDictionary`: `true`
 - `transcriptReplacements`: `{}`
+- `whisperModelSize`: `base`
+- `transcriptionLanguage`: `auto`
+- `subtitleCorrectionMode`: `off`
+- `subtitleCorrectionModel`: `gpt-5.5`
+- `subtitleCorrectionMinConfidence`: `0.9`
+- `subtitleCorrectionBatchSize`: `40`
+- `subtitleCorrectionContextSegments`: `2`
+- `subtitleCorrectionFallbackEnabled`: `true`
 
 For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.
 
@@ -684,6 +740,8 @@ Transcript post-processing:
 - Add project-specific replacements with `transcriptReplacements`; this does not call OpenAI.
 - Disable with `enableTranscriptPostProcessing=false` when raw transcription text is needed for debugging.
 
+OpenAI subtitle correction runs after deterministic post-processing when `subtitleCorrectionMode=openai`. The final `transcript_segments.json` is used by candidate generation and subtitle rendering. Correction never changes segment timestamps or count.
+
 ## Generation Diagnostics
 
 Each completed or expected-failure job writes compact summary files under:
@@ -696,6 +754,7 @@ Summary files:
 
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
 - `transcript_postprocess_summary.json`: transcript post-processing enablement, changed segment count, before/after character counts, replacement counts, and dictionary settings when transcription reached post-processing.
+- `transcript_correction_summary.json`: correction mode, model, corrected/unchanged/low-confidence segment counts, fallback status, API calls, schema failures, processing time, and timestamp/count preservation flags.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
 - `openai_scoring_summary.json`: model, initial candidate limit, finalist scoring limit, eligible/selected/sent counts, preselection/finalist counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, selected clip score source counts, and not-scored reasons.
