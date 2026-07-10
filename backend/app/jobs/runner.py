@@ -16,6 +16,7 @@ from app.audio.openai_transcript_correction import (
     OpenAITranscriptCorrector,
     TranscriptCorrectionResult,
     correction_diff_output_path,
+    correction_progress_output_path,
     correction_summary_output_path,
     deterministic_transcript_output_path,
     disabled_correction_result,
@@ -172,6 +173,10 @@ def _subtitle_correction_model_setting(settings: dict[str, Any]) -> str:
     return normalized or "gpt-5.5"
 
 
+def _subtitle_correction_batch_size_setting(settings: dict[str, Any]) -> int:
+    return max(1, min(100, _int_setting(settings, "subtitleCorrectionBatchSize", 40)))
+
+
 def _float_setting(settings: dict[str, Any], key: str, default: float) -> float:
     try:
         return float(settings.get(key, default))
@@ -194,7 +199,7 @@ def _apply_transcript_correction(
     settings: dict[str, Any],
     *,
     corrector: OpenAITranscriptCorrector | None = None,
-    heartbeat: Callable[[], None] | None = None,
+    progress_callback: Callable[[int, int, int], None] | None = None,
 ) -> TranscriptCorrectionResult:
     mode = _subtitle_correction_mode_setting(settings)
     model = _subtitle_correction_model_setting(settings)
@@ -209,7 +214,7 @@ def _apply_transcript_correction(
 
     active_corrector = corrector or OpenAITranscriptCorrector(model=model)
     min_confidence = max(0.0, min(1.0, _float_setting(settings, "subtitleCorrectionMinConfidence", 0.9)))
-    batch_size = max(1, min(100, _int_setting(settings, "subtitleCorrectionBatchSize", 40)))
+    batch_size = _subtitle_correction_batch_size_setting(settings)
     context_segments = min(10, _int_setting(settings, "subtitleCorrectionContextSegments", 2))
     try:
         return active_corrector.correct_segments(
@@ -218,7 +223,7 @@ def _apply_transcript_correction(
             batch_size=batch_size,
             context_segments=context_segments,
             glossary=_transcript_correction_glossary(settings),
-            heartbeat=heartbeat,
+            progress_callback=progress_callback,
         )
     except Exception as exc:
         if _bool_setting(settings, "subtitleCorrectionFallbackEnabled", True):
@@ -332,6 +337,38 @@ def _set_status(db: Session, job: Job, status: str) -> None:
 
 
 def _heartbeat_job(db: Session, job: Job) -> None:
+    job.updated_at = utc_now()
+    db.commit()
+    db.refresh(job)
+
+
+def _record_subtitle_correction_progress(
+    db: Session,
+    job: Job,
+    output_path: Path,
+    *,
+    completed_batches: int,
+    total_batches: int,
+    retry_count: int,
+    finished: bool = False,
+    fallback_used: bool = False,
+) -> None:
+    bounded_total = max(0, total_batches)
+    bounded_completed = max(0, min(completed_batches, bounded_total))
+    stage_progress = 100 if finished else (100 if bounded_total == 0 else int(bounded_completed * 100 / bounded_total))
+    payload = {
+        "stage": "correcting_subtitles",
+        "stageProgress": stage_progress,
+        "correctionBatchesCompleted": bounded_completed,
+        "correctionBatchesTotal": bounded_total,
+        "correctionRetryCount": max(0, retry_count),
+        "fallbackUsed": fallback_used,
+        "finished": finished,
+    }
+    _write_json(output_path, payload)
+    job.status = "correcting_subtitles"
+    job.progress = min(39, PROGRESS_MAP["correcting_subtitles"] + int(stage_progress * 8 / 100))
+    job.current_step = f"Correcting subtitles ({bounded_completed}/{bounded_total} batches)"
     job.updated_at = utc_now()
     db.commit()
     db.refresh(job)
@@ -1457,12 +1494,53 @@ def run_autoclipper_job(
             )
             metadata_files.append(deterministic_path)
 
+            correction_mode = _subtitle_correction_mode_setting(settings)
+            correction_progress_path = correction_progress_output_path(job_dir)
+            correction_progress_state = {"completed": 0, "total": 0, "retries": 0}
+            correction_progress_callback: Callable[[int, int, int], None] | None = None
+            if correction_mode == "openai":
+                _set_status(db, job, "correcting_subtitles")
+                visited_statuses.append("correcting_subtitles")
+                batch_size = _subtitle_correction_batch_size_setting(settings)
+                total_batches = (len(transcript_segments) + batch_size - 1) // batch_size
+                _record_subtitle_correction_progress(
+                    db,
+                    job,
+                    correction_progress_path,
+                    completed_batches=0,
+                    total_batches=total_batches,
+                    retry_count=0,
+                )
+                metadata_files.append(correction_progress_path)
+
+                def correction_progress_callback(completed: int, total: int, retries: int) -> None:
+                    correction_progress_state.update(completed=completed, total=total, retries=retries)
+                    _record_subtitle_correction_progress(
+                        db,
+                        job,
+                        correction_progress_path,
+                        completed_batches=completed,
+                        total_batches=total,
+                        retry_count=retries,
+                    )
+
             correction_result = _apply_transcript_correction(
                 transcript_segments,
                 settings,
                 corrector=deps.transcript_corrector,
-                heartbeat=lambda: _heartbeat_job(db, job),
+                progress_callback=correction_progress_callback,
             )
+            if correction_mode == "openai":
+                _record_subtitle_correction_progress(
+                    db,
+                    job,
+                    correction_progress_path,
+                    completed_batches=correction_progress_state["completed"],
+                    total_batches=correction_progress_state["total"],
+                    retry_count=correction_progress_state["retries"],
+                    finished=True,
+                    fallback_used=bool(correction_result.summary.get("fallback_used")),
+                )
             correction_summary_path = write_correction_summary(
                 correction_result.summary,
                 correction_summary_output_path(job_dir),
@@ -1472,7 +1550,7 @@ def run_autoclipper_job(
                 correction_diff_output_path(job_dir),
             )
             metadata_files.extend([correction_summary_path, correction_diff_path])
-            if _subtitle_correction_mode_setting(settings) == "openai":
+            if correction_mode == "openai":
                 metadata_files.append(write_corrected_transcript(correction_result, job_dir))
 
             transcript_segments = correction_result.segments

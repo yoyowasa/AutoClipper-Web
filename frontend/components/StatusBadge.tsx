@@ -6,6 +6,7 @@ const STATUS_STYLES: Record<JobStatus, string> = {
   probing: "border-sky-200 bg-sky-50 text-sky-800",
   extracting_audio: "border-sky-200 bg-sky-50 text-sky-800",
   transcribing: "border-sky-200 bg-sky-50 text-sky-800",
+  correcting_subtitles: "border-sky-200 bg-sky-50 text-sky-800",
   detecting_scenes: "border-sky-200 bg-sky-50 text-sky-800",
   generating_candidates: "border-blue-200 bg-blue-50 text-blue-800",
   scoring_candidates: "border-blue-200 bg-blue-50 text-blue-800",

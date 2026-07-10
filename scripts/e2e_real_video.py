@@ -92,7 +92,8 @@ class TimedJobResult:
 
 
 PHASE_END_STATUSES = {
-    "transcribing": ["detecting_scenes", "generating_candidates", "scoring_candidates", "selecting_clips", "failed"],
+    "transcribing": ["correcting_subtitles", "detecting_scenes", "generating_candidates", "scoring_candidates", "selecting_clips", "failed"],
+    "correcting_subtitles": ["detecting_scenes", "generating_candidates", "scoring_candidates", "selecting_clips", "failed"],
     "detecting_scenes": ["generating_candidates", "scoring_candidates", "selecting_clips", "failed"],
     "generating_candidates": ["scoring_candidates", "selecting_clips", "rendering_normal_clips", "rendering_shorts", "failed"],
     "scoring_candidates": ["selecting_clips", "rendering_normal_clips", "rendering_shorts", "packaging_zip", "failed"],
@@ -352,6 +353,7 @@ def poll_job_with_timings(backend_url: str, job_id: str, timeout_seconds: int) -
     status_times: dict[str, float] = {}
     poll_started_at = time.monotonic()
     last_status = ""
+    last_correction_progress: tuple[int, int, int] | None = None
     while time.monotonic() < deadline:
         payload = _request_json(f"{backend_url}/api/jobs/{job_id}")
         now = time.monotonic()
@@ -360,6 +362,20 @@ def poll_job_with_timings(backend_url: str, job_id: str, timeout_seconds: int) -
         if status != last_status:
             print(f"job {job_id}: {status} {payload.get('progress')}%")
             last_status = status
+        if status == "correcting_subtitles":
+            details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
+            correction_progress = (
+                int(details.get("correctionBatchesCompleted") or 0),
+                int(details.get("correctionBatchesTotal") or 0),
+                int(details.get("correctionRetryCount") or 0),
+            )
+            if correction_progress != last_correction_progress:
+                print(
+                    "subtitle correction progress: "
+                    f"{correction_progress[0]}/{correction_progress[1]} batches "
+                    f"stage={details.get('stageProgress')}% retries={correction_progress[2]}"
+                )
+                last_correction_progress = correction_progress
         if status in {"completed", "failed"}:
             return TimedJobResult(
                 final_status=payload,
@@ -383,6 +399,11 @@ def runtime_metrics(
             job_timing.status_times,
             "transcribing",
             PHASE_END_STATUSES["transcribing"],
+        ),
+        "subtitle_correction_time": phase_duration(
+            job_timing.status_times,
+            "correcting_subtitles",
+            PHASE_END_STATUSES["correcting_subtitles"],
         ),
         "scene_detection_time": phase_duration(
             job_timing.status_times,
@@ -428,6 +449,7 @@ def print_runtime_metrics(metrics: dict[str, float | None]) -> None:
     print("runtime metrics:")
     print(f"  upload_time={format_seconds(metrics.get('upload_time'))}")
     print(f"  transcription_time={format_seconds(metrics.get('transcription_time'))}")
+    print(f"  subtitle_correction_time={format_seconds(metrics.get('subtitle_correction_time'))}")
     print(f"  scene_detection_time={format_seconds(metrics.get('scene_detection_time'))}")
     print(f"  candidate_generation_time={format_seconds(metrics.get('candidate_generation_time'))}")
     print(f"  scoring_time={format_seconds(metrics.get('scoring_time'))}")

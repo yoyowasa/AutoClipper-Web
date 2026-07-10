@@ -279,6 +279,7 @@ def test_runtime_metrics_use_observed_status_transitions() -> None:
 
     assert metrics["upload_time"] == 1.25
     assert metrics["transcription_time"] == pytest.approx(5.5)
+    assert metrics["subtitle_correction_time"] is None
     assert metrics["scene_detection_time"] == pytest.approx(0.5)
     assert metrics["candidate_generation_time"] == pytest.approx(4.0)
     assert metrics["scoring_time"] == pytest.approx(2.5)
@@ -290,6 +291,25 @@ def test_runtime_metrics_use_observed_status_transitions() -> None:
     assert metrics["total_time"] == 50.0
     assert script.format_seconds(None) == "n/a"
     assert script.format_seconds(1.23456) == "1.235s"
+
+
+def test_runtime_metrics_separate_subtitle_correction_time() -> None:
+    timing = script.TimedJobResult(
+        final_status={"status": "completed"},
+        status_times={
+            "transcribing": 10.0,
+            "correcting_subtitles": 15.0,
+            "detecting_scenes": 35.0,
+            "completed": 40.0,
+        },
+        poll_started_at=9.0,
+        poll_finished_at=40.0,
+    )
+
+    metrics = script.runtime_metrics(upload_seconds=1.0, job_timing=timing, total_seconds=41.0)
+
+    assert metrics["transcription_time"] == pytest.approx(5.0)
+    assert metrics["subtitle_correction_time"] == pytest.approx(20.0)
 
 
 def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
