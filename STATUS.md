@@ -4127,6 +4127,7 @@ python .\scripts\e2e_real_video.py `
 - OpenAI keyは設定有無だけを表示し、command outputとlauncher logでは値をredactする。
 - project pathに空白があっても、shell文字列ではなくargument listと明示cwdで実行する。
 - GitHub Actions backend lintで`launcher/`も検査する。
+- launcher log欄のfontを日本語グリフ不足の`Consolas`からWindows標準の`Yu Gothic UI`へ変更。
 
 ### 事前整理
 
@@ -4142,16 +4143,17 @@ python .\scripts\e2e_real_video.py `
 
 - launcher targeted checks:
   - `.\.venv\Scripts\python -m ruff check launcher backend\tests\test_windows_launcher.py`: pass。
-  - `.\.venv\Scripts\python -m pytest backend\tests\test_windows_launcher.py`: 16 passed。
+  - `.\.venv\Scripts\python -m pytest backend\tests\test_windows_launcher.py`: 17 passed。
 - full checks:
   - `cd backend && ..\.venv\Scripts\python -m ruff check . ..\launcher`: pass。
-  - `cd backend && ..\.venv\Scripts\python -m pytest`: 259 passed, 1 skipped, 1 warning。
+  - `cd backend && ..\.venv\Scripts\python -m pytest`: 260 passed, 1 skipped, 1 warning。
   - `cd frontend && npm run lint`: pass。
   - `cd frontend && npm run typecheck`: pass。
   - `cd frontend && npm run build`: pass。
   - GitHub Actions PR #37: backend / frontend pass。
 - GUI startup:
   - Tkinter GUIを実表示し、2秒後に自動終了するstartup smoke: pass。
+  - `Yu Gothic UI`変更後のGUIを`.codex_tmp/task57_launcher_font_fix.png`へlocal-only captureし、日本語ログが欠けずに表示されることを目視確認。
 - launcher actual runtime:
   - preflight: Docker / Compose / daemon / OpenAI key / disk check pass。
   - launcher controllerから`docker compose stop`を実行。

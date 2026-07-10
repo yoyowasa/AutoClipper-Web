@@ -152,7 +152,7 @@ class LauncherApp:
 
         ttk.Label(outer, textvariable=self.operation_var).pack(anchor=tk.W, pady=(0, 6))
         self.console = scrolledtext.ScrolledText(
-            outer, height=16, wrap=tk.WORD, font=("Consolas", 9), state=tk.DISABLED
+            outer, height=16, wrap=tk.WORD, font=("Yu Gothic UI", 10), state=tk.DISABLED
         )
         self.console.pack(fill=tk.BOTH, expand=True)
         self._append(

@@ -264,3 +264,10 @@ def test_windows_entrypoint_quotes_project_path_and_does_not_reset_data() -> Non
     assert "py -3 -m launcher" in entrypoint
     assert "docker compose down" not in entrypoint
     assert "down -v" not in entrypoint
+
+
+def test_launcher_console_uses_japanese_capable_windows_font() -> None:
+    app_source = (ROOT / "launcher" / "app.py").read_text(encoding="utf-8")
+
+    assert 'font=("Yu Gothic UI", 10)' in app_source
+    assert "Consolas" not in app_source
