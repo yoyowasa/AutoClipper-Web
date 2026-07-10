@@ -150,6 +150,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--short-count", type=non_negative_int, default=None)
     parser.add_argument("--mode", default=None, choices=["low_cost", "fast", "high_quality"])
     parser.add_argument("--profile", default="talk", choices=["auto", "talk", "gameplay", "lecture"])
+    parser.add_argument(
+        "--whisper-model-size",
+        default="base",
+        choices=["base", "small", "medium", "large-v3"],
+        help="faster-whisper model used by the worker. Default preserves current behavior.",
+    )
+    parser.add_argument(
+        "--transcription-language",
+        default="auto",
+        choices=["auto", "ja"],
+        help="Use auto detection or force Japanese transcription.",
+    )
     parser.add_argument("--burn-subtitles", nargs="?", const=True, default=True, type=parse_bool)
     parser.add_argument("--no-burn-subtitles", dest="burn_subtitles", action="store_false")
     parser.add_argument("--normal-min-duration", type=positive_float, default=None)
@@ -230,6 +242,8 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
     settings = {
         "mode": args.mode,
         "profile": args.profile,
+        "whisperModelSize": args.whisper_model_size,
+        "transcriptionLanguage": args.transcription_language,
         "normalClipCount": args.normal_count,
         "shortCount": args.short_count,
         "normalMinDuration": args.normal_min_duration,
@@ -801,6 +815,11 @@ def run_e2e(args: argparse.Namespace) -> int:
     if settings.get("e2eFixtureTranscript") is not False:
         raise RuntimeError("e2eFixtureTranscript must be false for real spoken-video E2E")
     print("fixture transcript: explicitly disabled")
+    print(
+        "transcription: "
+        f"model={settings['whisperModelSize']} "
+        f"language={settings['transcriptionLanguage']}"
+    )
     if use_openai_scoring(settings):
         check_openai_api_key_available(env)
         print(

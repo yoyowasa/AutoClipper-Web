@@ -4147,3 +4147,36 @@ python .\scripts\e2e_real_video.py `
 ### 未解決事項
 
 - 字幕本文の誤変換改善はTask58の対象外。
+## 2026-07-10 Task 59 transcription accuracy benchmark
+
+### 目的
+
+- 字幕誤変換の原因を、後処理を混ぜず faster-whisper の model/language 単位で比較できるようにする。
+- 既定の `base + auto` は維持する。
+
+### 変更
+
+- `JobSettings` に `whisperModelSize` (`base|small|medium|large-v3`) と `transcriptionLanguage` (`auto|ja`) を追加。
+- worker が設定値から `FasterWhisperTranscriptionEngine` を生成するよう変更。
+- `transcript_summary.json` に `transcription_model` / `transcription_language` を追加。
+- `scripts/e2e_real_video.py` に model/language オプションを追加。
+- `app.audio.benchmark_transcription` を追加。raw transcriptのみで CER、固有語、timestamp、wall/CPU、peak RAMを比較し、JSON/Markdownを出力する。
+- benchmark profileは別processで実行し、モデルごとのpeak RAMを分離する。
+
+### 検証
+
+- `python -m ruff check .`: pass。
+- backend pytest: `249 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker backend/worker rebuild: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- `python scripts/e2e_sample_video.py`: pass (`job_5b98bdc1b46f4f6cb2e88daae19f2909`, short `1080x1920`)。
+- worker内 `python -m app.audio.benchmark_transcription --help`: pass。
+- OpenAPI default: `whisperModelSize=base`, `transcriptionLanguage=auto`。
+- CIではfaster-whisper modelをダウンロードせず、設定伝播・比較計算・report生成をmock/fixtureで検証。
+
+### 未解決事項
+
+- 代表日本語音声での `base:auto` / `base:ja` / `small:ja` / `medium:ja` 実測比較は未実施。
+- default model変更は実測結果後に判断する。
+- OpenAI字幕校正はTask60候補。本Taskには含めない。

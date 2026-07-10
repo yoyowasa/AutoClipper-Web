@@ -130,8 +130,20 @@ class PipelineExpectedError(Exception):
         self.details = details or {}
 
 
-def _default_transcribe_audio(wav_path: str | Path) -> list[TranscriptSegment]:
-    return FasterWhisperTranscriptionEngine().transcribe(wav_path)
+WHISPER_MODEL_SIZES = {"base", "small", "medium", "large-v3"}
+TRANSCRIPTION_LANGUAGES = {"auto", "ja"}
+
+
+def _whisper_model_size_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("whisperModelSize") or settings.get("whisper_model_size") or "base"
+    normalized = str(value).strip()
+    return normalized if normalized in WHISPER_MODEL_SIZES else "base"
+
+
+def _transcription_language_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("transcriptionLanguage") or settings.get("transcription_language") or "auto"
+    normalized = str(value).strip().lower()
+    return normalized if normalized in TRANSCRIPTION_LANGUAGES else "auto"
 
 
 def _truthy_setting(settings: dict[str, Any], key: str) -> bool:
@@ -1218,7 +1230,7 @@ def run_autoclipper_job(
 ) -> list[str]:
     storage_paths = paths or get_storage_paths()
     deps = dependencies or AutoClipperPipelineDependencies()
-    transcribe_audio = deps.transcribe_audio or _default_transcribe_audio
+    transcribe_audio = deps.transcribe_audio
     detect_silence_for_audio = deps.detect_silence or _default_detect_silence
     visited_statuses: list[str] = []
     metadata_files: list[Path] = []
@@ -1235,6 +1247,8 @@ def run_autoclipper_job(
     openai_scoring_summary: dict[str, Any] | None = None
     exports: list[ExportItem] = []
     transcription_engine = "not_run"
+    transcription_model: str | None = None
+    transcription_language: str | None = None
     used_fixture_transcript = False
     summary_files: list[Path] = []
     temp_dir: Path | None = None
@@ -1248,6 +1262,8 @@ def run_autoclipper_job(
             raise ValueError(f"video not found for job: {job_id}")
 
         settings = dict(job.settings_json or {})
+        configured_transcription_model = _whisper_model_size_setting(settings)
+        configured_transcription_language = _transcription_language_setting(settings)
         used_fixture_transcript = _e2e_fixture_transcript_enabled(settings)
         job_dir = storage_paths.job_outputs(job.id)
         temp_dir = storage_paths.temp / job.id
@@ -1271,6 +1287,8 @@ def run_autoclipper_job(
                 exports=exports,
                 transcription_engine=transcription_engine,
                 used_fixture_transcript=used_fixture_transcript,
+                transcription_model=transcription_model,
+                transcription_language=transcription_language,
             )
 
         try:
@@ -1319,11 +1337,22 @@ def run_autoclipper_job(
             visited_statuses.append("transcribing")
             if used_fixture_transcript:
                 transcription_engine = "e2e_fixture"
+                transcription_model = "fixture"
+                transcription_language = "fixture"
                 transcript_segments = _e2e_fixture_transcript(duration)
             else:
                 transcription_engine = "faster_whisper"
+                transcription_model = configured_transcription_model
+                transcription_language = configured_transcription_language
                 try:
-                    transcript_segments = transcribe_audio(audio_path)
+                    if transcribe_audio is not None:
+                        transcript_segments = transcribe_audio(audio_path)
+                    else:
+                        engine = FasterWhisperTranscriptionEngine(
+                            model_size=configured_transcription_model,
+                            language=None if configured_transcription_language == "auto" else configured_transcription_language,
+                        )
+                        transcript_segments = engine.transcribe(audio_path)
                 except Exception as exc:
                     raise PipelineExpectedError(
                         "transcription_failed",

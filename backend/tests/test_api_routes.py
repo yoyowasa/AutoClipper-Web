@@ -324,6 +324,8 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["openaiCandidateLimit"]["default"] == 40
     assert properties["openaiModel"]["default"] == "gpt-5.5"
     assert properties["openaiFallbackToRuleScore"]["default"] is True
+    assert properties["whisperModelSize"]["default"] == "base"
+    assert properties["transcriptionLanguage"]["default"] == "auto"
     assert "ensureSelectedOpenAIScored" in properties
     assert "openaiFinalistScoringLimit" in properties
     assert "subtitleFontName" in properties
@@ -332,6 +334,23 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert "shortSubtitleLowerMargin" in properties
     assert "normalSubtitleFontSize" in properties
     assert "normalSubtitleLowerMargin" in properties
+
+
+def test_job_creation_rejects_unsupported_transcription_profile(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"whisperModelSize": "tiny", "transcriptionLanguage": "en"},
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_stale_running_job_is_marked_failed_on_status_poll(client: TestClient) -> None:
