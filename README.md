@@ -458,6 +458,9 @@ The report contains normalized Japanese CER, keyword accuracy, segment/timestamp
 Per-profile raw transcript JSON is preserved. Transcript dictionary replacement and other post-processing are not applied.
 First execution may include model download time; rerun after models are cached before comparing runtime.
 
+The Task 59 reference result is documented in `docs/TRANSCRIPTION_BENCHMARK_2026-07-10.md`.
+The current production default remains `base + auto`; `small + ja` is the recommended high-accuracy Japanese option.
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell

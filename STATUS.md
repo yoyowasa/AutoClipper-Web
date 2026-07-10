@@ -4174,9 +4174,14 @@ python .\scripts\e2e_real_video.py `
 - worker内 `python -m app.audio.benchmark_transcription --help`: pass。
 - OpenAPI default: `whisperModelSize=base`, `transcriptionLanguage=auto`。
 - CIではfaster-whisper modelをダウンロードせず、設定伝播・比較計算・report生成をmock/fixtureで検証。
+- 正解原稿付き日本語TTS `119.628625s` で5構成を同一Docker CPU/int8環境で比較。
+- cached結果: `base:auto CER=0.2345 / 6.023s / 415.7MB`, `base:ja CER=0.2345 / 5.536s / 416.2MB`, `small:ja CER=0.1623 / 14.492s / 911.0MB`, `medium:ja CER=0.1463 / 35.213s / 2495.0MB`, `large-v3:ja CER=0.2846 / 62.187s / 4571.4MB`。
+- `small:ja` 実話者短尺E2E: pass (`job_145e70221060442cbbf209983559464a`)。
+- `small:ja` 58分E2E: pass (`job_426ce190bb02459cb3dec1829e662f98`, transcription `445.313s`, total `652.406s`, normal `1/1`, short `2/2`, render failure `0`, sidecar risk `0`)。
+- 匿名集計: `docs/TRANSCRIPTION_BENCHMARK_2026-07-10.md`。
 
 ### 未解決事項
 
-- 代表日本語音声での `base:auto` / `base:ja` / `small:ja` / `medium:ja` 実測比較は未実施。
-- default model変更は実測結果後に判断する。
+- production defaultは互換性と非日本語入力を考慮し `base + auto` を維持。
+- `small + ja` を日本語高精度optionとして推奨。人間音声CERの正解原稿がないため、TTS結果だけではdefault変更しない。
 - OpenAI字幕校正はTask60候補。本Taskには含めない。
