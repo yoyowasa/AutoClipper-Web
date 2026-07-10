@@ -6,6 +6,9 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 
 ## 現在状態
 
+- stable release `v1.1.0` 公開済み。
+- Task 56 representative normal warning regeneration check 完了、PR #36 merge済み。
+- Task 57 Windows launcher MVP を実装・検証済み。PR化前のTask branch状態。
 - Task 01 Repository scaffold の実装完了。
 - Git repository 初期化と GitHub remote 接続完了。
 - GitHub Actions backend ruff F401 修正完了。
@@ -79,6 +82,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 ## 未解決事項
 
 - `npm audit --omit=dev` は Next.js 最新 `16.2.9` 内包 PostCSS 由来の moderate 警告あり。現時点で通常更新では解消不可。
+- `scripts/smoke_runtime.py` に既存F541が1件あり、`ruff check scripts`は未通過。launcherとは分離してmaintenance PRで対応する。
 
 ## 更新ルール
 
@@ -4088,3 +4092,83 @@ python .\scripts\e2e_real_video.py `
 
 - `end_to_final_transcript_segment_end` の実発火は今回の代表再生成では確認されていない。
 - `subtitle_too_dense` と short `likely_abrupt_start` は Task56 の対象外。必要なら別Task。
+
+## 2026-07-10 Task 57 Windows launcher MVP
+
+### 目的
+
+- 既存のDocker版AutoClipperを、Windows上でコマンド入力なしに起動・確認・停止できるようにする。
+- frontend/backend/worker/pipelineは作り直さず、Docker Compose runtimeを操作する薄いlauncherとして実装する。
+
+### 対象
+
+- `Start AutoClipper.cmd`
+- `.github/workflows/ci.yml`
+- `launcher/`
+- `backend/tests/test_windows_launcher.py`
+- `docs/WINDOWS_LAUNCHER.md`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- Python/TkinterのWindows launcher GUIを追加。
+- Docker制御をGUIから分離した`LauncherController`を追加。
+- preflight:
+  - Docker CLI / daemon / Compose / compose file
+  - `.env`とOpenAI key設定有無
+  - port `3000` / `6379` / `8000`競合
+  - disk free space
+- Startは`docker compose up -d`、Rebuildは`docker compose up -d --build`として分離。
+- backend `/health`、frontend `/upload`、worker、Redisがreadyになるまで待機してからWeb UIを開く。
+- 起動済みruntimeの二重起動を防止。
+- outputs/uploads folder、Docker logs、launcher logをGUIから開けるようにした。
+- Stopは`docker compose stop`だけを使い、volume / SQLite / outputsを削除しない。
+- OpenAI keyは設定有無だけを表示し、command outputとlauncher logでは値をredactする。
+- project pathに空白があっても、shell文字列ではなくargument listと明示cwdで実行する。
+- GitHub Actions backend lintで`launcher/`も検査する。
+
+### 事前整理
+
+- Task56記録PR #36をmerge。main: `03b1481 docs: record normal warning regeneration check (#36)`。
+- superseded PR #3 / #7をclose。
+- desktop候補のみを記録していたPR #19はTask57へ設計移管しclose。
+- 2件のbackup stashを確認。
+  - 現在のignored local filesと一致する内容は重複と判定。
+  - 旧版transcriptは`.codex_tmp/stash-archives/pre-task52-existing-transcript-work-untracked.zip`へlocal-only退避。
+  - stash 2件をdropし、stash listを空にした。
+
+### 検証結果
+
+- launcher targeted checks:
+  - `.\.venv\Scripts\python -m ruff check launcher backend\tests\test_windows_launcher.py`: pass。
+  - `.\.venv\Scripts\python -m pytest backend\tests\test_windows_launcher.py`: 16 passed。
+- full checks:
+  - `cd backend && ..\.venv\Scripts\python -m ruff check . ..\launcher`: pass。
+  - `cd backend && ..\.venv\Scripts\python -m pytest`: 259 passed, 1 skipped, 1 warning。
+  - `cd frontend && npm run lint`: pass。
+  - `cd frontend && npm run typecheck`: pass。
+  - `cd frontend && npm run build`: pass。
+- GUI startup:
+  - Tkinter GUIを実表示し、2秒後に自動終了するstartup smoke: pass。
+- launcher actual runtime:
+  - preflight: Docker / Compose / daemon / OpenAI key / disk check pass。
+  - launcher controllerから`docker compose stop`を実行。
+  - launcher controllerから通常Startを実行。
+  - backend / frontend / worker / redis: running。
+  - backend `/health`: ready。
+  - frontend `/upload`: ready。
+  - project path `C:\BOT\AutoClipper Web`で起動成功。
+  - 既存job `job_43288ae94650426aad679465b6515fc3`: normal 5 / short 10 / ZIPを再起動後も確認。データ保持pass。
+- runtime smoke:
+  - `python scripts\smoke_runtime.py --skip-video`: pass。
+- sample E2E:
+  - job: `job_a067b744edc04c33bec66f0e876e5c85`。
+  - status: completed。
+  - short: 1/1、`1080x1920`。
+  - sidecar risk: 0。
+
+### 未解決事項
+
+- Task57 MVPはPython 3.11+とDocker Desktopが必要。Python同梱・installer・自動updateはTask58以降。
+- clean Windows環境での配布確認はTask58対象。
