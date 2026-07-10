@@ -416,6 +416,51 @@ The JSON file must be an object:
 }
 ```
 
+### Raw transcription benchmark
+
+The production default remains `whisperModelSize=base` with `transcriptionLanguage=auto`.
+For a real-video job, the raw faster-whisper profile can be changed without enabling transcript correction:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_sample.mp4 `
+  --whisper-model-size small `
+  --transcription-language ja `
+  --mode low_cost
+```
+
+Supported model sizes are `base`, `small`, `medium`, and `large-v3`. Supported language modes are `auto` and `ja`.
+The selected values are written to `transcript_summary.json` as `transcription_model` and `transcription_language`.
+
+To compare raw transcription accuracy inside the worker, first prepare a mono 16 kHz WAV under the shared `storage` directory:
+
+```powershell
+docker compose exec worker ffmpeg -y `
+  -i /app/storage/uploads/spoken_sample.mp4 `
+  -t 120 -vn -ac 1 -ar 16000 `
+  /app/storage/temp/transcription_benchmark/sample.wav
+```
+
+For a quick `base` auto-versus-Japanese comparison:
+
+```powershell
+docker compose exec worker python -m app.audio.benchmark_transcription `
+  --audio /app/storage/temp/transcription_benchmark/sample.wav `
+  --profile base:auto `
+  --profile base:ja `
+  --reference-file /app/storage/temp/transcription_benchmark/reference.txt `
+  --keyword OpenAI `
+  --output-dir /app/storage/outputs/transcription_benchmarks/sample
+```
+
+Omit `--profile` to run the default benchmark matrix: `base:auto`, `base:ja`, `small:ja`, and `medium:ja`.
+The report contains normalized Japanese CER, keyword accuracy, segment/timestamp checks, wall/CPU time, and peak process RAM.
+Per-profile raw transcript JSON is preserved. Transcript dictionary replacement and other post-processing are not applied.
+First execution may include model download time; rerun after models are cached before comparing runtime.
+
+The Task 59 reference result is documented in `docs/TRANSCRIPTION_BENCHMARK_2026-07-10.md`.
+The current production default remains `base + auto`; `small + ja` is the recommended high-accuracy Japanese option.
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell

@@ -23,6 +23,8 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.short_count == 1
     assert args.mode == "low_cost"
     assert args.profile == "talk"
+    assert args.whisper_model_size == "base"
+    assert args.transcription_language == "auto"
     assert args.burn_subtitles is True
     assert args.normal_min_duration == 90.0
     assert args.normal_max_duration == 600.0
@@ -117,6 +119,10 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "low_cost",
             "--profile",
             "talk",
+            "--whisper-model-size",
+            "small",
+            "--transcription-language",
+            "ja",
             "--normal-min-duration",
             "20",
             "--normal-max-duration",
@@ -161,6 +167,8 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     settings = script.build_job_settings(args)
 
     assert settings["e2eFixtureTranscript"] is False
+    assert settings["whisperModelSize"] == "small"
+    assert settings["transcriptionLanguage"] == "ja"
     assert settings["useOpenAIScoring"] is True
     assert settings["normalClipCount"] == 2
     assert settings["shortCount"] == 0

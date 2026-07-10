@@ -27,6 +27,8 @@ ClipProfile = Literal["auto", "talk", "gameplay", "lecture"]
 ShortLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
 SelectionPolicy = Literal["fill_requested", "strict_quality"]
 ShortOverlayTitleMode = Literal["auto", "always", "high_quality_only", "never"]
+WhisperModelSize = Literal["base", "small", "medium", "large-v3"]
+TranscriptionLanguage = Literal["auto", "ja"]
 
 
 class VideoRead(BaseModel):
@@ -110,6 +112,8 @@ class JobSettings(BaseModel):
     transcript_normalize_punctuation: bool = Field(default=True, alias="transcriptNormalizePunctuation")
     use_default_transcript_dictionary: bool = Field(default=True, alias="useDefaultTranscriptDictionary")
     transcript_replacements: dict[str, str] = Field(default_factory=dict, alias="transcriptReplacements")
+    whisper_model_size: WhisperModelSize = Field(default="base", alias="whisperModelSize")
+    transcription_language: TranscriptionLanguage = Field(default="auto", alias="transcriptionLanguage")
     selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
     cross_type_overlap_dedupe: bool = Field(default=False, alias="crossTypeOverlapDedupe")
     use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")

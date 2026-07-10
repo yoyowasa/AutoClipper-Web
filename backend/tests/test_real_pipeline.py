@@ -412,6 +412,8 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert transcript_summary["total_text_length"] > 20
     assert transcript_summary["total_speech_duration"] == 195.0
     assert transcript_summary["transcription_engine"] == "faster_whisper"
+    assert transcript_summary["transcription_model"] == "base"
+    assert transcript_summary["transcription_language"] == "auto"
     assert transcript_summary["used_fixture_transcript"] is False
     transcript_postprocess_summary = json.loads(
         (job_dir / "transcript_postprocess_summary.json").read_text(encoding="utf-8")
@@ -823,6 +825,8 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
         (storage.outputs / created["jobId"] / "transcript_summary.json").read_text(encoding="utf-8")
     )
     assert transcript_summary["transcription_engine"] == "e2e_fixture"
+    assert transcript_summary["transcription_model"] == "fixture"
+    assert transcript_summary["transcription_language"] == "fixture"
     assert transcript_summary["used_fixture_transcript"] is True
     assert not (storage.temp / created["jobId"]).exists()
 
