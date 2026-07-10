@@ -37,6 +37,12 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   shortOverlayTitleMode: "auto"
 };
 
+const SUBTITLE_FONT_OPTIONS = [
+  { value: "", label: "標準ゴシック（Noto Sans CJK JP）" },
+  { value: "Noto Serif CJK JP", label: "明朝（Noto Serif CJK JP）" },
+  { value: "Noto Sans Mono CJK JP", label: "等幅ゴシック（Noto Sans Mono CJK JP）" }
+] as const;
+
 function withOptionalNumber(
   settings: ClipSettings,
   key: keyof ClipSettings,
@@ -45,18 +51,6 @@ function withOptionalNumber(
   return {
     ...settings,
     [key]: rawValue === "" ? undefined : Number(rawValue)
-  };
-}
-
-function withOptionalText(
-  settings: ClipSettings,
-  key: keyof ClipSettings,
-  rawValue: string
-): ClipSettings {
-  const value = rawValue.trim();
-  return {
-    ...settings,
-    [key]: value === "" ? undefined : value
   };
 }
 
@@ -290,25 +284,33 @@ export function SettingsPanel({
 
         <details className="md:col-span-2">
           <summary className="cursor-pointer text-sm font-medium text-neutral-700">
-            Subtitle style
+            字幕スタイル
           </summary>
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <label className="flex flex-col gap-2 sm:col-span-2">
-              <span className="text-sm font-medium text-neutral-700">Font name</span>
-              <input
-                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+              <span className="text-sm font-medium text-neutral-700">字幕フォント</span>
+              <select
+                className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+                data-testid="subtitle-font-select"
                 disabled={disabled}
-                placeholder="Noto Sans CJK JP"
-                type="text"
                 value={settings.subtitleFontName ?? ""}
                 onChange={(event) =>
-                  onChange(withOptionalText(settings, "subtitleFontName", event.target.value))
+                  onChange({
+                    ...settings,
+                    subtitleFontName: event.target.value || undefined
+                  })
                 }
-              />
+              >
+                {SUBTITLE_FONT_OPTIONS.map((font) => (
+                  <option key={font.value || "default"} value={font.value}>
+                    {font.label}
+                  </option>
+                ))}
+              </select>
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">Font size</span>
+              <span className="text-sm font-medium text-neutral-700">文字サイズ</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={disabled}
@@ -324,7 +326,7 @@ export function SettingsPanel({
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">Outline</span>
+              <span className="text-sm font-medium text-neutral-700">縁取り</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={disabled}
@@ -340,7 +342,7 @@ export function SettingsPanel({
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">Lower margin</span>
+              <span className="text-sm font-medium text-neutral-700">下余白</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={disabled}
@@ -358,7 +360,7 @@ export function SettingsPanel({
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">Position</span>
+              <span className="text-sm font-medium text-neutral-700">表示位置</span>
               <select
                 className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
                 disabled={disabled}
@@ -367,10 +369,10 @@ export function SettingsPanel({
                   onChange(withOptionalNumber(settings, "subtitleAlignment", event.target.value))
                 }
               >
-                <option value="">Default</option>
-                <option value="2">Bottom</option>
-                <option value="5">Center</option>
-                <option value="8">Top</option>
+                <option value="">標準</option>
+                <option value="2">下</option>
+                <option value="5">中央</option>
+                <option value="8">上</option>
               </select>
             </label>
           </div>
