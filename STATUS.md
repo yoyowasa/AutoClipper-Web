@@ -3974,3 +3974,117 @@ python .\scripts\e2e_real_video.py `
 - 既存代表ジョブの warning count は、artifact 再生成なしでは変わらない。
 - `below_quality_threshold` は品質警告として残す。今回の変更は採用理由の明確化。
 - `normal_duration_outside_recommended_range` は代表ジョブで発生なし。Task54 の duration policy 表示を維持。
+
+## 2026-07-10 Task 56 representative normal warning regeneration check
+
+### 目的
+
+- Task55 後の main で代表素材を新規生成し、`likely_abrupt_ending` 改善が実artifactの audit に反映されるか確認する。
+- 検証/status task のため runtime code は変更しない。
+
+### 対象
+
+- `STATUS.md`
+- 代表素材:
+  - `C:\Users\peace.YAGURUMAGIKUHM\Desktop\【朝倉慶vs西田真澄】物価が牙をむく！？株高の代償…フジメディアHG大株主・ダルトンアクティビストが語るインフレの悲劇とは？【ReHacQ】 - ReHacQ−リハック−【公式】 (720p, h264).mp4`
+
+### 実行条件
+
+- tested main: `0562f04 Improve normal clip warning reduction (#35)`
+- command:
+  - `python scripts\e2e_real_video.py --video <representative> --mode low_cost --normal-count 5 --short-count 10 --selection-policy fill_requested --timeout 14400`
+- fixture transcript: disabled。
+- OpenAI scoring: not used。
+
+### baseline
+
+- baseline job: `job_e9a049ee5e3446c0b92943429fa8918a`
+- baseline audit:
+  - normal:
+    - `likely_abrupt_start`: 1
+    - `likely_abrupt_ending`: 1
+    - `below_quality_threshold`: 1
+    - `backfilled_clip`: 1
+  - short:
+    - `likely_abrupt_start`: 3
+    - `subtitle_too_dense`: 2
+
+### new job result
+
+- new job: `job_43288ae94650426aad679465b6515fc3`
+- status: completed。
+- video duration: `3495.8924`
+- transcript:
+  - segments: `2122`
+  - text length: `22554`
+  - engine: `faster_whisper`
+  - fixture: `False`
+- selection:
+  - normal: `5/5`
+  - short: `10/10`
+  - hard gate passed: `1400`
+  - render failures: `0`
+  - backfill: `2`
+  - unfilled: `{'normal': 0, 'short': 0}`
+- outputs:
+  - normal MP4: 5本、すべて `1280x720`
+  - short MP4: 10本、すべて `1080x1920`
+  - ZIP size: `370561422` bytes
+- runtime:
+  - transcription: `223.313s`
+  - scene detection: `107.921s`
+  - candidate generation: `54.907s`
+  - normal render: `67.078s`
+  - short render: `199.765s`
+  - zip packaging: `20.297s`
+  - total: `697.625s`
+
+### audit result
+
+- audit output:
+  - `.codex_tmp\task56_job_43288ae_audit\output_audit_report.json`
+  - `.codex_tmp\task56_job_43288ae_audit\output_audit_report.md`
+- audit summary:
+  - normal: 5
+  - short: 10
+  - inspection: 5
+- warning counts:
+  - normal:
+    - `subtitle_too_dense`: 1
+    - `below_quality_threshold`: 2
+    - `backfilled_clip`: 2
+  - short:
+    - `likely_abrupt_start`: 1
+    - `subtitle_too_dense`: 1
+- `likely_abrupt_ending`:
+  - before: `1`
+  - after: `0`
+- `end_to_final_transcript_segment_end`:
+  - count: `0`
+  - 解釈: 今回の新規生成では該当reasonは発火しなかったが、normal `likely_abrupt_ending` は 0 になった。
+- `below_quality_threshold` detail:
+  - count: `2`
+  - `selection_summary` present: yes
+  - `requested_count=5`
+  - `selected_count=5`
+  - `hard_gate_passed_count=600`
+  - `selected_below_threshold_backfill_count=2`
+  - `unfilled_requested_count=0`
+
+### sidecar risk
+
+- command:
+  - `python scripts\check_subtitle_sidecar_risk.py --job-id job_43288ae94650426aad679465b6515fc3 --json`
+- result:
+  - `risk_count=0`
+
+### 判断
+
+- pass。
+- Task55 後の新規生成では、代表素材の normal `likely_abrupt_ending` が `1 -> 0` になった。
+- low score / backfill warning は残るが、Task55 の selection context により採用理由は確認可能。
+
+### 未解決事項
+
+- `end_to_final_transcript_segment_end` の実発火は今回の代表再生成では確認されていない。
+- `subtitle_too_dense` と short `likely_abrupt_start` は Task56 の対象外。必要なら別Task。
