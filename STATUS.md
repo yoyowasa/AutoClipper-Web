@@ -4088,3 +4088,62 @@ python .\scripts\e2e_real_video.py `
 
 - `end_to_final_transcript_segment_end` の実発火は今回の代表再生成では確認されていない。
 - `subtitle_too_dense` と short `likely_abrupt_start` は Task56 の対象外。必要なら別Task。
+
+## 2026-07-10 Task 58 subtitle font selector
+
+### 目的
+
+- Upload UIの字幕font自由入力を、workerで利用確認済みの日本語font選択へ変更する。
+- 存在しないfont名や日本語glyphを持たないfontを誤指定する経路をなくす。
+
+### 対象
+
+- `frontend/components/SettingsPanel.tsx`
+- `README.md`
+- `STATUS.md`
+
+### 変更内容
+
+- `Font name` text inputをdropdownへ変更。
+- workerの`fc-list`で確認した次のfontだけを選択肢にした。
+  - 標準ゴシック: `Noto Sans CJK JP`
+  - 明朝: `Noto Serif CJK JP`
+  - 等幅ゴシック: `Noto Sans Mono CJK JP`
+- 未指定時は既存defaultの`Noto Sans CJK JP`を維持。
+- 字幕style欄のlabelを日本語化。
+
+### 誤変換の切り分け
+
+- fontは文字の形を変えるだけで、faster-whisperの認識結果は修正しない。
+- 現在の標準文字起こしは`faster-whisper base`で、一般的な誤変換の主原因候補。
+- Unicode・空白・句読点正規化、既定辞書、custom replacementsは実装済みだが、custom replacementsはUI未露出。
+- OpenAI字幕校正またはtranscription model選択は別Taskで扱う。
+
+### 検証結果
+
+- worker font確認:
+  - `fc-match 'Noto Sans CJK JP'`: exact match。
+  - `fc-match 'Noto Serif CJK JP'`: exact match。
+  - `fc-match 'Noto Sans Mono CJK JP'`: exact match。
+- frontend:
+  - `npm run lint`: pass。
+  - `npm run typecheck`: pass。
+  - `npm run build`: pass。
+- backend:
+  - `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+  - `cd backend && ..\.venv\Scripts\python -m pytest`: 243 passed, 1 skipped, 1 warning。
+- browser UI:
+  - `/upload`の`字幕スタイル`を展開し、3font option表示を確認。
+  - `Noto Serif CJK JP`と`Noto Sans Mono CJK JP`の選択値更新を確認。
+- actual render:
+  - job: `job_350588cebec648c9b8f9febfb3637679`。
+  - selected font: `Noto Serif CJK JP`。
+  - status: completed。
+  - ASS Subtitle style: `FontName=Noto Serif CJK JP`。
+  - short MP4: `1080x1920`。
+- runtime:
+  - `python scripts\smoke_runtime.py --skip-video`: pass。
+
+### 未解決事項
+
+- 字幕本文の誤変換改善はTask58の対象外。

@@ -745,6 +745,7 @@ Subtitle readability behavior:
 - Advanced API settings: `maxCharsPerLineShort`, `maxCharsPerLineNormal`, `maxLines`, `minSubtitleDuration`, `maxSubtitleDuration`, `minGapBetweenSubtitles`.
 - Task 35 subtitle-only 58-minute smoke regenerated ASS files without re-rendering MP4 and reduced subtitle density warnings to normal `1`, short `0`.
 - Backend and worker containers install `fonts-noto-cjk`; generated ASS files use `Noto Sans CJK JP` so Japanese subtitles do not render as missing-glyph boxes.
+- Upload settings expose only Japanese-capable fonts verified inside the worker: `Noto Sans CJK JP`, `Noto Serif CJK JP`, and `Noto Sans Mono CJK JP`.
 
 Short composition fallback behavior:
 
