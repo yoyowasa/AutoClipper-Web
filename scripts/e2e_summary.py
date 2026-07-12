@@ -11,6 +11,7 @@ SUMMARY_FILENAMES = [
     "transcript_summary.json",
     "transcript_postprocess_summary.json",
     "transcript_correction_summary.json",
+    "transcript_suspicion_summary.json",
     "audio_feature_summary.json",
     "candidate_summary.json",
     "candidate_generation_summary.json",
@@ -51,15 +52,30 @@ def summary_line(filename: str, payload: Any) -> str:
         return (
             f"enabled={_value(payload, 'enabled')} "
             f"model={_value(payload, 'model')} "
+            f"scope={_value(payload, 'scope')} "
+            f"targets={_value(payload, 'target_segment_count')} "
+            f"context={_value(payload, 'context_segment_count')} "
             f"corrected={_value(payload, 'corrected_segment_count')} "
             f"unchanged={_value(payload, 'unchanged_segment_count')} "
             f"low_confidence_rejected={_value(payload, 'low_confidence_rejected_count')} "
             f"safety_rejected={_value(payload, 'safety_rejected_count')} "
             f"fallback={_value(payload, 'fallback_used')} "
             f"calls={_value(payload, 'api_call_count')} "
+            f"tokens={_value(payload, 'input_tokens')}/{_value(payload, 'output_tokens')} "
+            f"cached={_value(payload, 'cached_tokens')} "
             f"retries={_value(payload, 'retry_count')} "
             f"schema_failures={_value(payload, 'schema_validation_failures')} "
             f"seconds={_value(payload, 'processing_seconds')}"
+        )
+    if filename == "transcript_suspicion_summary.json":
+        return (
+            f"segments={_value(payload, 'segment_count')} "
+            f"suspicious={_value(payload, 'suspicious_segment_count')} "
+            f"ratio={_value(payload, 'suspicious_ratio')} "
+            f"context={_value(payload, 'context_segment_count')} "
+            f"unique_sent={_value(payload, 'unique_segments_sent')} "
+            f"threshold={_value(payload, 'threshold')} "
+            f"reasons={_value(payload, 'reason_counts')}"
         )
     if filename == "audio_feature_summary.json":
         return (

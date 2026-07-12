@@ -92,7 +92,14 @@ class TimedJobResult:
 
 
 PHASE_END_STATUSES = {
-    "transcribing": ["correcting_subtitles", "detecting_scenes", "generating_candidates", "scoring_candidates", "selecting_clips", "failed"],
+    "transcribing": [
+        "correcting_subtitles",
+        "detecting_scenes",
+        "generating_candidates",
+        "scoring_candidates",
+        "selecting_clips",
+        "failed",
+    ],
     "correcting_subtitles": ["detecting_scenes", "generating_candidates", "scoring_candidates", "selecting_clips", "failed"],
     "detecting_scenes": ["generating_candidates", "scoring_candidates", "selecting_clips", "failed"],
     "generating_candidates": ["scoring_candidates", "selecting_clips", "rendering_normal_clips", "rendering_shorts", "failed"],
@@ -178,6 +185,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use auto detection or force Japanese transcription.",
     )
     parser.add_argument("--subtitle-correction-mode", default="off", choices=["off", "openai"])
+    parser.add_argument("--subtitle-correction-scope", default="all", choices=["all", "suspicious"])
+    parser.add_argument("--subtitle-correction-suspicion-threshold", type=probability_float, default=0.4)
     parser.add_argument("--subtitle-correction-model", default="gpt-5.5")
     parser.add_argument("--subtitle-correction-min-confidence", type=probability_float, default=0.9)
     parser.add_argument("--subtitle-correction-batch-size", type=positive_int, default=40)
@@ -271,6 +280,8 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "whisperModelSize": args.whisper_model_size,
         "transcriptionLanguage": args.transcription_language,
         "subtitleCorrectionMode": args.subtitle_correction_mode,
+        "subtitleCorrectionScope": args.subtitle_correction_scope,
+        "subtitleCorrectionSuspicionThreshold": args.subtitle_correction_suspicion_threshold,
         "subtitleCorrectionModel": args.subtitle_correction_model,
         "subtitleCorrectionMinConfidence": args.subtitle_correction_min_confidence,
         "subtitleCorrectionBatchSize": args.subtitle_correction_batch_size,
@@ -677,16 +688,35 @@ def validate_transcript_correction_summary(output_dir: Path) -> dict[str, Any]:
             raise RuntimeError("subtitle correction changed segment timestamps")
     if corrected != final:
         raise RuntimeError("final transcript does not match corrected transcript")
-    if not summary.get("fallback_used") and int(summary.get("api_call_count") or 0) <= 0:
+    if (
+        not summary.get("fallback_used")
+        and int(summary.get("target_segment_count") or 0) > 0
+        and int(summary.get("api_call_count") or 0) <= 0
+    ):
         raise RuntimeError("subtitle correction summary shows zero API calls")
+    if summary.get("scope") == "suspicious":
+        suspicion_summary = read_json(output_dir / "transcript_suspicion_summary.json")
+        required_suspicion_files = ["transcript_suspicion_summary.json"]
+        if not (isinstance(suspicion_summary, dict) and suspicion_summary.get("filter_failed")):
+            required_suspicion_files.extend(
+                ["transcript_suspicion_segments.json", "subtitle_correction_targets.json"]
+            )
+        for filename in required_suspicion_files:
+            if not (output_dir / filename).is_file():
+                raise RuntimeError(f"suspicion filter artifact not found: {output_dir / filename}")
     print(
         "subtitle correction: "
         f"model={summary.get('model')} "
+        f"scope={summary.get('scope')} "
         f"segments={summary.get('input_segment_count')} "
+        f"targets={summary.get('target_segment_count')} "
+        f"context={summary.get('context_segment_count')} "
         f"corrected={summary.get('corrected_segment_count')} "
         f"unchanged={summary.get('unchanged_segment_count')} "
         f"fallback={summary.get('fallback_used')} "
         f"calls={summary.get('api_call_count')} "
+        f"tokens={summary.get('input_tokens')}/{summary.get('output_tokens')} "
+        f"cached={summary.get('cached_tokens')} "
         f"seconds={summary.get('processing_seconds')}"
     )
     return summary
@@ -928,6 +958,8 @@ def run_e2e(args: argparse.Namespace) -> int:
         print(
             "subtitle correction: enabled "
             f"model={settings['subtitleCorrectionModel']} "
+            f"scope={settings['subtitleCorrectionScope']} "
+            f"threshold={settings['subtitleCorrectionSuspicionThreshold']} "
             f"confidence={settings['subtitleCorrectionMinConfidence']} "
             f"batch_size={settings['subtitleCorrectionBatchSize']} "
             f"context={settings['subtitleCorrectionContextSegments']} "

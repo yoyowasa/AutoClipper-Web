@@ -58,6 +58,8 @@ export type ClipSettings = {
   whisperModelSize: "base" | "small" | "medium" | "large-v3";
   transcriptionLanguage: "auto" | "ja";
   subtitleCorrectionMode: "off" | "openai";
+  subtitleCorrectionScope: "all" | "suspicious";
+  subtitleCorrectionSuspicionThreshold: number;
   subtitleCorrectionModel: string;
   subtitleCorrectionMinConfidence: number;
   subtitleCorrectionBatchSize: number;

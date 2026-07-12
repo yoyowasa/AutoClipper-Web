@@ -4331,3 +4331,41 @@ python .\scripts\e2e_real_video.py `
 ### 未解決事項
 
 - 現在のOpenAI quota不足により、今回のruntimeでは成功batchの`1/2 -> 2/2`表示を再確認できなかった。Task60の実API成功経路とTask61の自動testはpass済み。
+
+## 2026-07-12 Task 62 local transcript suspicion filter
+
+### 目的
+
+- OpenAI字幕校正前に疑わしいsegmentをローカル抽出し、API送信量と正常字幕の不要な書き換えを減らす。
+
+### 変更内容
+
+- `subtitleCorrectionScope=all|suspicious`を追加。既定は互換維持の`all`。
+- `subtitleCorrectionSuspicionThreshold`を追加。既定`0.40`。
+- confidence、表記揺れ、固有語候補、反復、文字種、数字、リスト、長尺内の反復漢字複合語を組み合わせてscore/reasonを保存。
+- target以外は変更禁止。contextはread-onlyでbatchごと最大4件。
+- target 0件はAPI call 0件。
+- filter失敗時は全件APIへ切り替えずdeterministic transcriptへfallback。
+- actual input/output/cached token usageを校正summaryへ追加。
+- job API/UIへ対象segment進捗を追加。
+- suspicion segments/summary/targetsの3 artifactをZIPへ追加。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `282 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker runtime smoke: pass。
+- correction OFF sample E2E: pass (`job_47d61624572043b8aba6cfb7491d78fd`)。
+- TTS: target `8/19`、全件採用修正recall `7/7`、総token `3006 -> 2401`。
+- 124秒実話者: calls `2 -> 1`、総token `14124 -> 7729`、校正時間 `157.3s -> 61.0s`。
+- 58分full E2E: pass (`job_31b475f0328f4a6fa0239316100b34a0`)。
+  - target `977/1695`、calls `10/17`、校正時間 `706.5s/1582.6s`。
+  - normal `1/1`、short `2/2`、render failure `0`、sidecar risk `0`。
+- 長尺recall改善後のoffline評価: target `1287/1695`、baseline採用修正coverage `250/273 = 91.6%`、想定calls `13/17`。
+- 詳細: `docs/TRANSCRIPT_SUSPICION_FILTER_2026-07-12.md`。
+
+### 未解決事項
+
+- 最終長尺filterの実API replayは`7/13`成功後、`429 insufficient_quota`で停止。最終signalによる13 batch完走は未確認。
+- 実際のinput token削減率は素材依存。短尺では固定prompt/schema比率が大きく、40%削減を保証しない。

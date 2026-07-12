@@ -26,6 +26,8 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.whisper_model_size == "base"
     assert args.transcription_language == "auto"
     assert args.subtitle_correction_mode == "off"
+    assert args.subtitle_correction_scope == "all"
+    assert args.subtitle_correction_suspicion_threshold == 0.4
     assert args.subtitle_correction_model == "gpt-5.5"
     assert args.subtitle_correction_min_confidence == 0.9
     assert args.subtitle_correction_batch_size == 40
@@ -64,6 +66,7 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     [
         ("--subtitle-correction-min-confidence", "1.1"),
         ("--subtitle-correction-min-confidence", "-0.1"),
+        ("--subtitle-correction-suspicion-threshold", "1.1"),
         ("--subtitle-correction-batch-size", "0"),
     ],
 )
@@ -160,6 +163,10 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "true",
             "--openai-candidate-limit",
             "7",
+            "--subtitle-correction-scope",
+            "suspicious",
+            "--subtitle-correction-suspicion-threshold",
+            "0.6",
             "--openai-model",
             "gpt-test",
             "--ensure-selected-openai-scored",
@@ -193,6 +200,8 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["whisperModelSize"] == "small"
     assert settings["transcriptionLanguage"] == "ja"
     assert settings["subtitleCorrectionMode"] == "openai"
+    assert settings["subtitleCorrectionScope"] == "suspicious"
+    assert settings["subtitleCorrectionSuspicionThreshold"] == 0.6
     assert settings["subtitleCorrectionModel"] == "gpt-5.5"
     assert settings["useOpenAIScoring"] is True
     assert settings["normalClipCount"] == 2

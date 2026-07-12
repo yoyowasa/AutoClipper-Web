@@ -118,10 +118,10 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
 
 def fake_transcript() -> list[TranscriptSegment]:
     return [
-        TranscriptSegment(start=0.0, end=30.0, text="why automation mistakes matter before launch"),
-        TranscriptSegment(start=35.0, end=80.0, text="how teams can fix the process with a clear checklist"),
-        TranscriptSegment(start=85.0, end=140.0, text="the final lesson is to measure progress every week"),
-        TranscriptSegment(start=145.0, end=210.0, text="another complete section for a normal clip selection"),
+        TranscriptSegment(start=0.0, end=30.0, text="why automation mistakes matter before launch", confidence=0.7),
+        TranscriptSegment(start=35.0, end=80.0, text="how teams can fix the process with a clear checklist", confidence=0.7),
+        TranscriptSegment(start=85.0, end=140.0, text="the final lesson is to measure progress every week", confidence=0.7),
+        TranscriptSegment(start=145.0, end=210.0, text="another complete section for a normal clip selection", confidence=0.7),
     ]
 
 
@@ -332,7 +332,8 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
                 "useOpenAIScoring": False,
-                "subtitleCorrectionMode": "openai",
+                    "subtitleCorrectionMode": "openai",
+                    "subtitleCorrectionScope": "suspicious",
                 "subtitleCorrectionBatchSize": 2,
                 "burnSubtitles": True,
                 "normalizeAudio": True,
@@ -416,7 +417,10 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         "transcript_segments.json",
         "transcript_correction_summary.json",
         "transcript_correction_diff.md",
-        "subtitle_correction_progress.json",
+            "subtitle_correction_progress.json",
+            "transcript_suspicion_segments.json",
+            "transcript_suspicion_summary.json",
+            "subtitle_correction_targets.json",
         "scene_segments.json",
         "silence_segments.json",
         "audio_features.json",
@@ -459,6 +463,8 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert transcript_summary["used_fixture_transcript"] is False
     correction_summary = json.loads((job_dir / "transcript_correction_summary.json").read_text(encoding="utf-8"))
     assert correction_summary["enabled"] is True
+    assert correction_summary["scope"] == "suspicious"
+    assert correction_summary["target_segment_count"] == 4
     assert correction_summary["api_call_count"] == 2
     correction_progress = json.loads(
         (job_dir / "subtitle_correction_progress.json").read_text(encoding="utf-8")
@@ -469,6 +475,9 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         "correctionBatchesCompleted": 2,
         "correctionBatchesTotal": 2,
         "correctionRetryCount": 0,
+        "correctionTargetsCompleted": 4,
+        "correctionTargetsTotal": 4,
+        "transcriptSegmentCount": 4,
         "fallbackUsed": False,
         "finished": True,
     }
