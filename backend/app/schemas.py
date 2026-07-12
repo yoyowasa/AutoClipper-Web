@@ -10,6 +10,7 @@ JobStatus = Literal[
     "probing",
     "extracting_audio",
     "transcribing",
+    "correcting_subtitles",
     "detecting_scenes",
     "generating_candidates",
     "scoring_candidates",

@@ -158,11 +158,18 @@ def test_transient_error_is_retried() -> None:
         retry_backoff_seconds=0,
         sleep_func=lambda _seconds: None,
     )
+    progress: list[tuple[int, int, int]] = []
 
-    result = corrector.correct_segments(segments(), batch_size=2)
+    result = corrector.correct_segments(
+        segments(),
+        batch_size=2,
+        progress_callback=lambda completed, total, retries: progress.append((completed, total, retries)),
+    )
 
     assert result.summary["api_call_count"] == 2
+    assert result.summary["retry_count"] == 1
     assert len(client.responses.calls) == 2
+    assert progress == [(0, 1, 0), (0, 1, 1), (1, 1, 1)]
 
 
 def test_mismatched_original_text_is_rejected() -> None:

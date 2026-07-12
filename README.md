@@ -493,6 +493,20 @@ transcript_correction_diff.md
 
 When `subtitleCorrectionFallbackEnabled=true`, transient API or schema failures use the complete deterministic transcript and record `fallback_used=true`; partial OpenAI corrections are discarded. Disable fallback only when the job must fail with `openai_subtitle_correction_failed`. Missing `OPENAI_API_KEY` fails early with `openai_configuration_missing`.
 
+While correction is running, `GET /api/jobs/{job_id}` returns `status=correcting_subtitles`. Progress details contain only counters and never subtitle text or credentials:
+
+```json
+{
+  "stage": "correcting_subtitles",
+  "stageProgress": 47,
+  "correctionBatchesCompleted": 8,
+  "correctionBatchesTotal": 17,
+  "correctionRetryCount": 1
+}
+```
+
+The job page shows this stage percentage separately from overall pipeline progress. Batch completion and retries refresh the worker heartbeat. Correction-off jobs keep the existing `transcribing` to `detecting_scenes` transition.
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell
@@ -581,6 +595,7 @@ storage/outputs/{job_id}/transcript_summary.json
 storage/outputs/{job_id}/transcript_postprocess_summary.json
 storage/outputs/{job_id}/transcript_correction_summary.json
 storage/outputs/{job_id}/transcript_correction_diff.md
+storage/outputs/{job_id}/subtitle_correction_progress.json
 storage/outputs/{job_id}/audio_feature_summary.json
 storage/outputs/{job_id}/candidate_generation_summary.json
 storage/outputs/{job_id}/candidate_summary.json

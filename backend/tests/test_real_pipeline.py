@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.audio.openai_transcript_correction import OpenAITranscriptCorrector
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.volume_features import build_audio_features
@@ -41,6 +42,40 @@ SUMMARY_FILENAMES = [
     "rejection_summary.json",
     "selected_clips_summary.json",
 ]
+
+
+class EchoCorrectionResponse:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.output_text = json.dumps(payload, ensure_ascii=False)
+
+
+class EchoCorrectionResponses:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> EchoCorrectionResponse:
+        self.calls.append(kwargs)
+        request = json.loads(kwargs["input"][1]["content"])
+        return EchoCorrectionResponse(
+            {
+                "segments": [
+                    {
+                        "index": segment["index"],
+                        "original_text": segment["original_text"],
+                        "corrected_text": segment["original_text"],
+                        "changed": False,
+                        "reason": "unchanged",
+                        "confidence": 1.0,
+                    }
+                    for segment in request["target_segments"]
+                ]
+            }
+        )
+
+
+class EchoCorrectionClient:
+    def __init__(self) -> None:
+        self.responses = EchoCorrectionResponses()
 
 
 @pytest.fixture()
@@ -297,6 +332,8 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
                 "useOpenAIScoring": False,
+                "subtitleCorrectionMode": "openai",
+                "subtitleCorrectionBatchSize": 2,
                 "burnSubtitles": True,
                 "normalizeAudio": True,
                 "transcriptReplacements": {"automation": "AutoClipper"},
@@ -341,6 +378,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         detect_black_screen=lambda _path: [BlackScreenSegment(start=220.0, end=225.0, duration=5.0)],
         normal_renderer=fake_render,
         short_renderer=fake_render,
+        transcript_corrector=OpenAITranscriptCorrector(client=EchoCorrectionClient()),
     )
 
     visited_statuses = run_autoclipper_job(
@@ -350,7 +388,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         dependencies=dependencies,
     )
 
-    assert visited_statuses == SUCCESS_STATUSES[1:]
+    assert visited_statuses == [*SUCCESS_STATUSES[1:4], "correcting_subtitles", *SUCCESS_STATUSES[4:]]
     assert not (storage.temp / created["jobId"]).exists()
 
     status_response = client.get(f"/api/jobs/{created['jobId']}")
@@ -378,6 +416,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         "transcript_segments.json",
         "transcript_correction_summary.json",
         "transcript_correction_diff.md",
+        "subtitle_correction_progress.json",
         "scene_segments.json",
         "silence_segments.json",
         "audio_features.json",
@@ -419,8 +458,23 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert transcript_summary["transcription_language"] == "auto"
     assert transcript_summary["used_fixture_transcript"] is False
     correction_summary = json.loads((job_dir / "transcript_correction_summary.json").read_text(encoding="utf-8"))
-    assert correction_summary["enabled"] is False
-    assert correction_summary["api_call_count"] == 0
+    assert correction_summary["enabled"] is True
+    assert correction_summary["api_call_count"] == 2
+    correction_progress = json.loads(
+        (job_dir / "subtitle_correction_progress.json").read_text(encoding="utf-8")
+    )
+    assert correction_progress == {
+        "stage": "correcting_subtitles",
+        "stageProgress": 100,
+        "correctionBatchesCompleted": 2,
+        "correctionBatchesTotal": 2,
+        "correctionRetryCount": 0,
+        "fallbackUsed": False,
+        "finished": True,
+    }
+    status_details = status_response.json()["details"]
+    assert status_details["stageProgress"] == 100
+    assert status_details["correctionBatchesCompleted"] == 2
     transcript_postprocess_summary = json.loads(
         (job_dir / "transcript_postprocess_summary.json").read_text(encoding="utf-8")
     )
@@ -495,6 +549,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "metadata/deterministic_transcript_segments.json" in names
     assert "metadata/transcript_correction_summary.json" in names
     assert "metadata/transcript_correction_diff.md" in names
+    assert "metadata/subtitle_correction_progress.json" in names
     assert "metadata/transcript_summary.json" in names
     assert "metadata/transcript_postprocess_summary.json" in names
     assert "metadata/selected_clips_summary.json" in names

@@ -57,6 +57,7 @@ def summary_line(filename: str, payload: Any) -> str:
             f"safety_rejected={_value(payload, 'safety_rejected_count')} "
             f"fallback={_value(payload, 'fallback_used')} "
             f"calls={_value(payload, 'api_call_count')} "
+            f"retries={_value(payload, 'retry_count')} "
             f"schema_failures={_value(payload, 'schema_validation_failures')} "
             f"seconds={_value(payload, 'processing_seconds')}"
         )

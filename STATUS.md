@@ -4278,3 +4278,56 @@ python .\scripts\e2e_real_video.py `
 - OpenAI correctionは長尺で処理時間を支配する。58分素材では校正だけで約26.4分。default `off`を維持する。
 - 校正品質は素材依存。raw / deterministic / corrected / diffを保持し、目視監査可能にする。
 - 長尺校正中もheartbeatはbatchごとに更新されるが、job表示は`transcribing 30%`のまま。校正専用progress表示は未実装。
+
+## 2026-07-11 Task 61 subtitle correction progress reporting
+
+### 目的
+
+- OpenAI字幕校正を`transcribing`から分離し、batch進捗・retry・fallbackをジョブAPIと画面に表示する。
+
+### 変更内容
+
+- 校正ON時だけjob statusを`correcting_subtitles`へ遷移。校正OFF時のstatus列は変更しない。
+- `subtitle_correction_progress.json`へbatch完了数、総数、stage進捗、retry回数、fallback、完了状態を保存。
+- job details APIへ字幕本文・API keyを含まない安全な進捗情報だけを追加。
+- Job Progressへ字幕校正専用のbatch表示とprogress barを追加。
+- E2E timingをtranscriptionとsubtitle correctionに分離。
+- retry時もheartbeatを更新し、停止と誤認されないようにした。
+
+### 変更ファイル
+
+- `backend/app/audio/openai_transcript_correction.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/status.py`
+- `backend/app/api/jobs.py`
+- `backend/app/schemas.py`
+- `frontend/components/JobProgress.tsx`
+- `frontend/components/ProgressTimeline.tsx`
+- `frontend/components/StatusBadge.tsx`
+- `frontend/lib/types.ts`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- backend tests
+- `README.md`
+- `STATUS.md`
+
+### 検証結果
+
+- backend ruff: pass。
+- backend pytest: `266 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- changed scripts ruff: pass。
+- `docker compose up -d --build`: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- 校正OFF sample E2E: pass (`job_d862e4b22e0241dea53edacd4de1a3a6`)。
+- 校正ON real-video E2E: pass (`job_fd2798d3150b4d49bffa5d0b70ee7d4a`)。
+  - status: `transcribing 30%` -> `correcting_subtitles 31%` -> 後続工程 -> `completed 100%`。
+  - batch表示: `0/2`、retry `0 -> 3`を確認。
+  - OpenAI API: `429 insufficient_quota`。4 calls後にfallbackし、short `1/1`、`1080x1920`、ZIP生成まで完走。
+  - progress artifact: `stageProgress=100`、`correctionRetryCount=3`、`fallbackUsed=true`、`finished=true`。
+- success batchの単調増加、retry、API details、ZIP artifactは自動testで確認。
+- sidecar risk: `0`。
+
+### 未解決事項
+
+- 現在のOpenAI quota不足により、今回のruntimeでは成功batchの`1/2 -> 2/2`表示を再確認できなかった。Task60の実API成功経路とTask61の自動testはpass済み。

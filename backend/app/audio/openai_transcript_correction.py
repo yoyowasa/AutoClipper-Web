@@ -23,6 +23,7 @@ DETERMINISTIC_TRANSCRIPT_FILENAME = "deterministic_transcript_segments.json"
 OPENAI_CORRECTED_TRANSCRIPT_FILENAME = "openai_corrected_transcript_segments.json"
 TRANSCRIPT_CORRECTION_SUMMARY_FILENAME = "transcript_correction_summary.json"
 TRANSCRIPT_CORRECTION_DIFF_FILENAME = "transcript_correction_diff.md"
+TRANSCRIPT_CORRECTION_PROGRESS_FILENAME = "subtitle_correction_progress.json"
 
 TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
 TRANSIENT_ERROR_NAMES = {
@@ -54,6 +55,9 @@ class OpenAIClientProtocol(Protocol):
     responses: OpenAIResponsesResource
 
 
+CorrectionProgressCallback = Callable[[int, int, int], None]
+
+
 @dataclass
 class TranscriptCorrectionStats:
     model: str
@@ -63,6 +67,7 @@ class TranscriptCorrectionStats:
     low_confidence_rejected_count: int = 0
     safety_rejected_count: int = 0
     api_call_count: int = 0
+    retry_count: int = 0
     successful_batch_count: int = 0
     failed_batch_count: int = 0
     schema_validation_failures: int = 0
@@ -85,6 +90,7 @@ class TranscriptCorrectionStats:
             "fallback_used": fallback_used,
             "fallback_reason": fallback_reason,
             "api_call_count": self.api_call_count,
+            "retry_count": self.retry_count,
             "successful_batch_count": self.successful_batch_count,
             "failed_batch_count": self.failed_batch_count,
             "schema_validation_failures": self.schema_validation_failures,
@@ -167,7 +173,7 @@ class OpenAITranscriptCorrector:
         batch_size: int = 40,
         context_segments: int = 2,
         glossary: Sequence[str] = (),
-        heartbeat: Callable[[], None] | None = None,
+        progress_callback: CorrectionProgressCallback | None = None,
     ) -> TranscriptCorrectionResult:
         started_at = time.monotonic()
         self.stats = TranscriptCorrectionStats(model=self.model)
@@ -175,6 +181,14 @@ class OpenAITranscriptCorrector:
         self.stats.input_segment_count = len(source)
         output = list(source)
         changes: list[dict[str, Any]] = []
+        total_batches = (len(source) + batch_size - 1) // batch_size
+        completed_batches = 0
+
+        def notify_progress() -> None:
+            if progress_callback is not None:
+                progress_callback(completed_batches, total_batches, self.stats.retry_count)
+
+        notify_progress()
         try:
             for batch_start in range(0, len(source), batch_size):
                 batch_end = min(len(source), batch_start + batch_size)
@@ -186,7 +200,12 @@ class OpenAITranscriptCorrector:
                     for index in range(context_start, context_end)
                     if index < batch_start or index >= batch_end
                 ]
-                corrected = self._correct_batch(targets, context=context, glossary=glossary)
+                corrected = self._correct_batch(
+                    targets,
+                    context=context,
+                    glossary=glossary,
+                    on_retry=notify_progress,
+                )
                 for item in corrected:
                     original = source[item.index]
                     corrected_text = item.corrected_text.strip()
@@ -220,8 +239,8 @@ class OpenAITranscriptCorrector:
                         elif safety_rejection is not None:
                             self.stats.safety_rejected_count += 1
                             self.stats.safety_rejection_counts[safety_rejection] += 1
-                if heartbeat is not None:
-                    heartbeat()
+                completed_batches += 1
+                notify_progress()
         finally:
             self.stats.processing_seconds = time.monotonic() - started_at
         return TranscriptCorrectionResult(
@@ -236,6 +255,7 @@ class OpenAITranscriptCorrector:
         *,
         context: Sequence[dict[str, Any]],
         glossary: Sequence[str],
+        on_retry: Callable[[], None] | None = None,
     ) -> list[CorrectedTranscriptSegment]:
         payload = {
             "target_segments": [
@@ -281,6 +301,9 @@ class OpenAITranscriptCorrector:
                     self.stats.failed_batch_count += 1
                     self.stats.errors.append(_safe_error(exc))
                     break
+                self.stats.retry_count += 1
+                if on_retry is not None:
+                    on_retry()
                 self.sleep_func(self.retry_backoff_seconds * (2**attempt))
             finally:
                 _ = time.monotonic() - started_at
@@ -362,6 +385,10 @@ def correction_summary_output_path(output_dir: str | Path) -> Path:
 
 def correction_diff_output_path(output_dir: str | Path) -> Path:
     return Path(output_dir) / TRANSCRIPT_CORRECTION_DIFF_FILENAME
+
+
+def correction_progress_output_path(output_dir: str | Path) -> Path:
+    return Path(output_dir) / TRANSCRIPT_CORRECTION_PROGRESS_FILENAME
 
 
 def write_correction_summary(payload: Mapping[str, Any], output_path: str | Path) -> Path:

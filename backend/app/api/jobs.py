@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.audio.openai_transcript_correction import TRANSCRIPT_CORRECTION_PROGRESS_FILENAME
 from app.db import get_db
 from app.ids import make_id
 from app.jobs.queue import JobEnqueue, get_enqueue_job
@@ -255,6 +256,20 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
         details["total_speech_duration"] = round(speech_duration, 6)
         if confidences:
             details["average_confidence"] = round(sum(confidences) / len(confidences), 6)
+
+    correction_progress = _read_json_if_exists(output_dir / TRANSCRIPT_CORRECTION_PROGRESS_FILENAME)
+    if isinstance(correction_progress, dict):
+        for key in (
+            "stage",
+            "stageProgress",
+            "correctionBatchesCompleted",
+            "correctionBatchesTotal",
+            "correctionRetryCount",
+            "fallbackUsed",
+            "finished",
+        ):
+            if key in correction_progress:
+                details[key] = correction_progress[key]
 
     return details
 
