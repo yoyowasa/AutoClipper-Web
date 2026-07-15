@@ -4369,3 +4369,38 @@ python .\scripts\e2e_real_video.py `
 
 - 最終長尺filterの実API replayは`7/13`成功後、`429 insufficient_quota`で停止。最終signalによる13 batch完走は未確認。
 - 実際のinput token削減率は素材依存。短尺では固定prompt/schema比率が大きく、40%削減を保証しない。
+
+## 2026-07-16 Task 62 final 58-minute API replay retry
+
+### 目的
+
+- PR #42 headで最終13 batch構成を実API再検証し、品質benchmarkとAPI失敗時の耐障害性を確認する。
+
+### 実行条件
+
+- tested commit: `c40e13b8a81f69bcca7fd5126e46845581eb2346`。
+- job: `job_3ec9083055224a9fbd1c8a4b8f904d5b`。
+- input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`。
+- transcription: `small + ja`。
+- correction model: `gpt-5.5`。
+- scope: `suspicious`、threshold: `0.40`、batch size: `100`、context segments: `2`。
+- requested outputs: normal `1`、short `2`。
+
+### 検証結果
+
+- suspicion filter: target `1287/1695`、想定batch `13`。
+- OpenAI API: successful batch `0/13`、failed batch `1`、calls `4`、retry `3`、schema failure `0`。
+- API error: `429 insufficient_quota`。actual token usageはinput/outputともに`0`。
+- fallback: `true`。deterministic transcriptへ戻り、jobは`completed`まで完走。
+- segment count: raw/deterministic/correctedすべて`1695`。
+- array order/start/end timestamp mismatch: `0`。fallback後のdeterministic/corrected text差分: `0`。
+- normal: `1/1`、`1280x720`、`348.982s`。
+- short: `2/2`、両方`1080x1920`、`51.188s` / `61.194s`。
+- render failure: `0`、sidecar risk: `0`、ZIP: `73,695,519 bytes`。
+- runtime: total `674.328s`、transcription `439.047s`、correction/fallback `20.895s`。
+
+### 結論
+
+- 耐障害性実地検証: pass。quota不足でも全件API送信へ切り替えず、出力生成まで完走した。
+- 品質benchmark: fail。`13/13`かつfallback `0`を満たさず、all-modeとのactual token比較は未実施。
+- PR #42はDraftを維持する。quota確保後に同一条件で再実行する。
