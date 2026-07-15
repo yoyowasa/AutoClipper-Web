@@ -4404,3 +4404,32 @@ python .\scripts\e2e_real_video.py `
 - 耐障害性実地検証: pass。quota不足でも全件API送信へ切り替えず、出力生成まで完走した。
 - 品質benchmark: fail。`13/13`かつfallback `0`を満たさず、all-modeとのactual token比較は未実施。
 - PR #42はDraftを維持する。quota確保後に同一条件で再実行する。
+
+## 2026-07-16 Task 62 excluded-change classification
+
+### 目的
+
+- all-mode採用変更のうち最終suspicion filterが対象外にした23件を、APIを使わず分類する。
+
+### 検証方法
+
+- baseline all-mode job: `job_0caea4d85baf4e9cbca9a84adaf0be80`。
+- filter job: `job_3ec9083055224a9fbd1c8a4b8f904d5b`。
+- deterministic/OpenAI corrected transcriptの差分273件とtarget index 1287件を集合比較し、対象外23件を抽出。
+- 元動画の該当区間を前後2秒付きで切り出し、ローカル`medium+ja`と`large-v3+ja`で再文字起こし。OpenAI APIは未使用。
+
+### 分類結果
+
+- 有益な修正の見逃し: `19`。
+- 不要な表記変更: `1`（index 110）。
+- 有害な誤修正: `1`（index 1256）。
+- 判断不能: `2`（index 64、164）。
+- 対象外変更の有益候補率: `19/23 = 82.6%`。
+- 詳細: `docs/TRANSCRIPT_SUSPICION_MISSED_CHANGES_2026-07-16.md`。
+
+### 判断
+
+- filter調整は必要。現状のままReady化しない。
+- global thresholdは下げず、異常語形、domain glossary、近接segment間の表記揺れを狙ったsignalを追加する。
+- grammarだけを根拠にAPI対象へ入れない。index 110/1256で過修正が確認された。
+- index 64/164は人手聴取が必要。
