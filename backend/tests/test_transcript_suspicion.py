@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.transcript_suspicion import (
@@ -122,3 +123,90 @@ def test_filter_failure_summary_is_explicit(tmp_path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["filter_failed"] is True
     assert payload["unique_segments_sent"] == 0
+
+
+def test_high_confidence_rescue_signal_is_selected_below_score_threshold() -> None:
+    result = analyze_transcript_suspicion([segment("安態なわけですよ", 0.99)])
+
+    rescued = result.segments[0]
+    assert rescued.score < result.threshold
+    assert rescued.suspicious is True
+    assert rescued.selection_source == "rescue_signal"
+    assert rescued.rescue_reasons == ("known_asr_malformed_expression",)
+
+
+def test_explicit_malformed_and_glossary_rescue_patterns_are_selected() -> None:
+    malformed = ("誤望抜き", "制財界", "年間領域", "進食後")
+    for text in malformed:
+        rescued = analyze_transcript_suspicion([segment(text, 0.99)], threshold=1.0).segments[0]
+        assert rescued.selection_source == "rescue_signal"
+        assert rescued.rescue_reasons == ("known_asr_malformed_expression",)
+
+    glossary = analyze_transcript_suspicion(
+        [segment("ニュースピックスの番組です", 0.99)],
+        threshold=1.0,
+    ).segments[0]
+    assert glossary.selection_source == "rescue_signal"
+    assert glossary.rescue_reasons == ("glossary_phonetic_match",)
+
+
+def test_nearby_variant_rescue_requires_glossary_anchor() -> None:
+    without_glossary = analyze_transcript_suspicion(
+        [segment("アルゴリズム", 0.99), segment("アルゴリスム", 0.99)],
+        threshold=1.0,
+    )
+    with_glossary = analyze_transcript_suspicion(
+        [segment("ジェーンストリート", 0.99), segment("ジェインストリート", 0.99)],
+        threshold=1.0,
+        glossary=["ジェーンストリート"],
+    )
+
+    assert without_glossary.target_indices == []
+    assert with_glossary.target_indices == [0, 1]
+    assert "nearby_spelling_inconsistency" in with_glossary.segments[1].rescue_reasons
+
+
+def test_rescue_summary_and_artifact_diagnostics(tmp_path) -> None:
+    result = analyze_transcript_suspicion(
+        [segment("安態なわけですよ", 0.99), segment("安全な字幕です", 0.99)]
+    )
+    write_suspicion_artifacts(result, tmp_path)
+
+    summary = json.loads(
+        (tmp_path / "transcript_suspicion_summary.json").read_text(encoding="utf-8")
+    )
+    segments = json.loads(
+        (tmp_path / "transcript_suspicion_segments.json").read_text(encoding="utf-8")
+    )
+    assert summary["rescue_selected_count"] == 1
+    assert summary["rescue_reason_counts"] == {"known_asr_malformed_expression": 1}
+    assert segments[0]["selected"] is True
+    assert segments[0]["selection_source"] == "rescue_signal"
+    assert segments[0]["rescue_reasons"] == ["known_asr_malformed_expression"]
+
+
+def test_fixed_missed_change_fixture_meets_rescue_acceptance() -> None:
+    fixture_path = Path(__file__).parent / "fixtures" / "transcript_suspicion_missed_changes.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    source = [segment(f"かな{index}", 0.99) for index in range(1695)]
+    for item in fixture:
+        source[item["original_index"]] = segment(item["text"], item["confidence"])
+    result = analyze_transcript_suspicion(source)
+    selected_original_indices = {
+        item["original_index"]
+        for item in fixture
+        if result.segments[item["original_index"]].suspicious
+    }
+    useful = {item["original_index"] for item in fixture if item["classification"] == "useful"}
+    unnecessary = {
+        item["original_index"] for item in fixture if item["classification"] == "unnecessary"
+    }
+    harmful = {item["original_index"] for item in fixture if item["classification"] == "harmful"}
+    inconclusive = {
+        item["original_index"] for item in fixture if item["classification"] == "inconclusive"
+    }
+
+    assert len(useful & selected_original_indices) >= 17
+    assert unnecessary.isdisjoint(selected_original_indices)
+    assert harmful.isdisjoint(selected_original_indices)
+    assert inconclusive.isdisjoint(selected_original_indices)

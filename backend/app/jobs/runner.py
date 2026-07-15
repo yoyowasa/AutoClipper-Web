@@ -204,6 +204,9 @@ def _transcript_correction_glossary(settings: dict[str, Any]) -> list[str]:
     replacements = settings.get("transcriptReplacements")
     if isinstance(replacements, dict):
         terms.extend(str(value).strip() for value in replacements.values())
+    custom_glossary = settings.get("transcriptCorrectionGlossary")
+    if isinstance(custom_glossary, list):
+        terms.extend(str(term).strip() for term in custom_glossary)
     return list(dict.fromkeys(term for term in terms if term))
 
 

@@ -498,6 +498,8 @@ subtitle_correction_targets.json
 
 `subtitleCorrectionScope=all` remains the compatibility default and sends every segment. Set it to `suspicious` to score segments locally and send only target indices plus a bounded read-only context set. Non-target segments cannot be changed. If no target is found, the correction uses zero API calls. If the local filter fails, correction is skipped and the deterministic transcript is retained; the worker never silently switches to all-segment correction.
 
+Suspicious selection keeps the configured score threshold and can also use narrowly targeted rescue signals for known malformed ASR expressions, glossary aliases, and nearby glossary-anchored spelling variants. Rescue signals only add OpenAI correction targets; they never replace transcript text locally. Supply additional canonical terms through the API-only `transcriptCorrectionGlossary` string array. Suspicion artifacts record `selected`, `selection_source`, and `rescue_reasons`; the summary records score-selected and rescue-selected counts separately.
+
 When `subtitleCorrectionFallbackEnabled=true`, transient API or schema failures use the complete deterministic transcript and record `fallback_used=true`; partial OpenAI corrections are discarded. Disable fallback only when the job must fail with `openai_subtitle_correction_failed`. Missing `OPENAI_API_KEY` fails early with `openai_configuration_missing`.
 
 While correction is running, `GET /api/jobs/{job_id}` returns `status=correcting_subtitles`. Progress details contain only counters and never subtitle text or credentials:
@@ -686,6 +688,7 @@ Troubleshooting:
     "transcriptionLanguage": "auto",
     "subtitleCorrectionMode": "off",
     "subtitleCorrectionScope": "all",
+    "transcriptCorrectionGlossary": [],
     "subtitleCorrectionSuspicionThreshold": 0.4,
     "subtitleCorrectionModel": "gpt-5.5",
     "subtitleCorrectionMinConfidence": 0.9,
@@ -733,6 +736,7 @@ Production-safe defaults remain:
 - `transcriptionLanguage`: `auto`
 - `subtitleCorrectionMode`: `off`
 - `subtitleCorrectionScope`: `all`
+- `transcriptCorrectionGlossary`: `[]`
 - `subtitleCorrectionSuspicionThreshold`: `0.4`
 - `subtitleCorrectionModel`: `gpt-5.5`
 - `subtitleCorrectionMinConfidence`: `0.9`
@@ -784,7 +788,7 @@ Summary files:
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
 - `transcript_postprocess_summary.json`: transcript post-processing enablement, changed segment count, before/after character counts, replacement counts, and dictionary settings when transcription reached post-processing.
 - `transcript_correction_summary.json`: correction mode, scope, model, target/context counts, corrected/unchanged/low-confidence segment counts, fallback status, API calls, actual token usage, schema failures, processing time, and timestamp/count preservation flags.
-- `transcript_suspicion_summary.json`: local filter threshold, suspicious ratio, target/context counts, unique segments sent, reason counts, and explicit filter failure state.
+- `transcript_suspicion_summary.json`: local filter threshold, suspicious ratio, target/context counts, unique segments sent, score/rescue selection counts, rescue reason counts, and explicit filter failure state.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
 - `openai_scoring_summary.json`: model, initial candidate limit, finalist scoring limit, eligible/selected/sent counts, preselection/finalist counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, selected clip score source counts, and not-scored reasons.

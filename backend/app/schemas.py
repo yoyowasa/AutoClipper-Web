@@ -119,6 +119,11 @@ class JobSettings(BaseModel):
     transcription_language: TranscriptionLanguage = Field(default="auto", alias="transcriptionLanguage")
     subtitle_correction_mode: SubtitleCorrectionMode = Field(default="off", alias="subtitleCorrectionMode")
     subtitle_correction_scope: SubtitleCorrectionScope = Field(default="all", alias="subtitleCorrectionScope")
+    transcript_correction_glossary: list[str] = Field(
+        default_factory=list,
+        max_length=200,
+        alias="transcriptCorrectionGlossary",
+    )
     subtitle_correction_suspicion_threshold: float = Field(
         default=0.40,
         ge=0,

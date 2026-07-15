@@ -59,6 +59,7 @@ export type ClipSettings = {
   transcriptionLanguage: "auto" | "ja";
   subtitleCorrectionMode: "off" | "openai";
   subtitleCorrectionScope: "all" | "suspicious";
+  transcriptCorrectionGlossary?: string[];
   subtitleCorrectionSuspicionThreshold: number;
   subtitleCorrectionModel: string;
   subtitleCorrectionMinConfidence: number;

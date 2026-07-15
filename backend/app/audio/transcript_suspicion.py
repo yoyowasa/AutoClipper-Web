@@ -23,6 +23,35 @@ _JAPANESE_NUMERIC_BRIDGE_RE = re.compile(r"[一-龯ぁ-んァ-ヶー]\d{1,3}[一
 _REPEATED_FRAGMENT_RE = re.compile(r"(.{2,8}?)(?:\1){2,}")
 _LIST_SEPARATOR_RE = re.compile(r"[、,]")
 _CJK_COMPOUND_RE = re.compile(r"[一-龯]{2,8}")
+_NEARBY_VARIANT_WINDOW = 8
+_KNOWN_MALFORMED_RESCUE_PATTERNS = (
+    re.compile(r"誤望抜き"),
+    re.compile(r"制財界"),
+    re.compile(r"年間領域"),
+    re.compile(r"進食後"),
+    re.compile(r"しなきゃらない"),
+    re.compile(r"安態"),
+    re.compile(r"遅いかか"),
+    re.compile(r"ぶっかだか"),
+    re.compile(r"\d+(?:円|ドル|ユーロ)(?:で|を)?買えない"),
+    re.compile(r"変わるザロンを得ない"),
+    re.compile(r"高熱株"),
+    re.compile(r"どかの(?:大学|会社|場所|人)"),
+    re.compile(r"テレビ国"),
+    re.compile(r"追いつかないだろうかな"),
+    re.compile(r"通すること"),
+)
+_KNOWN_GLOSSARY_RESCUE_ALIASES: dict[str, str] = {
+    "ジェインストリート": "ジェーンストリート",
+    "ニュースピックス": "NewsPicks",
+    "ファストAPI": "FastAPI",
+    "ボカ": "簿価",
+    "ソンさん": "孫さん",
+    "ナイデッグ": "ニデック",
+    "コンセンサー": "コンセンサス",
+    "氷関係": "小売関係",
+    "ナブ": "NAV",
+}
 
 
 @dataclass(frozen=True)
@@ -34,7 +63,9 @@ class SegmentSuspicion:
     confidence: float | None
     score: float
     reasons: tuple[str, ...]
+    rescue_reasons: tuple[str, ...]
     suspicious: bool
+    selection_source: str
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -45,7 +76,10 @@ class SegmentSuspicion:
             "confidence": self.confidence,
             "suspicion_score": self.score,
             "suspicion_reasons": list(self.reasons),
+            "rescue_reasons": list(self.rescue_reasons),
             "suspicious": self.suspicious,
+            "selected": self.suspicious,
+            "selection_source": self.selection_source,
         }
 
 
@@ -73,6 +107,10 @@ class TranscriptSuspicionResult:
             if segment.suspicious
             for reason in segment.reasons
         )
+        rescued = [segment for segment in self.segments if segment.selection_source == "rescue_signal"]
+        rescue_reason_counts: Counter[str] = Counter(
+            reason for segment in rescued for reason in segment.rescue_reasons
+        )
         return {
             "segment_count": len(self.segments),
             "suspicious_segment_count": len(targets),
@@ -83,6 +121,11 @@ class TranscriptSuspicionResult:
             "batch_size": self.batch_size,
             "estimated_api_calls": (len(targets) + self.batch_size - 1) // self.batch_size,
             "reason_counts": dict(sorted(reason_counts.items())),
+            "score_threshold_selected_count": sum(
+                segment.selection_source == "score_threshold" for segment in self.segments
+            ),
+            "rescue_selected_count": len(rescued),
+            "rescue_reason_counts": dict(sorted(rescue_reason_counts.items())),
             "filter_failed": False,
         }
 
@@ -160,6 +203,58 @@ def _variant_indices(tokens_by_index: Mapping[int, set[str]]) -> set[int]:
     return indices
 
 
+def _nearby_variant_indices(
+    tokens_by_index: Mapping[int, set[str]],
+    glossary: Sequence[str],
+) -> set[int]:
+    anchor_terms = [
+        *glossary,
+        *_KNOWN_GLOSSARY_RESCUE_ALIASES,
+        *_KNOWN_GLOSSARY_RESCUE_ALIASES.values(),
+    ]
+    anchor_tokens = {
+        _normalized_token(token)
+        for term in anchor_terms
+        for token in _entity_tokens(term)
+        if _normalized_token(token)
+    }
+    if not anchor_tokens:
+        return set()
+
+    indices: set[int] = set()
+    ordered_indices = sorted(tokens_by_index)
+    for left_position, left_index in enumerate(ordered_indices):
+        left_tokens = tokens_by_index[left_index]
+        if not left_tokens:
+            continue
+        for right_index in ordered_indices[left_position + 1 :]:
+            if right_index - left_index > _NEARBY_VARIANT_WINDOW:
+                break
+            for left_token in left_tokens:
+                normalized_left = _normalized_token(left_token)
+                for right_token in tokens_by_index[right_index]:
+                    normalized_right = _normalized_token(right_token)
+                    if (
+                        min(len(normalized_left), len(normalized_right)) < 4
+                        or abs(len(normalized_left) - len(normalized_right)) > 2
+                        or normalized_left == normalized_right
+                        or not ({normalized_left, normalized_right} & anchor_tokens)
+                    ):
+                        continue
+                    ratio = SequenceMatcher(None, normalized_left, normalized_right).ratio()
+                    if 0.65 <= ratio < 0.98:
+                        indices.update((left_index, right_index))
+    return indices
+
+
+def _has_known_malformed_expression(text: str) -> bool:
+    return any(pattern.search(text) for pattern in _KNOWN_MALFORMED_RESCUE_PATTERNS)
+
+
+def _has_known_glossary_alias(text: str) -> bool:
+    return any(alias in text for alias in _KNOWN_GLOSSARY_RESCUE_ALIASES)
+
+
 def _glossary_near_match(text: str, glossary: Sequence[str]) -> bool:
     text_tokens = {_normalized_token(token) for token in _entity_tokens(text)}
     glossary_tokens = {_normalized_token(term) for term in glossary if term.strip()}
@@ -194,6 +289,7 @@ def analyze_transcript_suspicion(
         if _normalized_token(token)
     )
     inconsistent_indices = _variant_indices(tokens_by_index)
+    nearby_inconsistent_indices = _nearby_variant_indices(tokens_by_index, glossary)
     replacement_sources = tuple(source for source in (replacements or {}) if source)
     list_like_indices = {
         index for index, segment in enumerate(segments) if len(_LIST_SEPARATOR_RE.findall(segment.text)) >= 3
@@ -211,15 +307,24 @@ def analyze_transcript_suspicion(
 
     for index, segment in enumerate(segments):
         signals: dict[str, float] = {}
+        rescue_reasons: set[str] = set()
         confidence_score, confidence_reason = _confidence_signal(segment.confidence)
         if confidence_reason is not None:
             signals[confidence_reason] = confidence_score
         if any(source in segment.text for source in replacement_sources):
             signals["dictionary_source_match"] = 0.90
-        if _glossary_near_match(segment.text, glossary):
+        glossary_near_match = _glossary_near_match(segment.text, glossary)
+        if glossary_near_match:
             signals["glossary_near_match"] = 0.65
+            rescue_reasons.add("glossary_phonetic_match")
+        if _has_known_glossary_alias(segment.text):
+            rescue_reasons.add("glossary_phonetic_match")
         if index in inconsistent_indices:
             signals["inconsistent_spelling"] = 0.45
+        if index in nearby_inconsistent_indices:
+            rescue_reasons.add("nearby_spelling_inconsistency")
+        if _has_known_malformed_expression(segment.text):
+            rescue_reasons.add("known_asr_malformed_expression")
         if tokens_by_index[index]:
             signals["entity_candidate"] = 0.15
         if any(token_counts[_normalized_token(token)] >= 2 for token in tokens_by_index[index]):
@@ -246,6 +351,14 @@ def analyze_transcript_suspicion(
             signals["opening_context"] = 0.35
 
         score = round(min(1.0, sum(signals.values())), 6)
+        score_selected = score >= bounded_threshold
+        rescued = bool(rescue_reasons) and not score_selected
+        if score_selected:
+            selection_source = "score_threshold"
+        elif rescued:
+            selection_source = "rescue_signal"
+        else:
+            selection_source = "not_selected"
         scored.append(
             SegmentSuspicion(
                 index=index,
@@ -255,7 +368,9 @@ def analyze_transcript_suspicion(
                 confidence=segment.confidence,
                 score=score,
                 reasons=tuple(sorted(signals)),
-                suspicious=score >= bounded_threshold,
+                rescue_reasons=tuple(sorted(rescue_reasons)),
+                suspicious=score_selected or rescued,
+                selection_source=selection_source,
             )
         )
 
@@ -328,6 +443,9 @@ def write_suspicion_failure_summary(
                 "unique_segments_sent": 0,
                 "threshold": threshold,
                 "reason_counts": {},
+                "score_threshold_selected_count": 0,
+                "rescue_selected_count": 0,
+                "rescue_reason_counts": {},
                 "filter_failed": True,
                 "error": f"{type(exc).__name__}: {exc}",
             },

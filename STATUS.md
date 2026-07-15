@@ -4433,3 +4433,40 @@ python .\scripts\e2e_real_video.py `
 - global thresholdは下げず、異常語形、domain glossary、近接segment間の表記揺れを狙ったsignalを追加する。
 - grammarだけを根拠にAPI対象へ入れない。index 110/1256で過修正が確認された。
 - index 64/164は人手聴取が必要。
+
+## 2026-07-16 Task 62 P2 targeted rescue signals
+
+### 目的
+
+- global threshold `0.40`を維持し、強い限定signalだけで有益な見逃しをOpenAI対象へ復帰させる。
+
+### 変更内容
+
+- `suspicion_score >= threshold OR rescue_signal`の選定を追加。
+- rescue理由: `known_asr_malformed_expression`、`glossary_phonetic_match`、`nearby_spelling_inconsistency`。
+- nearby表記揺れは既知aliasまたは設定glossaryに紐づく場合だけ対象化。
+- segment artifactへ`selected`、`selection_source`、`rescue_reasons`を追加。
+- summaryへscore/rescue選定数とrescue理由別件数を追加。
+- API設定`transcriptCorrectionGlossary`を追加。既定は空配列で、UIには未露出。
+- 固定23件fixtureとrescue回帰testを追加。
+
+### Offline検証
+
+- 固定23件: 有益な見逃し`17/19`を救済。
+- 不要変更`0/1`、有害修正`0/1`、判断不能`0/2`を対象外維持。
+- 全1695 segments: target `1287 -> 1304`、対象率`75.929% -> 76.932%`。
+- expected calls（batch 100）: `13 -> 14`、all-modeは`17`。
+- baseline採用変更coverage: `250/273 = 91.6%` -> `267/273 = 97.8%`。
+- target+context文字数proxy: `14,407 -> 14,597`。all-mode `17,726`比で約`17.7%`削減を維持。
+- rescue selected: `17`。理由件数はmalformed `11`、glossary `6`、nearby inconsistency `1`（重複あり）。
+- 詳細: `docs/TRANSCRIPT_SUSPICION_RESCUE_EVALUATION_2026-07-16.md`。
+
+### 現在判定
+
+- P2 offline acceptance: pass。
+- global threshold `0.40`、scope既定`all`、correction既定`off`は維持。
+- backend: `ruff check .` pass、`pytest`は`287 passed, 1 skipped`。
+- frontend: lint / typecheck / build pass。
+- Docker rebuild / runtime smoke: pass。backend / frontend / worker / redis起動、共有DB/storage、FFmpeg / ffprobeを確認。
+- correction OFF sample E2E: pass。job `job_139866cabc1e4603a407546764a616d8`、short `1/1`、`1080x1920`、render failure `0`、API call `0`、sidecar risk `0`。
+- PR #42はDraft維持。rescue追加後はexpected callが`14`のため、quota確保後の実API `14/14`、fallback `0`再検証が残る。
