@@ -74,6 +74,46 @@ Reason counts can overlap on one selected segment. Exactly `17` new targets were
 - Global threshold: keep `0.40`.
 - Default correction scope: keep `all` for compatibility.
 - Correction mode: keep `off` by default.
-- PR readiness: still blocked by the final real-API `14/14`, fallback `0` replay.
+- PR readiness: pass after the final real-API replay.
 
-Actual token savings remain unverified because the latest real-API retry returned `429 insufficient_quota` before the first batch completed.
+## Final real-API validation
+
+Tested code commit: `aa67fd43e136b276925983c8a32065c34a2e3d01`.
+
+Input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`.
+
+Configuration:
+
+- transcription: `small + ja`;
+- correction model: `gpt-5.5`;
+- batch size: `100`;
+- context segments: `2`;
+- minimum confidence: `0.9`;
+- suspicion threshold: `0.40`.
+
+P2 E2E job: `job_ea301023a3cd431f8a5700ea4f4e4ca1`.
+
+| Metric | All mode | Suspicious P2 | Reduction |
+| --- | ---: | ---: | ---: |
+| API calls | `17` | `14` | `17.647%` |
+| Input tokens | `67,053` | `52,247` | `22.081%` |
+| Output tokens | `134,638` | `100,698` | `25.208%` |
+| Total tokens | `201,691` | `152,945` | `24.169%` |
+| Correction time | `1469.749s` | `1087.679s` | `25.996%` |
+
+P2 acceptance results:
+
+- successful batches: `14/14`;
+- retries: `0`;
+- failed batches: `0`;
+- schema validation failures: `0`;
+- fallback: `false`;
+- deterministic/corrected/final segment counts: `1695/1695/1695`;
+- order or timestamp mismatches: `0`;
+- normal outputs: `1/1`, `1280x720`;
+- short outputs: `2/2`, both `1080x1920`;
+- render failures: `0`;
+- subtitle sidecar autoload risk: `0`;
+- ZIP: `73,335,336 bytes`.
+
+The all-mode token baseline used the same deterministic transcript and correction settings through the same correction implementation. It skipped transcription, candidate generation, and rendering because those stages do not affect subtitle-correction token usage.

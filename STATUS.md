@@ -4498,3 +4498,62 @@ python .\scripts\e2e_real_video.py `
 - API疎通: fail。key欠落やnetwork failureではなく、API billing/quota不足。
 - PR #42はDraft維持。
 - quota復旧後、同じ1 batch probeを再実行し、成功時のみ58分`14/14`へ進む。
+
+## 2026-07-17 Task 62 P2 final real-API validation
+
+### 目的
+
+- quota復旧後、P2最終構成で58分real API replayを完走し、all-modeとの実token差を確定する。
+
+### 実行条件
+
+- tested code commit: `aa67fd43e136b276925983c8a32065c34a2e3d01`。
+- input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`。
+- transcription: `small + ja`。
+- correction: `gpt-5.5`、batch `100`、context `2`、min confidence `0.9`。
+- P2: scope `suspicious`、threshold `0.40`。
+- P2 job: `job_ea301023a3cd431f8a5700ea4f4e4ca1`。
+
+### 疎通確認
+
+- rescue対象index `157`を1件送信。
+- API call `1`、successful batch `1/1`、schema failure `0`。
+- input/output tokens: `408/68`、processing `4.275s`。
+
+### P2 E2E結果
+
+- targets: `1304/1695`、context `55`、unique sent `1357`。
+- API calls / successful batches: `14/14`。
+- retry `0`、failed batch `0`、schema failure `0`、fallback `false`。
+- input/output/total tokens: `52,247 / 100,698 / 152,945`。
+- correction time: `1087.679s`。
+- corrected `268`、low-confidence reject `94`、safety reject `4`。
+- deterministic/corrected/final segment counts: `1695/1695/1695`。
+- order/start/end timestamp mismatch: `0`。final transcriptはcorrected transcriptと一致。
+- normal: `1/1`、`1280x720`、`348.982s`。
+- short: `2/2`、両方`1080x1920`、`49.883s` / `61.194s`。
+- render failure: `0`、sidecar risk: `0`、ZIP: `73,335,336 bytes`。
+- total E2E runtime: `1745.609s`。
+
+### All-mode実token baseline
+
+- 同じdeterministic transcript `1695` segmentsと同じ校正設定を使用。
+- API calls / successful batches: `17/17`。
+- retry `0`、failed batch `0`、schema failure `0`。
+- input/output/total tokens: `67,053 / 134,638 / 201,691`。
+- correction time: `1469.749s`。
+- baselineはtoken比較専用。transcription、candidate generation、renderはP2 E2Eで別途検証済みのため省略。
+
+### 実測削減
+
+- API calls: `17 -> 14`、`17.647%`削減。
+- input tokens: `67,053 -> 52,247`、`22.081%`削減。
+- output tokens: `134,638 -> 100,698`、`25.208%`削減。
+- total tokens: `201,691 -> 152,945`、`48,746 tokens / 24.169%`削減。
+- correction time: `1469.749s -> 1087.679s`、`382.071s / 25.996%`削減。
+
+### 判定
+
+- Task62 final real-API acceptance: pass。
+- `14/14`、fallback `0`、schema failure `0`、segment/timestamp維持、render、ZIP、sidecar risk `0`を確認。
+- PR #42をReady化し、CI通過後にmerge可能。
