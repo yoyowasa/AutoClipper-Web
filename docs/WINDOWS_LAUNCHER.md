@@ -1,6 +1,6 @@
 # AutoClipper Windows Launcher
 
-The Task57 launcher is a Windows GUI wrapper around the existing Docker Compose runtime.
+The Windows launcher is a GUI wrapper around the existing Docker Compose runtime.
 It does not replace the Next.js frontend, FastAPI backend, RQ worker, Redis, or FFmpeg pipeline.
 
 ## Requirements
@@ -9,7 +9,7 @@ It does not replace the Next.js frontend, FastAPI backend, RQ worker, Redis, or 
 - Docker Desktop with Docker Compose
 - Python 3.11 or later for the launcher MVP
 
-Task58 may package the launcher so a separate Python installation is not required.
+Future packaging work may bundle the launcher so a separate Python installation is not required.
 
 ## Start
 
@@ -48,8 +48,10 @@ docker compose up -d --build
 
 ## High-quality Mode
 
-The launcher only shows whether `OPENAI_API_KEY` is configured. It never displays or logs the key value.
-When the key is missing, low-cost mode remains available. Configure the key in `.env` before using OpenAI-backed high-quality scoring.
+The launcher only shows whether `OPENAI_API_KEY` is configured. It checks `.env`
+and the launcher process environment, but never displays or logs the key value.
+When the key is missing, low-cost mode remains available. Configure the key in
+`.env` or the process environment before using OpenAI-backed features.
 
 ## Errors
 

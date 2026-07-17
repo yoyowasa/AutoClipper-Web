@@ -40,7 +40,7 @@ Start AutoClipper.cmd
 
 The launcher checks Docker, ports, disk space, `.env`, and service health; starts the four services; waits for the app; and opens `/upload`. It can also show logs and open the uploads/outputs folders. Normal stop uses `docker compose stop` and preserves SQLite, Redis data, uploads, and outputs.
 
-Task57 is a launcher MVP and requires Python 3.11+. Docker Desktop remains required. See `docs/WINDOWS_LAUNCHER.md` for controls and troubleshooting.
+The launcher MVP requires Python 3.11+. Docker Desktop remains required. See `docs/WINDOWS_LAUNCHER.md` for controls and troubleshooting.
 
 ## Docker Compose Runtime
 

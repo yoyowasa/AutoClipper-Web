@@ -237,9 +237,15 @@ class LauncherController:
             self._docker_executable = self.docker_finder()
         return self._docker_executable
 
+    def _configured_openai_keys(self) -> tuple[str, ...]:
+        values = (
+            _parse_env_value(self.env_file, "OPENAI_API_KEY"),
+            os.environ.get("OPENAI_API_KEY"),
+        )
+        return tuple(dict.fromkeys(value for value in values if value))
+
     def _sensitive_values(self) -> tuple[str, ...]:
-        value = _parse_env_value(self.env_file, "OPENAI_API_KEY")
-        return (value,) if value else ()
+        return self._configured_openai_keys()
 
     def redact(self, text: str) -> str:
         redacted = text
@@ -314,7 +320,7 @@ class LauncherController:
             warnings.append(
                 ".envがありません。low_costは利用できますが、環境設定を確認してください。"
             )
-        openai_key_configured = bool(_parse_env_value(self.env_file, "OPENAI_API_KEY"))
+        openai_key_configured = bool(self._configured_openai_keys())
         if not openai_key_configured:
             warnings.append(
                 "OPENAI_API_KEY未設定: high_qualityはrule score fallbackまたは設定エラーになります。"
@@ -329,10 +335,24 @@ class LauncherController:
             if daemon_ready and compose_available and compose_file_exists
             else RuntimeStatus()
         )
-        if self.port_checker(8000) and not status.backend_ready:
+        backend_state = status.services.get("backend")
+        frontend_state = status.services.get("frontend")
+        if (
+            self.port_checker(8000)
+            and not status.backend_ready
+            and not (backend_state and backend_state.running)
+        ):
             errors.append("port 8000がAutoClipper以外のprocessに使用されています。")
-        if self.port_checker(3000) and not status.frontend_ready:
+        elif backend_state and backend_state.running and not status.backend_ready:
+            warnings.append("backend serviceは起動中ですが、healthはまだreadyではありません。")
+        if (
+            self.port_checker(3000)
+            and not status.frontend_ready
+            and not (frontend_state and frontend_state.running)
+        ):
             errors.append("port 3000がAutoClipper以外のprocessに使用されています。")
+        elif frontend_state and frontend_state.running and not status.frontend_ready:
+            warnings.append("frontend serviceは起動中ですが、画面はまだreadyではありません。")
         redis_state = status.services.get("redis")
         if self.port_checker(6379) and not (redis_state and redis_state.running):
             errors.append("port 6379がAutoClipper以外のprocessに使用されています。")

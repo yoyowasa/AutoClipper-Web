@@ -127,6 +127,20 @@ def test_preflight_reports_missing_openai_key_without_exposing_a_value(tmp_path:
     assert all("sk-" not in warning for warning in report.warnings)
 
 
+def test_preflight_accepts_and_redacts_openai_key_from_process_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-secret")
+    controller = make_controller(
+        make_project(tmp_path, env_text="OPENAI_API_KEY=\n"), FakeRunner()
+    )
+
+    report = controller.preflight()
+
+    assert report.openai_key_configured is True
+    assert controller.redact("key=environment-secret") == "key=[REDACTED]"
+
+
 def test_preflight_detects_port_conflict(tmp_path: Path) -> None:
     controller = make_controller(make_project(tmp_path), FakeRunner(), ports={8000, 6379})
 
@@ -135,6 +149,26 @@ def test_preflight_detects_port_conflict(tmp_path: Path) -> None:
     assert report.ok is False
     assert any("port 8000" in error for error in report.errors)
     assert any("port 6379" in error for error in report.errors)
+
+
+def test_preflight_allows_autoclipper_service_ports_while_health_is_starting(
+    tmp_path: Path,
+) -> None:
+    runner = FakeRunner(ps_output=compose_ps())
+    controller = make_controller(
+        make_project(tmp_path),
+        runner,
+        ports={3000, 8000, 6379},
+        ready=False,
+    )
+
+    report = controller.preflight()
+
+    assert report.ok is True
+    assert not any("port 3000" in error for error in report.errors)
+    assert not any("port 8000" in error for error in report.errors)
+    assert any("backend serviceは起動中" in warning for warning in report.warnings)
+    assert any("frontend serviceは起動中" in warning for warning in report.warnings)
 
 
 def test_start_uses_project_path_with_spaces_and_waits_for_health(tmp_path: Path) -> None:
@@ -261,7 +295,8 @@ def test_windows_entrypoint_quotes_project_path_and_does_not_reset_data() -> Non
     entrypoint = (ROOT / "Start AutoClipper.cmd").read_text(encoding="utf-8")
 
     assert 'cd /d "%~dp0"' in entrypoint
-    assert "py -3 -m launcher" in entrypoint
+    assert "py -3.11 -m launcher" in entrypoint
+    assert "sys.version_info >= (3,11)" in entrypoint
     assert "docker compose down" not in entrypoint
     assert "down -v" not in entrypoint
 
