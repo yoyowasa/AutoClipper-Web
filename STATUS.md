@@ -4557,3 +4557,52 @@ python .\scripts\e2e_real_video.py `
 - Task62 final real-API acceptance: pass。
 - `14/14`、fallback `0`、schema failure `0`、segment/timestamp維持、render、ZIP、sidecar risk `0`を確認。
 - PR #42をReady化し、CI通過後にmerge可能。
+
+## 2026-07-18 Task 63 Windows launcher MVP refresh
+
+### 目的
+
+- 未mergeのTask57 Windows launcherを現行mainへ更新し、Docker版AutoClipperをコマンド入力なしで起動・確認・停止できる状態にする。
+- frontend/backend/worker/pipelineは変更せず、既存Docker Compose runtimeを操作する薄いWindows GUIとして仕上げる。
+
+### 対象
+
+- `Start AutoClipper.cmd`
+- `.github/workflows/ci.yml`
+- `launcher/`
+- `backend/tests/test_windows_launcher.py`
+- `docs/WINDOWS_LAUNCHER.md`
+- `README.md`
+
+### 変更内容
+
+- Python/Tkinter launcherへStart、Rebuild and Start、Open App、Stop、Refresh、logs、uploads/outputs folder操作を追加。
+- Docker CLI/daemon/Compose、compose file、port、disk、service health、OpenAI key設定有無をpreflightで確認。
+- Stopは`docker compose stop`のみを使い、SQLite、Redis volume、uploads、outputsを削除しない。
+- project pathに空白がある場合も、明示cwdとargument listでDocker commandを実行。
+- launcher log欄へ`Yu Gothic UI`を指定し、日本語文字化けを回避。
+- 起動途中のAutoClipper serviceが使用するportを外部process競合と誤判定しないよう修正。
+- `OPENAI_API_KEY`を`.env`とprocess environmentの両方から検出し、command outputとlauncher logで値をredact。
+- `Start AutoClipper.cmd`でPython 3.11以上を明示確認。
+
+### 検証結果
+
+- tested main: `77d7426`。
+- launcher/backend ruff: pass。
+- launcher unit tests: `19 passed`。
+- backend pytest: `306 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Tkinter GUI startup smoke: pass。
+- launcher controllerによる`Stop -> Start`: pass。
+- backend `/health`: HTTP `200`、`status=ok`。
+- frontend `/upload`: HTTP `200`。
+- runtime smoke: pass。backend/frontend/worker/redis、共有DB/storage、FFmpeg/ffprobeを確認。
+- DB size: `524288 -> 524288 bytes`、output job count: `121 -> 121`。停止・再起動後も保持。
+- sample E2E: pass。job `job_f70c3bd81894446b9dd748f7512af567`、short `1/1`、`1080x1920`、render failure `0`。
+- sidecar risk: `0`。
+
+### 未解決事項
+
+- launcher MVPはWindows、Docker Desktop、Python 3.11以上が必要。
+- installer、Python同梱、auto update、Docker Desktop自動導入は未実装。
+- clean Windows環境での配布確認はpackaging taskとして別途実施する。
