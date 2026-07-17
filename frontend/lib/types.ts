@@ -4,6 +4,7 @@ export type JobStatus =
   | "probing"
   | "extracting_audio"
   | "transcribing"
+  | "correcting_subtitles"
   | "detecting_scenes"
   | "generating_candidates"
   | "scoring_candidates"
@@ -54,6 +55,17 @@ export type ClipSettings = {
   transcriptNormalizePunctuation?: boolean;
   useDefaultTranscriptDictionary?: boolean;
   transcriptReplacements?: Record<string, string>;
+  whisperModelSize: "base" | "small" | "medium" | "large-v3";
+  transcriptionLanguage: "auto" | "ja";
+  subtitleCorrectionMode: "off" | "openai";
+  subtitleCorrectionScope: "all" | "suspicious";
+  transcriptCorrectionGlossary?: string[];
+  subtitleCorrectionSuspicionThreshold: number;
+  subtitleCorrectionModel: string;
+  subtitleCorrectionMinConfidence: number;
+  subtitleCorrectionBatchSize: number;
+  subtitleCorrectionContextSegments: number;
+  subtitleCorrectionFallbackEnabled: boolean;
 };
 
 export type VideoUploadResponse = {

@@ -167,6 +167,49 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["openaiFinalistScoringLimit"] == 20
 
 
+def test_job_status_exposes_subtitle_correction_progress_artifact(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post("/api/jobs", json={"videoId": upload["videoId"], "settings": {}}).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(created["jobId"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "subtitle_correction_progress.json").write_text(
+        json.dumps(
+            {
+                "stage": "correcting_subtitles",
+                "stageProgress": 47,
+                "correctionBatchesCompleted": 8,
+                "correctionBatchesTotal": 17,
+                "correctionRetryCount": 1,
+                "fallbackUsed": False,
+                "finished": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        job.status = "correcting_subtitles"
+        job.progress = 34
+        job.current_step = "Correcting subtitles (8/17 batches)"
+        db.commit()
+
+    response = client.get(f"/api/jobs/{created['jobId']}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "correcting_subtitles"
+    assert payload["progress"] == 34
+    assert payload["details"]["stageProgress"] == 47
+    assert payload["details"]["correctionBatchesCompleted"] == 8
+    assert payload["details"]["correctionBatchesTotal"] == 17
+    assert payload["details"]["correctionRetryCount"] == 1
+
+
 def test_create_job_persists_advanced_duration_settings(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",
@@ -324,6 +367,17 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["openaiCandidateLimit"]["default"] == 40
     assert properties["openaiModel"]["default"] == "gpt-5.5"
     assert properties["openaiFallbackToRuleScore"]["default"] is True
+    assert properties["whisperModelSize"]["default"] == "base"
+    assert properties["transcriptionLanguage"]["default"] == "auto"
+    assert properties["subtitleCorrectionMode"]["default"] == "off"
+    assert properties["subtitleCorrectionScope"]["default"] == "all"
+    assert properties["transcriptCorrectionGlossary"]["type"] == "array"
+    assert properties["subtitleCorrectionSuspicionThreshold"]["default"] == 0.4
+    assert properties["subtitleCorrectionModel"]["default"] == "gpt-5.5"
+    assert properties["subtitleCorrectionMinConfidence"]["default"] == 0.9
+    assert properties["subtitleCorrectionBatchSize"]["default"] == 40
+    assert properties["subtitleCorrectionContextSegments"]["default"] == 2
+    assert properties["subtitleCorrectionFallbackEnabled"]["default"] is True
     assert "ensureSelectedOpenAIScored" in properties
     assert "openaiFinalistScoringLimit" in properties
     assert "subtitleFontName" in properties
@@ -332,6 +386,23 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert "shortSubtitleLowerMargin" in properties
     assert "normalSubtitleFontSize" in properties
     assert "normalSubtitleLowerMargin" in properties
+
+
+def test_job_creation_rejects_unsupported_transcription_profile(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"whisperModelSize": "tiny", "transcriptionLanguage": "en"},
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_stale_running_job_is_marked_failed_on_status_poll(client: TestClient) -> None:

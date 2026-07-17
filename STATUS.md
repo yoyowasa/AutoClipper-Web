@@ -6,9 +6,6 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 
 ## 現在状態
 
-- stable release `v1.1.0` 公開済み。
-- Task 56 representative normal warning regeneration check 完了、PR #36 merge済み。
-- Task 57 Windows launcher MVP を実装・検証済み。Draft PR #37、CI pass。
 - Task 01 Repository scaffold の実装完了。
 - Git repository 初期化と GitHub remote 接続完了。
 - GitHub Actions backend ruff F401 修正完了。
@@ -82,7 +79,6 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 ## 未解決事項
 
 - `npm audit --omit=dev` は Next.js 最新 `16.2.9` 内包 PostCSS 由来の moderate 警告あり。現時点で通常更新では解消不可。
-- `scripts/smoke_runtime.py` に既存F541が1件あり、`ruff check scripts`は未通過。launcherとは分離してmaintenance PRで対応する。
 
 ## 更新ルール
 
@@ -4093,85 +4089,471 @@ python .\scripts\e2e_real_video.py `
 - `end_to_final_transcript_segment_end` の実発火は今回の代表再生成では確認されていない。
 - `subtitle_too_dense` と short `likely_abrupt_start` は Task56 の対象外。必要なら別Task。
 
-## 2026-07-10 Task 57 Windows launcher MVP
+## 2026-07-10 Task 58 subtitle font selector
 
 ### 目的
 
-- 既存のDocker版AutoClipperを、Windows上でコマンド入力なしに起動・確認・停止できるようにする。
-- frontend/backend/worker/pipelineは作り直さず、Docker Compose runtimeを操作する薄いlauncherとして実装する。
+- Upload UIの字幕font自由入力を、workerで利用確認済みの日本語font選択へ変更する。
+- 存在しないfont名や日本語glyphを持たないfontを誤指定する経路をなくす。
 
 ### 対象
 
-- `Start AutoClipper.cmd`
-- `.github/workflows/ci.yml`
-- `launcher/`
-- `backend/tests/test_windows_launcher.py`
-- `docs/WINDOWS_LAUNCHER.md`
+- `frontend/components/SettingsPanel.tsx`
 - `README.md`
 - `STATUS.md`
 
 ### 変更内容
 
-- Python/TkinterのWindows launcher GUIを追加。
-- Docker制御をGUIから分離した`LauncherController`を追加。
-- preflight:
-  - Docker CLI / daemon / Compose / compose file
-  - `.env`とOpenAI key設定有無
-  - port `3000` / `6379` / `8000`競合
-  - disk free space
-- Startは`docker compose up -d`、Rebuildは`docker compose up -d --build`として分離。
-- backend `/health`、frontend `/upload`、worker、Redisがreadyになるまで待機してからWeb UIを開く。
-- 起動済みruntimeの二重起動を防止。
-- outputs/uploads folder、Docker logs、launcher logをGUIから開けるようにした。
-- Stopは`docker compose stop`だけを使い、volume / SQLite / outputsを削除しない。
-- OpenAI keyは設定有無だけを表示し、command outputとlauncher logでは値をredactする。
-- project pathに空白があっても、shell文字列ではなくargument listと明示cwdで実行する。
-- GitHub Actions backend lintで`launcher/`も検査する。
-- launcher log欄のfontを日本語グリフ不足の`Consolas`からWindows標準の`Yu Gothic UI`へ変更。
+- `Font name` text inputをdropdownへ変更。
+- workerの`fc-list`で確認した次のfontだけを選択肢にした。
+  - 標準ゴシック: `Noto Sans CJK JP`
+  - 明朝: `Noto Serif CJK JP`
+  - 等幅ゴシック: `Noto Sans Mono CJK JP`
+- 未指定時は既存defaultの`Noto Sans CJK JP`を維持。
+- 字幕style欄のlabelを日本語化。
 
-### 事前整理
+### 誤変換の切り分け
 
-- Task56記録PR #36をmerge。main: `03b1481 docs: record normal warning regeneration check (#36)`。
-- superseded PR #3 / #7をclose。
-- desktop候補のみを記録していたPR #19はTask57へ設計移管しclose。
-- 2件のbackup stashを確認。
-  - 現在のignored local filesと一致する内容は重複と判定。
-  - 旧版transcriptは`.codex_tmp/stash-archives/pre-task52-existing-transcript-work-untracked.zip`へlocal-only退避。
-  - stash 2件をdropし、stash listを空にした。
+- fontは文字の形を変えるだけで、faster-whisperの認識結果は修正しない。
+- 現在の標準文字起こしは`faster-whisper base`で、一般的な誤変換の主原因候補。
+- Unicode・空白・句読点正規化、既定辞書、custom replacementsは実装済みだが、custom replacementsはUI未露出。
+- OpenAI字幕校正またはtranscription model選択は別Taskで扱う。
 
 ### 検証結果
 
-- launcher targeted checks:
-  - `.\.venv\Scripts\python -m ruff check launcher backend\tests\test_windows_launcher.py`: pass。
-  - `.\.venv\Scripts\python -m pytest backend\tests\test_windows_launcher.py`: 17 passed。
-- full checks:
-  - `cd backend && ..\.venv\Scripts\python -m ruff check . ..\launcher`: pass。
-  - `cd backend && ..\.venv\Scripts\python -m pytest`: 260 passed, 1 skipped, 1 warning。
-  - `cd frontend && npm run lint`: pass。
-  - `cd frontend && npm run typecheck`: pass。
-  - `cd frontend && npm run build`: pass。
-  - GitHub Actions PR #37: backend / frontend pass。
-- GUI startup:
-  - Tkinter GUIを実表示し、2秒後に自動終了するstartup smoke: pass。
-  - `Yu Gothic UI`変更後のGUIを`.codex_tmp/task57_launcher_font_fix.png`へlocal-only captureし、日本語ログが欠けずに表示されることを目視確認。
-- launcher actual runtime:
-  - preflight: Docker / Compose / daemon / OpenAI key / disk check pass。
-  - launcher controllerから`docker compose stop`を実行。
-  - launcher controllerから通常Startを実行。
-  - backend / frontend / worker / redis: running。
-  - backend `/health`: ready。
-  - frontend `/upload`: ready。
-  - project path `C:\BOT\AutoClipper Web`で起動成功。
-  - 既存job `job_43288ae94650426aad679465b6515fc3`: normal 5 / short 10 / ZIPを再起動後も確認。データ保持pass。
-- runtime smoke:
-  - `python scripts\smoke_runtime.py --skip-video`: pass。
-- sample E2E:
-  - job: `job_a067b744edc04c33bec66f0e876e5c85`。
+- worker font確認:
+  - `fc-match 'Noto Sans CJK JP'`: exact match。
+  - `fc-match 'Noto Serif CJK JP'`: exact match。
+  - `fc-match 'Noto Sans Mono CJK JP'`: exact match。
+- frontend:
+  - `npm run lint`: pass。
+  - `npm run typecheck`: pass。
+  - `npm run build`: pass。
+- backend:
+  - `cd backend && ..\.venv\Scripts\python -m ruff check .`: pass。
+  - `cd backend && ..\.venv\Scripts\python -m pytest`: 243 passed, 1 skipped, 1 warning。
+- browser UI:
+  - `/upload`の`字幕スタイル`を展開し、3font option表示を確認。
+  - `Noto Serif CJK JP`と`Noto Sans Mono CJK JP`の選択値更新を確認。
+- actual render:
+  - job: `job_350588cebec648c9b8f9febfb3637679`。
+  - selected font: `Noto Serif CJK JP`。
   - status: completed。
-  - short: 1/1、`1080x1920`。
-  - sidecar risk: 0。
+  - ASS Subtitle style: `FontName=Noto Serif CJK JP`。
+  - short MP4: `1080x1920`。
+- runtime:
+  - `python scripts\smoke_runtime.py --skip-video`: pass。
 
 ### 未解決事項
 
-- Task57 MVPはPython 3.11+とDocker Desktopが必要。Python同梱・installer・自動updateはTask58以降。
-- clean Windows環境での配布確認はTask58対象。
+- 字幕本文の誤変換改善はTask58の対象外。
+## 2026-07-10 Task 59 transcription accuracy benchmark
+
+### 目的
+
+- 字幕誤変換の原因を、後処理を混ぜず faster-whisper の model/language 単位で比較できるようにする。
+- 既定の `base + auto` は維持する。
+
+### 変更
+
+- `JobSettings` に `whisperModelSize` (`base|small|medium|large-v3`) と `transcriptionLanguage` (`auto|ja`) を追加。
+- worker が設定値から `FasterWhisperTranscriptionEngine` を生成するよう変更。
+- `transcript_summary.json` に `transcription_model` / `transcription_language` を追加。
+- `scripts/e2e_real_video.py` に model/language オプションを追加。
+- `app.audio.benchmark_transcription` を追加。raw transcriptのみで CER、固有語、timestamp、wall/CPU、peak RAMを比較し、JSON/Markdownを出力する。
+- benchmark profileは別processで実行し、モデルごとのpeak RAMを分離する。
+
+### 検証
+
+- `python -m ruff check .`: pass。
+- backend pytest: `249 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker backend/worker rebuild: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- `python scripts/e2e_sample_video.py`: pass (`job_5b98bdc1b46f4f6cb2e88daae19f2909`, short `1080x1920`)。
+- worker内 `python -m app.audio.benchmark_transcription --help`: pass。
+- OpenAPI default: `whisperModelSize=base`, `transcriptionLanguage=auto`。
+- CIではfaster-whisper modelをダウンロードせず、設定伝播・比較計算・report生成をmock/fixtureで検証。
+- 正解原稿付き日本語TTS `119.628625s` で5構成を同一Docker CPU/int8環境で比較。
+- cached結果: `base:auto CER=0.2345 / 6.023s / 415.7MB`, `base:ja CER=0.2345 / 5.536s / 416.2MB`, `small:ja CER=0.1623 / 14.492s / 911.0MB`, `medium:ja CER=0.1463 / 35.213s / 2495.0MB`, `large-v3:ja CER=0.2846 / 62.187s / 4571.4MB`。
+- `small:ja` 実話者短尺E2E: pass (`job_145e70221060442cbbf209983559464a`)。
+- `small:ja` 58分E2E: pass (`job_426ce190bb02459cb3dec1829e662f98`, transcription `445.313s`, total `652.406s`, normal `1/1`, short `2/2`, render failure `0`, sidecar risk `0`)。
+- 匿名集計: `docs/TRANSCRIPTION_BENCHMARK_2026-07-10.md`。
+
+### 未解決事項
+
+- production defaultは互換性と非日本語入力を考慮し `base + auto` を維持。
+- `small + ja` を日本語高精度optionとして推奨。人間音声CERの正解原稿がないため、TTS結果だけではdefault変更しない。
+- OpenAI字幕校正はTask60候補。本Taskには含めない。
+
+## 2026-07-11 Task 60 OpenAI subtitle correction
+
+### 目的
+
+- deterministic後処理済み字幕をOpenAI Structured Outputsで任意校正する。
+- segment数・順序・timestampを変えず、API失敗時は部分適用せず全文をdeterministic字幕へfallbackする。
+
+### 変更
+
+- `JobSettings` / Upload UIへ以下を追加。
+  - `subtitleCorrectionMode`: `off|openai`、default `off`。
+  - `subtitleCorrectionModel`: default `gpt-5.5`。
+  - `subtitleCorrectionMinConfidence`: default `0.9`。
+  - `subtitleCorrectionBatchSize`: default `40`。
+  - `subtitleCorrectionContextSegments`: default `2`。
+  - `subtitleCorrectionFallbackEnabled`: default `true`。
+- 校正APIへ送る対象を字幕text・ASR confidence・前後text context・辞書語だけに限定。動画・音声・pathは送らない。
+- strict JSON schemaでindex、原文、校正文、変更有無、理由、confidenceを検証。
+- transient error retry、schema validation error、missing key、fallback disabledの明確なerror codeを追加。
+- 数値token変更を`numeric_expression`以外の理由で適用しないsafety gateを追加。
+- raw / deterministic / OpenAI校正後 / final transcriptを分離保存。
+- `transcript_correction_summary.json`と`transcript_correction_diff.md`を追加し、ZIPへ格納。
+- `scripts/e2e_real_video.py`へ校正設定・artifact・timestamp検証を追加。
+- `scripts/e2e_summary.py`へ校正summary表示を追加。
+
+### 変更ファイル
+
+- `backend/app/audio/openai_transcript_correction.py`
+- `backend/app/audio/transcript_correction_schema.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/schemas.py`
+- `frontend/components/SettingsPanel.tsx`
+- `frontend/lib/types.ts`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- backend tests
+- `README.md`
+- `STATUS.md`
+
+### 自動検証
+
+- backend `ruff`: pass。
+- backend pytest: `264 passed, 1 skipped`。OpenAI校正test単体: `12 passed`。
+- frontend lint / typecheck / build: pass。
+- `docker compose up -d --build`: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- default校正OFF synthetic E2E: pass (`job_65c624c6c02241f084cc9dd491ac7056`)。
+- 校正schema、timestamp維持、低confidence拒否、数値変更safety gate、retry、missing key、全体fallback、fallback無効時error、artifact、ZIP layoutをtest済み。
+
+### 短尺実API E2E
+
+- input: Task59の実話者 `123.706917s` local sample。mediaはcommitしない。
+- job: `job_d67a4d38c98144e0988bcec183fe74fb`。
+- transcription: `small + ja`、48 segments。
+- OpenAI correction: `gpt-5.5`、batch `40`、confidence `0.9`。
+- result: corrected `9`、unchanged `39`、low-confidence reject `4`、safety reject `1`、fallback `0`、schema failure `0`、API calls `2`。
+- short: `1/1`、`1080x1920`、render failure `0`。
+- segment数・timestamp・final transcript一致: pass。
+- ZIP correction artifacts: pass。
+- sidecar risk: `0`。
+
+### 58分実API E2E
+
+- input duration: `3495.8924s` local real video。mediaはcommitしない。
+- job: `job_0caea4d85baf4e9cbca9a84adaf0be80`。
+- transcription: `small + ja`、1695 segments。
+- OpenAI correction: `gpt-5.5`、batch `100`、confidence `0.9`。
+- correction result:
+  - corrected: `273`。
+  - unchanged: `1422`。
+  - low-confidence reject: `117`。
+  - safety reject: `5`。
+  - fallback: `0`。
+  - schema failure: `0`。
+  - API calls: `17`。
+  - correction time: `1582.563s`。
+- output:
+  - normal: `1/1`、`1280x720`。
+  - short: `2/2`、すべて`1080x1920`。
+  - render failure: `0`。
+  - ZIP: `73,201,537` bytes。
+  - total runtime: `2195.156s`。
+- segment数・timestamp・final transcript一致: pass。
+- ZIP correction artifacts: pass。
+- sidecar risk: `0`。
+- 273変更の最大文字数差: `6`。極端な長文化なし。
+
+### 未解決事項
+
+- OpenAI correctionは長尺で処理時間を支配する。58分素材では校正だけで約26.4分。default `off`を維持する。
+- 校正品質は素材依存。raw / deterministic / corrected / diffを保持し、目視監査可能にする。
+- 長尺校正中もheartbeatはbatchごとに更新されるが、job表示は`transcribing 30%`のまま。校正専用progress表示は未実装。
+
+## 2026-07-11 Task 61 subtitle correction progress reporting
+
+### 目的
+
+- OpenAI字幕校正を`transcribing`から分離し、batch進捗・retry・fallbackをジョブAPIと画面に表示する。
+
+### 変更内容
+
+- 校正ON時だけjob statusを`correcting_subtitles`へ遷移。校正OFF時のstatus列は変更しない。
+- `subtitle_correction_progress.json`へbatch完了数、総数、stage進捗、retry回数、fallback、完了状態を保存。
+- job details APIへ字幕本文・API keyを含まない安全な進捗情報だけを追加。
+- Job Progressへ字幕校正専用のbatch表示とprogress barを追加。
+- E2E timingをtranscriptionとsubtitle correctionに分離。
+- retry時もheartbeatを更新し、停止と誤認されないようにした。
+
+### 変更ファイル
+
+- `backend/app/audio/openai_transcript_correction.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/status.py`
+- `backend/app/api/jobs.py`
+- `backend/app/schemas.py`
+- `frontend/components/JobProgress.tsx`
+- `frontend/components/ProgressTimeline.tsx`
+- `frontend/components/StatusBadge.tsx`
+- `frontend/lib/types.ts`
+- `scripts/e2e_real_video.py`
+- `scripts/e2e_summary.py`
+- backend tests
+- `README.md`
+- `STATUS.md`
+
+### 検証結果
+
+- backend ruff: pass。
+- backend pytest: `266 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- changed scripts ruff: pass。
+- `docker compose up -d --build`: pass。
+- `python scripts/smoke_runtime.py --skip-video`: pass。
+- 校正OFF sample E2E: pass (`job_d862e4b22e0241dea53edacd4de1a3a6`)。
+- 校正ON real-video E2E: pass (`job_fd2798d3150b4d49bffa5d0b70ee7d4a`)。
+  - status: `transcribing 30%` -> `correcting_subtitles 31%` -> 後続工程 -> `completed 100%`。
+  - batch表示: `0/2`、retry `0 -> 3`を確認。
+  - OpenAI API: `429 insufficient_quota`。4 calls後にfallbackし、short `1/1`、`1080x1920`、ZIP生成まで完走。
+  - progress artifact: `stageProgress=100`、`correctionRetryCount=3`、`fallbackUsed=true`、`finished=true`。
+- success batchの単調増加、retry、API details、ZIP artifactは自動testで確認。
+- sidecar risk: `0`。
+
+### 未解決事項
+
+- 現在のOpenAI quota不足により、今回のruntimeでは成功batchの`1/2 -> 2/2`表示を再確認できなかった。Task60の実API成功経路とTask61の自動testはpass済み。
+
+## 2026-07-12 Task 62 local transcript suspicion filter
+
+### 目的
+
+- OpenAI字幕校正前に疑わしいsegmentをローカル抽出し、API送信量と正常字幕の不要な書き換えを減らす。
+
+### 変更内容
+
+- `subtitleCorrectionScope=all|suspicious`を追加。既定は互換維持の`all`。
+- `subtitleCorrectionSuspicionThreshold`を追加。既定`0.40`。
+- confidence、表記揺れ、固有語候補、反復、文字種、数字、リスト、長尺内の反復漢字複合語を組み合わせてscore/reasonを保存。
+- target以外は変更禁止。contextはread-onlyでbatchごと最大4件。
+- target 0件はAPI call 0件。
+- filter失敗時は全件APIへ切り替えずdeterministic transcriptへfallback。
+- actual input/output/cached token usageを校正summaryへ追加。
+- job API/UIへ対象segment進捗を追加。
+- suspicion segments/summary/targetsの3 artifactをZIPへ追加。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `282 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker runtime smoke: pass。
+- correction OFF sample E2E: pass (`job_47d61624572043b8aba6cfb7491d78fd`)。
+- TTS: target `8/19`、全件採用修正recall `7/7`、総token `3006 -> 2401`。
+- 124秒実話者: calls `2 -> 1`、総token `14124 -> 7729`、校正時間 `157.3s -> 61.0s`。
+- 58分full E2E: pass (`job_31b475f0328f4a6fa0239316100b34a0`)。
+  - target `977/1695`、calls `10/17`、校正時間 `706.5s/1582.6s`。
+  - normal `1/1`、short `2/2`、render failure `0`、sidecar risk `0`。
+- 長尺recall改善後のoffline評価: target `1287/1695`、baseline採用修正coverage `250/273 = 91.6%`、想定calls `13/17`。
+- 詳細: `docs/TRANSCRIPT_SUSPICION_FILTER_2026-07-12.md`。
+
+### 未解決事項
+
+- 最終長尺filterの実API replayは`7/13`成功後、`429 insufficient_quota`で停止。最終signalによる13 batch完走は未確認。
+- 実際のinput token削減率は素材依存。短尺では固定prompt/schema比率が大きく、40%削減を保証しない。
+
+## 2026-07-16 Task 62 final 58-minute API replay retry
+
+### 目的
+
+- PR #42 headで最終13 batch構成を実API再検証し、品質benchmarkとAPI失敗時の耐障害性を確認する。
+
+### 実行条件
+
+- tested commit: `c40e13b8a81f69bcca7fd5126e46845581eb2346`。
+- job: `job_3ec9083055224a9fbd1c8a4b8f904d5b`。
+- input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`。
+- transcription: `small + ja`。
+- correction model: `gpt-5.5`。
+- scope: `suspicious`、threshold: `0.40`、batch size: `100`、context segments: `2`。
+- requested outputs: normal `1`、short `2`。
+
+### 検証結果
+
+- suspicion filter: target `1287/1695`、想定batch `13`。
+- OpenAI API: successful batch `0/13`、failed batch `1`、calls `4`、retry `3`、schema failure `0`。
+- API error: `429 insufficient_quota`。actual token usageはinput/outputともに`0`。
+- fallback: `true`。deterministic transcriptへ戻り、jobは`completed`まで完走。
+- segment count: raw/deterministic/correctedすべて`1695`。
+- array order/start/end timestamp mismatch: `0`。fallback後のdeterministic/corrected text差分: `0`。
+- normal: `1/1`、`1280x720`、`348.982s`。
+- short: `2/2`、両方`1080x1920`、`51.188s` / `61.194s`。
+- render failure: `0`、sidecar risk: `0`、ZIP: `73,695,519 bytes`。
+- runtime: total `674.328s`、transcription `439.047s`、correction/fallback `20.895s`。
+
+### 結論
+
+- 耐障害性実地検証: pass。quota不足でも全件API送信へ切り替えず、出力生成まで完走した。
+- 品質benchmark: fail。`13/13`かつfallback `0`を満たさず、all-modeとのactual token比較は未実施。
+- PR #42はDraftを維持する。quota確保後に同一条件で再実行する。
+
+## 2026-07-16 Task 62 excluded-change classification
+
+### 目的
+
+- all-mode採用変更のうち最終suspicion filterが対象外にした23件を、APIを使わず分類する。
+
+### 検証方法
+
+- baseline all-mode job: `job_0caea4d85baf4e9cbca9a84adaf0be80`。
+- filter job: `job_3ec9083055224a9fbd1c8a4b8f904d5b`。
+- deterministic/OpenAI corrected transcriptの差分273件とtarget index 1287件を集合比較し、対象外23件を抽出。
+- 元動画の該当区間を前後2秒付きで切り出し、ローカル`medium+ja`と`large-v3+ja`で再文字起こし。OpenAI APIは未使用。
+
+### 分類結果
+
+- 有益な修正の見逃し: `19`。
+- 不要な表記変更: `1`（index 110）。
+- 有害な誤修正: `1`（index 1256）。
+- 判断不能: `2`（index 64、164）。
+- 対象外変更の有益候補率: `19/23 = 82.6%`。
+- 詳細: `docs/TRANSCRIPT_SUSPICION_MISSED_CHANGES_2026-07-16.md`。
+
+### 判断
+
+- filter調整は必要。現状のままReady化しない。
+- global thresholdは下げず、異常語形、domain glossary、近接segment間の表記揺れを狙ったsignalを追加する。
+- grammarだけを根拠にAPI対象へ入れない。index 110/1256で過修正が確認された。
+- index 64/164は人手聴取が必要。
+
+## 2026-07-16 Task 62 P2 targeted rescue signals
+
+### 目的
+
+- global threshold `0.40`を維持し、強い限定signalだけで有益な見逃しをOpenAI対象へ復帰させる。
+
+### 変更内容
+
+- `suspicion_score >= threshold OR rescue_signal`の選定を追加。
+- rescue理由: `known_asr_malformed_expression`、`glossary_phonetic_match`、`nearby_spelling_inconsistency`。
+- nearby表記揺れは既知aliasまたは設定glossaryに紐づく場合だけ対象化。
+- segment artifactへ`selected`、`selection_source`、`rescue_reasons`を追加。
+- summaryへscore/rescue選定数とrescue理由別件数を追加。
+- API設定`transcriptCorrectionGlossary`を追加。既定は空配列で、UIには未露出。
+- 固定23件fixtureとrescue回帰testを追加。
+
+### Offline検証
+
+- 固定23件: 有益な見逃し`17/19`を救済。
+- 不要変更`0/1`、有害修正`0/1`、判断不能`0/2`を対象外維持。
+- 全1695 segments: target `1287 -> 1304`、対象率`75.929% -> 76.932%`。
+- expected calls（batch 100）: `13 -> 14`、all-modeは`17`。
+- baseline採用変更coverage: `250/273 = 91.6%` -> `267/273 = 97.8%`。
+- target+context文字数proxy: `14,407 -> 14,597`。all-mode `17,726`比で約`17.7%`削減を維持。
+- rescue selected: `17`。理由件数はmalformed `11`、glossary `6`、nearby inconsistency `1`（重複あり）。
+- 詳細: `docs/TRANSCRIPT_SUSPICION_RESCUE_EVALUATION_2026-07-16.md`。
+
+### 現在判定
+
+- P2 offline acceptance: pass。
+- global threshold `0.40`、scope既定`all`、correction既定`off`は維持。
+- backend: `ruff check .` pass、`pytest`は`287 passed, 1 skipped`。
+- frontend: lint / typecheck / build pass。
+- Docker rebuild / runtime smoke: pass。backend / frontend / worker / redis起動、共有DB/storage、FFmpeg / ffprobeを確認。
+- correction OFF sample E2E: pass。job `job_139866cabc1e4603a407546764a616d8`、short `1/1`、`1080x1920`、render failure `0`、API call `0`、sidecar risk `0`。
+- PR #42はDraft維持。rescue追加後はexpected callが`14`のため、quota確保後の実API `14/14`、fallback `0`再検証が残る。
+
+## 2026-07-17 Task 62 P2 OpenAI API connectivity probe
+
+### 目的
+
+- 58分real API replayの前に、P2最終構成と既存keyで1 batch疎通を確認する。
+
+### 実行条件
+
+- tested commit: `aa67fd43e136b276925983c8a32065c34a2e3d01`。
+- input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`。
+- transcript: 既存58分jobの`small + ja` deterministic transcript、`1695` segments。
+- correction model: `gpt-5.5`。
+- scope: `suspicious`、threshold: `0.40`、context segments: `2`。
+- P2 rescue対象index `157`を1件だけ送信。retryは`0`に固定。
+
+### 結果
+
+- OpenAI API call: `1`。
+- result: `429 insufficient_quota`。
+- successful batch: `0/1`、schema failure: `0`、actual token usage: `0`。
+- 58分`14/14` replayは未開始。quota未復旧状態で追加callを行わないため停止。
+
+### 判定
+
+- API疎通: fail。key欠落やnetwork failureではなく、API billing/quota不足。
+- PR #42はDraft維持。
+- quota復旧後、同じ1 batch probeを再実行し、成功時のみ58分`14/14`へ進む。
+
+## 2026-07-17 Task 62 P2 final real-API validation
+
+### 目的
+
+- quota復旧後、P2最終構成で58分real API replayを完走し、all-modeとの実token差を確定する。
+
+### 実行条件
+
+- tested code commit: `aa67fd43e136b276925983c8a32065c34a2e3d01`。
+- input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`。
+- transcription: `small + ja`。
+- correction: `gpt-5.5`、batch `100`、context `2`、min confidence `0.9`。
+- P2: scope `suspicious`、threshold `0.40`。
+- P2 job: `job_ea301023a3cd431f8a5700ea4f4e4ca1`。
+
+### 疎通確認
+
+- rescue対象index `157`を1件送信。
+- API call `1`、successful batch `1/1`、schema failure `0`。
+- input/output tokens: `408/68`、processing `4.275s`。
+
+### P2 E2E結果
+
+- targets: `1304/1695`、context `55`、unique sent `1357`。
+- API calls / successful batches: `14/14`。
+- retry `0`、failed batch `0`、schema failure `0`、fallback `false`。
+- input/output/total tokens: `52,247 / 100,698 / 152,945`。
+- correction time: `1087.679s`。
+- corrected `268`、low-confidence reject `94`、safety reject `4`。
+- deterministic/corrected/final segment counts: `1695/1695/1695`。
+- order/start/end timestamp mismatch: `0`。final transcriptはcorrected transcriptと一致。
+- normal: `1/1`、`1280x720`、`348.982s`。
+- short: `2/2`、両方`1080x1920`、`49.883s` / `61.194s`。
+- render failure: `0`、sidecar risk: `0`、ZIP: `73,335,336 bytes`。
+- total E2E runtime: `1745.609s`。
+
+### All-mode実token baseline
+
+- 同じdeterministic transcript `1695` segmentsと同じ校正設定を使用。
+- API calls / successful batches: `17/17`。
+- retry `0`、failed batch `0`、schema failure `0`。
+- input/output/total tokens: `67,053 / 134,638 / 201,691`。
+- correction time: `1469.749s`。
+- baselineはtoken比較専用。transcription、candidate generation、renderはP2 E2Eで別途検証済みのため省略。
+
+### 実測削減
+
+- API calls: `17 -> 14`、`17.647%`削減。
+- input tokens: `67,053 -> 52,247`、`22.081%`削減。
+- output tokens: `134,638 -> 100,698`、`25.208%`削減。
+- total tokens: `201,691 -> 152,945`、`48,746 tokens / 24.169%`削減。
+- correction time: `1469.749s -> 1087.679s`、`382.071s / 25.996%`削減。
+
+### 判定
+
+- Task62 final real-API acceptance: pass。
+- `14/14`、fallback `0`、schema failure `0`、segment/timestamp維持、render、ZIP、sidecar risk `0`を確認。
+- PR #42をReady化し、CI通過後にmerge可能。

@@ -39,9 +39,13 @@ class FakeFasterWhisperSegment:
 
 
 class FakeWhisperModel:
+    def __init__(self) -> None:
+        self.kwargs: dict[str, object] = {}
+
     def transcribe(self, wav_path: str, **kwargs: object) -> tuple[list[FakeFasterWhisperSegment], object]:
         assert wav_path.endswith(".wav")
         assert kwargs["word_timestamps"] is True
+        self.kwargs = kwargs
         return (
             [
                 FakeFasterWhisperSegment(
@@ -112,8 +116,9 @@ def test_segment_from_faster_whisper_uses_word_probability_confidence() -> None:
 def test_faster_whisper_engine_maps_segments_with_injected_model(tmp_path: Path) -> None:
     wav_path = tmp_path / "sample.wav"
     wav_path.write_bytes(b"fake wav")
-    engine = FasterWhisperTranscriptionEngine()
-    engine._model = FakeWhisperModel()
+    engine = FasterWhisperTranscriptionEngine(model_size="small", language="ja")
+    fake_model = FakeWhisperModel()
+    engine._model = fake_model
 
     segments = engine.transcribe(wav_path)
 
@@ -122,6 +127,8 @@ def test_faster_whisper_engine_maps_segments_with_injected_model(tmp_path: Path)
     assert segments[0].end == 1.5
     assert segments[0].text == "hello world"
     assert segments[0].confidence == pytest.approx(0.7)
+    assert engine.model_size == "small"
+    assert fake_model.kwargs["language"] == "ja"
 
 
 def test_faster_whisper_engine_rejects_missing_wav() -> None:

@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.audio.openai_transcript_correction import OpenAITranscriptCorrector
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.volume_features import build_audio_features
@@ -41,6 +42,40 @@ SUMMARY_FILENAMES = [
     "rejection_summary.json",
     "selected_clips_summary.json",
 ]
+
+
+class EchoCorrectionResponse:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.output_text = json.dumps(payload, ensure_ascii=False)
+
+
+class EchoCorrectionResponses:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def create(self, **kwargs: Any) -> EchoCorrectionResponse:
+        self.calls.append(kwargs)
+        request = json.loads(kwargs["input"][1]["content"])
+        return EchoCorrectionResponse(
+            {
+                "segments": [
+                    {
+                        "index": segment["index"],
+                        "original_text": segment["original_text"],
+                        "corrected_text": segment["original_text"],
+                        "changed": False,
+                        "reason": "unchanged",
+                        "confidence": 1.0,
+                    }
+                    for segment in request["target_segments"]
+                ]
+            }
+        )
+
+
+class EchoCorrectionClient:
+    def __init__(self) -> None:
+        self.responses = EchoCorrectionResponses()
 
 
 @pytest.fixture()
@@ -83,10 +118,10 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
 
 def fake_transcript() -> list[TranscriptSegment]:
     return [
-        TranscriptSegment(start=0.0, end=30.0, text="why automation mistakes matter before launch"),
-        TranscriptSegment(start=35.0, end=80.0, text="how teams can fix the process with a clear checklist"),
-        TranscriptSegment(start=85.0, end=140.0, text="the final lesson is to measure progress every week"),
-        TranscriptSegment(start=145.0, end=210.0, text="another complete section for a normal clip selection"),
+        TranscriptSegment(start=0.0, end=30.0, text="why automation mistakes matter before launch", confidence=0.7),
+        TranscriptSegment(start=35.0, end=80.0, text="how teams can fix the process with a clear checklist", confidence=0.7),
+        TranscriptSegment(start=85.0, end=140.0, text="the final lesson is to measure progress every week", confidence=0.7),
+        TranscriptSegment(start=145.0, end=210.0, text="another complete section for a normal clip selection", confidence=0.7),
     ]
 
 
@@ -297,6 +332,9 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
                 "useOpenAIScoring": False,
+                    "subtitleCorrectionMode": "openai",
+                    "subtitleCorrectionScope": "suspicious",
+                "subtitleCorrectionBatchSize": 2,
                 "burnSubtitles": True,
                 "normalizeAudio": True,
                 "transcriptReplacements": {"automation": "AutoClipper"},
@@ -341,6 +379,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         detect_black_screen=lambda _path: [BlackScreenSegment(start=220.0, end=225.0, duration=5.0)],
         normal_renderer=fake_render,
         short_renderer=fake_render,
+        transcript_corrector=OpenAITranscriptCorrector(client=EchoCorrectionClient()),
     )
 
     visited_statuses = run_autoclipper_job(
@@ -350,7 +389,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         dependencies=dependencies,
     )
 
-    assert visited_statuses == SUCCESS_STATUSES[1:]
+    assert visited_statuses == [*SUCCESS_STATUSES[1:4], "correcting_subtitles", *SUCCESS_STATUSES[4:]]
     assert not (storage.temp / created["jobId"]).exists()
 
     status_response = client.get(f"/api/jobs/{created['jobId']}")
@@ -374,7 +413,14 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     for name in [
         "video_metadata.json",
         "raw_transcript_segments.json",
+        "deterministic_transcript_segments.json",
         "transcript_segments.json",
+        "transcript_correction_summary.json",
+        "transcript_correction_diff.md",
+            "subtitle_correction_progress.json",
+            "transcript_suspicion_segments.json",
+            "transcript_suspicion_summary.json",
+            "subtitle_correction_targets.json",
         "scene_segments.json",
         "silence_segments.json",
         "audio_features.json",
@@ -412,7 +458,32 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert transcript_summary["total_text_length"] > 20
     assert transcript_summary["total_speech_duration"] == 195.0
     assert transcript_summary["transcription_engine"] == "faster_whisper"
+    assert transcript_summary["transcription_model"] == "base"
+    assert transcript_summary["transcription_language"] == "auto"
     assert transcript_summary["used_fixture_transcript"] is False
+    correction_summary = json.loads((job_dir / "transcript_correction_summary.json").read_text(encoding="utf-8"))
+    assert correction_summary["enabled"] is True
+    assert correction_summary["scope"] == "suspicious"
+    assert correction_summary["target_segment_count"] == 4
+    assert correction_summary["api_call_count"] == 2
+    correction_progress = json.loads(
+        (job_dir / "subtitle_correction_progress.json").read_text(encoding="utf-8")
+    )
+    assert correction_progress == {
+        "stage": "correcting_subtitles",
+        "stageProgress": 100,
+        "correctionBatchesCompleted": 2,
+        "correctionBatchesTotal": 2,
+        "correctionRetryCount": 0,
+        "correctionTargetsCompleted": 4,
+        "correctionTargetsTotal": 4,
+        "transcriptSegmentCount": 4,
+        "fallbackUsed": False,
+        "finished": True,
+    }
+    status_details = status_response.json()["details"]
+    assert status_details["stageProgress"] == 100
+    assert status_details["correctionBatchesCompleted"] == 2
     transcript_postprocess_summary = json.loads(
         (job_dir / "transcript_postprocess_summary.json").read_text(encoding="utf-8")
     )
@@ -484,6 +555,10 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "metadata/shorts/short_01.json" in names
     assert "metadata/selected_clips.json" in names
     assert "metadata/raw_transcript_segments.json" in names
+    assert "metadata/deterministic_transcript_segments.json" in names
+    assert "metadata/transcript_correction_summary.json" in names
+    assert "metadata/transcript_correction_diff.md" in names
+    assert "metadata/subtitle_correction_progress.json" in names
     assert "metadata/transcript_summary.json" in names
     assert "metadata/transcript_postprocess_summary.json" in names
     assert "metadata/selected_clips_summary.json" in names
@@ -823,6 +898,8 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
         (storage.outputs / created["jobId"] / "transcript_summary.json").read_text(encoding="utf-8")
     )
     assert transcript_summary["transcription_engine"] == "e2e_fixture"
+    assert transcript_summary["transcription_model"] == "fixture"
+    assert transcript_summary["transcription_language"] == "fixture"
     assert transcript_summary["used_fixture_transcript"] is True
     assert not (storage.temp / created["jobId"]).exists()
 

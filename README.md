@@ -430,6 +430,109 @@ The JSON file must be an object:
 }
 ```
 
+### Raw transcription benchmark
+
+The production default remains `whisperModelSize=base` with `transcriptionLanguage=auto`.
+For a real-video job, the raw faster-whisper profile can be changed without enabling transcript correction:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_sample.mp4 `
+  --whisper-model-size small `
+  --transcription-language ja `
+  --mode low_cost
+```
+
+Supported model sizes are `base`, `small`, `medium`, and `large-v3`. Supported language modes are `auto` and `ja`.
+The selected values are written to `transcript_summary.json` as `transcription_model` and `transcription_language`.
+
+To compare raw transcription accuracy inside the worker, first prepare a mono 16 kHz WAV under the shared `storage` directory:
+
+```powershell
+docker compose exec worker ffmpeg -y `
+  -i /app/storage/uploads/spoken_sample.mp4 `
+  -t 120 -vn -ac 1 -ar 16000 `
+  /app/storage/temp/transcription_benchmark/sample.wav
+```
+
+For a quick `base` auto-versus-Japanese comparison:
+
+```powershell
+docker compose exec worker python -m app.audio.benchmark_transcription `
+  --audio /app/storage/temp/transcription_benchmark/sample.wav `
+  --profile base:auto `
+  --profile base:ja `
+  --reference-file /app/storage/temp/transcription_benchmark/reference.txt `
+  --keyword OpenAI `
+  --output-dir /app/storage/outputs/transcription_benchmarks/sample
+```
+
+Omit `--profile` to run the default benchmark matrix: `base:auto`, `base:ja`, `small:ja`, and `medium:ja`.
+The report contains normalized Japanese CER, keyword accuracy, segment/timestamp checks, wall/CPU time, and peak process RAM.
+Per-profile raw transcript JSON is preserved. Transcript dictionary replacement and other post-processing are not applied.
+First execution may include model download time; rerun after models are cached before comparing runtime.
+
+The Task 59 reference result is documented in `docs/TRANSCRIPTION_BENCHMARK_2026-07-10.md`.
+The current production default remains `base + auto`; `small + ja` is the recommended high-accuracy Japanese option.
+
+### OpenAI subtitle correction
+
+OpenAI subtitle correction is optional and disabled by default. It sends deterministic transcript text, nearby text context, confidence, and preferred terms only. It does not send audio, video, or rendered files. Segment count, order, and timestamps are preserved.
+
+Set `OPENAI_API_KEY` in `.env`, rebuild the services, then enable correction from the Upload UI or the E2E script:
+
+```powershell
+python scripts/e2e_real_video.py `
+  --video path\to\spoken_sample.mp4 `
+  --mode low_cost `
+  --whisper-model-size small `
+  --transcription-language ja `
+  --subtitle-correction-mode openai `
+  --subtitle-correction-scope suspicious `
+  --subtitle-correction-suspicion-threshold 0.4 `
+  --subtitle-correction-model gpt-5.5 `
+  --subtitle-correction-min-confidence 0.9 `
+  --subtitle-correction-batch-size 40 `
+  --subtitle-correction-context-segments 2
+```
+
+The worker preserves each correction stage:
+
+```text
+raw_transcript_segments.json
+deterministic_transcript_segments.json
+openai_corrected_transcript_segments.json
+transcript_segments.json
+transcript_correction_summary.json
+transcript_correction_diff.md
+transcript_suspicion_segments.json
+transcript_suspicion_summary.json
+subtitle_correction_targets.json
+```
+
+`subtitleCorrectionScope=all` remains the compatibility default and sends every segment. Set it to `suspicious` to score segments locally and send only target indices plus a bounded read-only context set. Non-target segments cannot be changed. If no target is found, the correction uses zero API calls. If the local filter fails, correction is skipped and the deterministic transcript is retained; the worker never silently switches to all-segment correction.
+
+Suspicious selection keeps the configured score threshold and can also use narrowly targeted rescue signals for known malformed ASR expressions, glossary aliases, and nearby glossary-anchored spelling variants. Rescue signals only add OpenAI correction targets; they never replace transcript text locally. Supply additional canonical terms through the API-only `transcriptCorrectionGlossary` string array. Suspicion artifacts record `selected`, `selection_source`, and `rescue_reasons`; the summary records score-selected and rescue-selected counts separately.
+
+When `subtitleCorrectionFallbackEnabled=true`, transient API or schema failures use the complete deterministic transcript and record `fallback_used=true`; partial OpenAI corrections are discarded. Disable fallback only when the job must fail with `openai_subtitle_correction_failed`. Missing `OPENAI_API_KEY` fails early with `openai_configuration_missing`.
+
+While correction is running, `GET /api/jobs/{job_id}` returns `status=correcting_subtitles`. Progress details contain only counters and never subtitle text or credentials:
+
+```json
+{
+  "stage": "correcting_subtitles",
+  "stageProgress": 47,
+  "correctionBatchesCompleted": 8,
+  "correctionBatchesTotal": 17,
+  "correctionRetryCount": 1,
+  "correctionTargetsCompleted": 143,
+  "correctionTargetsTotal": 412,
+  "transcriptSegmentCount": 1695
+}
+```
+
+The job page shows this stage percentage separately from overall pipeline progress. Batch completion and retries refresh the worker heartbeat. Correction-off jobs keep the existing `transcribing` to `detecting_scenes` transition.
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell
@@ -504,15 +607,21 @@ The script:
 - prints runtime metrics: upload, transcription, scene detection, candidate generation, scoring, selection, normal render, short render, ZIP packaging, and total time
 - prints pipeline metrics: video duration, transcript length, candidate counts, candidate generation chunks/raw/kept/dropped/caps, hard-gate counts, selected counts, backfilled count, render failure count, and ZIP size
 - validates `openai_scoring_summary.json` when OpenAI scoring is enabled and prints model, candidate limit, finalist limit, preselection/finalist call counts, success/failure/fallback counts, schema failures, latency, text-size proxy, and selected clip score source counts
+- validates `transcript_correction_summary.json` and timestamp/count preservation when OpenAI subtitle correction is enabled
 - prints diagnostic summary JSON files when they exist
 
 Expected outputs:
 
 ```text
 storage/outputs/{job_id}/raw_transcript_segments.json
+storage/outputs/{job_id}/deterministic_transcript_segments.json
+storage/outputs/{job_id}/openai_corrected_transcript_segments.json
 storage/outputs/{job_id}/transcript_segments.json
 storage/outputs/{job_id}/transcript_summary.json
 storage/outputs/{job_id}/transcript_postprocess_summary.json
+storage/outputs/{job_id}/transcript_correction_summary.json
+storage/outputs/{job_id}/transcript_correction_diff.md
+storage/outputs/{job_id}/subtitle_correction_progress.json
 storage/outputs/{job_id}/audio_feature_summary.json
 storage/outputs/{job_id}/candidate_generation_summary.json
 storage/outputs/{job_id}/candidate_summary.json
@@ -525,6 +634,8 @@ storage/temp/e2e_real_{job_id}.zip
 storage/temp/e2e_real_{job_id}_*.mp4
 ```
 
+`openai_corrected_transcript_segments.json` is written only when `subtitleCorrectionMode=openai`. The correction summary and diff are written for both enabled and disabled runs so the selected path remains auditable.
+
 Troubleshooting:
 
 - `audio_silent_or_unusable`: the audio track is silent, near-silent, or has too little measurable speech.
@@ -535,6 +646,7 @@ Troubleshooting:
 - `worker_terminated_unexpectedly`: the worker heartbeat stopped while a job was running. Check `docker compose logs worker` for RQ work-horse termination, signal 9, or container restart.
 - `quality gate rejection`: check `selected_clips.json` and `rejection_summary.json`; in `strict_quality` mode, low scores can intentionally leave selected outputs at zero.
 - `openai_configuration_missing`: `OPENAI_API_KEY` is missing in the worker container. Update `.env`, then recreate services with `docker compose up -d --build`.
+- `openai_subtitle_correction_failed`: subtitle correction failed and fallback was disabled. Check `transcript_correction_summary.json`, `transcript_correction_diff.md`, and worker logs.
 - `openai_scoring_failed`: OpenAI scoring failed and fallback was disabled. Check `openai_scoring_summary.json` and `docker compose logs worker`.
 - OpenAI rate limit / timeout: lower `--openai-candidate-limit`, retry later, or use `--openai-fallback-to-rule-score true`.
 - Structured output validation failure: check `openai_scoring_summary.json` error fields and keep the default strict schema.
@@ -585,7 +697,18 @@ Troubleshooting:
     "useDefaultTranscriptDictionary": true,
     "transcriptReplacements": {
       "オープンAI": "OpenAI"
-    }
+    },
+    "whisperModelSize": "base",
+    "transcriptionLanguage": "auto",
+    "subtitleCorrectionMode": "off",
+    "subtitleCorrectionScope": "all",
+    "transcriptCorrectionGlossary": [],
+    "subtitleCorrectionSuspicionThreshold": 0.4,
+    "subtitleCorrectionModel": "gpt-5.5",
+    "subtitleCorrectionMinConfidence": 0.9,
+    "subtitleCorrectionBatchSize": 40,
+    "subtitleCorrectionContextSegments": 2,
+    "subtitleCorrectionFallbackEnabled": true
   }
 }
 ```
@@ -623,6 +746,17 @@ Production-safe defaults remain:
 - `transcriptNormalizePunctuation`: `true`
 - `useDefaultTranscriptDictionary`: `true`
 - `transcriptReplacements`: `{}`
+- `whisperModelSize`: `base`
+- `transcriptionLanguage`: `auto`
+- `subtitleCorrectionMode`: `off`
+- `subtitleCorrectionScope`: `all`
+- `transcriptCorrectionGlossary`: `[]`
+- `subtitleCorrectionSuspicionThreshold`: `0.4`
+- `subtitleCorrectionModel`: `gpt-5.5`
+- `subtitleCorrectionMinConfidence`: `0.9`
+- `subtitleCorrectionBatchSize`: `40`
+- `subtitleCorrectionContextSegments`: `2`
+- `subtitleCorrectionFallbackEnabled`: `true`
 
 For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.
 
@@ -653,6 +787,8 @@ Transcript post-processing:
 - Add project-specific replacements with `transcriptReplacements`; this does not call OpenAI.
 - Disable with `enableTranscriptPostProcessing=false` when raw transcription text is needed for debugging.
 
+OpenAI subtitle correction runs after deterministic post-processing when `subtitleCorrectionMode=openai`. The final `transcript_segments.json` is used by candidate generation and subtitle rendering. Correction never changes segment timestamps or count. Correction summaries include target/context counts and actual Responses API `input_tokens`, `output_tokens`, and `cached_tokens` when the API returns usage data.
+
 ## Generation Diagnostics
 
 Each completed or expected-failure job writes compact summary files under:
@@ -665,6 +801,8 @@ Summary files:
 
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
 - `transcript_postprocess_summary.json`: transcript post-processing enablement, changed segment count, before/after character counts, replacement counts, and dictionary settings when transcription reached post-processing.
+- `transcript_correction_summary.json`: correction mode, scope, model, target/context counts, corrected/unchanged/low-confidence segment counts, fallback status, API calls, actual token usage, schema failures, processing time, and timestamp/count preservation flags.
+- `transcript_suspicion_summary.json`: local filter threshold, suspicious ratio, target/context counts, unique segments sent, score/rescue selection counts, rescue reason counts, and explicit filter failure state.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
 - `openai_scoring_summary.json`: model, initial candidate limit, finalist scoring limit, eligible/selected/sent counts, preselection/finalist counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, selected clip score source counts, and not-scored reasons.
@@ -759,6 +897,7 @@ Subtitle readability behavior:
 - Advanced API settings: `maxCharsPerLineShort`, `maxCharsPerLineNormal`, `maxLines`, `minSubtitleDuration`, `maxSubtitleDuration`, `minGapBetweenSubtitles`.
 - Task 35 subtitle-only 58-minute smoke regenerated ASS files without re-rendering MP4 and reduced subtitle density warnings to normal `1`, short `0`.
 - Backend and worker containers install `fonts-noto-cjk`; generated ASS files use `Noto Sans CJK JP` so Japanese subtitles do not render as missing-glyph boxes.
+- Upload settings expose only Japanese-capable fonts verified inside the worker: `Noto Sans CJK JP`, `Noto Serif CJK JP`, and `Noto Sans Mono CJK JP`.
 
 Short composition fallback behavior:
 

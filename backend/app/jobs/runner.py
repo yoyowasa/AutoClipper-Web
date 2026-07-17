@@ -12,8 +12,23 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from sqlalchemy.orm import Session
 
 from app.audio.extract import extract_mono_wav
+from app.audio.openai_transcript_correction import (
+    OpenAITranscriptCorrector,
+    TranscriptCorrectionResult,
+    correction_diff_output_path,
+    correction_progress_output_path,
+    correction_summary_output_path,
+    deterministic_transcript_output_path,
+    disabled_correction_result,
+    fallback_correction_result,
+    filter_failed_correction_result,
+    write_corrected_transcript,
+    write_correction_diff,
+    write_correction_summary,
+)
 from app.audio.silence_detect import SilenceSegment, detect_silence, silence_output_path, write_silence_segments
 from app.audio.transcript_postprocess import (
+    DEFAULT_TRANSCRIPT_REPLACEMENTS,
     postprocess_transcript_segments,
     raw_transcript_output_path,
     transcript_postprocess_summary_path,
@@ -24,6 +39,12 @@ from app.audio.transcribe_faster_whisper import (
     TranscriptSegment,
     transcript_output_path,
     write_transcript_segments,
+)
+from app.audio.transcript_suspicion import (
+    TranscriptSuspicionResult,
+    analyze_transcript_suspicion,
+    write_suspicion_artifacts,
+    write_suspicion_failure_summary,
 )
 from app.audio.volume_features import AudioFeatures, audio_features_output_path, compute_audio_features, write_audio_features
 from app.candidates.deduplicate import time_overlap_ratio
@@ -120,6 +141,7 @@ class AutoClipperPipelineDependencies:
     normal_renderer: Callable[..., Path] = render_normal_clip
     short_renderer: Callable[..., Any] = render_short_clip
     openai_scorer: OpenAICandidateScorer | None = None
+    transcript_corrector: OpenAITranscriptCorrector | None = None
 
 
 class PipelineExpectedError(Exception):
@@ -130,8 +152,106 @@ class PipelineExpectedError(Exception):
         self.details = details or {}
 
 
-def _default_transcribe_audio(wav_path: str | Path) -> list[TranscriptSegment]:
-    return FasterWhisperTranscriptionEngine().transcribe(wav_path)
+WHISPER_MODEL_SIZES = {"base", "small", "medium", "large-v3"}
+TRANSCRIPTION_LANGUAGES = {"auto", "ja"}
+
+
+def _whisper_model_size_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("whisperModelSize") or settings.get("whisper_model_size") or "base"
+    normalized = str(value).strip()
+    return normalized if normalized in WHISPER_MODEL_SIZES else "base"
+
+
+def _transcription_language_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("transcriptionLanguage") or settings.get("transcription_language") or "auto"
+    normalized = str(value).strip().lower()
+    return normalized if normalized in TRANSCRIPTION_LANGUAGES else "auto"
+
+
+def _subtitle_correction_mode_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("subtitleCorrectionMode") or settings.get("subtitle_correction_mode") or "off"
+    normalized = str(value).strip().lower()
+    return normalized if normalized in {"off", "openai"} else "off"
+
+
+def _subtitle_correction_model_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("subtitleCorrectionModel") or settings.get("subtitle_correction_model") or "gpt-5.5"
+    normalized = str(value).strip()
+    return normalized or "gpt-5.5"
+
+
+def _subtitle_correction_batch_size_setting(settings: dict[str, Any]) -> int:
+    return max(1, min(100, _int_setting(settings, "subtitleCorrectionBatchSize", 40)))
+
+
+def _subtitle_correction_scope_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("subtitleCorrectionScope") or settings.get("subtitle_correction_scope") or "all"
+    normalized = str(value).strip().lower()
+    return normalized if normalized in {"all", "suspicious"} else "all"
+
+
+def _float_setting(settings: dict[str, Any], key: str, default: float) -> float:
+    try:
+        return float(settings.get(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _transcript_correction_glossary(settings: dict[str, Any]) -> list[str]:
+    terms: list[str] = []
+    if _bool_setting(settings, "useDefaultTranscriptDictionary", True):
+        terms.extend(DEFAULT_TRANSCRIPT_REPLACEMENTS.values())
+    replacements = settings.get("transcriptReplacements")
+    if isinstance(replacements, dict):
+        terms.extend(str(value).strip() for value in replacements.values())
+    custom_glossary = settings.get("transcriptCorrectionGlossary")
+    if isinstance(custom_glossary, list):
+        terms.extend(str(term).strip() for term in custom_glossary)
+    return list(dict.fromkeys(term for term in terms if term))
+
+
+def _apply_transcript_correction(
+    segments: Sequence[TranscriptSegment],
+    settings: dict[str, Any],
+    *,
+    corrector: OpenAITranscriptCorrector | None = None,
+    target_indices: Sequence[int] | None = None,
+    progress_callback: Callable[[int, int, int], None] | None = None,
+) -> TranscriptCorrectionResult:
+    mode = _subtitle_correction_mode_setting(settings)
+    model = _subtitle_correction_model_setting(settings)
+    if mode == "off":
+        return disabled_correction_result(segments, model)
+    needs_api_call = target_indices is None or bool(target_indices)
+    if corrector is None and needs_api_call and not os.getenv("OPENAI_API_KEY"):
+        raise PipelineExpectedError(
+            "openai_configuration_missing",
+            "OPENAI_API_KEY is required when subtitleCorrectionMode is openai.",
+            details={"setting": "OPENAI_API_KEY", "feature": "subtitle_correction"},
+        )
+
+    active_corrector = corrector or OpenAITranscriptCorrector(model=model)
+    min_confidence = max(0.0, min(1.0, _float_setting(settings, "subtitleCorrectionMinConfidence", 0.9)))
+    batch_size = _subtitle_correction_batch_size_setting(settings)
+    context_segments = min(10, _int_setting(settings, "subtitleCorrectionContextSegments", 2))
+    try:
+        return active_corrector.correct_segments(
+            segments,
+            min_confidence=min_confidence,
+            batch_size=batch_size,
+            context_segments=context_segments,
+            glossary=_transcript_correction_glossary(settings),
+            target_indices=target_indices,
+            progress_callback=progress_callback,
+        )
+    except Exception as exc:
+        if _bool_setting(settings, "subtitleCorrectionFallbackEnabled", True):
+            return fallback_correction_result(segments, active_corrector, exc)
+        raise PipelineExpectedError(
+            "openai_subtitle_correction_failed",
+            f"OpenAI subtitle correction failed: {exc}",
+            details={"model": model, "fallback_enabled": False},
+        ) from exc
 
 
 def _truthy_setting(settings: dict[str, Any], key: str) -> bool:
@@ -236,6 +356,44 @@ def _set_status(db: Session, job: Job, status: str) -> None:
 
 
 def _heartbeat_job(db: Session, job: Job) -> None:
+    job.updated_at = utc_now()
+    db.commit()
+    db.refresh(job)
+
+
+def _record_subtitle_correction_progress(
+    db: Session,
+    job: Job,
+    output_path: Path,
+    *,
+    completed_batches: int,
+    total_batches: int,
+    retry_count: int,
+    target_segments_completed: int = 0,
+    target_segments_total: int = 0,
+    transcript_segment_count: int = 0,
+    finished: bool = False,
+    fallback_used: bool = False,
+) -> None:
+    bounded_total = max(0, total_batches)
+    bounded_completed = max(0, min(completed_batches, bounded_total))
+    stage_progress = 100 if finished else (100 if bounded_total == 0 else int(bounded_completed * 100 / bounded_total))
+    payload = {
+        "stage": "correcting_subtitles",
+        "stageProgress": stage_progress,
+        "correctionBatchesCompleted": bounded_completed,
+        "correctionBatchesTotal": bounded_total,
+        "correctionRetryCount": max(0, retry_count),
+        "correctionTargetsCompleted": max(0, min(target_segments_completed, target_segments_total)),
+        "correctionTargetsTotal": max(0, target_segments_total),
+        "transcriptSegmentCount": max(0, transcript_segment_count),
+        "fallbackUsed": fallback_used,
+        "finished": finished,
+    }
+    _write_json(output_path, payload)
+    job.status = "correcting_subtitles"
+    job.progress = min(39, PROGRESS_MAP["correcting_subtitles"] + int(stage_progress * 8 / 100))
+    job.current_step = f"Correcting subtitles ({bounded_completed}/{bounded_total} batches)"
     job.updated_at = utc_now()
     db.commit()
     db.refresh(job)
@@ -1218,7 +1376,7 @@ def run_autoclipper_job(
 ) -> list[str]:
     storage_paths = paths or get_storage_paths()
     deps = dependencies or AutoClipperPipelineDependencies()
-    transcribe_audio = deps.transcribe_audio or _default_transcribe_audio
+    transcribe_audio = deps.transcribe_audio
     detect_silence_for_audio = deps.detect_silence or _default_detect_silence
     visited_statuses: list[str] = []
     metadata_files: list[Path] = []
@@ -1235,6 +1393,8 @@ def run_autoclipper_job(
     openai_scoring_summary: dict[str, Any] | None = None
     exports: list[ExportItem] = []
     transcription_engine = "not_run"
+    transcription_model: str | None = None
+    transcription_language: str | None = None
     used_fixture_transcript = False
     summary_files: list[Path] = []
     temp_dir: Path | None = None
@@ -1248,6 +1408,8 @@ def run_autoclipper_job(
             raise ValueError(f"video not found for job: {job_id}")
 
         settings = dict(job.settings_json or {})
+        configured_transcription_model = _whisper_model_size_setting(settings)
+        configured_transcription_language = _transcription_language_setting(settings)
         used_fixture_transcript = _e2e_fixture_transcript_enabled(settings)
         job_dir = storage_paths.job_outputs(job.id)
         temp_dir = storage_paths.temp / job.id
@@ -1271,6 +1433,8 @@ def run_autoclipper_job(
                 exports=exports,
                 transcription_engine=transcription_engine,
                 used_fixture_transcript=used_fixture_transcript,
+                transcription_model=transcription_model,
+                transcription_language=transcription_language,
             )
 
         try:
@@ -1319,11 +1483,22 @@ def run_autoclipper_job(
             visited_statuses.append("transcribing")
             if used_fixture_transcript:
                 transcription_engine = "e2e_fixture"
+                transcription_model = "fixture"
+                transcription_language = "fixture"
                 transcript_segments = _e2e_fixture_transcript(duration)
             else:
                 transcription_engine = "faster_whisper"
+                transcription_model = configured_transcription_model
+                transcription_language = configured_transcription_language
                 try:
-                    transcript_segments = transcribe_audio(audio_path)
+                    if transcribe_audio is not None:
+                        transcript_segments = transcribe_audio(audio_path)
+                    else:
+                        engine = FasterWhisperTranscriptionEngine(
+                            model_size=configured_transcription_model,
+                            language=None if configured_transcription_language == "auto" else configured_transcription_language,
+                        )
+                        transcript_segments = engine.transcribe(audio_path)
                 except Exception as exc:
                     raise PipelineExpectedError(
                         "transcription_failed",
@@ -1338,6 +1513,137 @@ def run_autoclipper_job(
                 transcript_postprocess_summary_path(job_dir),
             )
             metadata_files.append(postprocess_summary_path)
+            deterministic_path = write_transcript_segments(
+                transcript_segments,
+                deterministic_transcript_output_path(job_dir),
+            )
+            metadata_files.append(deterministic_path)
+
+            correction_mode = _subtitle_correction_mode_setting(settings)
+            correction_scope = _subtitle_correction_scope_setting(settings)
+            correction_progress_path = correction_progress_output_path(job_dir)
+            correction_progress_state = {"completed": 0, "total": 0, "retries": 0}
+            correction_progress_callback: Callable[[int, int, int], None] | None = None
+            correction_target_indices: list[int] | None = None
+            suspicion_result: TranscriptSuspicionResult | None = None
+            suspicion_filter_error: Exception | None = None
+            if correction_mode == "openai":
+                if correction_scope == "suspicious":
+                    try:
+                        suspicion_result = analyze_transcript_suspicion(
+                            transcript_segments,
+                            threshold=max(
+                                0.0,
+                                min(1.0, _float_setting(settings, "subtitleCorrectionSuspicionThreshold", 0.40)),
+                            ),
+                            context_segments=min(10, _int_setting(settings, "subtitleCorrectionContextSegments", 2)),
+                            batch_size=_subtitle_correction_batch_size_setting(settings),
+                            glossary=_transcript_correction_glossary(settings),
+                            replacements=(
+                                settings.get("transcriptReplacements")
+                                if isinstance(settings.get("transcriptReplacements"), dict)
+                                else None
+                            ),
+                        )
+                        correction_target_indices = suspicion_result.target_indices
+                        metadata_files.extend(write_suspicion_artifacts(suspicion_result, job_dir))
+                    except Exception as exc:
+                        suspicion_filter_error = exc
+                        correction_target_indices = []
+                        metadata_files.append(
+                            write_suspicion_failure_summary(
+                                job_dir,
+                                segment_count=len(transcript_segments),
+                                threshold=max(
+                                    0.0,
+                                    min(
+                                        1.0,
+                                        _float_setting(settings, "subtitleCorrectionSuspicionThreshold", 0.40),
+                                    ),
+                                ),
+                                exc=exc,
+                            )
+                        )
+                _set_status(db, job, "correcting_subtitles")
+                visited_statuses.append("correcting_subtitles")
+                batch_size = _subtitle_correction_batch_size_setting(settings)
+                target_segment_count = (
+                    len(correction_target_indices)
+                    if correction_target_indices is not None
+                    else len(transcript_segments)
+                )
+                total_batches = (target_segment_count + batch_size - 1) // batch_size
+                _record_subtitle_correction_progress(
+                    db,
+                    job,
+                    correction_progress_path,
+                    completed_batches=0,
+                    total_batches=total_batches,
+                    retry_count=0,
+                    target_segments_total=target_segment_count,
+                    transcript_segment_count=len(transcript_segments),
+                )
+                metadata_files.append(correction_progress_path)
+
+                def correction_progress_callback(completed: int, total: int, retries: int) -> None:
+                    correction_progress_state.update(completed=completed, total=total, retries=retries)
+                    completed_targets = min(completed * batch_size, target_segment_count)
+                    _record_subtitle_correction_progress(
+                        db,
+                        job,
+                        correction_progress_path,
+                        completed_batches=completed,
+                        total_batches=total,
+                        retry_count=retries,
+                        target_segments_completed=completed_targets,
+                        target_segments_total=target_segment_count,
+                        transcript_segment_count=len(transcript_segments),
+                    )
+
+            if suspicion_filter_error is not None:
+                correction_result = filter_failed_correction_result(
+                    transcript_segments,
+                    _subtitle_correction_model_setting(settings),
+                    suspicion_filter_error,
+                )
+            else:
+                correction_result = _apply_transcript_correction(
+                    transcript_segments,
+                    settings,
+                    corrector=deps.transcript_corrector,
+                    target_indices=correction_target_indices,
+                    progress_callback=correction_progress_callback,
+                )
+            if correction_mode == "openai":
+                final_target_total = int(correction_result.summary.get("target_segment_count", 0))
+                _record_subtitle_correction_progress(
+                    db,
+                    job,
+                    correction_progress_path,
+                    completed_batches=correction_progress_state["completed"],
+                    total_batches=correction_progress_state["total"],
+                    retry_count=correction_progress_state["retries"],
+                    target_segments_completed=(
+                        0 if correction_result.summary.get("fallback_used") else final_target_total
+                    ),
+                    target_segments_total=final_target_total,
+                    transcript_segment_count=len(transcript_segments),
+                    finished=True,
+                    fallback_used=bool(correction_result.summary.get("fallback_used")),
+                )
+            correction_summary_path = write_correction_summary(
+                correction_result.summary,
+                correction_summary_output_path(job_dir),
+            )
+            correction_diff_path = write_correction_diff(
+                correction_result,
+                correction_diff_output_path(job_dir),
+            )
+            metadata_files.extend([correction_summary_path, correction_diff_path])
+            if correction_mode == "openai":
+                metadata_files.append(write_corrected_transcript(correction_result, job_dir))
+
+            transcript_segments = correction_result.segments
             transcript_path = write_transcript_segments(transcript_segments, transcript_output_path(job_dir))
             metadata_files.append(transcript_path)
             _raise_if_transcript_unusable(transcript_segments)

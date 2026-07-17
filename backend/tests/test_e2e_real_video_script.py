@@ -23,6 +23,16 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.short_count == 1
     assert args.mode == "low_cost"
     assert args.profile == "talk"
+    assert args.whisper_model_size == "base"
+    assert args.transcription_language == "auto"
+    assert args.subtitle_correction_mode == "off"
+    assert args.subtitle_correction_scope == "all"
+    assert args.subtitle_correction_suspicion_threshold == 0.4
+    assert args.subtitle_correction_model == "gpt-5.5"
+    assert args.subtitle_correction_min_confidence == 0.9
+    assert args.subtitle_correction_batch_size == 40
+    assert args.subtitle_correction_context_segments == 2
+    assert args.subtitle_correction_fallback_enabled is True
     assert args.burn_subtitles is True
     assert args.normal_min_duration == 90.0
     assert args.normal_max_duration == 600.0
@@ -49,6 +59,20 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
 
     no_flag_args = script.parse_args(["--video", "spoken.mp4", "--no-burn-subtitles"])
     assert no_flag_args.burn_subtitles is False
+
+
+@pytest.mark.parametrize(
+    "option,value",
+    [
+        ("--subtitle-correction-min-confidence", "1.1"),
+        ("--subtitle-correction-min-confidence", "-0.1"),
+        ("--subtitle-correction-suspicion-threshold", "1.1"),
+        ("--subtitle-correction-batch-size", "0"),
+    ],
+)
+def test_parse_args_rejects_invalid_subtitle_correction_values(option: str, value: str) -> None:
+    with pytest.raises(SystemExit):
+        script.parse_args(["--video", "spoken.mp4", option, value])
 
 
 def test_parse_args_30min_validation_profile_and_overrides() -> None:
@@ -117,6 +141,14 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "low_cost",
             "--profile",
             "talk",
+            "--whisper-model-size",
+            "small",
+            "--transcription-language",
+            "ja",
+            "--subtitle-correction-mode",
+            "openai",
+            "--subtitle-correction-model",
+            "gpt-5.5",
             "--normal-min-duration",
             "20",
             "--normal-max-duration",
@@ -131,6 +163,10 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "true",
             "--openai-candidate-limit",
             "7",
+            "--subtitle-correction-scope",
+            "suspicious",
+            "--subtitle-correction-suspicion-threshold",
+            "0.6",
             "--openai-model",
             "gpt-test",
             "--ensure-selected-openai-scored",
@@ -161,6 +197,12 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     settings = script.build_job_settings(args)
 
     assert settings["e2eFixtureTranscript"] is False
+    assert settings["whisperModelSize"] == "small"
+    assert settings["transcriptionLanguage"] == "ja"
+    assert settings["subtitleCorrectionMode"] == "openai"
+    assert settings["subtitleCorrectionScope"] == "suspicious"
+    assert settings["subtitleCorrectionSuspicionThreshold"] == 0.6
+    assert settings["subtitleCorrectionModel"] == "gpt-5.5"
     assert settings["useOpenAIScoring"] is True
     assert settings["normalClipCount"] == 2
     assert settings["shortCount"] == 0
@@ -246,6 +288,7 @@ def test_runtime_metrics_use_observed_status_transitions() -> None:
 
     assert metrics["upload_time"] == 1.25
     assert metrics["transcription_time"] == pytest.approx(5.5)
+    assert metrics["subtitle_correction_time"] is None
     assert metrics["scene_detection_time"] == pytest.approx(0.5)
     assert metrics["candidate_generation_time"] == pytest.approx(4.0)
     assert metrics["scoring_time"] == pytest.approx(2.5)
@@ -257,6 +300,25 @@ def test_runtime_metrics_use_observed_status_transitions() -> None:
     assert metrics["total_time"] == 50.0
     assert script.format_seconds(None) == "n/a"
     assert script.format_seconds(1.23456) == "1.235s"
+
+
+def test_runtime_metrics_separate_subtitle_correction_time() -> None:
+    timing = script.TimedJobResult(
+        final_status={"status": "completed"},
+        status_times={
+            "transcribing": 10.0,
+            "correcting_subtitles": 15.0,
+            "detecting_scenes": 35.0,
+            "completed": 40.0,
+        },
+        poll_started_at=9.0,
+        poll_finished_at=40.0,
+    )
+
+    metrics = script.runtime_metrics(upload_seconds=1.0, job_timing=timing, total_seconds=41.0)
+
+    assert metrics["transcription_time"] == pytest.approx(5.0)
+    assert metrics["subtitle_correction_time"] == pytest.approx(20.0)
 
 
 def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
@@ -633,6 +695,26 @@ def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: py
     )
     assert "changed_segments=1" in postprocess_line
     assert "オープンAI" in postprocess_line
+    correction_line = e2e_summary.summary_line(
+        "transcript_correction_summary.json",
+        {
+            "enabled": True,
+            "model": "gpt-5.5",
+            "corrected_segment_count": 3,
+            "unchanged_segment_count": 17,
+            "low_confidence_rejected_count": 1,
+            "safety_rejected_count": 2,
+            "fallback_used": False,
+            "api_call_count": 2,
+            "schema_validation_failures": 0,
+            "processing_seconds": 1.25,
+        },
+    )
+    assert "model=gpt-5.5" in correction_line
+    assert "corrected=3" in correction_line
+    assert "safety_rejected=2" in correction_line
+    assert "fallback=False" in correction_line
+    assert "calls=2" in correction_line
     openai_line = e2e_summary.summary_line(
         "openai_scoring_summary.json",
         {

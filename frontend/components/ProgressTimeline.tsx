@@ -1,6 +1,6 @@
 import type { JobStatus } from "../lib/types";
 
-const STEPS: JobStatus[] = [
+const BASE_STEPS: JobStatus[] = [
   "queued",
   "probing",
   "extracting_audio",
@@ -16,12 +16,20 @@ const STEPS: JobStatus[] = [
 ];
 
 export function ProgressTimeline({ status }: { status: JobStatus }) {
-  const activeIndex = STEPS.indexOf(status);
+  const steps =
+    status === "correcting_subtitles"
+      ? [
+          ...BASE_STEPS.slice(0, BASE_STEPS.indexOf("transcribing") + 1),
+          "correcting_subtitles" as const,
+          ...BASE_STEPS.slice(BASE_STEPS.indexOf("transcribing") + 1)
+        ]
+      : BASE_STEPS;
+  const activeIndex = steps.indexOf(status);
 
   return (
     <section className="rounded-md border border-neutral-300 bg-white p-5">
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-        {STEPS.map((step, index) => {
+        {steps.map((step, index) => {
           const isDone = status === "completed" || (activeIndex >= 0 && index < activeIndex);
           const isCurrent = step === status;
           return (
