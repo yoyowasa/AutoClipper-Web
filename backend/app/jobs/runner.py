@@ -154,6 +154,16 @@ class PipelineExpectedError(Exception):
 
 WHISPER_MODEL_SIZES = {"base", "small", "medium", "large-v3"}
 TRANSCRIPTION_LANGUAGES = {"auto", "ja"}
+SUBTITLE_CORRECTION_REASONING_EFFORTS = {
+    "default",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+}
 
 
 def _whisper_model_size_setting(settings: dict[str, Any]) -> str:
@@ -178,6 +188,16 @@ def _subtitle_correction_model_setting(settings: dict[str, Any]) -> str:
     value = settings.get("subtitleCorrectionModel") or settings.get("subtitle_correction_model") or "gpt-5.5"
     normalized = str(value).strip()
     return normalized or "gpt-5.5"
+
+
+def _subtitle_correction_reasoning_effort_setting(settings: dict[str, Any]) -> str:
+    value = (
+        settings.get("subtitleCorrectionReasoningEffort")
+        or settings.get("subtitle_correction_reasoning_effort")
+        or "default"
+    )
+    normalized = str(value).strip().lower()
+    return normalized if normalized in SUBTITLE_CORRECTION_REASONING_EFFORTS else "default"
 
 
 def _subtitle_correction_batch_size_setting(settings: dict[str, Any]) -> int:
@@ -230,7 +250,10 @@ def _apply_transcript_correction(
             details={"setting": "OPENAI_API_KEY", "feature": "subtitle_correction"},
         )
 
-    active_corrector = corrector or OpenAITranscriptCorrector(model=model)
+    active_corrector = corrector or OpenAITranscriptCorrector(
+        model=model,
+        reasoning_effort=_subtitle_correction_reasoning_effort_setting(settings),
+    )
     min_confidence = max(0.0, min(1.0, _float_setting(settings, "subtitleCorrectionMinConfidence", 0.9)))
     batch_size = _subtitle_correction_batch_size_setting(settings)
     context_segments = min(10, _int_setting(settings, "subtitleCorrectionContextSegments", 2))
@@ -250,7 +273,11 @@ def _apply_transcript_correction(
         raise PipelineExpectedError(
             "openai_subtitle_correction_failed",
             f"OpenAI subtitle correction failed: {exc}",
-            details={"model": model, "fallback_enabled": False},
+            details={
+                "model": model,
+                "reasoning_effort": _subtitle_correction_reasoning_effort_setting(settings),
+                "fallback_enabled": False,
+            },
         ) from exc
 
 

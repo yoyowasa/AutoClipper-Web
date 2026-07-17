@@ -62,6 +62,15 @@ export type ClipSettings = {
   transcriptCorrectionGlossary?: string[];
   subtitleCorrectionSuspicionThreshold: number;
   subtitleCorrectionModel: string;
+  subtitleCorrectionReasoningEffort:
+    | "default"
+    | "none"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "max";
   subtitleCorrectionMinConfidence: number;
   subtitleCorrectionBatchSize: number;
   subtitleCorrectionContextSegments: number;

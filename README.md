@@ -491,6 +491,7 @@ python scripts/e2e_real_video.py `
   --subtitle-correction-scope suspicious `
   --subtitle-correction-suspicion-threshold 0.4 `
   --subtitle-correction-model gpt-5.5 `
+  --subtitle-correction-reasoning-effort default `
   --subtitle-correction-min-confidence 0.9 `
   --subtitle-correction-batch-size 40 `
   --subtitle-correction-context-segments 2
@@ -532,6 +533,37 @@ While correction is running, `GET /api/jobs/{job_id}` returns `status=correcting
 ```
 
 The job page shows this stage percentage separately from overall pipeline progress. Batch completion and retries refresh the worker heartbeat. Correction-off jobs keep the existing `transcribing` to `detecting_scenes` transition.
+
+`subtitleCorrectionReasoningEffort=default` preserves compatibility by omitting the Responses API
+`reasoning` parameter. Explicit values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
+`max`; accepted values depend on the selected model. Correction summaries separate `output_tokens`
+into `reasoning_tokens` and `visible_output_tokens` when the API returns usage details.
+
+Use the fixed-transcript benchmark before changing the production default:
+
+```powershell
+python scripts/benchmark_subtitle_correction_models.py `
+  --phase probe `
+  --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
+  --targets-file storage/outputs/JOB_ID/subtitle_correction_targets.json `
+  --probe-target-index 0 `
+  --output-dir storage/temp/subtitle_correction_probe
+
+python scripts/benchmark_subtitle_correction_models.py `
+  --phase benchmark `
+  --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
+  --targets-file storage/outputs/JOB_ID/subtitle_correction_targets.json `
+  --probe-report storage/temp/subtitle_correction_probe/subtitle_correction_probe_report.json `
+  --batch-size 100 `
+  --context-segments 2 `
+  --output-dir storage/temp/subtitle_correction_benchmark
+```
+
+The probe sends one text segment per profile. The benchmark sends transcript text/features only,
+never video or audio. Reports include actual API token usage, reasoning/visible output token splits,
+processing time, schema/fallback counts, timestamp preservation, CER when a reference is supplied,
+proper-noun matches, and a usage-based cost estimate. See
+`docs/SUBTITLE_CORRECTION_MODEL_BENCHMARK.md`.
 
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
@@ -705,6 +737,7 @@ Troubleshooting:
     "transcriptCorrectionGlossary": [],
     "subtitleCorrectionSuspicionThreshold": 0.4,
     "subtitleCorrectionModel": "gpt-5.5",
+    "subtitleCorrectionReasoningEffort": "default",
     "subtitleCorrectionMinConfidence": 0.9,
     "subtitleCorrectionBatchSize": 40,
     "subtitleCorrectionContextSegments": 2,
@@ -753,6 +786,7 @@ Production-safe defaults remain:
 - `transcriptCorrectionGlossary`: `[]`
 - `subtitleCorrectionSuspicionThreshold`: `0.4`
 - `subtitleCorrectionModel`: `gpt-5.5`
+- `subtitleCorrectionReasoningEffort`: `default` (omit the API reasoning parameter)
 - `subtitleCorrectionMinConfidence`: `0.9`
 - `subtitleCorrectionBatchSize`: `40`
 - `subtitleCorrectionContextSegments`: `2`
@@ -787,7 +821,7 @@ Transcript post-processing:
 - Add project-specific replacements with `transcriptReplacements`; this does not call OpenAI.
 - Disable with `enableTranscriptPostProcessing=false` when raw transcription text is needed for debugging.
 
-OpenAI subtitle correction runs after deterministic post-processing when `subtitleCorrectionMode=openai`. The final `transcript_segments.json` is used by candidate generation and subtitle rendering. Correction never changes segment timestamps or count. Correction summaries include target/context counts and actual Responses API `input_tokens`, `output_tokens`, and `cached_tokens` when the API returns usage data.
+OpenAI subtitle correction runs after deterministic post-processing when `subtitleCorrectionMode=openai`. The final `transcript_segments.json` is used by candidate generation and subtitle rendering. Correction never changes segment timestamps or count. Correction summaries include target/context counts and actual Responses API `input_tokens`, `output_tokens`, `reasoning_tokens`, `visible_output_tokens`, and `cached_tokens` when the API returns usage data.
 
 ## Generation Diagnostics
 

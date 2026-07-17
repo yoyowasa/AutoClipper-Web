@@ -33,6 +33,16 @@ TRANSIENT_ERROR_NAMES = {
     "InternalServerError",
     "RateLimitError",
 }
+SUBTITLE_CORRECTION_REASONING_EFFORTS = {
+    "default",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+}
 
 SYSTEM_PROMPT = """You correct ASR errors in Japanese subtitle segments.
 Return only the requested structured output.
@@ -62,6 +72,7 @@ CorrectionProgressCallback = Callable[[int, int, int], None]
 @dataclass
 class TranscriptCorrectionStats:
     model: str
+    reasoning_effort: str = "default"
     scope: str = "all"
     input_segment_count: int = 0
     target_segment_count: int = 0
@@ -81,6 +92,7 @@ class TranscriptCorrectionStats:
     estimated_output_text_length: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    reasoning_tokens: int = 0
     cached_tokens: int = 0
     reason_counts: Counter[str] = field(default_factory=Counter)
     safety_rejection_counts: Counter[str] = field(default_factory=Counter)
@@ -90,6 +102,7 @@ class TranscriptCorrectionStats:
         return {
             "enabled": enabled,
             "model": self.model,
+            "reasoning_effort": self.reasoning_effort,
             "scope": self.scope,
             "input_segment_count": self.input_segment_count,
             "target_segment_count": self.target_segment_count,
@@ -111,6 +124,8 @@ class TranscriptCorrectionStats:
             "estimated_output_text_length": self.estimated_output_text_length,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "visible_output_tokens": max(0, self.output_tokens - self.reasoning_tokens),
             "cached_tokens": self.cached_tokens,
             "reason_counts": dict(sorted(self.reason_counts.items())),
             "safety_rejection_counts": dict(sorted(self.safety_rejection_counts.items())),
@@ -163,16 +178,21 @@ class OpenAITranscriptCorrector:
         client: OpenAIClientProtocol | None = None,
         *,
         model: str = "gpt-5.5",
+        reasoning_effort: str = "default",
         max_retries: int = 3,
         retry_backoff_seconds: float = 0.25,
         sleep_func: Callable[[float], None] = time.sleep,
     ) -> None:
+        normalized_reasoning_effort = str(reasoning_effort).strip().lower()
+        if normalized_reasoning_effort not in SUBTITLE_CORRECTION_REASONING_EFFORTS:
+            raise ValueError(f"unsupported subtitle correction reasoning effort: {reasoning_effort}")
         self._client = client
         self.model = model
+        self.reasoning_effort = normalized_reasoning_effort
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
         self.sleep_func = sleep_func
-        self.stats = TranscriptCorrectionStats(model=model)
+        self.stats = TranscriptCorrectionStats(model=model, reasoning_effort=self.reasoning_effort)
 
     @property
     def client(self) -> OpenAIClientProtocol:
@@ -192,7 +212,7 @@ class OpenAITranscriptCorrector:
         progress_callback: CorrectionProgressCallback | None = None,
     ) -> TranscriptCorrectionResult:
         started_at = time.monotonic()
-        self.stats = TranscriptCorrectionStats(model=self.model)
+        self.stats = TranscriptCorrectionStats(model=self.model, reasoning_effort=self.reasoning_effort)
         source = list(segments)
         self.stats.input_segment_count = len(source)
         selected_indices = list(range(len(source))) if target_indices is None else sorted(set(target_indices))
@@ -306,14 +326,17 @@ class OpenAITranscriptCorrector:
             try:
                 self.stats.api_call_count += 1
                 self.stats.estimated_input_text_length += len(SYSTEM_PROMPT) + len(user_content)
-                response = self.client.responses.create(
-                    model=self.model,
-                    input=[
+                request: dict[str, Any] = {
+                    "model": self.model,
+                    "input": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_content},
                     ],
-                    text={"format": transcript_correction_response_format(len(targets))},
-                )
+                    "text": {"format": transcript_correction_response_format(len(targets))},
+                }
+                if self.reasoning_effort != "default":
+                    request["reasoning"] = {"effort": self.reasoning_effort}
+                response = self.client.responses.create(**request)
                 self._record_usage(response)
                 text = _extract_response_text(response)
                 self.stats.estimated_output_text_length += len(text)
@@ -356,11 +379,16 @@ class OpenAITranscriptCorrector:
 
         self.stats.input_tokens += value(usage, "input_tokens")
         self.stats.output_tokens += value(usage, "output_tokens")
-        details = usage.get("input_tokens_details") if isinstance(usage, Mapping) else getattr(
+        input_details = usage.get("input_tokens_details") if isinstance(usage, Mapping) else getattr(
             usage, "input_tokens_details", None
         )
-        if details is not None:
-            self.stats.cached_tokens += value(details, "cached_tokens")
+        if input_details is not None:
+            self.stats.cached_tokens += value(input_details, "cached_tokens")
+        output_details = usage.get("output_tokens_details") if isinstance(usage, Mapping) else getattr(
+            usage, "output_tokens_details", None
+        )
+        if output_details is not None:
+            self.stats.reasoning_tokens += value(output_details, "reasoning_tokens")
 
     @staticmethod
     def _validate_batch(
