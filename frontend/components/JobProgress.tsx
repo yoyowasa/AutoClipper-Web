@@ -10,6 +10,9 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
   const correctionCompleted = detailNumber("correctionBatchesCompleted");
   const correctionTotal = detailNumber("correctionBatchesTotal");
   const correctionRetries = detailNumber("correctionRetryCount");
+  const correctionTargetsCompleted = detailNumber("correctionTargetsCompleted");
+  const correctionTargetsTotal = detailNumber("correctionTargetsTotal");
+  const transcriptSegmentCount = detailNumber("transcriptSegmentCount");
   const showCorrectionProgress =
     job.status === "correcting_subtitles" &&
     correctionProgress !== null &&
@@ -64,6 +67,12 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
             </div>
             {correctionRetries && correctionRetries > 0 ? (
               <p className="mt-2 text-xs text-amber-700">API retry: {correctionRetries}</p>
+            ) : null}
+            {correctionTargetsTotal !== null && transcriptSegmentCount !== null ? (
+              <p className="mt-2 text-xs text-neutral-600">
+                対象segment {correctionTargetsCompleted ?? 0}/{correctionTargetsTotal} ・ 全segment{" "}
+                {transcriptSegmentCount}
+              </p>
             ) : null}
           </div>
         ) : null}

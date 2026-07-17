@@ -17,6 +17,7 @@ from app.audio.transcript_correction_schema import (
     transcript_correction_response_format,
 )
 from app.audio.transcribe_faster_whisper import TranscriptSegment, write_transcript_segments
+from app.audio.transcript_suspicion import select_read_only_context_indices
 
 
 DETERMINISTIC_TRANSCRIPT_FILENAME = "deterministic_transcript_segments.json"
@@ -61,7 +62,11 @@ CorrectionProgressCallback = Callable[[int, int, int], None]
 @dataclass
 class TranscriptCorrectionStats:
     model: str
+    scope: str = "all"
     input_segment_count: int = 0
+    target_segment_count: int = 0
+    context_segment_count: int = 0
+    unique_segments_sent: int = 0
     corrected_segment_count: int = 0
     unchanged_segment_count: int = 0
     low_confidence_rejected_count: int = 0
@@ -74,6 +79,9 @@ class TranscriptCorrectionStats:
     processing_seconds: float = 0.0
     estimated_input_text_length: int = 0
     estimated_output_text_length: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
     reason_counts: Counter[str] = field(default_factory=Counter)
     safety_rejection_counts: Counter[str] = field(default_factory=Counter)
     errors: list[str] = field(default_factory=list)
@@ -82,7 +90,11 @@ class TranscriptCorrectionStats:
         return {
             "enabled": enabled,
             "model": self.model,
+            "scope": self.scope,
             "input_segment_count": self.input_segment_count,
+            "target_segment_count": self.target_segment_count,
+            "context_segment_count": self.context_segment_count,
+            "unique_segments_sent": self.unique_segments_sent,
             "corrected_segment_count": self.corrected_segment_count,
             "unchanged_segment_count": self.unchanged_segment_count,
             "low_confidence_rejected_count": self.low_confidence_rejected_count,
@@ -97,6 +109,9 @@ class TranscriptCorrectionStats:
             "processing_seconds": round(self.processing_seconds, 6),
             "estimated_input_text_length": self.estimated_input_text_length,
             "estimated_output_text_length": self.estimated_output_text_length,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "cached_tokens": self.cached_tokens,
             "reason_counts": dict(sorted(self.reason_counts.items())),
             "safety_rejection_counts": dict(sorted(self.safety_rejection_counts.items())),
             "errors": self.errors[:10],
@@ -173,16 +188,24 @@ class OpenAITranscriptCorrector:
         batch_size: int = 40,
         context_segments: int = 2,
         glossary: Sequence[str] = (),
+        target_indices: Sequence[int] | None = None,
         progress_callback: CorrectionProgressCallback | None = None,
     ) -> TranscriptCorrectionResult:
         started_at = time.monotonic()
         self.stats = TranscriptCorrectionStats(model=self.model)
         source = list(segments)
         self.stats.input_segment_count = len(source)
+        selected_indices = list(range(len(source))) if target_indices is None else sorted(set(target_indices))
+        if any(index < 0 or index >= len(source) for index in selected_indices):
+            raise ValueError("correction target index is outside transcript segments")
+        self.stats.scope = "all" if target_indices is None else "suspicious"
+        self.stats.target_segment_count = len(selected_indices)
+        self.stats.unchanged_segment_count = len(source) - len(selected_indices)
         output = list(source)
         changes: list[dict[str, Any]] = []
-        total_batches = (len(source) + batch_size - 1) // batch_size
+        total_batches = (len(selected_indices) + batch_size - 1) // batch_size
         completed_batches = 0
+        context_indices_sent: set[int] = set()
 
         def notify_progress() -> None:
             if progress_callback is not None:
@@ -190,15 +213,20 @@ class OpenAITranscriptCorrector:
 
         notify_progress()
         try:
-            for batch_start in range(0, len(source), batch_size):
-                batch_end = min(len(source), batch_start + batch_size)
-                targets = list(enumerate(source[batch_start:batch_end], start=batch_start))
-                context_start = max(0, batch_start - context_segments)
-                context_end = min(len(source), batch_end + context_segments)
+            for batch_start in range(0, len(selected_indices), batch_size):
+                batch_indices = selected_indices[batch_start : batch_start + batch_size]
+                targets = [(index, source[index]) for index in batch_indices]
+                context_index_set = set(
+                    select_read_only_context_indices(
+                        batch_indices,
+                        segment_count=len(source),
+                        context_segments=context_segments,
+                    )
+                )
+                context_indices_sent.update(context_index_set)
                 context = [
                     {"index": index, "text": source[index].text}
-                    for index in range(context_start, context_end)
-                    if index < batch_start or index >= batch_end
+                    for index in sorted(context_index_set)
                 ]
                 corrected = self._correct_batch(
                     targets,
@@ -242,6 +270,8 @@ class OpenAITranscriptCorrector:
                 completed_batches += 1
                 notify_progress()
         finally:
+            self.stats.context_segment_count = len(context_indices_sent)
+            self.stats.unique_segments_sent = len(set(selected_indices) | context_indices_sent)
             self.stats.processing_seconds = time.monotonic() - started_at
         return TranscriptCorrectionResult(
             segments=output,
@@ -257,15 +287,15 @@ class OpenAITranscriptCorrector:
         glossary: Sequence[str],
         on_retry: Callable[[], None] | None = None,
     ) -> list[CorrectedTranscriptSegment]:
+        def target_payload(index: int, segment: TranscriptSegment) -> dict[str, Any]:
+            return {
+                "index": index,
+                "original_text": segment.text,
+                "asr_confidence": segment.confidence,
+            }
+
         payload = {
-            "target_segments": [
-                {
-                    "index": index,
-                    "original_text": segment.text,
-                    "asr_confidence": segment.confidence,
-                }
-                for index, segment in targets
-            ],
+            "target_segments": [target_payload(index, segment) for index, segment in targets],
             "read_only_context_segments": list(context),
             "preferred_terms": list(dict.fromkeys(term for term in glossary if term.strip())),
         }
@@ -284,6 +314,7 @@ class OpenAITranscriptCorrector:
                     ],
                     text={"format": transcript_correction_response_format(len(targets))},
                 )
+                self._record_usage(response)
                 text = _extract_response_text(response)
                 self.stats.estimated_output_text_length += len(text)
                 result = TranscriptCorrectionBatch.model_validate(json.loads(text))
@@ -308,6 +339,28 @@ class OpenAITranscriptCorrector:
             finally:
                 _ = time.monotonic() - started_at
         raise RuntimeError(f"openai_subtitle_correction_failed: {_safe_error(last_error or RuntimeError('unknown'))}") from last_error
+
+    def _record_usage(self, response: Any) -> None:
+        usage = getattr(response, "usage", None)
+        if usage is None and isinstance(response, Mapping):
+            usage = response.get("usage")
+        if usage is None:
+            return
+
+        def value(source: Any, key: str) -> int:
+            raw = source.get(key) if isinstance(source, Mapping) else getattr(source, key, 0)
+            try:
+                return max(0, int(raw or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        self.stats.input_tokens += value(usage, "input_tokens")
+        self.stats.output_tokens += value(usage, "output_tokens")
+        details = usage.get("input_tokens_details") if isinstance(usage, Mapping) else getattr(
+            usage, "input_tokens_details", None
+        )
+        if details is not None:
+            self.stats.cached_tokens += value(details, "cached_tokens")
 
     @staticmethod
     def _validate_batch(
@@ -350,6 +403,27 @@ def disabled_correction_result(segments: Sequence[TranscriptSegment], model: str
         summary=stats.summary(enabled=False, fallback_used=False, fallback_reason=None),
         changes=[],
     )
+
+
+def filter_failed_correction_result(
+    segments: Sequence[TranscriptSegment],
+    model: str,
+    exc: Exception,
+) -> TranscriptCorrectionResult:
+    source = list(segments)
+    stats = TranscriptCorrectionStats(
+        model=model,
+        scope="suspicious",
+        input_segment_count=len(source),
+        unchanged_segment_count=len(source),
+    )
+    summary = stats.summary(
+        enabled=True,
+        fallback_used=True,
+        fallback_reason=f"suspicion_filter_failed: {_safe_error(exc)}",
+    )
+    summary["filter_failed"] = True
+    return TranscriptCorrectionResult(segments=source, summary=summary, changes=[])
 
 
 def fallback_correction_result(

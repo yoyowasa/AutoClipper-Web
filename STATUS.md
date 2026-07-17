@@ -4331,3 +4331,229 @@ python .\scripts\e2e_real_video.py `
 ### 未解決事項
 
 - 現在のOpenAI quota不足により、今回のruntimeでは成功batchの`1/2 -> 2/2`表示を再確認できなかった。Task60の実API成功経路とTask61の自動testはpass済み。
+
+## 2026-07-12 Task 62 local transcript suspicion filter
+
+### 目的
+
+- OpenAI字幕校正前に疑わしいsegmentをローカル抽出し、API送信量と正常字幕の不要な書き換えを減らす。
+
+### 変更内容
+
+- `subtitleCorrectionScope=all|suspicious`を追加。既定は互換維持の`all`。
+- `subtitleCorrectionSuspicionThreshold`を追加。既定`0.40`。
+- confidence、表記揺れ、固有語候補、反復、文字種、数字、リスト、長尺内の反復漢字複合語を組み合わせてscore/reasonを保存。
+- target以外は変更禁止。contextはread-onlyでbatchごと最大4件。
+- target 0件はAPI call 0件。
+- filter失敗時は全件APIへ切り替えずdeterministic transcriptへfallback。
+- actual input/output/cached token usageを校正summaryへ追加。
+- job API/UIへ対象segment進捗を追加。
+- suspicion segments/summary/targetsの3 artifactをZIPへ追加。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `282 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker runtime smoke: pass。
+- correction OFF sample E2E: pass (`job_47d61624572043b8aba6cfb7491d78fd`)。
+- TTS: target `8/19`、全件採用修正recall `7/7`、総token `3006 -> 2401`。
+- 124秒実話者: calls `2 -> 1`、総token `14124 -> 7729`、校正時間 `157.3s -> 61.0s`。
+- 58分full E2E: pass (`job_31b475f0328f4a6fa0239316100b34a0`)。
+  - target `977/1695`、calls `10/17`、校正時間 `706.5s/1582.6s`。
+  - normal `1/1`、short `2/2`、render failure `0`、sidecar risk `0`。
+- 長尺recall改善後のoffline評価: target `1287/1695`、baseline採用修正coverage `250/273 = 91.6%`、想定calls `13/17`。
+- 詳細: `docs/TRANSCRIPT_SUSPICION_FILTER_2026-07-12.md`。
+
+### 未解決事項
+
+- 最終長尺filterの実API replayは`7/13`成功後、`429 insufficient_quota`で停止。最終signalによる13 batch完走は未確認。
+- 実際のinput token削減率は素材依存。短尺では固定prompt/schema比率が大きく、40%削減を保証しない。
+
+## 2026-07-16 Task 62 final 58-minute API replay retry
+
+### 目的
+
+- PR #42 headで最終13 batch構成を実API再検証し、品質benchmarkとAPI失敗時の耐障害性を確認する。
+
+### 実行条件
+
+- tested commit: `c40e13b8a81f69bcca7fd5126e46845581eb2346`。
+- job: `job_3ec9083055224a9fbd1c8a4b8f904d5b`。
+- input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`。
+- transcription: `small + ja`。
+- correction model: `gpt-5.5`。
+- scope: `suspicious`、threshold: `0.40`、batch size: `100`、context segments: `2`。
+- requested outputs: normal `1`、short `2`。
+
+### 検証結果
+
+- suspicion filter: target `1287/1695`、想定batch `13`。
+- OpenAI API: successful batch `0/13`、failed batch `1`、calls `4`、retry `3`、schema failure `0`。
+- API error: `429 insufficient_quota`。actual token usageはinput/outputともに`0`。
+- fallback: `true`。deterministic transcriptへ戻り、jobは`completed`まで完走。
+- segment count: raw/deterministic/correctedすべて`1695`。
+- array order/start/end timestamp mismatch: `0`。fallback後のdeterministic/corrected text差分: `0`。
+- normal: `1/1`、`1280x720`、`348.982s`。
+- short: `2/2`、両方`1080x1920`、`51.188s` / `61.194s`。
+- render failure: `0`、sidecar risk: `0`、ZIP: `73,695,519 bytes`。
+- runtime: total `674.328s`、transcription `439.047s`、correction/fallback `20.895s`。
+
+### 結論
+
+- 耐障害性実地検証: pass。quota不足でも全件API送信へ切り替えず、出力生成まで完走した。
+- 品質benchmark: fail。`13/13`かつfallback `0`を満たさず、all-modeとのactual token比較は未実施。
+- PR #42はDraftを維持する。quota確保後に同一条件で再実行する。
+
+## 2026-07-16 Task 62 excluded-change classification
+
+### 目的
+
+- all-mode採用変更のうち最終suspicion filterが対象外にした23件を、APIを使わず分類する。
+
+### 検証方法
+
+- baseline all-mode job: `job_0caea4d85baf4e9cbca9a84adaf0be80`。
+- filter job: `job_3ec9083055224a9fbd1c8a4b8f904d5b`。
+- deterministic/OpenAI corrected transcriptの差分273件とtarget index 1287件を集合比較し、対象外23件を抽出。
+- 元動画の該当区間を前後2秒付きで切り出し、ローカル`medium+ja`と`large-v3+ja`で再文字起こし。OpenAI APIは未使用。
+
+### 分類結果
+
+- 有益な修正の見逃し: `19`。
+- 不要な表記変更: `1`（index 110）。
+- 有害な誤修正: `1`（index 1256）。
+- 判断不能: `2`（index 64、164）。
+- 対象外変更の有益候補率: `19/23 = 82.6%`。
+- 詳細: `docs/TRANSCRIPT_SUSPICION_MISSED_CHANGES_2026-07-16.md`。
+
+### 判断
+
+- filter調整は必要。現状のままReady化しない。
+- global thresholdは下げず、異常語形、domain glossary、近接segment間の表記揺れを狙ったsignalを追加する。
+- grammarだけを根拠にAPI対象へ入れない。index 110/1256で過修正が確認された。
+- index 64/164は人手聴取が必要。
+
+## 2026-07-16 Task 62 P2 targeted rescue signals
+
+### 目的
+
+- global threshold `0.40`を維持し、強い限定signalだけで有益な見逃しをOpenAI対象へ復帰させる。
+
+### 変更内容
+
+- `suspicion_score >= threshold OR rescue_signal`の選定を追加。
+- rescue理由: `known_asr_malformed_expression`、`glossary_phonetic_match`、`nearby_spelling_inconsistency`。
+- nearby表記揺れは既知aliasまたは設定glossaryに紐づく場合だけ対象化。
+- segment artifactへ`selected`、`selection_source`、`rescue_reasons`を追加。
+- summaryへscore/rescue選定数とrescue理由別件数を追加。
+- API設定`transcriptCorrectionGlossary`を追加。既定は空配列で、UIには未露出。
+- 固定23件fixtureとrescue回帰testを追加。
+
+### Offline検証
+
+- 固定23件: 有益な見逃し`17/19`を救済。
+- 不要変更`0/1`、有害修正`0/1`、判断不能`0/2`を対象外維持。
+- 全1695 segments: target `1287 -> 1304`、対象率`75.929% -> 76.932%`。
+- expected calls（batch 100）: `13 -> 14`、all-modeは`17`。
+- baseline採用変更coverage: `250/273 = 91.6%` -> `267/273 = 97.8%`。
+- target+context文字数proxy: `14,407 -> 14,597`。all-mode `17,726`比で約`17.7%`削減を維持。
+- rescue selected: `17`。理由件数はmalformed `11`、glossary `6`、nearby inconsistency `1`（重複あり）。
+- 詳細: `docs/TRANSCRIPT_SUSPICION_RESCUE_EVALUATION_2026-07-16.md`。
+
+### 現在判定
+
+- P2 offline acceptance: pass。
+- global threshold `0.40`、scope既定`all`、correction既定`off`は維持。
+- backend: `ruff check .` pass、`pytest`は`287 passed, 1 skipped`。
+- frontend: lint / typecheck / build pass。
+- Docker rebuild / runtime smoke: pass。backend / frontend / worker / redis起動、共有DB/storage、FFmpeg / ffprobeを確認。
+- correction OFF sample E2E: pass。job `job_139866cabc1e4603a407546764a616d8`、short `1/1`、`1080x1920`、render failure `0`、API call `0`、sidecar risk `0`。
+- PR #42はDraft維持。rescue追加後はexpected callが`14`のため、quota確保後の実API `14/14`、fallback `0`再検証が残る。
+
+## 2026-07-17 Task 62 P2 OpenAI API connectivity probe
+
+### 目的
+
+- 58分real API replayの前に、P2最終構成と既存keyで1 batch疎通を確認する。
+
+### 実行条件
+
+- tested commit: `aa67fd43e136b276925983c8a32065c34a2e3d01`。
+- input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`。
+- transcript: 既存58分jobの`small + ja` deterministic transcript、`1695` segments。
+- correction model: `gpt-5.5`。
+- scope: `suspicious`、threshold: `0.40`、context segments: `2`。
+- P2 rescue対象index `157`を1件だけ送信。retryは`0`に固定。
+
+### 結果
+
+- OpenAI API call: `1`。
+- result: `429 insufficient_quota`。
+- successful batch: `0/1`、schema failure: `0`、actual token usage: `0`。
+- 58分`14/14` replayは未開始。quota未復旧状態で追加callを行わないため停止。
+
+### 判定
+
+- API疎通: fail。key欠落やnetwork failureではなく、API billing/quota不足。
+- PR #42はDraft維持。
+- quota復旧後、同じ1 batch probeを再実行し、成功時のみ58分`14/14`へ進む。
+
+## 2026-07-17 Task 62 P2 final real-API validation
+
+### 目的
+
+- quota復旧後、P2最終構成で58分real API replayを完走し、all-modeとの実token差を確定する。
+
+### 実行条件
+
+- tested code commit: `aa67fd43e136b276925983c8a32065c34a2e3d01`。
+- input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`。
+- transcription: `small + ja`。
+- correction: `gpt-5.5`、batch `100`、context `2`、min confidence `0.9`。
+- P2: scope `suspicious`、threshold `0.40`。
+- P2 job: `job_ea301023a3cd431f8a5700ea4f4e4ca1`。
+
+### 疎通確認
+
+- rescue対象index `157`を1件送信。
+- API call `1`、successful batch `1/1`、schema failure `0`。
+- input/output tokens: `408/68`、processing `4.275s`。
+
+### P2 E2E結果
+
+- targets: `1304/1695`、context `55`、unique sent `1357`。
+- API calls / successful batches: `14/14`。
+- retry `0`、failed batch `0`、schema failure `0`、fallback `false`。
+- input/output/total tokens: `52,247 / 100,698 / 152,945`。
+- correction time: `1087.679s`。
+- corrected `268`、low-confidence reject `94`、safety reject `4`。
+- deterministic/corrected/final segment counts: `1695/1695/1695`。
+- order/start/end timestamp mismatch: `0`。final transcriptはcorrected transcriptと一致。
+- normal: `1/1`、`1280x720`、`348.982s`。
+- short: `2/2`、両方`1080x1920`、`49.883s` / `61.194s`。
+- render failure: `0`、sidecar risk: `0`、ZIP: `73,335,336 bytes`。
+- total E2E runtime: `1745.609s`。
+
+### All-mode実token baseline
+
+- 同じdeterministic transcript `1695` segmentsと同じ校正設定を使用。
+- API calls / successful batches: `17/17`。
+- retry `0`、failed batch `0`、schema failure `0`。
+- input/output/total tokens: `67,053 / 134,638 / 201,691`。
+- correction time: `1469.749s`。
+- baselineはtoken比較専用。transcription、candidate generation、renderはP2 E2Eで別途検証済みのため省略。
+
+### 実測削減
+
+- API calls: `17 -> 14`、`17.647%`削減。
+- input tokens: `67,053 -> 52,247`、`22.081%`削減。
+- output tokens: `134,638 -> 100,698`、`25.208%`削減。
+- total tokens: `201,691 -> 152,945`、`48,746 tokens / 24.169%`削減。
+- correction time: `1469.749s -> 1087.679s`、`382.071s / 25.996%`削減。
+
+### 判定
+
+- Task62 final real-API acceptance: pass。
+- `14/14`、fallback `0`、schema failure `0`、segment/timestamp維持、render、ZIP、sidecar risk `0`を確認。
+- PR #42をReady化し、CI通過後にmerge可能。

@@ -474,6 +474,8 @@ python scripts/e2e_real_video.py `
   --whisper-model-size small `
   --transcription-language ja `
   --subtitle-correction-mode openai `
+  --subtitle-correction-scope suspicious `
+  --subtitle-correction-suspicion-threshold 0.4 `
   --subtitle-correction-model gpt-5.5 `
   --subtitle-correction-min-confidence 0.9 `
   --subtitle-correction-batch-size 40 `
@@ -489,7 +491,14 @@ openai_corrected_transcript_segments.json
 transcript_segments.json
 transcript_correction_summary.json
 transcript_correction_diff.md
+transcript_suspicion_segments.json
+transcript_suspicion_summary.json
+subtitle_correction_targets.json
 ```
+
+`subtitleCorrectionScope=all` remains the compatibility default and sends every segment. Set it to `suspicious` to score segments locally and send only target indices plus a bounded read-only context set. Non-target segments cannot be changed. If no target is found, the correction uses zero API calls. If the local filter fails, correction is skipped and the deterministic transcript is retained; the worker never silently switches to all-segment correction.
+
+Suspicious selection keeps the configured score threshold and can also use narrowly targeted rescue signals for known malformed ASR expressions, glossary aliases, and nearby glossary-anchored spelling variants. Rescue signals only add OpenAI correction targets; they never replace transcript text locally. Supply additional canonical terms through the API-only `transcriptCorrectionGlossary` string array. Suspicion artifacts record `selected`, `selection_source`, and `rescue_reasons`; the summary records score-selected and rescue-selected counts separately.
 
 When `subtitleCorrectionFallbackEnabled=true`, transient API or schema failures use the complete deterministic transcript and record `fallback_used=true`; partial OpenAI corrections are discarded. Disable fallback only when the job must fail with `openai_subtitle_correction_failed`. Missing `OPENAI_API_KEY` fails early with `openai_configuration_missing`.
 
@@ -501,7 +510,10 @@ While correction is running, `GET /api/jobs/{job_id}` returns `status=correcting
   "stageProgress": 47,
   "correctionBatchesCompleted": 8,
   "correctionBatchesTotal": 17,
-  "correctionRetryCount": 1
+  "correctionRetryCount": 1,
+  "correctionTargetsCompleted": 143,
+  "correctionTargetsTotal": 412,
+  "transcriptSegmentCount": 1695
 }
 ```
 
@@ -675,6 +687,9 @@ Troubleshooting:
     "whisperModelSize": "base",
     "transcriptionLanguage": "auto",
     "subtitleCorrectionMode": "off",
+    "subtitleCorrectionScope": "all",
+    "transcriptCorrectionGlossary": [],
+    "subtitleCorrectionSuspicionThreshold": 0.4,
     "subtitleCorrectionModel": "gpt-5.5",
     "subtitleCorrectionMinConfidence": 0.9,
     "subtitleCorrectionBatchSize": 40,
@@ -720,6 +735,9 @@ Production-safe defaults remain:
 - `whisperModelSize`: `base`
 - `transcriptionLanguage`: `auto`
 - `subtitleCorrectionMode`: `off`
+- `subtitleCorrectionScope`: `all`
+- `transcriptCorrectionGlossary`: `[]`
+- `subtitleCorrectionSuspicionThreshold`: `0.4`
 - `subtitleCorrectionModel`: `gpt-5.5`
 - `subtitleCorrectionMinConfidence`: `0.9`
 - `subtitleCorrectionBatchSize`: `40`
@@ -755,7 +773,7 @@ Transcript post-processing:
 - Add project-specific replacements with `transcriptReplacements`; this does not call OpenAI.
 - Disable with `enableTranscriptPostProcessing=false` when raw transcription text is needed for debugging.
 
-OpenAI subtitle correction runs after deterministic post-processing when `subtitleCorrectionMode=openai`. The final `transcript_segments.json` is used by candidate generation and subtitle rendering. Correction never changes segment timestamps or count.
+OpenAI subtitle correction runs after deterministic post-processing when `subtitleCorrectionMode=openai`. The final `transcript_segments.json` is used by candidate generation and subtitle rendering. Correction never changes segment timestamps or count. Correction summaries include target/context counts and actual Responses API `input_tokens`, `output_tokens`, and `cached_tokens` when the API returns usage data.
 
 ## Generation Diagnostics
 
@@ -769,7 +787,8 @@ Summary files:
 
 - `transcript_summary.json`: transcript segment count, text length, speech duration, confidence, first segments, engine, fixture flag.
 - `transcript_postprocess_summary.json`: transcript post-processing enablement, changed segment count, before/after character counts, replacement counts, and dictionary settings when transcription reached post-processing.
-- `transcript_correction_summary.json`: correction mode, model, corrected/unchanged/low-confidence segment counts, fallback status, API calls, schema failures, processing time, and timestamp/count preservation flags.
+- `transcript_correction_summary.json`: correction mode, scope, model, target/context counts, corrected/unchanged/low-confidence segment counts, fallback status, API calls, actual token usage, schema failures, processing time, and timestamp/count preservation flags.
+- `transcript_suspicion_summary.json`: local filter threshold, suspicious ratio, target/context counts, unique segments sent, score/rescue selection counts, rescue reason counts, and explicit filter failure state.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
 - `openai_scoring_summary.json`: model, initial candidate limit, finalist scoring limit, eligible/selected/sent counts, preselection/finalist counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, selected clip score source counts, and not-scored reasons.

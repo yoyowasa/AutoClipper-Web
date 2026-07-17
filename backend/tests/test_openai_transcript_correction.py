@@ -7,6 +7,7 @@ import pytest
 from app.audio.openai_transcript_correction import (
     OpenAITranscriptCorrector,
     disabled_correction_result,
+    filter_failed_correction_result,
     fallback_correction_result,
     write_corrected_transcript,
     write_correction_diff,
@@ -26,13 +27,15 @@ class TransientOpenAIError(Exception):
 
 
 class FakeResponse:
-    def __init__(self, payload: dict[str, Any]) -> None:
+    def __init__(self, payload: dict[str, Any], usage: dict[str, Any] | None = None) -> None:
         self.output_text = json.dumps(payload, ensure_ascii=False)
+        self.usage = usage
 
 
 class FakeResponses:
-    def __init__(self, outcomes: list[Any]) -> None:
+    def __init__(self, outcomes: list[Any], usage: dict[str, Any] | None = None) -> None:
         self.outcomes = outcomes
+        self.usage = usage
         self.calls: list[dict[str, Any]] = []
 
     def create(self, **kwargs: Any) -> FakeResponse:
@@ -40,12 +43,12 @@ class FakeResponses:
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
-        return FakeResponse(outcome)
+        return FakeResponse(outcome, self.usage)
 
 
 class FakeClient:
-    def __init__(self, outcomes: list[Any]) -> None:
-        self.responses = FakeResponses(outcomes)
+    def __init__(self, outcomes: list[Any], usage: dict[str, Any] | None = None) -> None:
+        self.responses = FakeResponses(outcomes, usage)
 
 
 def segments() -> list[TranscriptSegment]:
@@ -124,6 +127,53 @@ def test_low_confidence_correction_is_not_applied() -> None:
     assert result.segments == segments()
     assert result.summary["corrected_segment_count"] == 0
     assert result.summary["low_confidence_rejected_count"] == 1
+
+
+def test_suspicious_scope_sends_only_targets_with_read_only_context() -> None:
+    payload = {"segments": [correction_payload()["segments"][0]]}
+    client = FakeClient([payload])
+    corrector = OpenAITranscriptCorrector(client=client)
+
+    result = corrector.correct_segments(
+        segments(),
+        target_indices=[0],
+        context_segments=1,
+    )
+
+    request = json.loads(client.responses.calls[0]["input"][1]["content"])
+    assert [item["index"] for item in request["target_segments"]] == [0]
+    assert set(request["target_segments"][0]) == {"index", "original_text", "asr_confidence"}
+    assert request["read_only_context_segments"] == [{"index": 1, "text": "字幕を確認します"}]
+    assert result.segments[1] == segments()[1]
+    assert result.summary["scope"] == "suspicious"
+    assert result.summary["target_segment_count"] == 1
+    assert result.summary["context_segment_count"] == 1
+
+
+def test_zero_suspicious_targets_skips_api() -> None:
+    client = FakeClient([])
+    result = OpenAITranscriptCorrector(client=client).correct_segments(segments(), target_indices=[])
+
+    assert client.responses.calls == []
+    assert result.segments == segments()
+    assert result.summary["api_call_count"] == 0
+    assert result.summary["target_segment_count"] == 0
+    assert result.summary["unchanged_segment_count"] == 2
+
+
+def test_response_usage_is_recorded() -> None:
+    usage = {
+        "input_tokens": 120,
+        "output_tokens": 35,
+        "input_tokens_details": {"cached_tokens": 20},
+    }
+    result = OpenAITranscriptCorrector(client=FakeClient([correction_payload()], usage)).correct_segments(
+        segments(), batch_size=2
+    )
+
+    assert result.summary["input_tokens"] == 120
+    assert result.summary["output_tokens"] == 35
+    assert result.summary["cached_tokens"] == 20
 
 
 def test_numeric_change_requires_numeric_expression_reason() -> None:
@@ -231,6 +281,28 @@ def test_runner_openai_mode_requires_api_key(monkeypatch: pytest.MonkeyPatch) ->
 
     assert exc_info.value.code == "openai_configuration_missing"
     assert exc_info.value.details == {"setting": "OPENAI_API_KEY", "feature": "subtitle_correction"}
+
+
+def test_zero_suspicious_targets_do_not_require_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    result = _apply_transcript_correction(
+        segments(),
+        {"subtitleCorrectionMode": "openai", "subtitleCorrectionScope": "suspicious"},
+        target_indices=[],
+    )
+
+    assert result.summary["api_call_count"] == 0
+    assert result.summary["target_segment_count"] == 0
+
+
+def test_filter_failure_falls_back_without_openai() -> None:
+    result = filter_failed_correction_result(segments(), "gpt-5.5", RuntimeError("filter broke"))
+
+    assert result.segments == segments()
+    assert result.summary["filter_failed"] is True
+    assert result.summary["fallback_used"] is True
+    assert result.summary["api_call_count"] == 0
 
 
 def test_disabled_mode_does_not_call_openai() -> None:

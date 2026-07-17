@@ -265,6 +265,9 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
             "correctionBatchesCompleted",
             "correctionBatchesTotal",
             "correctionRetryCount",
+            "correctionTargetsCompleted",
+            "correctionTargetsTotal",
+            "transcriptSegmentCount",
             "fallbackUsed",
             "finished",
         ):

@@ -370,6 +370,9 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["whisperModelSize"]["default"] == "base"
     assert properties["transcriptionLanguage"]["default"] == "auto"
     assert properties["subtitleCorrectionMode"]["default"] == "off"
+    assert properties["subtitleCorrectionScope"]["default"] == "all"
+    assert properties["transcriptCorrectionGlossary"]["type"] == "array"
+    assert properties["subtitleCorrectionSuspicionThreshold"]["default"] == 0.4
     assert properties["subtitleCorrectionModel"]["default"] == "gpt-5.5"
     assert properties["subtitleCorrectionMinConfidence"]["default"] == 0.9
     assert properties["subtitleCorrectionBatchSize"]["default"] == 40

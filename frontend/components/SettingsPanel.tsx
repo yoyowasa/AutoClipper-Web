@@ -36,6 +36,8 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   whisperModelSize: "base",
   transcriptionLanguage: "auto",
   subtitleCorrectionMode: "off",
+  subtitleCorrectionScope: "all",
+  subtitleCorrectionSuspicionThreshold: 0.4,
   subtitleCorrectionModel: "gpt-5.5",
   subtitleCorrectionMinConfidence: 0.9,
   subtitleCorrectionBatchSize: 40,
@@ -450,6 +452,45 @@ export function SettingsPanel({
 
             {settings.subtitleCorrectionMode === "openai" && (
               <>
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-medium text-neutral-700">校正対象</span>
+                  <select
+                    className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+                    disabled={disabled}
+                    value={settings.subtitleCorrectionScope}
+                    onChange={(event) =>
+                      onChange({
+                        ...settings,
+                        subtitleCorrectionScope: event.target.value as ClipSettings["subtitleCorrectionScope"]
+                      })
+                    }
+                  >
+                    <option value="all">すべての字幕</option>
+                    <option value="suspicious">疑わしい字幕のみ</option>
+                  </select>
+                </label>
+
+                {settings.subtitleCorrectionScope === "suspicious" ? (
+                  <label className="flex flex-col gap-2">
+                    <span className="text-sm font-medium text-neutral-700">疑わしさの閾値</span>
+                    <input
+                      className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                      disabled={disabled}
+                      max={1}
+                      min={0}
+                      step={0.05}
+                      type="number"
+                      value={settings.subtitleCorrectionSuspicionThreshold}
+                      onChange={(event) =>
+                        onChange({
+                          ...settings,
+                          subtitleCorrectionSuspicionThreshold: Number(event.target.value)
+                        })
+                      }
+                    />
+                  </label>
+                ) : null}
+
                 <label className="flex flex-col gap-2">
                   <span className="text-sm font-medium text-neutral-700">校正モデル</span>
                   <input
