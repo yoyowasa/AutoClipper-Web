@@ -4470,3 +4470,31 @@ python .\scripts\e2e_real_video.py `
 - Docker rebuild / runtime smoke: pass。backend / frontend / worker / redis起動、共有DB/storage、FFmpeg / ffprobeを確認。
 - correction OFF sample E2E: pass。job `job_139866cabc1e4603a407546764a616d8`、short `1/1`、`1080x1920`、render failure `0`、API call `0`、sidecar risk `0`。
 - PR #42はDraft維持。rescue追加後はexpected callが`14`のため、quota確保後の実API `14/14`、fallback `0`再検証が残る。
+
+## 2026-07-17 Task 62 P2 OpenAI API connectivity probe
+
+### 目的
+
+- 58分real API replayの前に、P2最終構成と既存keyで1 batch疎通を確認する。
+
+### 実行条件
+
+- tested commit: `aa67fd43e136b276925983c8a32065c34a2e3d01`。
+- input SHA-256: `25DF7F71CAC8DBBDDC731D2C41A55F31A852E7981CC42DB5E2F9F29816D61890`。
+- transcript: 既存58分jobの`small + ja` deterministic transcript、`1695` segments。
+- correction model: `gpt-5.5`。
+- scope: `suspicious`、threshold: `0.40`、context segments: `2`。
+- P2 rescue対象index `157`を1件だけ送信。retryは`0`に固定。
+
+### 結果
+
+- OpenAI API call: `1`。
+- result: `429 insufficient_quota`。
+- successful batch: `0/1`、schema failure: `0`、actual token usage: `0`。
+- 58分`14/14` replayは未開始。quota未復旧状態で追加callを行わないため停止。
+
+### 判定
+
+- API疎通: fail。key欠落やnetwork failureではなく、API billing/quota不足。
+- PR #42はDraft維持。
+- quota復旧後、同じ1 batch probeを再実行し、成功時のみ58分`14/14`へ進む。
