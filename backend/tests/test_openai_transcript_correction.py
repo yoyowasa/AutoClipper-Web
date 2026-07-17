@@ -112,11 +112,27 @@ def test_correction_applies_text_only_and_preserves_timestamps() -> None:
     assert result.summary["reason_counts"] == {"proper_noun": 1}
     call = client.responses.calls[0]
     assert call["text"]["format"]["strict"] is True
+    assert "reasoning" not in call
     encoded = json.dumps(call["input"], ensure_ascii=False)
     assert "OpenAI" in encoded
     assert ".mp4" not in encoded.lower()
     assert "video_path" not in encoded.lower()
     assert "stored_path" not in encoded.lower()
+
+
+def test_explicit_reasoning_effort_is_sent_to_responses_api() -> None:
+    client = FakeClient([correction_payload()])
+    corrector = OpenAITranscriptCorrector(client=client, reasoning_effort="none")
+
+    result = corrector.correct_segments(segments(), batch_size=2)
+
+    assert client.responses.calls[0]["reasoning"] == {"effort": "none"}
+    assert result.summary["reasoning_effort"] == "none"
+
+
+def test_invalid_reasoning_effort_is_rejected_before_api_call() -> None:
+    with pytest.raises(ValueError, match="unsupported subtitle correction reasoning effort"):
+        OpenAITranscriptCorrector(client=FakeClient([]), reasoning_effort="automatic")
 
 
 def test_low_confidence_correction_is_not_applied() -> None:
@@ -166,6 +182,7 @@ def test_response_usage_is_recorded() -> None:
         "input_tokens": 120,
         "output_tokens": 35,
         "input_tokens_details": {"cached_tokens": 20},
+        "output_tokens_details": {"reasoning_tokens": 12},
     }
     result = OpenAITranscriptCorrector(client=FakeClient([correction_payload()], usage)).correct_segments(
         segments(), batch_size=2
@@ -173,6 +190,8 @@ def test_response_usage_is_recorded() -> None:
 
     assert result.summary["input_tokens"] == 120
     assert result.summary["output_tokens"] == 35
+    assert result.summary["reasoning_tokens"] == 12
+    assert result.summary["visible_output_tokens"] == 23
     assert result.summary["cached_tokens"] == 20
 
 
@@ -281,6 +300,29 @@ def test_runner_openai_mode_requires_api_key(monkeypatch: pytest.MonkeyPatch) ->
 
     assert exc_info.value.code == "openai_configuration_missing"
     assert exc_info.value.details == {"setting": "OPENAI_API_KEY", "feature": "subtitle_correction"}
+
+
+def test_runner_propagates_reasoning_effort_to_created_corrector(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def build_corrector(**kwargs: Any) -> OpenAITranscriptCorrector:
+        captured.update(kwargs)
+        return OpenAITranscriptCorrector(client=FakeClient([correction_payload()]), **kwargs)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.setattr("app.jobs.runner.OpenAITranscriptCorrector", build_corrector)
+
+    result = _apply_transcript_correction(
+        segments(),
+        {
+            "subtitleCorrectionMode": "openai",
+            "subtitleCorrectionReasoningEffort": "none",
+            "subtitleCorrectionBatchSize": 2,
+        },
+    )
+
+    assert captured == {"model": "gpt-5.5", "reasoning_effort": "none"}
+    assert result.summary["reasoning_effort"] == "none"
 
 
 def test_zero_suspicious_targets_do_not_require_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

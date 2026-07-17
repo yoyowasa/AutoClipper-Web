@@ -32,6 +32,16 @@ WhisperModelSize = Literal["base", "small", "medium", "large-v3"]
 TranscriptionLanguage = Literal["auto", "ja"]
 SubtitleCorrectionMode = Literal["off", "openai"]
 SubtitleCorrectionScope = Literal["all", "suspicious"]
+SubtitleCorrectionReasoningEffort = Literal[
+    "default",
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+]
 
 
 class VideoRead(BaseModel):
@@ -131,6 +141,10 @@ class JobSettings(BaseModel):
         alias="subtitleCorrectionSuspicionThreshold",
     )
     subtitle_correction_model: str = Field(default="gpt-5.5", min_length=1, alias="subtitleCorrectionModel")
+    subtitle_correction_reasoning_effort: SubtitleCorrectionReasoningEffort = Field(
+        default="default",
+        alias="subtitleCorrectionReasoningEffort",
+    )
     subtitle_correction_min_confidence: float = Field(default=0.9, ge=0, le=1, alias="subtitleCorrectionMinConfidence")
     subtitle_correction_batch_size: int = Field(default=40, ge=1, le=100, alias="subtitleCorrectionBatchSize")
     subtitle_correction_context_segments: int = Field(default=2, ge=0, le=10, alias="subtitleCorrectionContextSegments")

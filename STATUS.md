@@ -4606,3 +4606,83 @@ python .\scripts\e2e_real_video.py `
 - launcher MVPはWindows、Docker Desktop、Python 3.11以上が必要。
 - installer、Python同梱、auto update、Docker Desktop自動導入は未実装。
 - clean Windows環境での配布確認はpackaging taskとして別途実施する。
+
+## 2026-07-18 Task 64 subtitle correction model / reasoning benchmark
+
+### 目的
+
+- 字幕校正のmodelとreasoning設定を固定transcriptで比較し、実token、推定費用、処理時間、品質差を確認する。
+- production defaultは比較完了まで変更せず、音声・動画をOpenAIへ送らない。
+
+### 実装
+
+- `subtitleCorrectionReasoningEffort`をAPI、worker、Upload UI、real-video E2Eへ追加。
+- `default`はResponses APIの`reasoning`を省略し、現行挙動を維持。明示値は`reasoning.effort`へ渡す。
+- correction summaryへ`reasoning_tokens`と`visible_output_tokens`を追加。
+- `scripts/benchmark_subtitle_correction_models.py`を追加。1 segment probe、固定target benchmark、手動review再集計に対応。
+- benchmark reportへusage-based費用、変更index差、token/費用/時間のbaseline比を追加。
+
+### 1 segment probe
+
+- `gpt-5.5:default`: pass。
+- `gpt-5.5:none`: pass。
+- `gpt-5.4-mini:none`: pass。
+- `gpt-5-mini:none`: reject、`minimal`: pass。比較値は`minimal`を採用。
+- `gpt-5.6-luna:none`: pass。
+- 全成功条件でStructured Outputs schemaとusage取得を確認。
+
+### Controlled TTS
+
+| profile | CER | proper nouns | output/reasoning/visible | cost USD | seconds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `gpt-5.5:default` | 0.0809 | 7/8 | 1614/1034/580 | 0.0524 | 21.058 |
+| `gpt-5.5:none` | 0.0809 | 7/8 | 577/0/577 | 0.0213 | 5.753 |
+| `gpt-5.4-mini:none` | 0.1006 | 7/8 | 577/0/577 | 0.0032 | 3.444 |
+| `gpt-5-mini:minimal` | 0.1164 | 6/8 | 596/0/596 | 0.0014 | 5.703 |
+| `gpt-5.6-luna:none` | 0.0907 | 7/8 | 577/0/577 | 0.0043 | 3.336 |
+
+### 124秒実話者
+
+- 固定`36/48` targets、`small + ja`、scope `suspicious`、context `2`、batch `100`。
+- text/contextによる手動分類。音声正解原稿による確定評価ではない。
+
+| profile | useful | missed | harmful | style | cost USD | seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `gpt-5.5:default` | 13 | 2 | 0 | 0 | 0.2140 | 88.225 |
+| `gpt-5.5:none` | 15 | 0 | 0 | 1 | 0.0750 | 20.232 |
+| `gpt-5.4-mini:none` | 8 | 6 | 0 | 1 | 0.0112 | 9.245 |
+| `gpt-5-mini:minimal` | 4 | 7 | 0 | 2 | 0.0049 | 20.399 |
+| `gpt-5.6-luna:none` | 11 | 2 | 2 | 6 | 0.0151 | 9.186 |
+
+### 58分上位2条件
+
+- input: Task62 P2の固定`1695` segments / `1304` targets。
+- 共通設定: `small + ja`、scope `suspicious`、context `2`、batch `100`、min confidence `0.9`。
+- 両条件ともAPI `14/14`、retry `0`、schema failure `0`、fallback `0`、segment/order/timestamp mismatch `0`。
+
+| profile | changes | input | output | reasoning | visible | cost USD | seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `gpt-5.5:default` | 283 | 52247 | 105104 | 47467 | 57637 | 3.4144 | 1257.230 |
+| `gpt-5.5:none` | 129 | 52247 | 61524 | 0 | 61524 | 2.1070 | 543.496 |
+
+- `none`削減: output tokens `41.464%`、total tokens `27.696%`、推定費用`38.291%`、処理時間`56.770%`。
+- 変更index: 共通`117`、defaultのみ`166`、noneのみ`12`。
+- 長尺では変更件数差が大きいため、`none`を品質同等またはdefault候補とは未判定。
+
+### Render / runtime検証
+
+- 最新workerで`gpt-5.5:none`短尺実話者E2E: `job_3a220894ed9d4d129da1828961cbe85b`。
+- correction: API `1/1`、input/output `1942/2159`、reasoning `0`、visible `2159`、fallback `false`、schema failure `0`、`22.765s`。
+- normal `1/1`、short `2/2`、short `1080x1920`、render failure `0`、ZIP download pass、sidecar risk `0`。
+- Docker rebuild / runtime smoke: pass。
+- 58分default renderはTask62 job `job_ea301023a3cd431f8a5700ea4f4e4ca1`で確認済み。
+- 58分`none`の重複pipeline E2Eは約`$2.11`の校正再課金を避けるため未実施。固定transcript API比較と短尺renderで設定経路を確認。
+
+### 判定
+
+- production defaultを維持:
+  - `subtitleCorrectionMode=off`
+  - `subtitleCorrectionModel=gpt-5.5`
+  - `subtitleCorrectionReasoningEffort=default`
+- `gpt-5.5:none`は有力な省コストoptionだが、長尺のdefault-only変更`166`件の正誤確認前に既定化しない。
+- `gpt-5.4-mini`、`gpt-5-mini`は124秒評価で見逃し増加。`gpt-5.6-luna`は有害/表記変更増加のため採用しない。

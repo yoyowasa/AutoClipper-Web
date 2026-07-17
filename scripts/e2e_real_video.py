@@ -188,6 +188,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--subtitle-correction-scope", default="all", choices=["all", "suspicious"])
     parser.add_argument("--subtitle-correction-suspicion-threshold", type=probability_float, default=0.4)
     parser.add_argument("--subtitle-correction-model", default="gpt-5.5")
+    parser.add_argument(
+        "--subtitle-correction-reasoning-effort",
+        default="default",
+        choices=["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    )
     parser.add_argument("--subtitle-correction-min-confidence", type=probability_float, default=0.9)
     parser.add_argument("--subtitle-correction-batch-size", type=positive_int, default=40)
     parser.add_argument("--subtitle-correction-context-segments", type=non_negative_int, default=2)
@@ -283,6 +288,7 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "subtitleCorrectionScope": args.subtitle_correction_scope,
         "subtitleCorrectionSuspicionThreshold": args.subtitle_correction_suspicion_threshold,
         "subtitleCorrectionModel": args.subtitle_correction_model,
+        "subtitleCorrectionReasoningEffort": args.subtitle_correction_reasoning_effort,
         "subtitleCorrectionMinConfidence": args.subtitle_correction_min_confidence,
         "subtitleCorrectionBatchSize": args.subtitle_correction_batch_size,
         "subtitleCorrectionContextSegments": args.subtitle_correction_context_segments,
@@ -716,6 +722,8 @@ def validate_transcript_correction_summary(output_dir: Path) -> dict[str, Any]:
         f"fallback={summary.get('fallback_used')} "
         f"calls={summary.get('api_call_count')} "
         f"tokens={summary.get('input_tokens')}/{summary.get('output_tokens')} "
+        f"reasoning={summary.get('reasoning_tokens')} "
+        f"visible={summary.get('visible_output_tokens')} "
         f"cached={summary.get('cached_tokens')} "
         f"seconds={summary.get('processing_seconds')}"
     )
@@ -958,6 +966,7 @@ def run_e2e(args: argparse.Namespace) -> int:
         print(
             "subtitle correction: enabled "
             f"model={settings['subtitleCorrectionModel']} "
+            f"reasoning={settings['subtitleCorrectionReasoningEffort']} "
             f"scope={settings['subtitleCorrectionScope']} "
             f"threshold={settings['subtitleCorrectionSuspicionThreshold']} "
             f"confidence={settings['subtitleCorrectionMinConfidence']} "
