@@ -73,6 +73,7 @@ export type ClipSettings = {
     | "high"
     | "xhigh"
     | "max";
+  subtitleCorrectionResponseSchema: "full" | "changes_only";
   subtitleCorrectionMinConfidence: number;
   subtitleCorrectionBatchSize: number;
   subtitleCorrectionContextSegments: number;

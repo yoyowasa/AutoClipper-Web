@@ -205,6 +205,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="default",
         choices=["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
     )
+    parser.add_argument(
+        "--subtitle-correction-response-schema",
+        default="full",
+        choices=["full", "changes_only"],
+    )
     parser.add_argument("--subtitle-correction-min-confidence", type=probability_float, default=0.9)
     parser.add_argument("--subtitle-correction-batch-size", type=positive_int, default=40)
     parser.add_argument("--subtitle-correction-context-segments", type=non_negative_int, default=2)
@@ -303,6 +308,7 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "subtitleCorrectionSuspicionThreshold": args.subtitle_correction_suspicion_threshold,
         "subtitleCorrectionModel": args.subtitle_correction_model,
         "subtitleCorrectionReasoningEffort": args.subtitle_correction_reasoning_effort,
+        "subtitleCorrectionResponseSchema": args.subtitle_correction_response_schema,
         "subtitleCorrectionMinConfidence": args.subtitle_correction_min_confidence,
         "subtitleCorrectionBatchSize": args.subtitle_correction_batch_size,
         "subtitleCorrectionContextSegments": args.subtitle_correction_context_segments,
@@ -1009,6 +1015,7 @@ def run_e2e(args: argparse.Namespace) -> int:
             "subtitle correction: enabled "
             f"model={settings['subtitleCorrectionModel']} "
             f"reasoning={settings['subtitleCorrectionReasoningEffort']} "
+            f"schema={settings['subtitleCorrectionResponseSchema']} "
             f"scope={settings['subtitleCorrectionScope']} "
             f"threshold={settings['subtitleCorrectionSuspicionThreshold']} "
             f"confidence={settings['subtitleCorrectionMinConfidence']} "

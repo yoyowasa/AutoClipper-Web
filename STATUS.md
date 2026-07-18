@@ -4827,3 +4827,38 @@ pip check: pass
 - `turbo`でも既知難所`13/29`が未解決。OpenAI校正を完全に不要とは判定しない。
 - GPU workerはCompose overrideで起動する。Windows launcherのGPU override自動選択は未実装。
 - 次はTask66 changes-only schemaで、品質を維持したままOpenAI output token削減を検証する。
+
+## 2026-07-19 Task 66 changes-only compact subtitle correction schema
+
+### 目的
+
+- `gpt-5.5:default`の品質設定を維持し、未変更segmentのAPI出力を省く`changes_only` schemaを比較可能にする。
+- production defaultの`full` schemaは変更しない。
+
+### 実装
+
+- `subtitleCorrectionResponseSchema=full|changes_only`をAPI、worker、Upload UI、real-video E2Eへ追加。既定値は`full`。
+- `changes_only`は`target_count`と変更index、校正文、理由、confidenceだけを受信。
+- 応答にないtargetはローカルでunchangedへ復元し、既存confidence・numeric safety gateを通す。
+- target外index、duplicate index、空校正文、target count不一致をschema failureとして拒否。
+- compact schema failure時にfull schemaやall segmentsへ再送せず、既存のdeterministic fallbackを使用。
+- fixed-transcript benchmark profileを`MODEL:REASONING[:SCHEMA]`へ拡張し、同一indexの同文・異文件数を追加。
+- 既存full report/change artifactをbaselineとして再利用可能にし、58分比較時の重複API費用を回避。segment数・target数不一致は拒否。
+
+### 検証
+
+- targeted backend tests: `70 passed`。
+- targeted backend ruff: pass。
+- backend CI checks: ruff pass、`330 passed, 1 skipped`。
+- frontend typecheck / lint / build: pass。
+- worker image rebuildと`changes_only`設定読込: pass。
+- Docker compose full rebuild / `python scripts/smoke_runtime.py --skip-video`: pass。
+- default synthetic sample E2E: pass (`job_f4799fba9341403c96b7e9c1251248c1`、short `1080x1920`、render failure `0`)。
+- rebuilt backend OpenAPI: correction default `off`、response schema default `full`。
+- 124秒実API schema benchmark開始時、最初のcallが`429 insufficient_quota`。successful batch `0`、usage未取得。追加callは停止。
+
+### 未解決事項
+
+- quota復旧後、124秒で`gpt-5.5:default:full`対`changes_only`の品質・token比較が必要。
+- 短尺比較合格後、58分は既存full baselineを保持し、compact側14 batchの実token・変更差・timestamp保持を確認する。
+- 実API比較完了前はproduction recommendationを`full`から変更しない。

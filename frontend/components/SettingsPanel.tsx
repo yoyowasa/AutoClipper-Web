@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   subtitleCorrectionSuspicionThreshold: 0.4,
   subtitleCorrectionModel: "gpt-5.5",
   subtitleCorrectionReasoningEffort: "default",
+  subtitleCorrectionResponseSchema: "full",
   subtitleCorrectionMinConfidence: 0.9,
   subtitleCorrectionBatchSize: 40,
   subtitleCorrectionContextSegments: 2,
@@ -570,6 +571,25 @@ export function SettingsPanel({
                     <option value="high">高</option>
                     <option value="xhigh">特高</option>
                     <option value="max">最大</option>
+                  </select>
+                </label>
+
+                <label className="flex flex-col gap-2">
+                  <span className="text-sm font-medium text-neutral-700">API応答形式</span>
+                  <select
+                    className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+                    disabled={disabled}
+                    value={settings.subtitleCorrectionResponseSchema}
+                    onChange={(event) =>
+                      onChange({
+                        ...settings,
+                        subtitleCorrectionResponseSchema:
+                          event.target.value as ClipSettings["subtitleCorrectionResponseSchema"]
+                      })
+                    }
+                  >
+                    <option value="full">標準（推奨）</option>
+                    <option value="changes_only">変更のみ（実験）</option>
                   </select>
                 </label>
 

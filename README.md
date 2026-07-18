@@ -529,6 +529,7 @@ python scripts/e2e_real_video.py `
   --subtitle-correction-suspicion-threshold 0.4 `
   --subtitle-correction-model gpt-5.5 `
   --subtitle-correction-reasoning-effort default `
+  --subtitle-correction-response-schema full `
   --subtitle-correction-min-confidence 0.9 `
   --subtitle-correction-batch-size 40 `
   --subtitle-correction-context-segments 2
@@ -576,6 +577,13 @@ The job page shows this stage percentage separately from overall pipeline progre
 `max`; accepted values depend on the selected model. Correction summaries separate `output_tokens`
 into `reasoning_tokens` and `visible_output_tokens` when the API returns usage details.
 
+`subtitleCorrectionResponseSchema=full` is the production default. It requires one response item for
+every target segment. Experimental `changes_only` returns only changed indices; omitted target
+indices are restored locally as unchanged before the existing confidence and safety gates run.
+Out-of-target indices, duplicate indices, and blank corrections are rejected. A compact schema
+failure uses the configured deterministic fallback and is never retried by sending the full target
+batch.
+
 Use the fixed-transcript benchmark before changing the production default:
 
 ```powershell
@@ -590,7 +598,8 @@ python scripts/benchmark_subtitle_correction_models.py `
   --phase benchmark `
   --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
   --targets-file storage/outputs/JOB_ID/subtitle_correction_targets.json `
-  --probe-report storage/temp/subtitle_correction_probe/subtitle_correction_probe_report.json `
+  --profile gpt-5.5:default:full `
+  --profile gpt-5.5:default:changes_only `
   --batch-size 100 `
   --context-segments 2 `
   --output-dir storage/temp/subtitle_correction_benchmark
@@ -803,6 +812,7 @@ Troubleshooting:
     "subtitleCorrectionSuspicionThreshold": 0.4,
     "subtitleCorrectionModel": "gpt-5.5",
     "subtitleCorrectionReasoningEffort": "default",
+    "subtitleCorrectionResponseSchema": "full",
     "subtitleCorrectionMinConfidence": 0.9,
     "subtitleCorrectionBatchSize": 40,
     "subtitleCorrectionContextSegments": 2,
@@ -854,6 +864,7 @@ Production-safe defaults remain:
 - `subtitleCorrectionSuspicionThreshold`: `0.4`
 - `subtitleCorrectionModel`: `gpt-5.5`
 - `subtitleCorrectionReasoningEffort`: `default` (omit the API reasoning parameter)
+- `subtitleCorrectionResponseSchema`: `full`
 - `subtitleCorrectionMinConfidence`: `0.9`
 - `subtitleCorrectionBatchSize`: `40`
 - `subtitleCorrectionContextSegments`: `2`

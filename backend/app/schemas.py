@@ -34,6 +34,7 @@ TranscriptionDevice = Literal["auto", "cpu", "cuda"]
 TranscriptionComputeType = Literal["auto", "int8", "float16", "int8_float16"]
 SubtitleCorrectionMode = Literal["off", "openai"]
 SubtitleCorrectionScope = Literal["all", "suspicious"]
+SubtitleCorrectionResponseSchema = Literal["full", "changes_only"]
 SubtitleCorrectionReasoningEffort = Literal[
     "default",
     "none",
@@ -148,6 +149,10 @@ class JobSettings(BaseModel):
     subtitle_correction_reasoning_effort: SubtitleCorrectionReasoningEffort = Field(
         default="default",
         alias="subtitleCorrectionReasoningEffort",
+    )
+    subtitle_correction_response_schema: SubtitleCorrectionResponseSchema = Field(
+        default="full",
+        alias="subtitleCorrectionResponseSchema",
     )
     subtitle_correction_min_confidence: float = Field(default=0.9, ge=0, le=1, alias="subtitleCorrectionMinConfidence")
     subtitle_correction_batch_size: int = Field(default=40, ge=1, le=100, alias="subtitleCorrectionBatchSize")

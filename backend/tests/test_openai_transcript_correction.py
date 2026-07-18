@@ -14,7 +14,10 @@ from app.audio.openai_transcript_correction import (
     write_correction_summary,
 )
 from app.audio.transcript_correction_schema import (
+    CompactTranscriptCorrectionBatch,
     TranscriptCorrectionBatch,
+    compact_transcript_correction_json_schema,
+    compact_transcript_correction_response_format,
     transcript_correction_json_schema,
     transcript_correction_response_format,
 )
@@ -81,6 +84,20 @@ def correction_payload(*, first_confidence: float = 0.96) -> dict[str, Any]:
     }
 
 
+def compact_correction_payload() -> dict[str, Any]:
+    return {
+        "target_count": 2,
+        "changes": [
+            {
+                "index": 0,
+                "corrected_text": "OpenAIのモデル",
+                "reason": "proper_noun",
+                "confidence": 0.96,
+            }
+        ],
+    }
+
+
 def test_correction_schema_is_strict() -> None:
     schema = transcript_correction_json_schema(2)
     response_format = transcript_correction_response_format(2)
@@ -90,6 +107,20 @@ def test_correction_schema_is_strict() -> None:
     assert schema["properties"]["segments"]["maxItems"] == 2
     assert response_format["strict"] is True
     assert TranscriptCorrectionBatch.model_validate(correction_payload()).segments[0].reason == "proper_noun"
+
+
+def test_compact_correction_schema_is_strict_and_changes_only() -> None:
+    schema = compact_transcript_correction_json_schema(2)
+    response_format = compact_transcript_correction_response_format(2)
+
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["target_count"]["enum"] == [2]
+    assert schema["properties"]["changes"]["minItems"] == 0
+    assert schema["properties"]["changes"]["maxItems"] == 2
+    assert "original_text" not in schema["properties"]["changes"]["items"]["properties"]
+    assert "changed" not in schema["properties"]["changes"]["items"]["properties"]
+    assert response_format["strict"] is True
+    assert CompactTranscriptCorrectionBatch.model_validate(compact_correction_payload()).changes[0].index == 0
 
 
 def test_correction_applies_text_only_and_preserves_timestamps() -> None:
@@ -120,6 +151,67 @@ def test_correction_applies_text_only_and_preserves_timestamps() -> None:
     assert "stored_path" not in encoded.lower()
 
 
+def test_compact_correction_omits_unchanged_targets_and_preserves_timestamps() -> None:
+    client = FakeClient([compact_correction_payload()])
+    corrector = OpenAITranscriptCorrector(client=client, response_schema="changes_only")
+
+    result = corrector.correct_segments(segments(), min_confidence=0.8, batch_size=2)
+
+    assert [segment.text for segment in result.segments] == ["OpenAIのモデル", "字幕を確認します"]
+    assert [(segment.start, segment.end) for segment in result.segments] == [(0.0, 1.5), (1.5, 3.0)]
+    assert result.summary["response_schema"] == "changes_only"
+    assert result.summary["response_change_item_count"] == 1
+    assert result.summary["corrected_segment_count"] == 1
+    assert result.summary["unchanged_segment_count"] == 1
+    call = client.responses.calls[0]
+    assert call["text"]["format"]["name"] == "subtitle_correction_changes_only_batch"
+    assert "Omit unchanged target segments" in call["input"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (
+            {
+                "target_count": 2,
+                "changes": [
+                    {"index": 9, "corrected_text": "x", "reason": "asr_error", "confidence": 0.9},
+                ],
+            },
+            "unrequested target index",
+        ),
+        (
+            {
+                "target_count": 2,
+                "changes": [
+                    {"index": 0, "corrected_text": "x", "reason": "asr_error", "confidence": 0.9},
+                    {"index": 0, "corrected_text": "y", "reason": "asr_error", "confidence": 0.9},
+                ],
+            },
+            "duplicate target indices",
+        ),
+        (
+            {
+                "target_count": 2,
+                "changes": [
+                    {"index": 0, "corrected_text": "   ", "reason": "asr_error", "confidence": 0.9},
+                ],
+            },
+            "empty text",
+        ),
+    ],
+)
+def test_compact_correction_rejects_unsafe_indices_and_text(payload: dict[str, Any], message: str) -> None:
+    corrector = OpenAITranscriptCorrector(
+        client=FakeClient([payload]),
+        response_schema="changes_only",
+        max_retries=0,
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        corrector.correct_segments(segments(), batch_size=2)
+
+
 def test_explicit_reasoning_effort_is_sent_to_responses_api() -> None:
     client = FakeClient([correction_payload()])
     corrector = OpenAITranscriptCorrector(client=client, reasoning_effort="none")
@@ -133,6 +225,11 @@ def test_explicit_reasoning_effort_is_sent_to_responses_api() -> None:
 def test_invalid_reasoning_effort_is_rejected_before_api_call() -> None:
     with pytest.raises(ValueError, match="unsupported subtitle correction reasoning effort"):
         OpenAITranscriptCorrector(client=FakeClient([]), reasoning_effort="automatic")
+
+
+def test_invalid_response_schema_is_rejected_before_api_call() -> None:
+    with pytest.raises(ValueError, match="unsupported subtitle correction response schema"):
+        OpenAITranscriptCorrector(client=FakeClient([]), response_schema="compact")
 
 
 def test_low_confidence_correction_is_not_applied() -> None:
@@ -272,6 +369,42 @@ def test_runner_falls_back_to_complete_deterministic_transcript() -> None:
     assert result.summary["unchanged_segment_count"] == 2
 
 
+def test_compact_schema_failure_falls_back_without_resending_full_batch() -> None:
+    client = FakeClient(
+        [
+            {
+                "target_count": 2,
+                "changes": [
+                    {"index": 7, "corrected_text": "x", "reason": "asr_error", "confidence": 0.99},
+                ],
+            }
+        ]
+    )
+    corrector = OpenAITranscriptCorrector(
+        client=client,
+        response_schema="changes_only",
+        max_retries=0,
+    )
+
+    result = _apply_transcript_correction(
+        segments(),
+        {
+            "subtitleCorrectionMode": "openai",
+            "subtitleCorrectionResponseSchema": "changes_only",
+            "subtitleCorrectionFallbackEnabled": True,
+            "subtitleCorrectionBatchSize": 2,
+        },
+        corrector=corrector,
+    )
+
+    assert result.segments == segments()
+    assert result.summary["response_schema"] == "changes_only"
+    assert result.summary["fallback_used"] is True
+    assert result.summary["schema_validation_failures"] == 1
+    assert len(client.responses.calls) == 1
+    assert client.responses.calls[0]["text"]["format"]["name"] == "subtitle_correction_changes_only_batch"
+
+
 def test_runner_failure_without_fallback_is_clear() -> None:
     corrector = OpenAITranscriptCorrector(
         client=FakeClient([TransientOpenAIError("unavailable")]),
@@ -302,12 +435,14 @@ def test_runner_openai_mode_requires_api_key(monkeypatch: pytest.MonkeyPatch) ->
     assert exc_info.value.details == {"setting": "OPENAI_API_KEY", "feature": "subtitle_correction"}
 
 
-def test_runner_propagates_reasoning_effort_to_created_corrector(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_runner_propagates_reasoning_and_response_schema_to_created_corrector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, Any] = {}
 
     def build_corrector(**kwargs: Any) -> OpenAITranscriptCorrector:
         captured.update(kwargs)
-        return OpenAITranscriptCorrector(client=FakeClient([correction_payload()]), **kwargs)
+        return OpenAITranscriptCorrector(client=FakeClient([compact_correction_payload()]), **kwargs)
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-only")
     monkeypatch.setattr("app.jobs.runner.OpenAITranscriptCorrector", build_corrector)
@@ -317,12 +452,18 @@ def test_runner_propagates_reasoning_effort_to_created_corrector(monkeypatch: py
         {
             "subtitleCorrectionMode": "openai",
             "subtitleCorrectionReasoningEffort": "none",
+            "subtitleCorrectionResponseSchema": "changes_only",
             "subtitleCorrectionBatchSize": 2,
         },
     )
 
-    assert captured == {"model": "gpt-5.5", "reasoning_effort": "none"}
+    assert captured == {
+        "model": "gpt-5.5",
+        "reasoning_effort": "none",
+        "response_schema": "changes_only",
+    }
     assert result.summary["reasoning_effort"] == "none"
+    assert result.summary["response_schema"] == "changes_only"
 
 
 def test_zero_suspicious_targets_do_not_require_api_key(monkeypatch: pytest.MonkeyPatch) -> None:

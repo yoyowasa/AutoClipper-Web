@@ -377,6 +377,7 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["subtitleCorrectionSuspicionThreshold"]["default"] == 0.4
     assert properties["subtitleCorrectionModel"]["default"] == "gpt-5.5"
     assert properties["subtitleCorrectionReasoningEffort"]["default"] == "default"
+    assert properties["subtitleCorrectionResponseSchema"]["default"] == "full"
     assert properties["subtitleCorrectionMinConfidence"]["default"] == 0.9
     assert properties["subtitleCorrectionBatchSize"]["default"] == 40
     assert properties["subtitleCorrectionContextSegments"]["default"] == 2

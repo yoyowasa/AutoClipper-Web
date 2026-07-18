@@ -22,6 +22,7 @@ DEFAULT_PROFILES = (
     "gpt-5.6-luna:none",
 )
 REASONING_EFFORTS = {"default", "none", "minimal", "low", "medium", "high", "xhigh", "max"}
+RESPONSE_SCHEMAS = {"full", "changes_only"}
 LOWEST_REASONING_CANDIDATES = ("none", "minimal", "low", "medium", "high")
 MANUAL_REVIEW_FIELDS = (
     "useful_corrections",
@@ -52,19 +53,36 @@ MODEL_PRICING_2026_07_18: dict[str, ModelPricing] = {
 class BenchmarkProfile:
     model: str
     reasoning_effort: str
+    response_schema: str = "full"
 
     @property
     def label(self) -> str:
-        return re.sub(r"[^a-zA-Z0-9_-]+", "_", f"{self.model}_{self.reasoning_effort}")
+        suffix = "" if self.response_schema == "full" else f"_{self.response_schema}"
+        return re.sub(r"[^a-zA-Z0-9_-]+", "_", f"{self.model}_{self.reasoning_effort}{suffix}")
+
+    @property
+    def specification(self) -> str:
+        return f"{self.model}:{self.reasoning_effort}:{self.response_schema}"
 
 
 def parse_profile(value: str, *, allow_lowest: bool = True) -> BenchmarkProfile:
-    model, separator, reasoning_effort = value.rpartition(":")
+    parts = value.split(":")
+    if len(parts) not in {2, 3}:
+        raise argparse.ArgumentTypeError("profile must be MODEL:REASONING[:SCHEMA]")
+    model, reasoning_effort = parts[:2]
+    response_schema = parts[2] if len(parts) == 3 else "full"
     allowed = REASONING_EFFORTS | ({"lowest"} if allow_lowest else set())
-    if not separator or not model.strip() or reasoning_effort not in allowed:
+    if not model.strip() or reasoning_effort not in allowed or response_schema not in RESPONSE_SCHEMAS:
         values = "|".join(sorted(allowed))
-        raise argparse.ArgumentTypeError(f"profile must be MODEL:REASONING using {values}")
-    return BenchmarkProfile(model=model.strip(), reasoning_effort=reasoning_effort)
+        schemas = "|".join(sorted(RESPONSE_SCHEMAS))
+        raise argparse.ArgumentTypeError(
+            f"profile must be MODEL:REASONING[:SCHEMA] using reasoning {values} and schema {schemas}"
+        )
+    return BenchmarkProfile(
+        model=model.strip(),
+        reasoning_effort=reasoning_effort,
+        response_schema=response_schema,
+    )
 
 
 def load_segments(path: Path) -> list[TranscriptSegment]:
@@ -128,20 +146,29 @@ def build_baseline_comparisons(runs: Sequence[Mapping[str, Any]]) -> list[dict[s
         return []
     baseline = runs[0]
     baseline_summary = baseline["summary"]
-    baseline_indices = {int(change["index"]) for change in baseline.get("changes", [])}
+    baseline_changes = {int(change["index"]): str(change.get("after", "")) for change in baseline.get("changes", [])}
+    baseline_indices = set(baseline_changes)
     baseline_total_tokens = int(baseline_summary["input_tokens"]) + int(baseline_summary["output_tokens"])
     baseline_cost = baseline.get("estimated_actual_cost_usd")
     comparisons: list[dict[str, Any]] = []
     for run in runs[1:]:
         summary = run["summary"]
-        candidate_indices = {int(change["index"]) for change in run.get("changes", [])}
+        candidate_changes = {int(change["index"]): str(change.get("after", "")) for change in run.get("changes", [])}
+        candidate_indices = set(candidate_changes)
+        shared_indices = baseline_indices & candidate_indices
         candidate_total_tokens = int(summary["input_tokens"]) + int(summary["output_tokens"])
         candidate_cost = run.get("estimated_actual_cost_usd")
         comparisons.append(
             {
                 "baseline_profile": baseline["profile"],
                 "candidate_profile": run["profile"],
-                "shared_changed_indices": len(baseline_indices & candidate_indices),
+                "shared_changed_indices": len(shared_indices),
+                "shared_changed_same_text": sum(
+                    1 for index in shared_indices if baseline_changes[index] == candidate_changes[index]
+                ),
+                "shared_changed_different_text": sum(
+                    1 for index in shared_indices if baseline_changes[index] != candidate_changes[index]
+                ),
                 "baseline_only_changed_indices": len(baseline_indices - candidate_indices),
                 "candidate_only_changed_indices": len(candidate_indices - baseline_indices),
                 "output_token_reduction_percent": _reduction_percent(
@@ -195,6 +222,35 @@ def load_manual_review(path: Path | None) -> dict[str, Any]:
     if not isinstance(profiles, Mapping):
         raise ValueError("manual review JSON must contain a profiles object")
     return dict(profiles)
+
+
+def load_baseline_run(
+    report_path: Path,
+    changes_path: Path,
+    *,
+    segment_count: int,
+    target_segment_count: int,
+) -> dict[str, Any]:
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if not isinstance(report, Mapping):
+        raise ValueError("baseline report must be an object")
+    if int(report.get("segment_count", -1)) != segment_count:
+        raise ValueError("baseline report segment_count does not match the benchmark input")
+    if int(report.get("target_segment_count", -1)) != target_segment_count:
+        raise ValueError("baseline report target_segment_count does not match the benchmark targets")
+    runs = report.get("runs")
+    if not isinstance(runs, list) or not runs or not isinstance(runs[0], Mapping):
+        raise ValueError("baseline report must contain at least one run")
+    changes = json.loads(changes_path.read_text(encoding="utf-8"))
+    if not isinstance(changes, list):
+        raise ValueError("baseline changes must be an array")
+    baseline = dict(runs[0])
+    baseline["changes"] = changes
+    baseline.setdefault("response_schema", "full")
+    baseline_summary = dict(baseline.get("summary", {}))
+    baseline_summary.setdefault("response_schema", "full")
+    baseline["summary"] = baseline_summary
+    return baseline
 
 
 def manual_review_metrics(profile_label: str, review: Mapping[str, Any]) -> dict[str, Any]:
@@ -268,6 +324,7 @@ def _run_correction(
     corrector = OpenAITranscriptCorrector(
         model=profile.model,
         reasoning_effort=profile.reasoning_effort,
+        response_schema=profile.response_schema,
         max_retries=0,
     )
     return corrector.correct_segments(
@@ -299,7 +356,11 @@ def run_probe(
         )
         attempts: list[dict[str, Any]] = []
         for reasoning_effort in candidates:
-            profile = BenchmarkProfile(requested_profile.model, reasoning_effort)
+            profile = BenchmarkProfile(
+                requested_profile.model,
+                reasoning_effort,
+                requested_profile.response_schema,
+            )
             try:
                 result = _run_correction(
                     segments,
@@ -330,7 +391,7 @@ def run_probe(
                 )
         runs.append(
             {
-                "requested_profile": f"{requested_profile.model}:{requested_profile.reasoning_effort}",
+                "requested_profile": requested_profile.specification,
                 "model": requested_profile.model,
                 "success": bool(attempts and attempts[-1]["success"]),
                 "attempts": attempts,
@@ -359,8 +420,9 @@ def run_benchmark(
     aliases: Sequence[tuple[str, str]],
     manual_review: Mapping[str, Any],
     output_dir: Path,
+    baseline_run: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    runs: list[dict[str, Any]] = []
+    runs: list[dict[str, Any]] = [dict(baseline_run)] if baseline_run is not None else []
     for profile in profiles:
         result = _run_correction(
             segments,
@@ -380,10 +442,11 @@ def run_benchmark(
         changes_path.write_text(json.dumps(result.changes, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         runs.append(
             {
-                "profile": f"{profile.model}:{profile.reasoning_effort}",
+                "profile": profile.specification,
                 "profile_label": profile.label,
                 "model": profile.model,
                 "reasoning_effort": profile.reasoning_effort,
+                "response_schema": profile.response_schema,
                 "summary": result.summary,
                 "estimated_actual_cost_usd": estimated_actual_cost_usd(result.summary, profile.model),
                 "quality": quality_metrics(
@@ -412,6 +475,7 @@ def run_benchmark(
         "min_confidence": min_confidence,
         "pricing_snapshot": "2026-07-18",
         "cost_note": "Usage-based estimate; cached input pricing is included when cached_tokens is reported.",
+        "baseline_reused": baseline_run is not None,
         "runs": runs,
         "baseline_comparisons": comparisons,
     }
@@ -477,8 +541,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 "## Baseline comparison",
                 "",
                 "| Candidate | Shared changes | Baseline only | Candidate only | "
+                "Same text | Different text | "
                 "Output token reduction | Total token reduction | Cost reduction | Time reduction |",
-                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for comparison in comparisons:
@@ -486,6 +551,8 @@ def render_markdown(report: Mapping[str, Any]) -> str:
                 f"| {comparison['candidate_profile']} | {comparison['shared_changed_indices']} | "
                 f"{comparison['baseline_only_changed_indices']} | "
                 f"{comparison['candidate_only_changed_indices']} | "
+                f"{comparison['shared_changed_same_text']} | "
+                f"{comparison['shared_changed_different_text']} | "
                 f"{percent_text(comparison['output_token_reduction_percent'])} | "
                 f"{percent_text(comparison['total_token_reduction_percent'])} | "
                 f"{percent_text(comparison['cost_reduction_percent'])} | "
@@ -523,6 +590,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--canonical-alias", action="append", type=parse_alias, default=[])
     parser.add_argument("--manual-review-file", type=Path)
     parser.add_argument("--existing-report", type=Path)
+    parser.add_argument("--baseline-report", type=Path)
+    parser.add_argument("--baseline-changes", type=Path)
     parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--context-segments", type=int, default=2)
     parser.add_argument("--min-confidence", type=float, default=0.9)
@@ -605,6 +674,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         json_path = args.output_dir / "subtitle_correction_probe_report.json"
         markdown_path = args.output_dir / "subtitle_correction_probe_report.md"
     else:
+        if (args.baseline_report is None) != (args.baseline_changes is None):
+            raise SystemExit("--baseline-report and --baseline-changes must be supplied together")
+        if args.baseline_report is not None and not args.profile:
+            raise SystemExit("at least one --profile is required when reusing a baseline")
         resolved_profiles: list[BenchmarkProfile] = []
         for profile in profiles:
             if profile.reasoning_effort == "lowest":
@@ -613,9 +686,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 profile = BenchmarkProfile(
                     profile.model,
                     resolve_lowest_reasoning_from_probe(args.probe_report.resolve(), profile.model),
+                    profile.response_schema,
                 )
             resolved_profiles.append(profile)
         reference = args.reference_file.read_text(encoding="utf-8") if args.reference_file else None
+        baseline_run = (
+            load_baseline_run(
+                args.baseline_report.resolve(),
+                args.baseline_changes.resolve(),
+                segment_count=len(segments),
+                target_segment_count=len(targets),
+            )
+            if args.baseline_report is not None and args.baseline_changes is not None
+            else None
+        )
         report = run_benchmark(
             segments,
             resolved_profiles,
@@ -629,6 +713,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             aliases=args.canonical_alias,
             manual_review=load_manual_review(args.manual_review_file),
             output_dir=args.output_dir,
+            baseline_run=baseline_run,
         )
         report["target_source"] = target_source
         report["suspicion_threshold"] = args.suspicion_threshold

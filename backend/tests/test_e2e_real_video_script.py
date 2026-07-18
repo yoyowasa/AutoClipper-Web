@@ -171,6 +171,8 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "0.6",
             "--subtitle-correction-reasoning-effort",
             "none",
+            "--subtitle-correction-response-schema",
+            "changes_only",
             "--openai-model",
             "gpt-test",
             "--ensure-selected-openai-scored",
@@ -210,6 +212,7 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["subtitleCorrectionSuspicionThreshold"] == 0.6
     assert settings["subtitleCorrectionModel"] == "gpt-5.5"
     assert settings["subtitleCorrectionReasoningEffort"] == "none"
+    assert settings["subtitleCorrectionResponseSchema"] == "changes_only"
     assert settings["useOpenAIScoring"] is True
     assert settings["normalClipCount"] == 2
     assert settings["shortCount"] == 0

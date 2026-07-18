@@ -12,8 +12,10 @@ from typing import Any, Protocol
 from pydantic import ValidationError
 
 from app.audio.transcript_correction_schema import (
+    CompactTranscriptCorrectionBatch,
     CorrectedTranscriptSegment,
     TranscriptCorrectionBatch,
+    compact_transcript_correction_response_format,
     transcript_correction_response_format,
 )
 from app.audio.transcribe_faster_whisper import TranscriptSegment, write_transcript_segments
@@ -43,6 +45,7 @@ SUBTITLE_CORRECTION_REASONING_EFFORTS = {
     "xhigh",
     "max",
 }
+SUBTITLE_CORRECTION_RESPONSE_SCHEMAS = {"full", "changes_only"}
 
 SYSTEM_PROMPT = """You correct ASR errors in Japanese subtitle segments.
 Return only the requested structured output.
@@ -54,6 +57,20 @@ The input contains text only. Never infer content from audio or video.
 Do not replace numeric tokens with phonetic kanji unless the intended numeric expression is unequivocal.
 Leave short ambiguous utterances unchanged.
 For unchanged text, copy original_text exactly, set changed=false, reason=unchanged.
+"""
+
+COMPACT_SYSTEM_PROMPT = """You correct ASR errors in Japanese subtitle segments.
+Return only the requested structured output.
+Do not summarize, paraphrase, improve style, or add information.
+Do not merge, split, reorder, add, or remove segments.
+Preserve fillers and conversational tone unless text is clearly an ASR error.
+Only correct wording strongly supported by the supplied segment context.
+The input contains text only. Never infer content from audio or video.
+Do not replace numeric tokens with phonetic kanji unless the intended numeric expression is unequivocal.
+Leave short ambiguous utterances unchanged.
+Return only target segments whose text should change.
+Omit unchanged target segments from changes.
+Never return a context-only segment.
 """
 
 
@@ -73,6 +90,7 @@ CorrectionProgressCallback = Callable[[int, int, int], None]
 class TranscriptCorrectionStats:
     model: str
     reasoning_effort: str = "default"
+    response_schema: str = "full"
     scope: str = "all"
     input_segment_count: int = 0
     target_segment_count: int = 0
@@ -90,6 +108,7 @@ class TranscriptCorrectionStats:
     processing_seconds: float = 0.0
     estimated_input_text_length: int = 0
     estimated_output_text_length: int = 0
+    response_change_item_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
@@ -103,6 +122,7 @@ class TranscriptCorrectionStats:
             "enabled": enabled,
             "model": self.model,
             "reasoning_effort": self.reasoning_effort,
+            "response_schema": self.response_schema,
             "scope": self.scope,
             "input_segment_count": self.input_segment_count,
             "target_segment_count": self.target_segment_count,
@@ -122,6 +142,7 @@ class TranscriptCorrectionStats:
             "processing_seconds": round(self.processing_seconds, 6),
             "estimated_input_text_length": self.estimated_input_text_length,
             "estimated_output_text_length": self.estimated_output_text_length,
+            "response_change_item_count": self.response_change_item_count,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "reasoning_tokens": self.reasoning_tokens,
@@ -179,6 +200,7 @@ class OpenAITranscriptCorrector:
         *,
         model: str = "gpt-5.5",
         reasoning_effort: str = "default",
+        response_schema: str = "full",
         max_retries: int = 3,
         retry_backoff_seconds: float = 0.25,
         sleep_func: Callable[[float], None] = time.sleep,
@@ -186,13 +208,21 @@ class OpenAITranscriptCorrector:
         normalized_reasoning_effort = str(reasoning_effort).strip().lower()
         if normalized_reasoning_effort not in SUBTITLE_CORRECTION_REASONING_EFFORTS:
             raise ValueError(f"unsupported subtitle correction reasoning effort: {reasoning_effort}")
+        normalized_response_schema = str(response_schema).strip().lower()
+        if normalized_response_schema not in SUBTITLE_CORRECTION_RESPONSE_SCHEMAS:
+            raise ValueError(f"unsupported subtitle correction response schema: {response_schema}")
         self._client = client
         self.model = model
         self.reasoning_effort = normalized_reasoning_effort
+        self.response_schema = normalized_response_schema
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
         self.sleep_func = sleep_func
-        self.stats = TranscriptCorrectionStats(model=model, reasoning_effort=self.reasoning_effort)
+        self.stats = TranscriptCorrectionStats(
+            model=model,
+            reasoning_effort=self.reasoning_effort,
+            response_schema=self.response_schema,
+        )
 
     @property
     def client(self) -> OpenAIClientProtocol:
@@ -212,7 +242,11 @@ class OpenAITranscriptCorrector:
         progress_callback: CorrectionProgressCallback | None = None,
     ) -> TranscriptCorrectionResult:
         started_at = time.monotonic()
-        self.stats = TranscriptCorrectionStats(model=self.model, reasoning_effort=self.reasoning_effort)
+        self.stats = TranscriptCorrectionStats(
+            model=self.model,
+            reasoning_effort=self.reasoning_effort,
+            response_schema=self.response_schema,
+        )
         source = list(segments)
         self.stats.input_segment_count = len(source)
         selected_indices = list(range(len(source))) if target_indices is None else sorted(set(target_indices))
@@ -320,19 +354,25 @@ class OpenAITranscriptCorrector:
             "preferred_terms": list(dict.fromkeys(term for term in glossary if term.strip())),
         }
         user_content = json.dumps(payload, ensure_ascii=False)
+        system_prompt = COMPACT_SYSTEM_PROMPT if self.response_schema == "changes_only" else SYSTEM_PROMPT
+        response_format = (
+            compact_transcript_correction_response_format(len(targets))
+            if self.response_schema == "changes_only"
+            else transcript_correction_response_format(len(targets))
+        )
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             started_at = time.monotonic()
             try:
                 self.stats.api_call_count += 1
-                self.stats.estimated_input_text_length += len(SYSTEM_PROMPT) + len(user_content)
+                self.stats.estimated_input_text_length += len(system_prompt) + len(user_content)
                 request: dict[str, Any] = {
                     "model": self.model,
                     "input": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_content},
                     ],
-                    "text": {"format": transcript_correction_response_format(len(targets))},
+                    "text": {"format": response_format},
                 }
                 if self.reasoning_effort != "default":
                     request["reasoning"] = {"effort": self.reasoning_effort}
@@ -340,10 +380,18 @@ class OpenAITranscriptCorrector:
                 self._record_usage(response)
                 text = _extract_response_text(response)
                 self.stats.estimated_output_text_length += len(text)
-                result = TranscriptCorrectionBatch.model_validate(json.loads(text))
-                self._validate_batch(result.segments, targets)
+                payload = json.loads(text)
+                if self.response_schema == "changes_only":
+                    compact_result = CompactTranscriptCorrectionBatch.model_validate(payload)
+                    result_segments = self._normalize_compact_batch(compact_result, targets)
+                    self.stats.response_change_item_count += len(compact_result.changes)
+                else:
+                    result = TranscriptCorrectionBatch.model_validate(payload)
+                    self._validate_batch(result.segments, targets)
+                    result_segments = result.segments
+                    self.stats.response_change_item_count += sum(1 for item in result.segments if item.changed)
                 self.stats.successful_batch_count += 1
-                return result.segments
+                return result_segments
             except (json.JSONDecodeError, ValidationError, ValueError) as exc:
                 self.stats.schema_validation_failures += 1
                 self.stats.failed_batch_count += 1
@@ -407,6 +455,49 @@ class OpenAITranscriptCorrector:
                 raise ValueError(f"changed correction used unchanged reason at index {index}")
             if not item.changed and (item.corrected_text != original_text or item.reason != "unchanged"):
                 raise ValueError(f"unchanged correction modified text or reason at index {index}")
+
+    @staticmethod
+    def _normalize_compact_batch(
+        corrected: CompactTranscriptCorrectionBatch,
+        targets: Sequence[tuple[int, TranscriptSegment]],
+    ) -> list[CorrectedTranscriptSegment]:
+        expected = {index: segment.text for index, segment in targets}
+        if corrected.target_count != len(expected):
+            raise ValueError("compact correction target_count does not match requested target count")
+        received = {item.index: item for item in corrected.changes}
+        if len(received) != len(corrected.changes):
+            raise ValueError("compact correction response contains duplicate target indices")
+        if not set(received).issubset(expected):
+            raise ValueError("compact correction response contains an unrequested target index")
+
+        normalized: list[CorrectedTranscriptSegment] = []
+        for index, original_text in expected.items():
+            item = received.get(index)
+            if item is None:
+                normalized.append(
+                    CorrectedTranscriptSegment(
+                        index=index,
+                        original_text=original_text,
+                        corrected_text=original_text,
+                        changed=False,
+                        reason="unchanged",
+                        confidence=1.0,
+                    )
+                )
+                continue
+            if not item.corrected_text.strip():
+                raise ValueError(f"compact correction returned empty text at index {index}")
+            normalized.append(
+                CorrectedTranscriptSegment(
+                    index=index,
+                    original_text=original_text,
+                    corrected_text=item.corrected_text,
+                    changed=True,
+                    reason=item.reason,
+                    confidence=item.confidence,
+                )
+            )
+        return normalized
 
 
 def _correction_safety_rejection(

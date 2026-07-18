@@ -169,6 +169,7 @@ SUBTITLE_CORRECTION_REASONING_EFFORTS = {
     "xhigh",
     "max",
 }
+SUBTITLE_CORRECTION_RESPONSE_SCHEMAS = {"full", "changes_only"}
 
 
 def _whisper_model_size_setting(settings: dict[str, Any]) -> str:
@@ -215,6 +216,16 @@ def _subtitle_correction_reasoning_effort_setting(settings: dict[str, Any]) -> s
     )
     normalized = str(value).strip().lower()
     return normalized if normalized in SUBTITLE_CORRECTION_REASONING_EFFORTS else "default"
+
+
+def _subtitle_correction_response_schema_setting(settings: dict[str, Any]) -> str:
+    value = (
+        settings.get("subtitleCorrectionResponseSchema")
+        or settings.get("subtitle_correction_response_schema")
+        or "full"
+    )
+    normalized = str(value).strip().lower()
+    return normalized if normalized in SUBTITLE_CORRECTION_RESPONSE_SCHEMAS else "full"
 
 
 def _subtitle_correction_batch_size_setting(settings: dict[str, Any]) -> int:
@@ -270,6 +281,7 @@ def _apply_transcript_correction(
     active_corrector = corrector or OpenAITranscriptCorrector(
         model=model,
         reasoning_effort=_subtitle_correction_reasoning_effort_setting(settings),
+        response_schema=_subtitle_correction_response_schema_setting(settings),
     )
     min_confidence = max(0.0, min(1.0, _float_setting(settings, "subtitleCorrectionMinConfidence", 0.9)))
     batch_size = _subtitle_correction_batch_size_setting(settings)
@@ -293,6 +305,7 @@ def _apply_transcript_correction(
             details={
                 "model": model,
                 "reasoning_effort": _subtitle_correction_reasoning_effort_setting(settings),
+                "response_schema": _subtitle_correction_response_schema_setting(settings),
                 "fallback_enabled": False,
             },
         ) from exc

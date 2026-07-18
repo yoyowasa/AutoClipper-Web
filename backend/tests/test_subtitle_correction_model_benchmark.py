@@ -10,6 +10,7 @@ from app.audio.benchmark_subtitle_correction import (
     apply_aliases,
     build_baseline_comparisons,
     estimated_actual_cost_usd,
+    load_baseline_run,
     load_target_indices,
     manual_review_metrics,
     parse_profile,
@@ -24,9 +25,18 @@ def test_profile_parser_supports_default_none_and_lowest() -> None:
     assert parse_profile("gpt-5.5:default") == BenchmarkProfile("gpt-5.5", "default")
     assert parse_profile("gpt-5.4-mini:none") == BenchmarkProfile("gpt-5.4-mini", "none")
     assert parse_profile("gpt-5-mini:lowest") == BenchmarkProfile("gpt-5-mini", "lowest")
+    assert parse_profile("gpt-5.5:default:changes_only") == BenchmarkProfile(
+        "gpt-5.5",
+        "default",
+        "changes_only",
+    )
+    assert BenchmarkProfile("gpt-5.5", "default").label == "gpt-5_5_default"
+    assert BenchmarkProfile("gpt-5.5", "default", "changes_only").label == "gpt-5_5_default_changes_only"
 
     with pytest.raises(argparse.ArgumentTypeError):
         parse_profile("gpt-5-mini:auto")
+    with pytest.raises(argparse.ArgumentTypeError):
+        parse_profile("gpt-5.5:default:compact")
 
 
 def test_cost_estimate_uses_cached_input_and_reasoning_in_output() -> None:
@@ -47,19 +57,25 @@ def test_baseline_comparison_reports_usage_and_change_overlap() -> None:
             "profile": "gpt-5.5:default",
             "summary": {"input_tokens": 100, "output_tokens": 300, "processing_seconds": 20},
             "estimated_actual_cost_usd": 1.0,
-            "changes": [{"index": 1}, {"index": 2}, {"index": 3}],
+            "changes": [
+                {"index": 1, "after": "one"},
+                {"index": 2, "after": "same"},
+                {"index": 3, "after": "three"},
+            ],
         },
         {
             "profile": "gpt-5.5:none",
             "summary": {"input_tokens": 100, "output_tokens": 100, "processing_seconds": 10},
             "estimated_actual_cost_usd": 0.4,
-            "changes": [{"index": 2}, {"index": 4}],
+            "changes": [{"index": 2, "after": "same"}, {"index": 4, "after": "four"}],
         },
     ]
 
     comparison = build_baseline_comparisons(runs)[0]
 
     assert comparison["shared_changed_indices"] == 1
+    assert comparison["shared_changed_same_text"] == 1
+    assert comparison["shared_changed_different_text"] == 0
     assert comparison["baseline_only_changed_indices"] == 2
     assert comparison["candidate_only_changed_indices"] == 1
     assert comparison["output_token_reduction_percent"] == pytest.approx(66.666667)
@@ -79,6 +95,42 @@ def test_targets_and_probe_resolution_are_loaded_from_artifacts(tmp_path: Path) 
 
     assert load_target_indices(targets_path, segment_count=3) == [0, 2]
     assert resolve_lowest_reasoning_from_probe(probe_path, "gpt-5-mini") == "minimal"
+
+
+def test_existing_full_baseline_can_be_reused_without_api_call(tmp_path: Path) -> None:
+    report_path = tmp_path / "report.json"
+    changes_path = tmp_path / "changes.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "segment_count": 3,
+                "target_segment_count": 2,
+                "runs": [
+                    {
+                        "profile": "gpt-5.5:default",
+                        "summary": {"input_tokens": 10, "output_tokens": 20},
+                        "quality": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    changes_path.write_text(json.dumps([{"index": 1, "after": "corrected"}]), encoding="utf-8")
+
+    baseline = load_baseline_run(
+        report_path,
+        changes_path,
+        segment_count=3,
+        target_segment_count=2,
+    )
+
+    assert baseline["response_schema"] == "full"
+    assert baseline["summary"]["response_schema"] == "full"
+    assert baseline["changes"] == [{"index": 1, "after": "corrected"}]
+
+    with pytest.raises(ValueError, match="segment_count"):
+        load_baseline_run(report_path, changes_path, segment_count=4, target_segment_count=2)
 
 
 def test_alias_review_and_timestamp_metrics_are_explicit() -> None:

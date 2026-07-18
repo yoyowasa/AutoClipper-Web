@@ -12,9 +12,13 @@ Production defaults remain unchanged until the comparison is complete:
 subtitleCorrectionMode=off
 subtitleCorrectionModel=gpt-5.5
 subtitleCorrectionReasoningEffort=default
+subtitleCorrectionResponseSchema=full
 ```
 
 `default` omits the Responses API `reasoning` parameter. It is not an alias for a specific effort.
+
+Profiles accept `MODEL:REASONING[:SCHEMA]`. Omitting `SCHEMA` uses `full`. Supported schemas are
+`full` and `changes_only`.
 
 ## Profiles
 
@@ -141,3 +145,49 @@ The report records:
 
 The cost value is an estimate, not an invoice amount. It uses actual token usage and a pricing
 snapshot dated `2026-07-18`, including cached-input pricing when `cached_tokens` is returned.
+
+## Full vs changes-only schema
+
+Compare response schemas without changing model or reasoning:
+
+```powershell
+python scripts/benchmark_subtitle_correction_models.py `
+  --phase benchmark `
+  --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
+  --targets-file storage/outputs/JOB_ID/subtitle_correction_targets.json `
+  --profile gpt-5.5:default:full `
+  --profile gpt-5.5:default:changes_only `
+  --batch-size 100 `
+  --context-segments 2 `
+  --min-confidence 0.9 `
+  --output-dir storage/temp/subtitle_correction_schema_benchmark
+```
+
+`changes_only` returns `{target_count, changes}`. Missing target indices are unchanged. The worker
+rejects target-outside indices, duplicates, blank text, and a mismatched target count before applying
+the existing confidence and numeric safety gates. A failed compact batch does not trigger a full
+schema resend.
+
+The compact schema is not only a transport optimization: allowing omitted items can change model
+behavior. Compare changed indices, same/different corrected text, useful correction recall, harmful
+corrections, visible output tokens, reasoning tokens, cost, and time before recommending it.
+
+To avoid paying for an unchanged long-form full-schema baseline again, reuse an existing report and
+its first run's change artifact:
+
+```powershell
+python scripts/benchmark_subtitle_correction_models.py `
+  --phase benchmark `
+  --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
+  --targets-file storage/outputs/JOB_ID/subtitle_correction_targets.json `
+  --baseline-report storage/temp/OLD_FULL_RUN/subtitle_correction_model_benchmark.json `
+  --baseline-changes storage/temp/OLD_FULL_RUN/gpt-5_5_default_changes.json `
+  --profile gpt-5.5:default:changes_only `
+  --batch-size 100 `
+  --context-segments 2 `
+  --min-confidence 0.9 `
+  --output-dir storage/temp/subtitle_correction_schema_benchmark
+```
+
+The command rejects a baseline whose segment or target count differs. Reuse still has a model-alias
+time-drift caveat; rerun both profiles when a same-time scientific comparison is required.
