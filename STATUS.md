@@ -4743,3 +4743,87 @@ python .\scripts\e2e_real_video.py `
 - production recommendationは`gpt-5.5:default`を維持。
 - `gpt-5.5:none`は実験的な省コスト・高速option。重要字幕の手動確認を前提とする。
 - Task66 changes-only compact schemaはTask65音声監査後の別branch / PRで実施する。
+
+## 2026-07-19 Task 67 GPU transcription benchmark
+
+### 目的
+
+- RTX 5070 Tiを使うfaster-whisper GPU workerを追加する。
+- `small / medium / large-v3 / turbo + ja + CUDA FP16`を比較し、精度とOpenAI校正需要から採用profileを決める。
+- Task66 changes-only schemaとはbranch / PRを分離する。
+
+### 実装
+
+- worker専用`backend/Dockerfile.gpu`と`docker-compose.gpu.yml`を追加。
+- CUDA 12.8.1 + cuDNN runtime、CTranslate2 4.8.1、faster-whisper 1.2.1を使用。
+- Whisper model cacheを`whisper_model_cache` volumeへ永続化。
+- JobSettings / Upload UI / real-video E2Eへ以下を追加:
+  - `transcriptionDevice`: `auto / cpu / cuda`
+  - `transcriptionComputeType`: `auto / int8 / float16 / int8_float16`
+  - `whisperModelSize`: `turbo`追加
+- `cuda`明示時はGPU未検出を`transcription_cuda_unavailable`で失敗させ、CPUへ黙ってfallbackしない。
+- `auto`時だけCPU fallbackを許可し、理由をmetadataへ保存。
+- `transcript_summary.json`へrequested/actual device、compute type、GPU名、load/transcription秒、peak VRAM、fallbackを追加。
+- benchmarkへdeterministic CER、suspicion target、API calls、対象音声、context込みtext/token proxyを追加。
+
+### GPU preflight
+
+```text
+GPU: NVIDIA GeForce RTX 5070 Ti
+VRAM: 16303 MiB
+driver: 595.97
+compute capability: 12.0
+actual runtime: cuda / float16
+fallback: false
+pip check: pass
+```
+
+### CPU compatibility
+
+- job: `job_a961a746c2d149f693c5d7d4af4665c9`
+- compatibility defaultの`base / auto / cpu / auto`で短尺実話者E2Eを実行。
+- actual runtimeは`cpu / int8`、short `1/1` (`1080x1920`)。
+- render failure `0`、sidecar risk `0`、total runtime `31.188s`。
+
+### 比較結果
+
+- controlled TTS 119.629秒:
+  - `small`: CER `0.1583`, transcribe `3.908s`, VRAM `3300MB`
+  - `medium`: CER `0.1463`, transcribe `5.968s`, VRAM `4676MB`
+  - `large-v3`: CER `0.2846`, transcribe `7.417s`, VRAM `6724MB`
+  - `turbo`: CER `0.1804`, transcribe `2.715s`, VRAM `4642MB`
+- 124秒実話者:
+  - 固有名詞: `large-v3 3/4`, `turbo 3/4`
+  - correction text proxy: `small 714`, `large-v3 328`, `turbo 294`
+- 58分実話者:
+  - `large-v3`: `265.400s`, VRAM `7716MB`, 重要語`2/5`
+  - `turbo`: `100.963s`, VRAM `4772MB`, 重要語`4/5`
+  - Task65人間確認済み難所の厳格一致: `large-v3 13/29`, `turbo 16/29`
+
+### OpenAI需要
+
+- 本番同条件`threshold=0.4 / context=2 / batch=100 / glossary=[]`。
+- 現行`small + CPU`: target `1304/1695`, calls `14`, token proxy `14343`。
+- `turbo + CUDA`: target `850/1396`, calls `9`, token proxy `11876`。
+- 削減見込み:
+  - target `34.8%`
+  - calls `35.7%`
+  - target speech `16.9%`
+  - context込みtoken proxy `17.2%`
+- 実OpenAI tokenは未測定。Task66 compact schemaと分離して評価する。
+
+### 58分統合E2E
+
+- job: `job_e7f350f808164c679cdd27f27bc3f63e`
+- `turbo / ja / cuda / float16`, OpenAI correction `off`。
+- total `303.391s`, transcription stage `89.063s`, engine `86.102s`。
+- normal `1/1` (`1280x720`)、short `2/2` (全て`1080x1920`)。
+- render failure `0`、ZIP `76050538 bytes`、audit inspection `0`、sidecar risk `0`。
+
+### 判定・未解決
+
+- RTX 5070 Ti推奨profileは`turbo / ja / cuda / float16`。
+- compatibility defaultの`base / auto / cpu / auto`は変更しない。
+- `turbo`でも既知難所`13/29`が未解決。OpenAI校正を完全に不要とは判定しない。
+- GPU workerはCompose overrideで起動する。Windows launcherのGPU override自動選択は未実装。
+- 次はTask66 changes-only schemaで、品質を維持したままOpenAI output token削減を検証する。

@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "FastAPI backend for AutoClipper Web"
 requires-python = ">=3.11"
 dependencies = [
+  "ctranslate2>=4.6.3,<5.0.0",
   "faster-whisper>=1.0.0,<2.0.0",
   "fastapi>=0.115.0,<1.0.0",
   "openai>=1.100.0,<2.0.0",

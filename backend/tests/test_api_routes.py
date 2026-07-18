@@ -369,6 +369,8 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["openaiFallbackToRuleScore"]["default"] is True
     assert properties["whisperModelSize"]["default"] == "base"
     assert properties["transcriptionLanguage"]["default"] == "auto"
+    assert properties["transcriptionDevice"]["default"] == "cpu"
+    assert properties["transcriptionComputeType"]["default"] == "auto"
     assert properties["subtitleCorrectionMode"]["default"] == "off"
     assert properties["subtitleCorrectionScope"]["default"] == "all"
     assert properties["transcriptCorrectionGlossary"]["type"] == "array"

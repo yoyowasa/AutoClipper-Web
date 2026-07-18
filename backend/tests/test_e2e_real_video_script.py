@@ -25,6 +25,8 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.profile == "talk"
     assert args.whisper_model_size == "base"
     assert args.transcription_language == "auto"
+    assert args.transcription_device == "cpu"
+    assert args.transcription_compute_type == "auto"
     assert args.subtitle_correction_mode == "off"
     assert args.subtitle_correction_scope == "all"
     assert args.subtitle_correction_suspicion_threshold == 0.4
@@ -201,6 +203,8 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["e2eFixtureTranscript"] is False
     assert settings["whisperModelSize"] == "small"
     assert settings["transcriptionLanguage"] == "ja"
+    assert settings["transcriptionDevice"] == "cpu"
+    assert settings["transcriptionComputeType"] == "auto"
     assert settings["subtitleCorrectionMode"] == "openai"
     assert settings["subtitleCorrectionScope"] == "suspicious"
     assert settings["subtitleCorrectionSuspicionThreshold"] == 0.6
@@ -330,7 +334,24 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     (tmp_path / "transcript_summary.json").write_text(
-        json.dumps({"segment_count": 8, "total_text_length": 420}),
+        json.dumps(
+            {
+                "segment_count": 8,
+                "total_text_length": 420,
+                "transcription_runtime": {
+                    "requested_device": "cuda",
+                    "actual_device": "cuda",
+                    "requested_compute_type": "auto",
+                    "actual_compute_type": "float16",
+                    "gpu_name": "RTX Test",
+                    "model_load_seconds": 2.5,
+                    "transcription_seconds": 12.0,
+                    "peak_vram_mb": 4096,
+                    "fallback_used": False,
+                    "fallback_reason": None,
+                },
+            }
+        ),
         encoding="utf-8",
     )
     (tmp_path / "candidate_summary.json").write_text(
@@ -395,6 +416,16 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
         "video_duration": 1812.5,
         "transcript_segment_count": 8,
         "total_transcript_text_length": 420,
+        "transcription_requested_device": "cuda",
+        "transcription_actual_device": "cuda",
+        "transcription_requested_compute_type": "auto",
+        "transcription_actual_compute_type": "float16",
+        "transcription_gpu_name": "RTX Test",
+        "transcription_model_load_seconds": 2.5,
+        "transcription_seconds": 12.0,
+        "transcription_peak_vram_mb": 4096,
+        "transcription_fallback_used": False,
+        "transcription_fallback_reason": None,
         "total_candidates_count": 42,
         "short_candidates_count": 30,
         "normal_candidates_count": 12,

@@ -88,6 +88,27 @@ docker compose up -d worker
 docker compose logs -f worker
 ```
 
+### NVIDIA GPU worker
+
+The default Compose file keeps the existing CPU worker. On Windows with Docker Desktop,
+WSL2 GPU support, and a compatible NVIDIA driver, start the CUDA 12.8 worker with:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec -T worker `
+  python -m app.audio.gpu_preflight
+```
+
+The GPU override changes only the worker image. Backend and frontend remain on their smaller
+default images. Whisper model downloads are retained in the `whisper_model_cache` volume.
+
+Use `transcriptionDevice=cuda` for an explicit GPU requirement. That mode fails with
+`transcription_cuda_unavailable` instead of silently using CPU. `transcriptionDevice=auto`
+uses CUDA when available and records a CPU fallback reason otherwise.
+
+The Windows launcher currently starts the default Compose file. Start the GPU override from
+PowerShell before selecting CUDA in the Upload UI.
+
 ## Health Checks
 
 Backend:
@@ -432,19 +453,26 @@ The JSON file must be an object:
 
 ### Raw transcription benchmark
 
-The production default remains `whisperModelSize=base` with `transcriptionLanguage=auto`.
+The compatibility default remains `whisperModelSize=base`, `transcriptionLanguage=auto`,
+`transcriptionDevice=cpu`, and `transcriptionComputeType=auto`.
 For a real-video job, the raw faster-whisper profile can be changed without enabling transcript correction:
 
 ```powershell
 python scripts/e2e_real_video.py `
   --video path\to\spoken_sample.mp4 `
-  --whisper-model-size small `
+  --whisper-model-size turbo `
   --transcription-language ja `
+  --transcription-device cuda `
+  --transcription-compute-type float16 `
   --mode low_cost
 ```
 
-Supported model sizes are `base`, `small`, `medium`, and `large-v3`. Supported language modes are `auto` and `ja`.
-The selected values are written to `transcript_summary.json` as `transcription_model` and `transcription_language`.
+Supported model sizes are `base`, `small`, `medium`, `large-v3`, and `turbo`. Supported
+language modes are `auto` and `ja`. Device modes are `cpu`, `cuda`, and `auto`; compute
+types are `auto`, `int8`, `float16`, and `int8_float16`.
+
+The selected and actual runtime values are written to `transcript_summary.json`, including
+model load time, transcription time, GPU name, peak VRAM proxy, and fallback diagnostics.
 
 To compare raw transcription accuracy inside the worker, first prepare a mono 16 kHz WAV under the shared `storage` directory:
 
@@ -455,25 +483,34 @@ docker compose exec worker ffmpeg -y `
   /app/storage/temp/transcription_benchmark/sample.wav
 ```
 
-For a quick `base` auto-versus-Japanese comparison:
+For a cached GPU comparison:
 
 ```powershell
-docker compose exec worker python -m app.audio.benchmark_transcription `
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec -T worker `
+  python -m app.audio.benchmark_transcription `
   --audio /app/storage/temp/transcription_benchmark/sample.wav `
-  --profile base:auto `
-  --profile base:ja `
+  --profile small:ja:cuda:float16 `
+  --profile medium:ja:cuda:float16 `
+  --profile large-v3:ja:cuda:float16 `
+  --profile turbo:ja:cuda:float16 `
   --reference-file /app/storage/temp/transcription_benchmark/reference.txt `
   --keyword OpenAI `
   --output-dir /app/storage/outputs/transcription_benchmarks/sample
 ```
 
 Omit `--profile` to run the default benchmark matrix: `base:auto`, `base:ja`, `small:ja`, and `medium:ja`.
-The report contains normalized Japanese CER, keyword accuracy, segment/timestamp checks, wall/CPU time, and peak process RAM.
+The report contains normalized Japanese CER, keyword accuracy, segment/timestamp checks,
+RTF, GPU time, peak VRAM proxy, suspicion target count, API-call estimate, and a local
+context-inclusive input-token proxy. The token proxy excludes prompt, schema, reasoning,
+and output tokens; actual OpenAI usage still requires an API benchmark.
 Per-profile raw transcript JSON is preserved. Transcript dictionary replacement and other post-processing are not applied.
 First execution may include model download time; rerun after models are cached before comparing runtime.
 
 The Task 59 reference result is documented in `docs/TRANSCRIPTION_BENCHMARK_2026-07-10.md`.
-The current production default remains `base + auto`; `small + ja` is the recommended high-accuracy Japanese option.
+The Task 67 GPU result is documented in `docs/GPU_TRANSCRIPTION_BENCHMARK_2026-07-19.md`.
+On the tested RTX 5070 Ti, `turbo + ja + cuda + float16` is the current GPU recommendation.
+It reduces correction demand but does not eliminate transcription errors or the need for
+optional OpenAI correction on important material.
 
 ### OpenAI subtitle correction
 
@@ -758,6 +795,8 @@ Troubleshooting:
     },
     "whisperModelSize": "base",
     "transcriptionLanguage": "auto",
+    "transcriptionDevice": "cpu",
+    "transcriptionComputeType": "auto",
     "subtitleCorrectionMode": "off",
     "subtitleCorrectionScope": "all",
     "transcriptCorrectionGlossary": [],
@@ -807,6 +846,8 @@ Production-safe defaults remain:
 - `transcriptReplacements`: `{}`
 - `whisperModelSize`: `base`
 - `transcriptionLanguage`: `auto`
+- `transcriptionDevice`: `cpu`
+- `transcriptionComputeType`: `auto`
 - `subtitleCorrectionMode`: `off`
 - `subtitleCorrectionScope`: `all`
 - `transcriptCorrectionGlossary`: `[]`

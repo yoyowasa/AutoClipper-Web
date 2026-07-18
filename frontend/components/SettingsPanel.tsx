@@ -35,6 +35,8 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   minGapBetweenSubtitles: 0.08,
   whisperModelSize: "base",
   transcriptionLanguage: "auto",
+  transcriptionDevice: "cpu",
+  transcriptionComputeType: "auto",
   subtitleCorrectionMode: "off",
   subtitleCorrectionScope: "all",
   subtitleCorrectionSuspicionThreshold: 0.4,
@@ -411,6 +413,47 @@ export function SettingsPanel({
                 <option value="small">日本語高精度（small）</option>
                 <option value="medium">高精度・低速（medium）</option>
                 <option value="large-v3">実験的（large-v3）</option>
+                <option value="turbo">高速large-v3系（turbo）</option>
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">文字起こしデバイス</span>
+              <select
+                className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+                disabled={disabled}
+                value={settings.transcriptionDevice}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    transcriptionDevice: event.target.value as ClipSettings["transcriptionDevice"]
+                  })
+                }
+              >
+                <option value="cpu">CPU（互換設定）</option>
+                <option value="auto">自動（GPU優先）</option>
+                <option value="cuda">NVIDIA GPU（利用不能時は失敗）</option>
+              </select>
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">演算精度</span>
+              <select
+                className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+                disabled={disabled}
+                value={settings.transcriptionComputeType}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    transcriptionComputeType:
+                      event.target.value as ClipSettings["transcriptionComputeType"]
+                  })
+                }
+              >
+                <option value="auto">自動（GPU=float16 / CPU=int8）</option>
+                <option value="int8">int8</option>
+                <option value="float16">float16</option>
+                <option value="int8_float16">int8_float16</option>
               </select>
             </label>
 

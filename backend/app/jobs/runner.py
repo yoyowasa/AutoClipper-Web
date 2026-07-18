@@ -40,6 +40,11 @@ from app.audio.transcribe_faster_whisper import (
     transcript_output_path,
     write_transcript_segments,
 )
+from app.audio.transcription_runtime import (
+    TRANSCRIPTION_COMPUTE_TYPES,
+    TRANSCRIPTION_DEVICES,
+    TranscriptionRuntimeError,
+)
 from app.audio.transcript_suspicion import (
     TranscriptSuspicionResult,
     analyze_transcript_suspicion,
@@ -152,7 +157,7 @@ class PipelineExpectedError(Exception):
         self.details = details or {}
 
 
-WHISPER_MODEL_SIZES = {"base", "small", "medium", "large-v3"}
+WHISPER_MODEL_SIZES = {"base", "small", "medium", "large-v3", "turbo"}
 TRANSCRIPTION_LANGUAGES = {"auto", "ja"}
 SUBTITLE_CORRECTION_REASONING_EFFORTS = {
     "default",
@@ -176,6 +181,18 @@ def _transcription_language_setting(settings: dict[str, Any]) -> str:
     value = settings.get("transcriptionLanguage") or settings.get("transcription_language") or "auto"
     normalized = str(value).strip().lower()
     return normalized if normalized in TRANSCRIPTION_LANGUAGES else "auto"
+
+
+def _transcription_device_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("transcriptionDevice") or settings.get("transcription_device") or "cpu"
+    normalized = str(value).strip().lower()
+    return normalized if normalized in TRANSCRIPTION_DEVICES else "cpu"
+
+
+def _transcription_compute_type_setting(settings: dict[str, Any]) -> str:
+    value = settings.get("transcriptionComputeType") or settings.get("transcription_compute_type") or "auto"
+    normalized = str(value).strip().lower()
+    return normalized if normalized in TRANSCRIPTION_COMPUTE_TYPES else "auto"
 
 
 def _subtitle_correction_mode_setting(settings: dict[str, Any]) -> str:
@@ -1422,6 +1439,7 @@ def run_autoclipper_job(
     transcription_engine = "not_run"
     transcription_model: str | None = None
     transcription_language: str | None = None
+    transcription_diagnostics: dict[str, Any] | None = None
     used_fixture_transcript = False
     summary_files: list[Path] = []
     temp_dir: Path | None = None
@@ -1437,6 +1455,23 @@ def run_autoclipper_job(
         settings = dict(job.settings_json or {})
         configured_transcription_model = _whisper_model_size_setting(settings)
         configured_transcription_language = _transcription_language_setting(settings)
+        configured_transcription_device = _transcription_device_setting(settings)
+        configured_transcription_compute_type = _transcription_compute_type_setting(settings)
+        transcription_diagnostics = {
+            "requested_device": configured_transcription_device,
+            "actual_device": None,
+            "requested_compute_type": configured_transcription_compute_type,
+            "actual_compute_type": None,
+            "model": configured_transcription_model,
+            "language": configured_transcription_language,
+            "gpu_name": None,
+            "gpu_memory_total_mb": None,
+            "model_load_seconds": 0.0,
+            "transcription_seconds": 0.0,
+            "peak_vram_mb": None,
+            "fallback_used": False,
+            "fallback_reason": None,
+        }
         used_fixture_transcript = _e2e_fixture_transcript_enabled(settings)
         job_dir = storage_paths.job_outputs(job.id)
         temp_dir = storage_paths.temp / job.id
@@ -1462,6 +1497,7 @@ def run_autoclipper_job(
                 used_fixture_transcript=used_fixture_transcript,
                 transcription_model=transcription_model,
                 transcription_language=transcription_language,
+                transcription_diagnostics=transcription_diagnostics,
             )
 
         try:
@@ -1512,6 +1548,21 @@ def run_autoclipper_job(
                 transcription_engine = "e2e_fixture"
                 transcription_model = "fixture"
                 transcription_language = "fixture"
+                transcription_diagnostics = {
+                    "requested_device": configured_transcription_device,
+                    "actual_device": "fixture",
+                    "requested_compute_type": configured_transcription_compute_type,
+                    "actual_compute_type": "fixture",
+                    "model": "fixture",
+                    "language": "fixture",
+                    "gpu_name": None,
+                    "gpu_memory_total_mb": None,
+                    "model_load_seconds": 0.0,
+                    "transcription_seconds": 0.0,
+                    "peak_vram_mb": None,
+                    "fallback_used": False,
+                    "fallback_reason": None,
+                }
                 transcript_segments = _e2e_fixture_transcript(duration)
             else:
                 transcription_engine = "faster_whisper"
@@ -1520,12 +1571,31 @@ def run_autoclipper_job(
                 try:
                     if transcribe_audio is not None:
                         transcript_segments = transcribe_audio(audio_path)
+                        transcription_diagnostics = {
+                            **(transcription_diagnostics or {}),
+                            "actual_device": "injected",
+                            "actual_compute_type": "injected",
+                        }
                     else:
                         engine = FasterWhisperTranscriptionEngine(
                             model_size=configured_transcription_model,
+                            device=configured_transcription_device,
+                            compute_type=configured_transcription_compute_type,
                             language=None if configured_transcription_language == "auto" else configured_transcription_language,
                         )
                         transcript_segments = engine.transcribe(audio_path)
+                        transcription_diagnostics = engine.diagnostics
+                except TranscriptionRuntimeError as exc:
+                    transcription_diagnostics = {
+                        **(transcription_diagnostics or {}),
+                        **exc.details,
+                        "error_code": exc.code,
+                    }
+                    raise PipelineExpectedError(
+                        exc.code,
+                        str(exc),
+                        details=transcription_diagnostics,
+                    ) from exc
                 except Exception as exc:
                     raise PipelineExpectedError(
                         "transcription_failed",

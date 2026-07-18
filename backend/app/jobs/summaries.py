@@ -132,6 +132,7 @@ def build_transcript_summary(
     used_fixture_transcript: bool,
     transcription_model: str | None = None,
     transcription_language: str | None = None,
+    transcription_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     segments = list(transcript_segments or [])
     return {
@@ -151,6 +152,7 @@ def build_transcript_summary(
         "transcription_engine": transcription_engine,
         "transcription_model": transcription_model,
         "transcription_language": transcription_language,
+        "transcription_runtime": transcription_diagnostics or {},
         "used_fixture_transcript": used_fixture_transcript,
     }
 
@@ -486,6 +488,7 @@ def write_generation_summaries(
     used_fixture_transcript: bool = False,
     transcription_model: str | None = None,
     transcription_language: str | None = None,
+    transcription_diagnostics: dict[str, Any] | None = None,
 ) -> list[Path]:
     root = Path(output_dir)
     payloads = {
@@ -495,6 +498,7 @@ def write_generation_summaries(
             used_fixture_transcript=used_fixture_transcript,
             transcription_model=transcription_model,
             transcription_language=transcription_language,
+            transcription_diagnostics=transcription_diagnostics,
         ),
         AUDIO_FEATURE_SUMMARY_FILENAME: build_audio_feature_summary(audio_features),
         CANDIDATE_SUMMARY_FILENAME: build_candidate_summary(

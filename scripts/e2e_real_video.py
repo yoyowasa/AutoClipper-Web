@@ -175,7 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--whisper-model-size",
         default="base",
-        choices=["base", "small", "medium", "large-v3"],
+        choices=["base", "small", "medium", "large-v3", "turbo"],
         help="faster-whisper model used by the worker. Default preserves current behavior.",
     )
     parser.add_argument(
@@ -183,6 +183,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="auto",
         choices=["auto", "ja"],
         help="Use auto detection or force Japanese transcription.",
+    )
+    parser.add_argument(
+        "--transcription-device",
+        default="cpu",
+        choices=["auto", "cpu", "cuda"],
+        help="Use CPU, require CUDA, or prefer CUDA with an explicit CPU fallback.",
+    )
+    parser.add_argument(
+        "--transcription-compute-type",
+        default="auto",
+        choices=["auto", "int8", "float16", "int8_float16"],
+        help="CTranslate2 compute type. Auto resolves to float16 on CUDA and int8 on CPU.",
     )
     parser.add_argument("--subtitle-correction-mode", default="off", choices=["off", "openai"])
     parser.add_argument("--subtitle-correction-scope", default="all", choices=["all", "suspicious"])
@@ -284,6 +296,8 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "profile": args.profile,
         "whisperModelSize": args.whisper_model_size,
         "transcriptionLanguage": args.transcription_language,
+        "transcriptionDevice": args.transcription_device,
+        "transcriptionComputeType": args.transcription_compute_type,
         "subtitleCorrectionMode": args.subtitle_correction_mode,
         "subtitleCorrectionScope": args.subtitle_correction_scope,
         "subtitleCorrectionSuspicionThreshold": args.subtitle_correction_suspicion_threshold,
@@ -505,10 +519,23 @@ def pipeline_metrics(output_dir: Path) -> dict[str, Any]:
     selected_normal = selected.get("selected_normal_count")
     requested_short = selected.get("requested_short_count", candidates.get("requested_short_count"))
     selected_short = selected.get("selected_short_count")
+    transcription_runtime = transcript.get("transcription_runtime")
+    if not isinstance(transcription_runtime, dict):
+        transcription_runtime = {}
     return {
         "video_duration": video_metadata.get("duration"),
         "transcript_segment_count": transcript.get("segment_count"),
         "total_transcript_text_length": transcript.get("total_text_length"),
+        "transcription_requested_device": transcription_runtime.get("requested_device"),
+        "transcription_actual_device": transcription_runtime.get("actual_device"),
+        "transcription_requested_compute_type": transcription_runtime.get("requested_compute_type"),
+        "transcription_actual_compute_type": transcription_runtime.get("actual_compute_type"),
+        "transcription_gpu_name": transcription_runtime.get("gpu_name"),
+        "transcription_model_load_seconds": transcription_runtime.get("model_load_seconds"),
+        "transcription_seconds": transcription_runtime.get("transcription_seconds"),
+        "transcription_peak_vram_mb": transcription_runtime.get("peak_vram_mb"),
+        "transcription_fallback_used": transcription_runtime.get("fallback_used"),
+        "transcription_fallback_reason": transcription_runtime.get("fallback_reason"),
         "total_candidates_count": candidates.get("total_candidates"),
         "short_candidates_count": candidates.get("short_candidates"),
         "normal_candidates_count": candidates.get("normal_candidates"),
@@ -567,6 +594,19 @@ def print_pipeline_metrics(metrics: dict[str, Any]) -> None:
     print(f"  video_duration={metrics.get('video_duration')}")
     print(f"  transcript_segment_count={metrics.get('transcript_segment_count')}")
     print(f"  total_transcript_text_length={metrics.get('total_transcript_text_length')}")
+    print(
+        "  transcription_runtime="
+        f"{metrics.get('transcription_actual_device')}/"
+        f"{metrics.get('transcription_actual_compute_type')} "
+        f"requested={metrics.get('transcription_requested_device')}/"
+        f"{metrics.get('transcription_requested_compute_type')} "
+        f"gpu={metrics.get('transcription_gpu_name')} "
+        f"model_load={metrics.get('transcription_model_load_seconds')}s "
+        f"transcription={metrics.get('transcription_seconds')}s "
+        f"peak_vram={metrics.get('transcription_peak_vram_mb')}MB "
+        f"fallback={metrics.get('transcription_fallback_used')} "
+        f"reason={metrics.get('transcription_fallback_reason')}"
+    )
     print(f"  total_candidates_count={metrics.get('total_candidates_count')}")
     print(f"  short_candidates_count={metrics.get('short_candidates_count')}")
     print(f"  normal_candidates_count={metrics.get('normal_candidates_count')}")
@@ -951,7 +991,9 @@ def run_e2e(args: argparse.Namespace) -> int:
     print(
         "transcription: "
         f"model={settings['whisperModelSize']} "
-        f"language={settings['transcriptionLanguage']}"
+        f"language={settings['transcriptionLanguage']} "
+        f"device={settings['transcriptionDevice']} "
+        f"compute_type={settings['transcriptionComputeType']}"
     )
     if use_openai_scoring(settings) or use_openai_subtitle_correction(settings):
         check_openai_api_key_available(env)
