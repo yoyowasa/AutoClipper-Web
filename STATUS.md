@@ -4855,6 +4855,7 @@ pip check: pass
 - Docker compose full rebuild / `python scripts/smoke_runtime.py --skip-video`: pass。
 - default synthetic sample E2E: pass (`job_f4799fba9341403c96b7e9c1251248c1`、short `1080x1920`、render failure `0`)。
 - rebuilt backend OpenAPI: correction default `off`、response schema default `full`。
+- Draft PR #45 GitHub CI: backend / frontend pass。
 - 124秒実API schema benchmark開始時、最初のcallが`429 insufficient_quota`。successful batch `0`、usage未取得。追加callは停止。
 
 ### 未解決事項
