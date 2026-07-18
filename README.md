@@ -565,6 +565,32 @@ processing time, schema/fallback counts, timestamp preservation, CER when a refe
 proper-noun matches, and a usage-based cost estimate. See
 `docs/SUBTITLE_CORRECTION_MODEL_BENCHMARK.md`.
 
+Audit `gpt-5.5:default` and `gpt-5.5:none` differences without new API calls:
+
+```powershell
+python scripts/audit_reasoning_quality.py prepare `
+  --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
+  --default-changes storage/temp/BENCHMARK/gpt-5_5_default_changes.json `
+  --none-changes storage/temp/BENCHMARK/gpt-5_5_none_changes.json `
+  --video storage/uploads/VIDEO_ID.mp4 `
+  --output-dir storage/temp/reasoning_quality_audit `
+  --extract-audio `
+  --docker-service worker `
+  --storage-root storage
+```
+
+The ignored review package contains a UTF-8 CSV, JSON context, and per-index WAV snippets. Correctness
+labels require listening to the audio; the script does not infer them. See
+`docs/REASONING_QUALITY_AUDIT.md`.
+
+The 58-minute Task 65 audit stopped after 29 prioritized audio reviews because the product decision
+was already conclusive. `gpt-5.5:none` missed 17 corrections that reviewers judged useful from
+`gpt-5.5:default`; even the most favorable remaining-shared-index assumption limits its useful
+recall to at most 87.3%, below the 95% decision gate. Five harmful `none` corrections were observed,
+including four repeated `キオクシア -> NVIDIA` substitutions. Keep `default` as the production
+recommendation. Treat `none` as an experimental cost-saving option whose important subtitles require
+manual verification. The full-population harmful-rate estimate is deferred.
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell
