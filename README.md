@@ -583,6 +583,14 @@ The ignored review package contains a UTF-8 CSV, JSON context, and per-index WAV
 labels require listening to the audio; the script does not infer them. See
 `docs/REASONING_QUALITY_AUDIT.md`.
 
+The 58-minute Task 65 audit stopped after 29 prioritized audio reviews because the product decision
+was already conclusive. `gpt-5.5:none` missed 17 corrections that reviewers judged useful from
+`gpt-5.5:default`; even the most favorable remaining-shared-index assumption limits its useful
+recall to at most 87.3%, below the 95% decision gate. Five harmful `none` corrections were observed,
+including four repeated `キオクシア -> NVIDIA` substitutions. Keep `default` as the production
+recommendation. Treat `none` as an experimental cost-saving option whose important subtitles require
+manual verification. The full-population harmful-rate estimate is deferred.
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell

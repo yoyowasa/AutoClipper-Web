@@ -520,7 +520,7 @@ export function SettingsPanel({
                     }
                   >
                     <option value="default">モデル既定</option>
-                    <option value="none">なし</option>
+                    <option value="none">なし（省コスト・高速、重要字幕は要確認）</option>
                     <option value="minimal">最小</option>
                     <option value="low">低</option>
                     <option value="medium">中</option>

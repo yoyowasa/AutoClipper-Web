@@ -4727,6 +4727,19 @@ python .\scripts\e2e_real_video.py `
 
 ### 現在判定
 
-- review label: `0/295`。Task65品質監査は準備完了、音声判定は未完了。
-- `none` useful recall / harmful rate /重要語見逃しは未確定。既定値は変更しない。
+- review label: `29/295`。標準設定の製品判断が確定したため全件確認を停止。
+- 確認内訳:
+  - default-only: `17`
+  - none-only: `9`
+  - shared + corrected text相違: `3`
+  - shared + corrected text同一: `0`
+- 人間判定:
+  - `default`有益修正: `17`
+  - `none`が上記17件を見逃し。
+  - `none`有害修正: `5 segments`。
+  - 重大な反復パターン: `キオクシア -> NVIDIA`が`4 segments`。
+- 最も`none`に有利な仮定でも、useful recall上限は`117 / (117 + 17) = 87.3%`。暫定合格条件`95%`へ到達不可。
+- 29件は差分優先sampleであり、`5/29`を全295件の有害修正率として使用しない。全母集団率の算出は保留。
+- production recommendationは`gpt-5.5:default`を維持。
+- `gpt-5.5:none`は実験的な省コスト・高速option。重要字幕の手動確認を前提とする。
 - Task66 changes-only compact schemaはTask65音声監査後の別branch / PRで実施する。

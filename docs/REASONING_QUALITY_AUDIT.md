@@ -97,17 +97,44 @@ The summary reports:
 Partial reviews remain `status=partial`. Missing labels are not treated as successful, harmful, or
 missed corrections.
 
-## Decision gate
+## Decision result
 
-Do not recommend `gpt-5.5:none` as the normal default until the audio review is complete. The
-provisional gate is:
+The Task 65 long-form audit reviewed 29 prioritized items:
 
 ```text
-none useful recall vs default >= 95%
-none harmful correction count = 0 or no worse than default
-no important proper-noun, numeric, or technical-term misses
-equivalent alternatives excluded from quality loss
+default_only reviewed: 17
+none_only reviewed: 9
+shared_different_text reviewed: 3
+shared_same_text reviewed: 0
 ```
+
+The review found:
+
+```text
+useful default corrections missed by none: 17
+harmful none corrections observed: 5 segments
+repeated critical pattern: キオクシア -> NVIDIA in 4 segments
+```
+
+The original gate required `none` useful recall versus `default` to be at least 95%, with no increase
+in harmful corrections or important-term misses. Even if all 117 shared indices were useful and
+correct under `none`, the most favorable upper bound is:
+
+```text
+117 / (117 + 17) = 87.3%
+```
+
+The product decision is therefore conclusive without reviewing all 295 items:
+
+```text
+gpt-5.5:default -> production recommendation
+gpt-5.5:none    -> experimental cost-saving option; manually verify important subtitles
+```
+
+The 29 reviewed items were prioritized disagreements, not a random sample. Do not interpret
+`5 / 29` as the harmful-correction rate for the full population. A full-population rate estimate is
+deferred. Remaining `shared_same_text` items do not affect the model-choice decision, and additional
+useful `default_only` corrections would only lower `none` recall.
 
 Task 66 changes-only schema work must use a separate branch and benchmark. Schema effects must not be
 mixed into this reasoning-quality audit.
