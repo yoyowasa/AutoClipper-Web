@@ -4686,3 +4686,47 @@ python .\scripts\e2e_real_video.py `
   - `subtitleCorrectionReasoningEffort=default`
 - `gpt-5.5:none`は有力な省コストoptionだが、長尺のdefault-only変更`166`件の正誤確認前に既定化しない。
 - `gpt-5.4-mini`、`gpt-5-mini`は124秒評価で見逃し増加。`gpt-5.6-luna`は有害/表記変更増加のため採用しない。
+
+## 2026-07-18 Task 65 default vs none long-form quality audit preparation
+
+### 目的
+
+- Task64の58分`gpt-5.5:default` / `gpt-5.5:none`差分を、追加API費用なしで音声確認できる形にする。
+- reasoning差の品質評価とTask66 changes-only schema変更を分離する。
+
+### 変更内容
+
+- `scripts/audit_reasoning_quality.py`を追加。
+- 既存change artifactを次の4群へ分類:
+  - `default_only`
+  - `none_only`
+  - `shared_same_text`
+  - `shared_different_text`
+- 各indexへ元字幕、両model出力、前後segment、音声区間、review欄を記録。
+- Docker workerのFFmpegで前後文脈付きmono 16kHz WAVを抽出可能。
+- UTF-8 BOM CSVへ手動labelを記入し、JSON manifestと結合して品質指標を再集計可能。
+- 未入力labelを成功・失敗へ推測せず、partial reviewとして扱う。
+
+### 58分review package
+
+- source job: `job_ea301023a3cd431f8a5700ea4f4e4ca1`。
+- API call: `0`。
+- unique changed indices: `295`。
+- 分類:
+  - default-only: `166`
+  - none-only: `12`
+  - shared + corrected text同一: `114`
+  - shared + corrected text相違: `3`
+- review JSON items / CSV rows / WAV: `295 / 295 / 295`。
+- WAV size: `63,404,804 bytes`。
+- 全WAV ffprobe: pass。空/header-only file: `0`。
+- local output:
+  - `storage/temp/transcription_benchmark/task65/long_58m_quality_audit/reasoning_quality_review.json`
+  - `storage/temp/transcription_benchmark/task65/long_58m_quality_audit/reasoning_quality_review.csv`
+  - `storage/temp/transcription_benchmark/task65/long_58m_quality_audit/audio/`
+
+### 現在判定
+
+- review label: `0/295`。Task65品質監査は準備完了、音声判定は未完了。
+- `none` useful recall / harmful rate /重要語見逃しは未確定。既定値は変更しない。
+- Task66 changes-only compact schemaはTask65音声監査後の別branch / PRで実施する。

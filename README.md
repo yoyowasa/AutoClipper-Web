@@ -565,6 +565,24 @@ processing time, schema/fallback counts, timestamp preservation, CER when a refe
 proper-noun matches, and a usage-based cost estimate. See
 `docs/SUBTITLE_CORRECTION_MODEL_BENCHMARK.md`.
 
+Audit `gpt-5.5:default` and `gpt-5.5:none` differences without new API calls:
+
+```powershell
+python scripts/audit_reasoning_quality.py prepare `
+  --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
+  --default-changes storage/temp/BENCHMARK/gpt-5_5_default_changes.json `
+  --none-changes storage/temp/BENCHMARK/gpt-5_5_none_changes.json `
+  --video storage/uploads/VIDEO_ID.mp4 `
+  --output-dir storage/temp/reasoning_quality_audit `
+  --extract-audio `
+  --docker-service worker `
+  --storage-root storage
+```
+
+The ignored review package contains a UTF-8 CSV, JSON context, and per-index WAV snippets. Correctness
+labels require listening to the audio; the script does not infer them. See
+`docs/REASONING_QUALITY_AUDIT.md`.
+
 For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
 
 ```powershell
