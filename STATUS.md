@@ -4849,17 +4849,25 @@ pip check: pass
 
 - targeted backend tests: `70 passed`。
 - targeted backend ruff: pass。
-- backend CI checks: ruff pass、`330 passed, 1 skipped`。
+- backend CI checks: ruff pass、`338 passed, 1 skipped`。
 - frontend typecheck / lint / build: pass。
 - worker image rebuildと`changes_only`設定読込: pass。
 - Docker compose full rebuild / `python scripts/smoke_runtime.py --skip-video`: pass。
 - default synthetic sample E2E: pass (`job_f4799fba9341403c96b7e9c1251248c1`、short `1080x1920`、render failure `0`)。
 - rebuilt backend OpenAPI: correction default `off`、response schema default `full`。
 - Draft PR #45 GitHub CI: backend / frontend pass。
-- 124秒実API schema benchmark開始時、最初のcallが`429 insufficient_quota`。successful batch `0`、usage未取得。追加callは停止。
+- rebase後commit `2aa5114`で、124秒固定artifactを使った1 batch疎通を再実行。
+  - profile: `gpt-5.5:default:changes_only`
+  - segments: `48`
+  - suspicious targets: `36`
+  - deterministic transcript SHA-256: `C6874EA6C59B37467D346E614288C9B96924BD03D454E2011EBFB12CBF5A7DF3`
+  - target file SHA-256: `2DC5CB8A9C9CF86B93B40166FE47691140893BE12DE2A849AB4ED5AA6F1AFA6C`
+  - API到達後、最初のcallが`429 insufficient_quota`。successful batch `0/1`、successful responseとusage記録なし。
+  - 124秒full/changes-only比較と58分最終構成測定は開始していない。
 
 ### 未解決事項
 
-- quota復旧後、124秒で`gpt-5.5:default:full`対`changes_only`の品質・token比較が必要。
+- quota復旧後、同じ固定artifactで1 batch疎通を再実行し、schema success、usage取得、retry/fallback `0`を先に確認する。
+- 疎通成功後、124秒で`gpt-5.5:default:full`対`changes_only`の品質・token比較が必要。
 - 短尺比較合格後、58分は既存full baselineを保持し、compact側14 batchの実token・変更差・timestamp保持を確認する。
 - 実API比較完了前はproduction recommendationを`full`から変更しない。
