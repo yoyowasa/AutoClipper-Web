@@ -4868,6 +4868,6 @@ pip check: pass
 ### 未解決事項
 
 - quota復旧後、同じ固定artifactで1 batch疎通を再実行し、schema success、usage取得、retry/fallback `0`を先に確認する。
-- 疎通成功後、124秒で`gpt-5.5:default:full`対`changes_only`の品質・token比較が必要。
-- 短尺比較合格後、58分は既存full baselineを保持し、compact側14 batchの実token・変更差・timestamp保持を確認する。
+- 疎通成功後、124秒・36 targetsで`gpt-5.5:default:full` `1/1`対`changes_only` `1/1`の品質・token比較が必要。
+- 短尺比較合格後、58分は`turbo + ja + cuda + float16 + suspicious + changes_only`を実行し、新しいtarget数から算出した`N/N` batchの実token・変更差・timestamp保持を確認する。
 - 実API比較完了前はproduction recommendationを`full`から変更しない。
