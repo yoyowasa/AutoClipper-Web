@@ -28,8 +28,10 @@ ClipProfile = Literal["auto", "talk", "gameplay", "lecture"]
 ShortLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
 SelectionPolicy = Literal["fill_requested", "strict_quality"]
 ShortOverlayTitleMode = Literal["auto", "always", "high_quality_only", "never"]
-WhisperModelSize = Literal["base", "small", "medium", "large-v3"]
+WhisperModelSize = Literal["base", "small", "medium", "large-v3", "turbo"]
 TranscriptionLanguage = Literal["auto", "ja"]
+TranscriptionDevice = Literal["auto", "cpu", "cuda"]
+TranscriptionComputeType = Literal["auto", "int8", "float16", "int8_float16"]
 SubtitleCorrectionMode = Literal["off", "openai"]
 SubtitleCorrectionScope = Literal["all", "suspicious"]
 SubtitleCorrectionReasoningEffort = Literal[
@@ -127,6 +129,8 @@ class JobSettings(BaseModel):
     transcript_replacements: dict[str, str] = Field(default_factory=dict, alias="transcriptReplacements")
     whisper_model_size: WhisperModelSize = Field(default="base", alias="whisperModelSize")
     transcription_language: TranscriptionLanguage = Field(default="auto", alias="transcriptionLanguage")
+    transcription_device: TranscriptionDevice = Field(default="cpu", alias="transcriptionDevice")
+    transcription_compute_type: TranscriptionComputeType = Field(default="auto", alias="transcriptionComputeType")
     subtitle_correction_mode: SubtitleCorrectionMode = Field(default="off", alias="subtitleCorrectionMode")
     subtitle_correction_scope: SubtitleCorrectionScope = Field(default="all", alias="subtitleCorrectionScope")
     transcript_correction_glossary: list[str] = Field(

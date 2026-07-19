@@ -1,8 +1,15 @@
 import json
+import time
 from pathlib import Path
 from typing import Any, Protocol, Sequence
 
 from pydantic import BaseModel, Field
+
+from app.audio.transcription_runtime import (
+    NvidiaMemorySampler,
+    TranscriptionRuntime,
+    resolve_transcription_runtime,
+)
 
 
 TRANSCRIPT_FILENAME = "transcript_segments.json"
@@ -25,18 +32,35 @@ class FasterWhisperTranscriptionEngine:
         self,
         model_size: str = "base",
         device: str = "cpu",
-        compute_type: str = "int8",
+        compute_type: str = "auto",
         language: str | None = None,
         beam_size: int = 5,
     ) -> None:
         self.model_size = model_size
+        self.requested_device = device
+        self.requested_compute_type = compute_type
         self.device = device
         self.compute_type = compute_type
         self.language = language
         self.beam_size = beam_size
         self._model: Any | None = None
+        self._runtime: TranscriptionRuntime | None = None
+        self._model_load_seconds = 0.0
+        self._transcription_seconds = 0.0
+        self._peak_vram_mb: int | None = None
+
+    def _resolve_runtime(self) -> TranscriptionRuntime:
+        if self._runtime is None:
+            self._runtime = resolve_transcription_runtime(
+                self.requested_device,
+                self.requested_compute_type,
+            )
+            self.device = self._runtime.actual_device
+            self.compute_type = self._runtime.actual_compute_type
+        return self._runtime
 
     def _load_model(self) -> Any:
+        runtime = self._resolve_runtime()
         if self._model is None:
             try:
                 from faster_whisper import WhisperModel
@@ -45,25 +69,61 @@ class FasterWhisperTranscriptionEngine:
 
             self._model = WhisperModel(
                 self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
+                device=runtime.actual_device,
+                compute_type=runtime.actual_compute_type,
             )
         return self._model
+
+    @property
+    def diagnostics(self) -> dict[str, Any]:
+        runtime = self._runtime
+        payload = (
+            runtime.to_dict()
+            if runtime is not None
+            else {
+                "requested_device": self.requested_device,
+                "actual_device": None,
+                "requested_compute_type": self.requested_compute_type,
+                "actual_compute_type": None,
+                "cuda_device_count": None,
+                "gpu_name": None,
+                "gpu_memory_total_mb": None,
+                "fallback_used": False,
+                "fallback_reason": None,
+            }
+        )
+        return payload | {
+            "model": self.model_size,
+            "language": self.language or "auto",
+            "model_load_seconds": round(self._model_load_seconds, 3),
+            "transcription_seconds": round(self._transcription_seconds, 3),
+            "peak_vram_mb": self._peak_vram_mb,
+        }
 
     def transcribe(self, wav_path: str | Path) -> list[TranscriptSegment]:
         path = Path(wav_path)
         if not path.is_file():
             raise FileNotFoundError(path)
 
-        model = self._load_model()
-        segments, _info = model.transcribe(
-            str(path),
-            beam_size=self.beam_size,
-            language=self.language,
-            word_timestamps=True,
-        )
-
-        return [segment_from_faster_whisper(segment) for segment in segments]
+        runtime = self._resolve_runtime()
+        memory_sampler = NvidiaMemorySampler(enabled=runtime.actual_device == "cuda")
+        memory_sampler.start()
+        try:
+            model_started = time.monotonic()
+            model = self._load_model()
+            self._model_load_seconds = time.monotonic() - model_started
+            transcription_started = time.monotonic()
+            segments, _info = model.transcribe(
+                str(path),
+                beam_size=self.beam_size,
+                language=self.language,
+                word_timestamps=True,
+            )
+            result = [segment_from_faster_whisper(segment) for segment in segments]
+            self._transcription_seconds = time.monotonic() - transcription_started
+            return result
+        finally:
+            self._peak_vram_mb = memory_sampler.stop()
 
 
 class OpenAITranscriptionEngine:

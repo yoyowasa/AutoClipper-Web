@@ -460,6 +460,10 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert transcript_summary["transcription_engine"] == "faster_whisper"
     assert transcript_summary["transcription_model"] == "base"
     assert transcript_summary["transcription_language"] == "auto"
+    assert transcript_summary["transcription_runtime"]["requested_device"] == "cpu"
+    assert transcript_summary["transcription_runtime"]["actual_device"] == "injected"
+    assert transcript_summary["transcription_runtime"]["requested_compute_type"] == "auto"
+    assert transcript_summary["transcription_runtime"]["actual_compute_type"] == "injected"
     assert transcript_summary["used_fixture_transcript"] is False
     correction_summary = json.loads((job_dir / "transcript_correction_summary.json").read_text(encoding="utf-8"))
     assert correction_summary["enabled"] is True
@@ -900,6 +904,8 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
     assert transcript_summary["transcription_engine"] == "e2e_fixture"
     assert transcript_summary["transcription_model"] == "fixture"
     assert transcript_summary["transcription_language"] == "fixture"
+    assert transcript_summary["transcription_runtime"]["actual_device"] == "fixture"
+    assert transcript_summary["transcription_runtime"]["actual_compute_type"] == "fixture"
     assert transcript_summary["used_fixture_transcript"] is True
     assert not (storage.temp / created["jobId"]).exists()
 

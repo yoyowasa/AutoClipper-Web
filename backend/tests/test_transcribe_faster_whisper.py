@@ -129,6 +129,10 @@ def test_faster_whisper_engine_maps_segments_with_injected_model(tmp_path: Path)
     assert segments[0].confidence == pytest.approx(0.7)
     assert engine.model_size == "small"
     assert fake_model.kwargs["language"] == "ja"
+    assert engine.diagnostics["requested_device"] == "cpu"
+    assert engine.diagnostics["actual_device"] == "cpu"
+    assert engine.diagnostics["actual_compute_type"] == "int8"
+    assert engine.diagnostics["fallback_used"] is False
 
 
 def test_faster_whisper_engine_rejects_missing_wav() -> None:

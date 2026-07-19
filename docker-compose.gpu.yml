@@ -1,0 +1,21 @@
+services:
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.gpu
+    environment:
+      HF_HOME: /app/model-cache/huggingface
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      - whisper_model_cache:/app/model-cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  whisper_model_cache:
