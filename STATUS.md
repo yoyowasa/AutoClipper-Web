@@ -4827,3 +4827,36 @@ pip check: pass
 - `turbo`でも既知難所`13/29`が未解決。OpenAI校正を完全に不要とは判定しない。
 - GPU workerはCompose overrideで起動する。Windows launcherのGPU override自動選択は未実装。
 - 次はTask66 changes-only schemaで、品質を維持したままOpenAI output token削減を検証する。
+
+## 2026-07-20 Task 66 compact subtitle response schema rejection
+
+### 目的
+
+- `gpt-5.5:default`の品質を維持したまま、未変更segmentのAPI出力と費用を削減できるか検証する。
+
+### 検証結果
+
+- 固定124秒artifact: `48 segments / 36 suspicious targets / context=2 / batch=100`。
+- full baselineはTask64の既存結果を再利用し、changes-only側だけ1 batchを実行。
+- `full`:
+  - estimated cost `$0.21398`
+  - visible output tokens `2144`
+  - accepted changes `13`
+- `changes-only`:
+  - estimated cost `$0.15216`
+  - visible output tokens `606`
+  - accepted changes `10`
+  - retry `0`、fallback `0`、schema failure `0`
+  - segment count / order / timestamp維持
+- 費用削減 `28.891%`、visible output token削減 `71.7%`。
+- changed indexはshared `9`、full only `4`、compact only `1`。
+- fullで有益と確認済みの13修正に対するchanges-only coverageは最大`9/13 = 69.2%`。
+
+### 判定
+
+- Task66は検証完了。不採用。
+- 費用削減に対して有益修正coverageの低下が大きく、品質受入条件を満たさない。
+- 58分の有料API replayは短尺品質gate不合格のため意図的に実施しない。
+- production response schemaと既定値は`full`を維持する。
+- changes-only runtime codeはmainへmergeしない。
+- Draft PR #45はrejected experimentとしてclose済み。
