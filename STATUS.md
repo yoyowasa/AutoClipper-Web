@@ -4864,10 +4864,19 @@ pip check: pass
   - target file SHA-256: `2DC5CB8A9C9CF86B93B40166FE47691140893BE12DE2A849AB4ED5AA6F1AFA6C`
   - API到達後、最初のcallが`429 insufficient_quota`。successful batch `0/1`、successful responseとusage記録なし。
   - 124秒full/changes-only比較と58分最終構成測定は開始していない。
+- 2026-07-20、commit `5081136`で同じtarget indexを再実行し、quota復旧と`changes_only`疎通を確認。
+  - successful batch `1/1`、API call `1`、retry `0`、fallback `0`、schema failure `0`
+  - invalid/duplicate/blank correction `0`
+  - input tokens `437`、output tokens `181`、reasoning tokens `127`、visible output tokens `54`
+  - segment count / timestamp維持、processing `7.407s`
+  - 疎通確認後は追加の有料API callを実行していない。
+- 124秒full baselineはTask64の同一`48 segments / 36 targets / context=2 / batch=100`を再利用可能。
+  - `gpt-5.5:default:full`実績: API call `1`、input `1972`、output `6804`、reasoning `4660`、visible output `2144`、推定費用 `$0.21398`
+  - `changes_only`側は1 batchだけを実行対象とし、追加費用上限を`$0.25`とする。明示確認前は実行しない。
 
 ### 未解決事項
 
-- quota復旧後、同じ固定artifactで1 batch疎通を再実行し、schema success、usage取得、retry/fallback `0`を先に確認する。
-- 疎通成功後、124秒・36 targetsで`gpt-5.5:default:full` `1/1`対`changes_only` `1/1`の品質・token比較が必要。
-- 短尺比較合格後、58分は`turbo + ja + cuda + float16 + suspicious + changes_only`を実行し、新しいtarget数から算出した`N/N` batchの実token・変更差・timestamp保持を確認する。
+- 既存full baselineに対し、124秒・36 targetsの`gpt-5.5:default:changes_only` `1/1`だけを追加実行して品質・tokenを比較する。
+- 58分の有料API再実行は必須条件から外す。既存58分artifactを使ってtarget数・batch数・token削減見込みをoffline算出する。
+- 追加の有料API比較は、推定tokenと費用を提示し、明示確認後に実行する。
 - 実API比較完了前はproduction recommendationを`full`から変更しない。
