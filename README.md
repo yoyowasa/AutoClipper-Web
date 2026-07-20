@@ -109,6 +109,13 @@ uses CUDA when available and records a CPU fallback reason otherwise.
 The Windows launcher currently starts the default Compose file. Start the GPU override from
 PowerShell before selecting CUDA in the Upload UI.
 
+## Local subtitle correction benchmark
+
+Task 68 provides an offline Ollama benchmark for `qwen3.5:9b` and optional `qwen3:14b`.
+It evaluates deterministic safety escalation and projected OpenAI text reduction without
+changing the pipeline or calling OpenAI. Both tested models failed the safety or utility gates,
+so local LLM correction is not integrated. See `docs/TASK68_LOCAL_LLM_BENCHMARK.md`.
+
 ## Health Checks
 
 Backend:

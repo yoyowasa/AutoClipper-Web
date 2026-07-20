@@ -4860,3 +4860,42 @@ pip check: pass
 - production response schemaと既定値は`full`を維持する。
 - changes-only runtime codeはmainへmergeしない。
 - Draft PR #45はrejected experimentとしてclose済み。
+
+## 2026-07-20 Task 68 local subtitle correction model benchmark
+
+### 目的
+
+- ローカルLLMが危険な字幕修正を確定せず、OpenAI送信textを20%以上削減できるか独立benchmarkで判定する。
+- pipeline・UI・production providerへ接続せず、OpenAI APIを使わない。
+
+### 変更
+
+- Ollama native API向けbenchmark CLIを追加。
+- `think=false / JSON schema / temperature=0 / seed=42 / num_ctx=8192`を固定可能にした。
+- timestampをモデルへ送信せず、検証済みindexで元segmentへ再結合する。
+- 数字、単位、英字、カタカナ、漢字、固有名詞候補、大きい編集をAPI escalationへ残すdeterministic gateを追加。
+- Task64固定124秒artifactとTask65人手確認済み29件の評価を追加。
+
+### 実測環境
+
+- Ollama `0.32.1`
+- GPU `NVIDIA GeForce RTX 5070 Ti 16GB`
+- driver `595.97`
+- batch `10`
+
+### 結果
+
+- `qwen3.5:9b / Q4_K_M / digest 6488c96fa5fa`:
+  - 124秒: targets `36`, model changes `6`, local accept `0`, text削減 `0%`, `13.656s`, peak VRAM `8659MiB`
+  - 難所29件: model changes `8`, local accept `0`, unsafe accept `0`, text削減 `0%`, `10.390s`
+- `qwen3:14b / Q4_K_M / digest bdbd181c33f2`:
+  - 124秒: targets `36`, model changes `0`, local accept `0`, text削減 `0%`, `28.500s`, peak VRAM `12209MiB`
+  - 難所29件: model changes `2`, local accept `1`, unsafe accept `1`, text削減 `6.575%`, `21.438s`
+
+### 判定・未解決
+
+- Task68は検証完了。不採用。
+- 両モデルともAPI text削減20%未達。`qwen3:14b`は有害なlocal accept `1`で安全性条件も不合格。
+- fail-fast条件成立後の反復・58分評価は意図的に実施しない。
+- OpenAI API call `0`。pipeline・UI・production defaultは変更しない。
+- benchmark reportはignored local outputに保存し、モデル本体と生成artifactはcommitしない。
