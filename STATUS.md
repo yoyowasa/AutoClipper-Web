@@ -4873,10 +4873,21 @@ pip check: pass
 - 124秒full baselineはTask64の同一`48 segments / 36 targets / context=2 / batch=100`を再利用可能。
   - `gpt-5.5:default:full`実績: API call `1`、input `1972`、output `6804`、reasoning `4660`、visible output `2144`、推定費用 `$0.21398`
   - `changes_only`側は1 batchだけを実行対象とし、追加費用上限を`$0.25`とする。明示確認前は実行しない。
+- 明示確認後、124秒`gpt-5.5:default:changes_only` `1/1`を実行。
+  - API call `1`、retry `0`、fallback `0`、schema failure `0`
+  - input `1944`、output `4748`、reasoning `4142`、visible output `606`
+  - 推定費用 `$0.15216`、processing `76.906s`
+  - full比: output token `30.218%`減、total token `23.747%`減、費用`28.891%`減、時間`12.830%`減
+  - changed index: shared `9`、full only `4`、compact only `1`
+  - shared same text `7`、shared different text `2`
+  - full baselineで有益と確認済みの13修正に対するchanged-index coverageは最大`9/13 = 69.2%`
+  - segment count / order / timestamp維持、追加API callなし。
+- 58分offline概算:
+  - Task67 turboによるtext proxy削減`17.2%`とcompact費用削減`28.891%`を単純合成すると、旧small/full比の概算削減は`41.1%`
+  - 旧58分full実績`$3.41`に対する概算は約`$2.01`。実token測定ではなく参考値。
 
 ### 未解決事項
 
-- 既存full baselineに対し、124秒・36 targetsの`gpt-5.5:default:changes_only` `1/1`だけを追加実行して品質・tokenを比較する。
-- 58分の有料API再実行は必須条件から外す。既存58分artifactを使ってtarget数・batch数・token削減見込みをoffline算出する。
-- 追加の有料API比較は、推定tokenと費用を提示し、明示確認後に実行する。
-- 実API比較完了前はproduction recommendationを`full`から変更しない。
+- `changes_only`は費用削減を確認したが、有益修正coverageが`69.2%`に低下し、品質受入条件を満たさない。
+- production recommendationと既定値は`full`を維持する。
+- PR #45はDraft維持。追加の有料API検証は行わない。
