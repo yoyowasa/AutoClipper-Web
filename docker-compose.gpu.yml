@@ -7,6 +7,7 @@ services:
       HF_HOME: /app/model-cache/huggingface
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
       NVIDIA_VISIBLE_DEVICES: all
+      AUTOCLIPPER_RUNTIME_PROFILE: gpu
     volumes:
       - whisper_model_cache:/app/model-cache
     deploy:

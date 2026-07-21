@@ -10,7 +10,13 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from launcher.controller import CommandResult, LauncherController, LauncherError, parse_compose_ps  # noqa: E402
+from launcher.controller import (  # noqa: E402
+    CommandResult,
+    HostGpu,
+    LauncherController,
+    LauncherError,
+    parse_compose_ps,
+)
 
 
 def compose_ps(*, running: bool = True) -> str:
@@ -23,11 +29,24 @@ def compose_ps(*, running: bool = True) -> str:
 
 
 class FakeRunner:
-    def __init__(self, *, daemon_ok: bool = True, compose_ok: bool = True, ps_output: str | None = None, up_ok: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        daemon_ok: bool = True,
+        compose_ok: bool = True,
+        ps_output: str | None = None,
+        up_ok: bool = True,
+        docker_gpu: bool = False,
+        worker_profile: str = "cpu",
+        gpu_preflight_ok: bool = True,
+    ) -> None:
         self.daemon_ok = daemon_ok
         self.compose_ok = compose_ok
         self.ps_output = ps_output if ps_output is not None else compose_ps(running=False)
         self.up_ok = up_ok
+        self.docker_gpu = docker_gpu
+        self.worker_profile = worker_profile
+        self.gpu_preflight_ok = gpu_preflight_ok
         self.calls: list[tuple[list[str], Path, float | None]] = []
 
     def __call__(self, command: list[str], cwd: Path, timeout: float | None) -> CommandResult:
@@ -35,12 +54,30 @@ class FakeRunner:
         self.calls.append((command, cwd, timeout))
         if command[-2:] == ["compose", "version"]:
             return CommandResult(0 if self.compose_ok else 1, "Docker Compose", "")
+        if command[-3:-1] == ["info", "--format"]:
+            runtimes = {"runc": {}}
+            if self.docker_gpu:
+                runtimes["nvidia"] = {}
+            return CommandResult(0, json.dumps(runtimes), "")
         if command[-1:] == ["info"]:
             return CommandResult(0 if self.daemon_ok else 1, "Docker info", "daemon unavailable")
         if command[-3:] == ["ps", "--format", "json"]:
             return CommandResult(0, self.ps_output, "")
         if "up" in command:
+            self.worker_profile = (
+                "gpu" if any("docker-compose.gpu.yml" in part for part in command) else "cpu"
+            )
             return CommandResult(0 if self.up_ok else 1, "started" if self.up_ok else "", "start failed")
+        if "AUTOCLIPPER_RUNTIME_PROFILE" in " ".join(command):
+            return CommandResult(0, self.worker_profile, "")
+        if "app.audio.gpu_preflight" in command:
+            report = {
+                "ok": self.gpu_preflight_ok,
+                "actual_device": "cuda" if self.gpu_preflight_ok else "cpu",
+                "actual_compute_type": "float16" if self.gpu_preflight_ok else "int8",
+                "fallback_used": False,
+            }
+            return CommandResult(0 if self.gpu_preflight_ok else 1, json.dumps(report), "")
         if command[-2:] == ["compose", "stop"]:
             return CommandResult(0, "stopped", "")
         if "logs" in command:
@@ -52,6 +89,7 @@ def make_project(tmp_path: Path, *, env_text: str = "OPENAI_API_KEY=test-secret\
     root = tmp_path / "AutoClipper Web"
     root.mkdir()
     (root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (root / "docker-compose.gpu.yml").write_text("services: {}\n", encoding="utf-8")
     (root / ".env").write_text(env_text, encoding="utf-8")
     return root
 
@@ -64,6 +102,7 @@ def make_controller(
     docker: str | None = "docker.exe",
     ports: set[int] | None = None,
     url_values: list[bool] | None = None,
+    gpu: HostGpu | None = None,
 ) -> LauncherController:
     values = iter(url_values or [])
 
@@ -78,6 +117,7 @@ def make_controller(
         url_checker=url_checker,
         port_checker=lambda port: port in (ports or set()),
         docker_finder=lambda: docker,
+        gpu_checker=lambda: gpu or HostGpu(),
         sleeper=lambda _seconds: None,
         browser_opener=lambda _url: True,
     )
@@ -212,7 +252,7 @@ def test_start_opens_upload_page_when_runtime_is_ready(tmp_path: Path) -> None:
 
     controller.start()
 
-    assert opened == ["http://localhost:3000/upload"]
+    assert opened == ["http://localhost:3000/upload?runtimeProfile=cpu"]
 
 
 def test_rebuild_start_uses_explicit_build_flag(tmp_path: Path) -> None:
@@ -227,6 +267,117 @@ def test_rebuild_start_uses_explicit_build_flag(tmp_path: Path) -> None:
 
     up_call = next(call for call in runner.calls if "up" in call[0])
     assert up_call[0][-4:] == ["compose", "up", "-d", "--build"]
+
+
+def test_recommended_start_uses_gpu_override_and_gpu_upload_profile(tmp_path: Path) -> None:
+    opened: list[str] = []
+    runner = FakeRunner(
+        ps_output=compose_ps(),
+        docker_gpu=True,
+        worker_profile="cpu",
+    )
+    root = make_project(tmp_path)
+    values = iter([False, False, True, True])
+    controller = LauncherController(
+        root,
+        command_runner=runner,
+        url_checker=lambda _url, _expected, _timeout: next(values, True),
+        port_checker=lambda _port: False,
+        docker_finder=lambda: "docker.exe",
+        gpu_checker=lambda: HostGpu("NVIDIA Test GPU", "1.0", 16384),
+        sleeper=lambda _seconds: None,
+        browser_opener=lambda url: not opened.append(url),
+    )
+
+    result = controller.start(profile="recommended", timeout=4)
+
+    up_call = next(call for call in runner.calls if "up" in call[0])
+    assert str(root / "docker-compose.gpu.yml") in up_call[0]
+    assert any("app.audio.gpu_preflight" in call[0] for call in runner.calls)
+    assert result.runtime_profile.key == "gpu"
+    assert result.gpu_override_enabled is True
+    assert result.fallback_used is False
+    assert opened == ["http://localhost:3000/upload?runtimeProfile=gpu"]
+
+
+def test_recommended_start_falls_back_to_cpu_with_visible_reason(tmp_path: Path) -> None:
+    runner = FakeRunner(ps_output=compose_ps())
+    controller = make_controller(
+        make_project(tmp_path),
+        runner,
+        url_values=[False, False, True, True],
+    )
+
+    result = controller.start(profile="recommended", timeout=4, open_browser=False)
+
+    assert result.runtime_profile.key == "cpu"
+    assert result.fallback_used is True
+    assert "NVIDIA GPU" in (result.fallback_reason or "")
+
+
+def test_explicit_gpu_start_stops_when_gpu_preflight_is_unavailable(tmp_path: Path) -> None:
+    controller = make_controller(make_project(tmp_path), FakeRunner())
+
+    with pytest.raises(LauncherError, match="GPU必須") as error:
+        controller.start(profile="gpu", open_browser=False)
+
+    assert error.value.code == "gpu_preflight_failed"
+
+
+def test_recommended_gpu_worker_failure_recreates_cpu_worker(tmp_path: Path) -> None:
+    runner = FakeRunner(
+        ps_output=compose_ps(),
+        docker_gpu=True,
+        worker_profile="cpu",
+        gpu_preflight_ok=False,
+    )
+    controller = make_controller(
+        make_project(tmp_path),
+        runner,
+        gpu=HostGpu("NVIDIA Test GPU", "1.0", 16384),
+        url_values=[False, False, True, True, True, True],
+    )
+
+    result = controller.start(profile="recommended", timeout=4, open_browser=False)
+
+    assert result.runtime_profile.key == "cpu"
+    assert result.fallback_used is True
+    assert "gpu_worker_preflight_failed" in (result.fallback_reason or "")
+    cpu_fallback = [
+        call
+        for call in runner.calls
+        if "up" in call[0]
+        and "--force-recreate" in call[0]
+        and not any("docker-compose.gpu.yml" in part for part in call[0])
+    ]
+    assert cpu_fallback
+
+
+def test_explicit_gpu_worker_failure_stops_without_cpu_fallback(tmp_path: Path) -> None:
+    runner = FakeRunner(
+        ps_output=compose_ps(),
+        docker_gpu=True,
+        worker_profile="cpu",
+        gpu_preflight_ok=False,
+    )
+    controller = make_controller(
+        make_project(tmp_path),
+        runner,
+        gpu=HostGpu("NVIDIA Test GPU", "1.0", 16384),
+        url_values=[False, False, True, True],
+    )
+
+    with pytest.raises(LauncherError) as error:
+        controller.start(profile="GPU", timeout=4, open_browser=False)
+
+    assert error.value.code == "gpu_worker_preflight_failed"
+    assert any(call[0][-2:] == ["stop", "worker"] for call in runner.calls)
+    assert not any(
+        "up" in call[0]
+        and "--force-recreate" in call[0]
+        and not any("docker-compose.gpu.yml" in part for part in call[0])
+        for call in runner.calls
+    )
 
 
 def test_start_reports_compose_failure(tmp_path: Path) -> None:

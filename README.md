@@ -38,7 +38,7 @@ Double-click:
 Start AutoClipper.cmd
 ```
 
-The launcher checks Docker, ports, disk space, `.env`, and service health; starts the four services; waits for the app; and opens `/upload`. It can also show logs and open the uploads/outputs folders. Normal stop uses `docker compose stop` and preserves SQLite, Redis data, uploads, and outputs.
+The launcher checks Docker, ports, disk space, `.env`, GPU support, and service health; starts the four services; waits for the app; and opens `/upload`. On a compatible NVIDIA system, `Recommended Start` uses the GPU worker and preselects `turbo / ja / cuda / float16`. Otherwise it starts the CPU-compatible profile and shows the reason. An explicit GPU start never falls back silently. The launcher can also show logs and open the uploads/outputs folders. Normal stop uses `docker compose stop` and preserves SQLite, Redis data, uploads, outputs, and the Whisper model cache.
 
 The launcher MVP requires Python 3.11+. Docker Desktop remains required. See `docs/WINDOWS_LAUNCHER.md` for controls and troubleshooting.
 
@@ -106,8 +106,10 @@ Use `transcriptionDevice=cuda` for an explicit GPU requirement. That mode fails 
 `transcription_cuda_unavailable` instead of silently using CPU. `transcriptionDevice=auto`
 uses CUDA when available and records a CPU fallback reason otherwise.
 
-The Windows launcher currently starts the default Compose file. Start the GPU override from
-PowerShell before selecting CUDA in the Upload UI.
+The Windows launcher can select this override automatically. `Recommended Start` uses it only
+after the host NVIDIA GPU and Docker NVIDIA runtime pass preflight; `GPU Required Start` stops
+on failure instead of silently switching to CPU. `CPU Compatible Start` always uses the default
+Compose worker. The launcher opens Upload with the matching transcription profile selected.
 
 ## Local subtitle correction benchmark
 

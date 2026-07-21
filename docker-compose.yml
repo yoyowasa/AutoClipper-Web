@@ -35,6 +35,7 @@ services:
       STORAGE_ROOT: /app/storage
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-536870912}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      AUTOCLIPPER_RUNTIME_PROFILE: cpu
     volumes:
       - ./storage:/app/storage
     depends_on:

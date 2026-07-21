@@ -4899,3 +4899,52 @@ pip check: pass
 - fail-fast条件成立後の反復・58分評価は意図的に実施しない。
 - OpenAI API call `0`。pipeline・UI・production defaultは変更しない。
 - benchmark reportはignored local outputに保存し、モデル本体と生成artifactはcommitしない。
+
+## 2026-07-21 Task 69 launcher GPU recommended profile
+
+### 目的
+
+- Windows launcherの主操作から、検証済みGPU profileまたはCPU互換profileを選んで起動する。
+- GPU明示時の暗黙CPU fallbackを禁止し、自動選択時だけfallback理由を表示する。
+
+### 変更
+
+- launcherへ`recommended / gpu / cpu` runtime profileを追加。
+- host NVIDIA GPU、Docker NVIDIA runtime、`docker-compose.gpu.yml`をpreflightで確認。
+- GPU profile起動後にworker内`app.audio.gpu_preflight`を実行し、`cuda / float16 / fallback=false`を検証。
+- 推奨GPU起動の実体確認に失敗した場合のみCPU workerを再作成し、理由を表示。
+- GPU必須起動は失敗時にworkerを停止し、CPUへ切り替えない。
+- launcher画面へruntime profile、transcription設定、GPU名、worker構成、fallbackを表示。
+- Upload URLへ`runtimeProfile`を付け、GPUでは`turbo / ja / cuda / float16`、CPUでは`base / auto / cpu / auto`を初期選択。
+- Compose workerへ`AUTOCLIPPER_RUNTIME_PROFILE=cpu|gpu`を追加。backend schemaの互換defaultは変更しない。
+
+### 検証
+
+- launcher tests: `24 passed`。
+- launcher/tests ruff: pass。
+- backend ruff: pass。
+- backend pytest: `341 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Compose config merge: pass。
+- Docker runtime smoke `--skip-video`: pass。
+- 実GPU起動:
+  - GPU: `NVIDIA GeForce RTX 5070 Ti`
+  - worker: `gpu`
+  - transcription: `turbo / ja / cuda / float16`
+  - actual device / compute type: `cuda / float16`
+  - fallback: `false`
+  - backend / frontend / worker / redis: running
+  - backend health / Upload: HTTP `200`
+- 実CPU切替: worker `cpu`、全service ready。
+- `GPU -> CPU -> GPU -> Stop -> GPU Start`: pass。
+- SQLite size: `569344 -> 569344 bytes`、output job directory count: `127 -> 127`。
+- Upload UI実描画:
+  - GPU query: `Runtime: GPU recommended`、`turbo / cuda / float16 / ja`
+  - CPU query: `Runtime: CPU compatible`、`base / cpu / auto / auto`
+- OpenAI API call、実動画生成は本Taskで実行しない。
+
+### 未解決
+
+- 別Windows環境での初回clone/ZIP展開、image/model初回download、PC再起動後、GPUなし環境、日本語パスは未検証。
+- 上記はTask70 clean Windows distribution acceptanceで確認する。
+- `v1.2.0 stable`はTask70 pass後に判断する。
