@@ -19,6 +19,64 @@ BACKEND_URL = "http://localhost:8000/health"
 FRONTEND_URL = "http://localhost:3000/upload"
 DOCKER_BIN_DIR = Path(r"C:\Program Files\Docker\Docker\resources\bin")
 MIN_FREE_DISK_GB = 20.0
+RUNTIME_PROFILES = {"recommended", "gpu", "cpu"}
+
+
+@dataclass(frozen=True)
+class HostGpu:
+    name: str | None = None
+    driver: str | None = None
+    memory_total_mib: int | None = None
+
+    @property
+    def available(self) -> bool:
+        return bool(self.name)
+
+
+@dataclass(frozen=True)
+class RuntimeProfile:
+    key: str
+    label: str
+    whisper_model: str
+    language: str
+    device: str
+    compute_type: str
+
+    @property
+    def transcription_label(self) -> str:
+        return (
+            f"{self.whisper_model} / {self.language} / "
+            f"{self.device} / {self.compute_type}"
+        )
+
+
+CPU_PROFILE = RuntimeProfile("cpu", "CPU compatible", "base", "auto", "cpu", "auto")
+GPU_PROFILE = RuntimeProfile("gpu", "GPU recommended", "turbo", "ja", "cuda", "float16")
+
+
+@dataclass(frozen=True)
+class GpuSupport:
+    host: HostGpu
+    docker_runtime_available: bool
+    compose_override_exists: bool
+
+    @property
+    def available(self) -> bool:
+        return (
+            self.host.available
+            and self.docker_runtime_available
+            and self.compose_override_exists
+        )
+
+    @property
+    def unavailable_reason(self) -> str | None:
+        if not self.host.available:
+            return "NVIDIA GPUを検出できません"
+        if not self.docker_runtime_available:
+            return "Docker NVIDIA runtimeを利用できません"
+        if not self.compose_override_exists:
+            return "docker-compose.gpu.ymlが見つかりません"
+        return None
 
 
 @dataclass(frozen=True)
@@ -51,6 +109,7 @@ class RuntimeStatus:
     services: dict[str, ServiceState] = field(default_factory=dict)
     backend_ready: bool = False
     frontend_ready: bool = False
+    worker_profile: str | None = None
 
     @property
     def all_services_running(self) -> bool:
@@ -74,6 +133,8 @@ class PreflightReport:
     openai_key_configured: bool
     disk_free_gb: float
     runtime_status: RuntimeStatus
+    gpu_support: GpuSupport
+    recommended_profile: RuntimeProfile
     errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
@@ -90,6 +151,12 @@ class PreflightReport:
 class StartResult:
     already_running: bool
     status: RuntimeStatus
+    requested_profile: str
+    runtime_profile: RuntimeProfile
+    gpu_name: str | None
+    gpu_override_enabled: bool
+    fallback_used: bool = False
+    fallback_reason: str | None = None
 
 
 class LauncherError(RuntimeError):
@@ -104,6 +171,7 @@ CommandRunner = Callable[[Sequence[str], Path, float | None], CommandResult]
 UrlChecker = Callable[[str, str | None, float], bool]
 PortChecker = Callable[[int], bool]
 PathOpener = Callable[[Path], None]
+GpuChecker = Callable[[], HostGpu]
 
 
 def find_docker_executable() -> str | None:
@@ -112,6 +180,33 @@ def find_docker_executable() -> str | None:
         return docker
     candidate = DOCKER_BIN_DIR / "docker.exe"
     return str(candidate) if candidate.is_file() else None
+
+
+def query_host_nvidia_gpu() -> HostGpu:
+    try:
+        completed = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,driver_version,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+    except (FileNotFoundError, OSError, subprocess.SubprocessError):
+        return HostGpu()
+    first_line = completed.stdout.strip().splitlines()[0] if completed.stdout.strip() else ""
+    values = [value.strip() for value in first_line.split(",")]
+    if len(values) != 3:
+        return HostGpu()
+    try:
+        memory_total_mib = int(float(values[2]))
+    except ValueError:
+        memory_total_mib = None
+    return HostGpu(values[0] or None, values[1] or None, memory_total_mib)
 
 
 def run_command(
@@ -217,6 +312,7 @@ class LauncherController:
         path_opener: PathOpener = open_local_path,
         browser_opener: Callable[[str], bool] = webbrowser.open,
         docker_finder: Callable[[], str | None] = find_docker_executable,
+        gpu_checker: GpuChecker = query_host_nvidia_gpu,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self.project_root = Path(project_root).resolve()
@@ -226,8 +322,10 @@ class LauncherController:
         self.path_opener = path_opener
         self.browser_opener = browser_opener
         self.docker_finder = docker_finder
+        self.gpu_checker = gpu_checker
         self.sleeper = sleeper
         self.compose_file = self.project_root / "docker-compose.yml"
+        self.gpu_compose_file = self.project_root / "docker-compose.gpu.yml"
         self.env_file = self.project_root / ".env"
         self._docker_executable: str | None = None
 
@@ -274,16 +372,79 @@ class LauncherController:
     ) -> CommandResult:
         return self._docker(["compose", *args], timeout=timeout)
 
+    def _compose_for_profile(
+        self,
+        profile: RuntimeProfile,
+        args: Sequence[str],
+        timeout: float | None = 60.0,
+    ) -> CommandResult:
+        if profile.key == "gpu":
+            return self._docker(
+                [
+                    "compose",
+                    "-f",
+                    str(self.compose_file),
+                    "-f",
+                    str(self.gpu_compose_file),
+                    *args,
+                ],
+                timeout=timeout,
+            )
+        return self._compose(args, timeout=timeout)
+
+    def _current_worker_profile(self) -> str | None:
+        result = self._compose(
+            [
+                "exec",
+                "-T",
+                "worker",
+                "python",
+                "-c",
+                "import os; print(os.getenv('AUTOCLIPPER_RUNTIME_PROFILE', ''))",
+            ],
+            timeout=15.0,
+        )
+        value = result.stdout.strip().splitlines()[-1].strip().lower() if result.stdout.strip() else ""
+        return value if result.returncode == 0 and value in {"cpu", "gpu"} else None
+
+    def _docker_nvidia_runtime_available(self) -> bool:
+        result = self._docker(
+            ["info", "--format", "{{json .Runtimes}}"], timeout=20.0
+        )
+        if result.returncode != 0:
+            return False
+        try:
+            runtimes = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return False
+        return isinstance(runtimes, dict) and "nvidia" in runtimes
+
+    def _gpu_support(self, *, daemon_ready: bool) -> GpuSupport:
+        return GpuSupport(
+            host=self.gpu_checker(),
+            docker_runtime_available=(
+                self._docker_nvidia_runtime_available() if daemon_ready else False
+            ),
+            compose_override_exists=self.gpu_compose_file.is_file(),
+        )
+
     def runtime_status(self) -> RuntimeStatus:
         services: dict[str, ServiceState] = {}
         if self.docker_executable and self.compose_file.is_file():
             result = self._compose(["ps", "--format", "json"], timeout=15.0)
             if result.returncode == 0:
                 services = parse_compose_ps(result.stdout)
+        worker_state = services.get("worker")
+        worker_profile = (
+            self._current_worker_profile()
+            if worker_state is not None and worker_state.running
+            else None
+        )
         return RuntimeStatus(
             services=services,
             backend_ready=self.url_checker(BACKEND_URL, '"status":"ok"', 2.0),
             frontend_ready=self.url_checker(FRONTEND_URL, "AutoClipper", 2.0),
+            worker_profile=worker_profile,
         )
 
     def preflight(self) -> PreflightReport:
@@ -330,6 +491,8 @@ class LauncherController:
         if disk_free_gb < MIN_FREE_DISK_GB:
             warnings.append(f"ディスク空き容量が少ないです: {disk_free_gb:.1f} GB")
 
+        gpu_support = self._gpu_support(daemon_ready=daemon_ready)
+        recommended_profile = GPU_PROFILE if gpu_support.available else CPU_PROFILE
         status = (
             self.runtime_status()
             if daemon_ready and compose_available and compose_file_exists
@@ -366,9 +529,87 @@ class LauncherController:
             openai_key_configured=openai_key_configured,
             disk_free_gb=disk_free_gb,
             runtime_status=status,
+            gpu_support=gpu_support,
+            recommended_profile=recommended_profile,
             errors=tuple(errors),
             warnings=tuple(warnings),
         )
+
+    @staticmethod
+    def _select_profile(
+        requested_profile: str, report: PreflightReport
+    ) -> tuple[RuntimeProfile, str | None]:
+        normalized = str(requested_profile).strip().lower()
+        if normalized not in RUNTIME_PROFILES:
+            raise LauncherError(
+                "runtime_profile_invalid",
+                f"未対応のruntime profileです: {requested_profile}",
+            )
+        if normalized == "cpu":
+            return CPU_PROFILE, None
+        if normalized == "gpu":
+            if not report.gpu_support.available:
+                raise LauncherError(
+                    "gpu_preflight_failed",
+                    "GPU必須profileの起動前確認に失敗しました。",
+                    report.gpu_support.unavailable_reason,
+                )
+            return GPU_PROFILE, None
+        if report.gpu_support.available:
+            return GPU_PROFILE, None
+        return CPU_PROFILE, report.gpu_support.unavailable_reason
+
+    def _verify_gpu_worker(
+        self, *, attempts: int = 5, retry_interval: float = 2.0
+    ) -> dict[str, object]:
+        result = CommandResult(1, "", "GPU worker is not ready")
+        for attempt in range(attempts):
+            result = self._compose_for_profile(
+                GPU_PROFILE,
+                [
+                    "exec",
+                    "-T",
+                    "worker",
+                    "python",
+                    "-m",
+                    "app.audio.gpu_preflight",
+                    "--device",
+                    "cuda",
+                    "--compute-type",
+                    "float16",
+                ],
+                timeout=30.0,
+            )
+            if result.returncode == 0:
+                break
+            if attempt + 1 < attempts:
+                self.sleeper(retry_interval)
+        if result.returncode != 0:
+            raise LauncherError(
+                "gpu_worker_preflight_failed",
+                "GPU workerのCUDA確認に失敗しました。",
+                result.output,
+            )
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise LauncherError(
+                "gpu_worker_preflight_invalid",
+                "GPU workerの確認結果を解析できません。",
+                result.output,
+            ) from exc
+        if not (
+            payload.get("ok") is True
+            and payload.get("actual_device") == "cuda"
+            and payload.get("actual_compute_type") == "float16"
+            and payload.get("fallback_used") is False
+        ):
+            raise LauncherError(
+                "gpu_worker_preflight_failed",
+                "GPU workerが推奨profileで起動していません。",
+                json.dumps(payload, ensure_ascii=False),
+            )
+        return payload
 
     def wait_until_ready(
         self, timeout: float = 180.0, poll_interval: float = 2.0
@@ -390,6 +631,7 @@ class LauncherController:
     def start(
         self,
         *,
+        profile: str = "recommended",
         rebuild: bool = False,
         timeout: float = 180.0,
         open_browser: bool = True,
@@ -401,15 +643,45 @@ class LauncherController:
                 "起動前確認に失敗しました。",
                 "\n".join(report.errors),
             )
-        if report.already_running:
+        requested_profile = str(profile).strip().lower()
+        selected_profile, fallback_reason = self._select_profile(
+            requested_profile, report
+        )
+        compatible_running_profile = report.runtime_status.worker_profile
+        already_compatible = report.already_running and (
+            compatible_running_profile == selected_profile.key
+            or (
+                selected_profile.key == "cpu"
+                and compatible_running_profile is None
+            )
+        )
+        if already_compatible:
             if open_browser:
-                self.open_app()
-            return StartResult(already_running=True, status=report.runtime_status)
+                self.open_app(selected_profile.key)
+            return StartResult(
+                already_running=True,
+                status=report.runtime_status,
+                requested_profile=requested_profile,
+                runtime_profile=selected_profile,
+                gpu_name=report.gpu_support.host.name,
+                gpu_override_enabled=selected_profile.key == "gpu",
+                fallback_used=fallback_reason is not None,
+                fallback_reason=fallback_reason,
+            )
 
         args = ["up", "-d"]
         if rebuild:
             args.append("--build")
-        result = self._compose(args, timeout=None if rebuild else 180.0)
+        if (
+            report.runtime_status.all_services_running
+            and compatible_running_profile != selected_profile.key
+        ):
+            args.extend(["--force-recreate", "worker"])
+        result = self._compose_for_profile(
+            selected_profile,
+            args,
+            timeout=None if rebuild else 180.0,
+        )
         if result.returncode != 0:
             raise LauncherError(
                 "compose_start_failed",
@@ -417,10 +689,41 @@ class LauncherController:
                 result.output,
             )
 
+        if selected_profile.key == "gpu":
+            try:
+                self._verify_gpu_worker()
+            except LauncherError as exc:
+                if requested_profile == "gpu":
+                    self._compose_for_profile(
+                        GPU_PROFILE, ["stop", "worker"], timeout=120.0
+                    )
+                    raise
+                fallback_reason = f"{exc.code}: {exc.message}"
+                fallback = self._compose_for_profile(
+                    CPU_PROFILE,
+                    ["up", "-d", "--force-recreate", "worker"],
+                    timeout=180.0,
+                )
+                if fallback.returncode != 0:
+                    raise LauncherError(
+                        "cpu_fallback_start_failed",
+                        "GPU確認失敗後のCPU worker起動に失敗しました。",
+                        fallback.output,
+                    ) from exc
+                selected_profile = CPU_PROFILE
         status = self.wait_until_ready(timeout=timeout)
         if open_browser:
-            self.open_app()
-        return StartResult(already_running=False, status=status)
+            self.open_app(selected_profile.key)
+        return StartResult(
+            already_running=False,
+            status=status,
+            requested_profile=requested_profile,
+            runtime_profile=selected_profile,
+            gpu_name=report.gpu_support.host.name,
+            gpu_override_enabled=selected_profile.key == "gpu",
+            fallback_used=fallback_reason is not None,
+            fallback_reason=fallback_reason,
+        )
 
     def stop(self) -> CommandResult:
         result = self._compose(["stop"], timeout=120.0)
@@ -443,8 +746,12 @@ class LauncherController:
             )
         return result.output
 
-    def open_app(self) -> None:
-        self.browser_opener(FRONTEND_URL)
+    def open_app(self, runtime_profile: str | None = None) -> None:
+        profile = runtime_profile or self.runtime_status().worker_profile
+        url = FRONTEND_URL
+        if profile in {"cpu", "gpu"}:
+            url = f"{FRONTEND_URL}?runtimeProfile={profile}"
+        self.browser_opener(url)
 
     def open_outputs(self) -> None:
         self.path_opener(self.project_root / "storage" / "outputs")
@@ -463,4 +770,5 @@ class LauncherController:
             parts.append(f"{service}={value}")
         parts.append(f"backend={'ready' if status.backend_ready else 'not_ready'}")
         parts.append(f"frontend={'ready' if status.frontend_ready else 'not_ready'}")
+        parts.append(f"worker_profile={status.worker_profile or 'unknown'}")
         return ", ".join(parts)

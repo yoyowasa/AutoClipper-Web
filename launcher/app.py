@@ -11,10 +11,13 @@ from tkinter import messagebox, scrolledtext, ttk
 from typing import Any
 
 from .controller import (
+    CPU_PROFILE,
+    GPU_PROFILE,
     LauncherController,
     LauncherError,
     PreflightReport,
     REQUIRED_SERVICES,
+    StartResult,
 )
 
 
@@ -50,6 +53,11 @@ class LauncherApp:
         self.docker_var = tk.StringVar(value="確認中")
         self.openai_var = tk.StringVar(value="確認中")
         self.disk_var = tk.StringVar(value="確認中")
+        self.runtime_profile_var = tk.StringVar(value="確認中")
+        self.transcription_var = tk.StringVar(value="確認中")
+        self.gpu_var = tk.StringVar(value="確認中")
+        self.worker_runtime_var = tk.StringVar(value="確認中")
+        self.fallback_var = tk.StringVar(value="確認中")
         self.operation_var = tk.StringVar(value="起動前確認を実行しています")
         self.action_buttons: list[ttk.Button] = []
         self._build_ui()
@@ -118,12 +126,48 @@ class LauncherApp:
         ttk.Label(status_frame, textvariable=self.disk_var).grid(
             row=5, column=0, sticky=tk.W
         )
+        ttk.Label(status_frame, text="Runtime profile").grid(
+            row=4, column=1, sticky=tk.W, pady=(12, 0)
+        )
+        ttk.Label(status_frame, textvariable=self.runtime_profile_var).grid(
+            row=5, column=1, sticky=tk.W
+        )
+        ttk.Label(status_frame, text="GPU").grid(
+            row=4, column=2, sticky=tk.W, pady=(12, 0)
+        )
+        ttk.Label(status_frame, textvariable=self.gpu_var).grid(
+            row=5, column=2, sticky=tk.W
+        )
+        ttk.Label(status_frame, text="Docker worker").grid(
+            row=4, column=3, sticky=tk.W, pady=(12, 0)
+        )
+        ttk.Label(status_frame, textvariable=self.worker_runtime_var).grid(
+            row=5, column=3, sticky=tk.W
+        )
+        ttk.Label(status_frame, text="Transcription").grid(
+            row=6, column=0, columnspan=2, sticky=tk.W, pady=(12, 0)
+        )
+        ttk.Label(status_frame, textvariable=self.transcription_var).grid(
+            row=7, column=0, columnspan=2, sticky=tk.W
+        )
+        ttk.Label(status_frame, text="Fallback").grid(
+            row=6, column=2, columnspan=2, sticky=tk.W, pady=(12, 0)
+        )
+        ttk.Label(status_frame, textvariable=self.fallback_var).grid(
+            row=7, column=2, columnspan=2, sticky=tk.W
+        )
 
         primary = ttk.Frame(outer)
         primary.pack(fill=tk.X, pady=(14, 8))
         self._button(
-            primary, "Start AutoClipper", lambda: self._start(False), "Primary.TButton"
+            primary,
+            "推奨設定で起動",
+            lambda: self._start(False, "recommended"),
+            "Primary.TButton",
         ).pack(side=tk.LEFT)
+        self._button(
+            primary, "CPU互換設定で起動", lambda: self._start(False, "cpu")
+        ).pack(side=tk.LEFT, padx=(8, 0))
         self._button(primary, "Open App", self._open_app).pack(
             side=tk.LEFT, padx=(8, 0)
         )
@@ -146,9 +190,16 @@ class LauncherApp:
         self._button(utilities, "Launcher Log", self._show_launcher_log).pack(
             side=tk.LEFT, padx=(8, 0)
         )
-        self._button(utilities, "Rebuild and Start", lambda: self._start(True)).pack(
-            side=tk.RIGHT
-        )
+        self._button(
+            utilities,
+            "GPU必須で起動",
+            lambda: self._start(False, "gpu"),
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        self._button(
+            utilities,
+            "再ビルドして起動",
+            lambda: self._start(True, "recommended"),
+        ).pack(side=tk.RIGHT)
 
         ttk.Label(outer, textvariable=self.operation_var).pack(anchor=tk.W, pady=(0, 6))
         self.console = scrolledtext.ScrolledText(
@@ -156,7 +207,7 @@ class LauncherApp:
         )
         self.console.pack(fill=tk.BOTH, expand=True)
         self._append(
-            "Launcherを起動しました。通常は Start AutoClipper を押してください。"
+            "Launcherを起動しました。通常は「推奨設定で起動」を押してください。"
         )
 
     def _button(
@@ -253,6 +304,29 @@ class LauncherApp:
             "configured" if report.openai_key_configured else "not configured"
         )
         self.disk_var.set(f"{report.disk_free_gb:.1f} GB")
+        actual_profile = status.worker_profile
+        profile = (
+            GPU_PROFILE
+            if actual_profile == "gpu"
+            else CPU_PROFILE
+            if actual_profile == "cpu"
+            else report.recommended_profile
+        )
+        self.runtime_profile_var.set(profile.label)
+        self.transcription_var.set(profile.transcription_label)
+        self.gpu_var.set(report.gpu_support.host.name or "not detected")
+        self.worker_runtime_var.set(
+            "GPU override enabled"
+            if actual_profile == "gpu"
+            else "CPU compose"
+            if actual_profile == "cpu"
+            else "not started"
+        )
+        self.fallback_var.set(
+            "false"
+            if report.gpu_support.available or actual_profile == "gpu"
+            else report.gpu_support.unavailable_reason or "false"
+        )
         for warning in report.warnings:
             self._append(f"WARNING: {warning}")
         for error in report.errors:
@@ -263,18 +337,36 @@ class LauncherApp:
     def _refresh(self) -> None:
         self._run_async("状態更新", self.controller.preflight, self._apply_preflight)
 
-    def _start(self, rebuild: bool) -> None:
-        label = "Rebuild and Start" if rebuild else "Start"
+    def _start(self, rebuild: bool, profile: str) -> None:
+        label = "再ビルドして起動" if rebuild else "AutoClipper起動"
 
-        def success(result: Any) -> None:
+        def success(result: StartResult) -> None:
             self._append(
                 "既に起動済みです。"
                 if result.already_running
                 else "4 servicesが起動しました。"
             )
             self._refresh_after_operation()
+            self.runtime_profile_var.set(result.runtime_profile.label)
+            self.transcription_var.set(result.runtime_profile.transcription_label)
+            self.gpu_var.set(result.gpu_name or "not detected")
+            self.worker_runtime_var.set(
+                "GPU override enabled"
+                if result.gpu_override_enabled
+                else "CPU compose"
+            )
+            self.fallback_var.set(result.fallback_reason or "false")
+            self._append(
+                f"Runtime profile: {result.runtime_profile.label}; "
+                f"Transcription: {result.runtime_profile.transcription_label}; "
+                f"Fallback: {result.fallback_reason or 'false'}"
+            )
 
-        self._run_async(label, lambda: self.controller.start(rebuild=rebuild), success)
+        self._run_async(
+            label,
+            lambda: self.controller.start(profile=profile, rebuild=rebuild),
+            success,
+        )
 
     def _stop(self) -> None:
         if not messagebox.askyesno(
