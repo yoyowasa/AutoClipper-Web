@@ -78,6 +78,30 @@ When the key is missing, low-cost mode remains available. Configure the key in
 
 Project paths containing spaces are supported because commands use an explicit working directory and argument list rather than a shell command string.
 
-## Current Validation Boundary
+## Distribution Acceptance
 
-Task 69 was validated on the development Windows 11 machine with an NVIDIA GeForce RTX 5070 Ti. GPU and CPU profile switching, CUDA FP16 verification, Stop/Start, service health, and SQLite/output preservation passed. A clean second Windows installation, first-time image/model downloads, Japanese paths, and restart-after-PC-reboot remain Task 70 distribution acceptance checks.
+Task 70 validated the `v1.2.0-rc.2` tag ZIP as the v1.2.0 distribution candidate.
+
+Clean CPU Windows acceptance passed:
+
+- the launcher GUI started from an extracted tag ZIP outside the development checkout
+- Python 3.11.9 and all 24 launcher tests passed
+- the first Docker build started backend, frontend, worker, and Redis
+- `/health`, `/upload`, normal output, short output, and ZIP download passed
+- Stop, Windows restart, and Start passed
+- SQLite, outputs, and the Whisper model cache were preserved
+- no NVIDIA GPU was available, so the CPU-compatible profile was used
+
+The development Windows 11 system separately passed the NVIDIA runtime path with an RTX 5070 Ti:
+
+- recommended profile selected `turbo / ja / cuda / float16`
+- worker verification returned `actual_device=cuda`, `actual_compute_type=float16`, and `fallback=false`
+- GPU and CPU profile switching, service health, Stop/Start, and data preservation passed
+
+A first-run test combining a clean Windows installation and NVIDIA GPU was not performed.
+The release accepts this as a documented limitation because the clean distribution/CPU path and
+the actual NVIDIA runtime path passed independently. Docker Desktop must be started manually after
+Windows restart; the launcher detects and explains a stopped Docker daemon.
+
+Installer packaging, bundled Python, Docker Desktop installation, and automatic updates remain out
+of scope for v1.2.0.
