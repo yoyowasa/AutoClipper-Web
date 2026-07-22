@@ -24,6 +24,16 @@ def _error_detail(code: str, message: str) -> dict[str, str]:
     return {"code": code, "message": message}
 
 
+def _format_byte_size(size_bytes: int) -> str:
+    gibibyte = 1024**3
+    mebibyte = 1024**2
+    if size_bytes >= gibibyte and size_bytes % gibibyte == 0:
+        return f"{size_bytes // gibibyte} GiB"
+    if size_bytes >= mebibyte and size_bytes % mebibyte == 0:
+        return f"{size_bytes // mebibyte} MiB"
+    return f"{size_bytes} bytes"
+
+
 def _validate_upload_metadata(file: UploadFile, settings: Settings) -> str:
     if not file.filename:
         raise HTTPException(
@@ -64,7 +74,8 @@ def _save_upload_with_size_limit(file: UploadFile, stored_path: Path, max_size_b
                         status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                         detail=_error_detail(
                             "file_too_large",
-                            f"upload exceeds max size of {max_size_bytes} bytes",
+                            "upload exceeds maximum size of "
+                            f"{_format_byte_size(max_size_bytes)}",
                         ),
                     )
                 output_file.write(chunk)

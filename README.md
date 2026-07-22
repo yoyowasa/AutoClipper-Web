@@ -50,6 +50,9 @@ Copy the example environment file if you want local overrides:
 Copy-Item .env.example .env
 ```
 
+Video uploads default to a maximum of 8 GiB. Override
+`MAX_UPLOAD_SIZE_BYTES` in `.env` when a different local limit is required.
+
 Start all services:
 
 ```powershell
