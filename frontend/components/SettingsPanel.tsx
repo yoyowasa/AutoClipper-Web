@@ -1,6 +1,7 @@
 "use client";
 
 import type { ClipSettings } from "../lib/types";
+import { SubtitleStylePreview } from "./SubtitleStylePreview";
 
 type SettingsPanelProps = {
   settings: ClipSettings;
@@ -308,10 +309,30 @@ export function SettingsPanel({
           </div>
         </details>
 
-        <details className="md:col-span-2">
-          <summary className="cursor-pointer text-sm font-medium text-neutral-700">
-            字幕スタイル
-          </summary>
+        <section className="border-t border-neutral-200 pt-5 md:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-semibold text-neutral-950">字幕スタイル</h2>
+            <button
+              className="min-h-9 rounded-md border border-neutral-300 px-3 text-sm font-medium text-neutral-700"
+              disabled={disabled}
+              type="button"
+              onClick={() =>
+                onChange({
+                  ...settings,
+                  subtitleFontName: undefined,
+                  subtitleFontSize: undefined,
+                  subtitleOutline: undefined,
+                  subtitleLowerMargin: undefined,
+                  subtitleAlignment: undefined
+                })
+              }
+            >
+              既定値に戻す
+            </button>
+          </div>
+
+          <SubtitleStylePreview settings={settings} />
+
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             <label className="flex flex-col gap-2 sm:col-span-2">
               <span className="text-sm font-medium text-neutral-700">字幕フォント</span>
@@ -342,6 +363,7 @@ export function SettingsPanel({
                 disabled={disabled}
                 max={220}
                 min={12}
+                placeholder="既定"
                 step={2}
                 type="number"
                 value={settings.subtitleFontSize ?? ""}
@@ -358,6 +380,7 @@ export function SettingsPanel({
                 disabled={disabled}
                 max={20}
                 min={0}
+                placeholder="既定"
                 step={1}
                 type="number"
                 value={settings.subtitleOutline ?? ""}
@@ -374,6 +397,7 @@ export function SettingsPanel({
                 disabled={disabled}
                 max={1600}
                 min={0}
+                placeholder="既定"
                 step={10}
                 type="number"
                 value={settings.subtitleLowerMargin ?? ""}
@@ -402,7 +426,7 @@ export function SettingsPanel({
               </select>
             </label>
           </div>
-        </details>
+        </section>
 
         <details className="md:col-span-2">
           <summary className="cursor-pointer text-sm font-medium text-neutral-700">

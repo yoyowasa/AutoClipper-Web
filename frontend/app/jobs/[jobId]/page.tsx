@@ -74,6 +74,15 @@ export default function JobPage() {
           </Link>
         </header>
 
+        <div className="border border-emerald-300 bg-emerald-50 px-5 py-4">
+          <p className="text-sm font-semibold text-emerald-950">
+            動画のアップロードが完了しました
+          </p>
+          <p className="mt-1 text-sm text-emerald-800">
+            切り抜き処理を開始しています。この画面は自動更新されます。
+          </p>
+        </div>
+
         {error ? (
           <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
             {error}
