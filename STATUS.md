@@ -4948,3 +4948,49 @@ pip check: pass
 - 別Windows環境での初回clone/ZIP展開、image/model初回download、PC再起動後、GPUなし環境、日本語パスは未検証。
 - 上記はTask70 clean Windows distribution acceptanceで確認する。
 - `v1.2.0 stable`はTask70 pass後に判断する。
+
+## 2026-07-23 Task 70 Windows distribution acceptance
+
+### 目的
+
+- `v1.2.0-rc.2` tag ZIPを実配布候補としてWindows環境で受入確認する。
+- クリーンCPU配布経路と実NVIDIA GPU経路の結果を分離して記録し、`v1.2.0`判定を確定する。
+
+### 配布物
+
+- tag: `v1.2.0-rc.2`
+- commit: `d385b8c7d1925fd14b3de42280fc21d39832b179`
+- local release ZIP SHA-256: `99D1194559A3E58A8DEA8FB3EBC6DB169F6851A3F829A9CDFA25FAC1647E3631`
+- runtime codeはtagから変更なし。
+
+### クリーンCPU Windows受入
+
+- 判定: PASS。
+- 開発checkoutとは別パスへtag ZIPを展開し、launcher GUI起動を確認。
+- Python `3.11.9`、compile pass、launcher tests `24 passed`。
+- port conflict `0`、確認時disk free `241.85GB`。
+- Docker image、SQLite DB、Whisper cache、outputsがない状態から初回起動。
+- backend / frontend / worker / redis: running。
+- `/health`、`/upload`: pass。
+- sample動画job、normal、short、ZIP download: pass。
+- launcher Stop後にWindowsを再起動し、再Start: pass。
+- SQLite DB、outputs、Whisper model cache保持: pass。
+- NVIDIA GPU未検出のためCPU互換profileを使用。
+- Docker DesktopはWindows再起動後に手動起動が必要。launcherによる未起動検出・案内は仕様どおり。
+
+### NVIDIA GPU受入
+
+- クリーンWindowsとの組合せ試験は未実施。
+- 開発Windows 11 / NVIDIA GeForce RTX 5070 Tiで実GPU runtimeを確認済み。
+- recommended profile: `turbo / ja / cuda / float16`。
+- actual runtime: `cuda / float16`、fallback `false`。
+- GPU/CPU切替、4 services、health、Stop/Start、DB・outputs保持: pass。
+
+### 判定・既知制限
+
+- Task70は合格。クリーンCPU配布経路と実NVIDIA runtime経路の独立PASSを`v1.2.0`受入根拠とする。
+- クリーンWindows + NVIDIA GPUの初回download/build組合せは未検証として明記し、release blockerにはしない。
+- OpenAI字幕校正は既定OFF。Task70ではAPIを使用しない。
+- Docker Desktop、WSL2、Python 3.11+は前提条件。
+- installer、Python同梱、Docker Desktop導入支援、自動更新は`v1.2.0`対象外。
+- docs-only PR merge後、runtime差分がないことを確認して`v1.2.0` tagを作成する。
