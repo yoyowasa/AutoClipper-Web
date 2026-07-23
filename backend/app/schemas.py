@@ -102,6 +102,17 @@ class JobSettings(BaseModel):
     subtitle_top_margin: int | None = Field(default=None, ge=0, le=1600, alias="subtitleTopMargin")
     subtitle_alignment: int | None = Field(default=None, ge=1, le=9, alias="subtitleAlignment")
     subtitle_title_alignment: int | None = Field(default=None, ge=1, le=9, alias="subtitleTitleAlignment")
+    subtitle_primary_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="subtitlePrimaryColor",
+    )
+    subtitle_outline_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="subtitleOutlineColor",
+    )
+    short_subtitle_font_name: str | None = Field(default=None, min_length=1, alias="shortSubtitleFontName")
     short_subtitle_font_size: int | None = Field(default=None, ge=20, le=220, alias="shortSubtitleFontSize")
     short_title_font_size: int | None = Field(default=None, ge=20, le=220, alias="shortTitleFontSize")
     short_subtitle_outline: int | None = Field(default=None, ge=0, le=20, alias="shortSubtitleOutline")
@@ -111,6 +122,17 @@ class JobSettings(BaseModel):
     short_title_top_margin: int | None = Field(default=None, ge=0, le=1600, alias="shortTitleTopMargin")
     short_subtitle_alignment: int | None = Field(default=None, ge=1, le=9, alias="shortSubtitleAlignment")
     short_title_alignment: int | None = Field(default=None, ge=1, le=9, alias="shortTitleAlignment")
+    short_subtitle_primary_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="shortSubtitlePrimaryColor",
+    )
+    short_subtitle_outline_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="shortSubtitleOutlineColor",
+    )
+    normal_subtitle_font_name: str | None = Field(default=None, min_length=1, alias="normalSubtitleFontName")
     normal_subtitle_font_size: int | None = Field(default=None, ge=12, le=180, alias="normalSubtitleFontSize")
     normal_title_font_size: int | None = Field(default=None, ge=12, le=180, alias="normalTitleFontSize")
     normal_subtitle_outline: int | None = Field(default=None, ge=0, le=20, alias="normalSubtitleOutline")
@@ -120,6 +142,16 @@ class JobSettings(BaseModel):
     normal_title_top_margin: int | None = Field(default=None, ge=0, le=900, alias="normalTitleTopMargin")
     normal_subtitle_alignment: int | None = Field(default=None, ge=1, le=9, alias="normalSubtitleAlignment")
     normal_title_alignment: int | None = Field(default=None, ge=1, le=9, alias="normalTitleAlignment")
+    normal_subtitle_primary_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="normalSubtitlePrimaryColor",
+    )
+    normal_subtitle_outline_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="normalSubtitleOutlineColor",
+    )
     normalize_audio: bool = Field(default=False, alias="normalizeAudio")
     short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
     short_overlay_title_mode: ShortOverlayTitleMode = Field(default="auto", alias="shortOverlayTitleMode")
@@ -177,6 +209,8 @@ class JobSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_duration_ranges(self) -> "JobSettings":
+        if self.normal_clip_count + self.short_count <= 0:
+            raise ValueError("at least one normal clip or short must be requested")
         if self.normal_max_duration < self.normal_min_duration:
             raise ValueError("normalMaxDuration must be >= normalMinDuration")
         if self.short_max_duration < self.short_min_duration:

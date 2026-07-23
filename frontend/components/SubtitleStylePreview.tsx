@@ -1,13 +1,12 @@
 "use client";
 
-import { useState } from "react";
-
 import type { ClipSettings } from "../lib/types";
 
-type PreviewMode = "short" | "normal";
+export type SubtitlePreviewMode = "short" | "normal";
 
 type SubtitleStylePreviewProps = {
   settings: ClipSettings;
+  mode: SubtitlePreviewMode;
 };
 
 const PREVIEW_DEFAULTS = {
@@ -48,13 +47,40 @@ function alignmentLabel(alignment: number): string {
   return "下";
 }
 
-export function SubtitleStylePreview({ settings }: SubtitleStylePreviewProps) {
-  const [mode, setMode] = useState<PreviewMode>("short");
+export function SubtitleStylePreview({ settings, mode }: SubtitleStylePreviewProps) {
   const defaults = PREVIEW_DEFAULTS[mode];
-  const fontSize = settings.subtitleFontSize ?? defaults.fontSize;
-  const outline = settings.subtitleOutline ?? defaults.outline;
-  const lowerMargin = settings.subtitleLowerMargin ?? defaults.lowerMargin;
-  const alignment = settings.subtitleAlignment ?? 2;
+  const isShort = mode === "short";
+  const fontName =
+    (isShort ? settings.shortSubtitleFontName : settings.normalSubtitleFontName) ??
+    settings.subtitleFontName;
+  const fontSize =
+    (isShort ? settings.shortSubtitleFontSize : settings.normalSubtitleFontSize) ??
+    settings.subtitleFontSize ??
+    defaults.fontSize;
+  const outline =
+    (isShort ? settings.shortSubtitleOutline : settings.normalSubtitleOutline) ??
+    settings.subtitleOutline ??
+    defaults.outline;
+  const lowerMargin =
+    (isShort ? settings.shortSubtitleLowerMargin : settings.normalSubtitleLowerMargin) ??
+    settings.subtitleLowerMargin ??
+    defaults.lowerMargin;
+  const alignment =
+    (isShort ? settings.shortSubtitleAlignment : settings.normalSubtitleAlignment) ??
+    settings.subtitleAlignment ??
+    2;
+  const primaryColor =
+    (isShort
+      ? settings.shortSubtitlePrimaryColor
+      : settings.normalSubtitlePrimaryColor) ??
+    settings.subtitlePrimaryColor ??
+    "#FFFFFF";
+  const outlineColor =
+    (isShort
+      ? settings.shortSubtitleOutlineColor
+      : settings.normalSubtitleOutlineColor) ??
+    settings.subtitleOutlineColor ??
+    "#000000";
   const lowerMarginPercent = Math.min(42, Math.max(0, (lowerMargin / defaults.height) * 100));
   const fontSizePercent = Math.min(12, Math.max(3.2, (fontSize / defaults.height) * 100));
   const strokeWidth = Math.min(4, Math.max(0, outline * 0.22));
@@ -64,27 +90,6 @@ export function SubtitleStylePreview({ settings }: SubtitleStylePreviewProps) {
   return (
     <div className="mt-4 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_220px]">
       <div className="flex min-w-0 flex-col items-center">
-        <div className="mb-3 inline-flex rounded-md border border-neutral-300 bg-neutral-100 p-1">
-          <button
-            className={`min-h-9 rounded px-3 text-sm font-medium ${
-              mode === "short" ? "bg-neutral-950 text-white" : "text-neutral-600"
-            }`}
-            type="button"
-            onClick={() => setMode("short")}
-          >
-            ショート 9:16
-          </button>
-          <button
-            className={`min-h-9 rounded px-3 text-sm font-medium ${
-              mode === "normal" ? "bg-neutral-950 text-white" : "text-neutral-600"
-            }`}
-            type="button"
-            onClick={() => setMode("normal")}
-          >
-            通常 16:9
-          </button>
-        </div>
-
         <div
           className={`relative w-full overflow-hidden border border-neutral-400 bg-[#27343a] ${
             mode === "short" ? "max-w-[250px] aspect-[9/16]" : "max-w-[560px] aspect-video"
@@ -98,17 +103,19 @@ export function SubtitleStylePreview({ settings }: SubtitleStylePreviewProps) {
             className="absolute inset-0 flex flex-col items-center px-[7%] py-[7%] text-center"
             style={{
               justifyContent: verticalPosition,
-              paddingBottom: alignment === 2 ? `${Math.max(7, lowerMarginPercent)}%` : undefined
+              paddingBottom: alignment === 2 ? `${Math.max(7, lowerMarginPercent)}%` : undefined,
+              paddingTop: alignment === 8 ? `${Math.max(7, lowerMarginPercent)}%` : undefined
             }}
           >
             <p
-              className="m-0 whitespace-pre-line font-extrabold tracking-normal text-white"
+              className="m-0 whitespace-pre-line font-extrabold tracking-normal"
               style={{
-                fontFamily: previewFontFamily(settings.subtitleFontName),
+                color: primaryColor,
+                fontFamily: previewFontFamily(fontName),
                 fontSize: `clamp(12px, ${fontSizePercent}cqh, 38px)`,
                 lineHeight: 1.28,
-                textShadow: "0 2px 2px rgba(0, 0, 0, 0.8)",
-                WebkitTextStroke: `${strokeWidth}px #000`
+                textShadow: `0 2px 2px ${outlineColor}`,
+                WebkitTextStroke: `${strokeWidth}px ${outlineColor}`
               }}
             >
               {"この瞬間が一番おもしろい！\n切り抜き字幕のプレビュー"}
@@ -126,10 +133,28 @@ export function SubtitleStylePreview({ settings }: SubtitleStylePreviewProps) {
         <dd className="m-0 font-medium text-neutral-950">{fontSize}</dd>
         <dt className="text-neutral-500">縁取り</dt>
         <dd className="m-0 font-medium text-neutral-950">{outline}</dd>
-        <dt className="text-neutral-500">下余白</dt>
+        <dt className="text-neutral-500">端の余白</dt>
         <dd className="m-0 font-medium text-neutral-950">{lowerMargin}</dd>
         <dt className="text-neutral-500">位置</dt>
         <dd className="m-0 font-medium text-neutral-950">{alignmentLabel(alignment)}</dd>
+        <dt className="text-neutral-500">文字色</dt>
+        <dd className="m-0 flex items-center gap-2 font-mono text-xs font-medium text-neutral-950">
+          <span
+            aria-hidden="true"
+            className="h-4 w-4 border border-neutral-400"
+            style={{ backgroundColor: primaryColor }}
+          />
+          {primaryColor}
+        </dd>
+        <dt className="text-neutral-500">縁色</dt>
+        <dd className="m-0 flex items-center gap-2 font-mono text-xs font-medium text-neutral-950">
+          <span
+            aria-hidden="true"
+            className="h-4 w-4 border border-neutral-400"
+            style={{ backgroundColor: outlineColor }}
+          />
+          {outlineColor}
+        </dd>
       </dl>
     </div>
   );

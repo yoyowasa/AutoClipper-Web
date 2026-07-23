@@ -5169,3 +5169,73 @@ pip check: pass
 
 - branch `codex/task-74-source-han-heavy-font`で実装・ローカル検証済み。main mergeは未実施。
 - Task74 branchはPR #53のheadを親にしている。PR #53 merge後にmainへretarget / rebaseする。
+
+## 2026-07-23 Task 75 output selection and per-type subtitle styles
+
+### 目的
+
+- Upload画面で通常切り抜きのみ、ショートのみ、両方を選べるようにする。
+- 通常切り抜きとショートの字幕styleを別々に設定・previewできるようにする。
+- 文字色、縁取り色、font、文字サイズ、縁取り幅、位置、画面端からの余白をGUIから設定する。
+- font選択肢から案件固有の表現を除去する。
+
+### 変更
+
+- 生成対象へ`両方`、`通常のみ`、`ショートのみ`のsegmented controlを追加。
+- 未生成側のcountを`0`にし、関連しないshort設定とduration設定を無効化。
+- APIは`normalClipCount=0`または`shortCount=0`を許可し、両方`0`はrejectする。
+- 通常とショートに独立したsubtitle font / size / outline / text color / outline color / alignment / margin設定を追加。
+- 字幕style editorを通常`16:9`とショート`9:16`のtabへ分離し、選択中styleのpreviewを即時更新。
+- 色はnative color pickerと白・黄・水色・pink・緑・黒のpresetを追加。
+- ASS colorへ`#RRGGBB`からlibassのBGR表記へ変換して反映。
+- 共通subtitle style fieldは既存API互換のfallbackとして維持。
+- `Source Han Sans JP Heavy`の表示名を`極太ゴシック`へ変更し、案件固有文言を削除。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `352 passed, 1 skipped`。
+- targeted subtitle/API tests: `33 passed`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / worker / frontend rebuild: pass。
+- `smoke_runtime.py --skip-video`: pass。backend / frontend / worker / redis running。
+- ショートのみ実render E2E: pass。
+  - job: `job_a2b365e78c9f414a987451511d3d0624`
+  - selected: normal `0/0` / short `1/1`
+  - short: `1080x1920`
+  - ZIP: generated
+  - sidecar risk: `0`
+- 通常のみ実render E2E: pass。
+  - job: `job_27b31a915e774188a4dc166a1c68c3c2`
+  - selected: normal `1/1` / short `0/0`
+  - normal: video `320x180` + audio stream
+  - ZIP: generated
+  - sidecar risk: `0`
+- API tests:
+  - 通常のみ: accepted。
+  - ショートのみ: accepted。
+  - 両方`0`: validation error。
+  - 通常/ショート別styleの保存: pass。
+- ASS tests:
+  - 通常/ショート別fontと色の反映: pass。
+  - `#RRGGBB`からASS BGR colorへの変換: pass。
+- 通常/ショート別style実render E2E: pass。
+  - job: `job_b87b226b2628447d9e4ff1027bfbbdd9`
+  - normal ASS: `Noto Serif CJK JP` / `52` / 水色 / alignment `5`
+  - short ASS: `Source Han Sans JP Heavy` / `88` / 黄色 / alignment `8`
+  - overlay titleの色は従来の白文字・黒縁を維持。
+  - normal `1/1` / short `1/1`
+  - sidecar risk: `0`
+- browser:
+  - `両方` / `通常のみ` / `ショートのみ`の切替: pass。
+  - 非対象countの非表示とshort専用controlの無効化: pass。
+  - 通常/ショート間でfont・色・位置を独立保持: pass。
+  - desktop: pass。
+  - mobile `390x844`: 重なり・横はみ出しなし。
+  - browser error: `0`。
+
+### 未解決・制限
+
+- 本Taskの実render確認は25秒fixtureで実施。長尺実動画の再renderは実施していない。
+- 共通subtitle style fieldは互換用途で残るが、Upload UIは通常/ショート別fieldを送信する。
+- branch `codex/task-75-output-and-subtitle-style-controls`で実装・ローカル検証済み。main mergeは未実施。

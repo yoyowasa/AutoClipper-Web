@@ -1,7 +1,7 @@
 "use client";
 
 import type { ClipSettings } from "../lib/types";
-import { SubtitleStylePreview } from "./SubtitleStylePreview";
+import { SubtitleStyleEditor } from "./SubtitleStyleEditor";
 
 type SettingsPanelProps = {
   settings: ClipSettings;
@@ -65,24 +65,37 @@ export function settingsForRuntimeProfile(profile: string | null): ClipSettings 
   return { ...DEFAULT_SETTINGS };
 }
 
-const SUBTITLE_FONT_OPTIONS = [
-  { value: "", label: "標準ゴシック（Noto Sans CJK JP）" },
-  {
-    value: "Source Han Sans JP Heavy",
-    label: "極太ゴシック（Source Han Sans JP Heavy）"
-  },
-  { value: "Noto Serif CJK JP", label: "明朝（Noto Serif CJK JP）" },
-  { value: "Noto Sans Mono CJK JP", label: "等幅ゴシック（Noto Sans Mono CJK JP）" }
-] as const;
+type OutputMode = "both" | "normal_only" | "short_only";
 
-function withOptionalNumber(
-  settings: ClipSettings,
-  key: keyof ClipSettings,
-  rawValue: string
-): ClipSettings {
+function outputModeForSettings(settings: ClipSettings): OutputMode {
+  if (settings.normalClipCount === 0) {
+    return "short_only";
+  }
+  if (settings.shortCount === 0) {
+    return "normal_only";
+  }
+  return "both";
+}
+
+function withOutputMode(settings: ClipSettings, mode: OutputMode): ClipSettings {
+  if (mode === "normal_only") {
+    return {
+      ...settings,
+      normalClipCount: settings.normalClipCount || DEFAULT_SETTINGS.normalClipCount,
+      shortCount: 0
+    };
+  }
+  if (mode === "short_only") {
+    return {
+      ...settings,
+      normalClipCount: 0,
+      shortCount: settings.shortCount || DEFAULT_SETTINGS.shortCount
+    };
+  }
   return {
     ...settings,
-    [key]: rawValue === "" ? undefined : Number(rawValue)
+    normalClipCount: settings.normalClipCount || DEFAULT_SETTINGS.normalClipCount,
+    shortCount: settings.shortCount || DEFAULT_SETTINGS.shortCount
   };
 }
 
@@ -91,6 +104,8 @@ export function SettingsPanel({
   disabled = false,
   onChange
 }: SettingsPanelProps) {
+  const outputMode = outputModeForSettings(settings);
+
   return (
     <section className="rounded-md border border-neutral-300 bg-white p-5">
       <div className="grid gap-5 md:grid-cols-2">
@@ -126,47 +141,81 @@ export function SettingsPanel({
           </select>
         </label>
 
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-neutral-700">Normal clips</span>
-          <input
-            className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-            disabled={disabled}
-            max={12}
-            min={1}
-            type="number"
-            value={settings.normalClipCount}
-            onChange={(event) =>
-              onChange({
-                ...settings,
-                normalClipCount: Number(event.target.value)
-              })
-            }
-          />
-        </label>
+        <fieldset className="md:col-span-2">
+          <legend className="text-sm font-medium text-neutral-700">作成する動画</legend>
+          <div
+            aria-label="生成対象"
+            className="mt-2 grid w-full grid-cols-3 border border-neutral-300 bg-neutral-100 p-1 sm:w-auto"
+            role="group"
+          >
+            {(
+              [
+                ["both", "両方"],
+                ["normal_only", "通常のみ"],
+                ["short_only", "ショートのみ"]
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                aria-pressed={outputMode === value}
+                className={`min-h-10 px-3 text-sm font-medium ${
+                  outputMode === value ? "bg-neutral-950 text-white" : "text-neutral-600"
+                }`}
+                disabled={disabled}
+                key={value}
+                type="button"
+                onClick={() => onChange(withOutputMode(settings, value))}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </fieldset>
 
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-neutral-700">Shorts</span>
-          <input
-            className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-            disabled={disabled}
-            max={24}
-            min={1}
-            type="number"
-            value={settings.shortCount}
-            onChange={(event) =>
-              onChange({
-                ...settings,
-                shortCount: Number(event.target.value)
-              })
-            }
-          />
-        </label>
+        {settings.normalClipCount > 0 ? (
+          <label className="flex flex-col gap-2">
+            <span className="text-sm font-medium text-neutral-700">通常切り抜きの本数</span>
+            <input
+              className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+              disabled={disabled}
+              max={12}
+              min={1}
+              type="number"
+              value={settings.normalClipCount}
+              onChange={(event) =>
+                onChange({
+                  ...settings,
+                  normalClipCount: Math.max(1, Number(event.target.value) || 1)
+                })
+              }
+            />
+          </label>
+        ) : null}
+
+        {settings.shortCount > 0 ? (
+          <label className="flex flex-col gap-2">
+            <span className="text-sm font-medium text-neutral-700">ショートの本数</span>
+            <input
+              className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+              disabled={disabled}
+              max={24}
+              min={1}
+              type="number"
+              value={settings.shortCount}
+              onChange={(event) =>
+                onChange({
+                  ...settings,
+                  shortCount: Math.max(1, Number(event.target.value) || 1)
+                })
+              }
+            />
+          </label>
+        ) : null}
 
         <label className="flex flex-col gap-2">
           <span className="text-sm font-medium text-neutral-700">Short layout</span>
           <select
             className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-            disabled={disabled}
+            disabled={disabled || settings.shortCount === 0}
             value={settings.shortLayout}
             onChange={(event) =>
               onChange({
@@ -245,7 +294,7 @@ export function SettingsPanel({
           <span className="text-sm font-medium text-neutral-700">Short overlay title</span>
           <select
             className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-            disabled={disabled}
+            disabled={disabled || settings.shortCount === 0}
             value={settings.shortOverlayTitleMode}
             onChange={(event) =>
               onChange({
@@ -288,7 +337,7 @@ export function SettingsPanel({
               <span className="text-sm font-medium text-neutral-700">Normal min seconds</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled}
+                disabled={disabled || settings.normalClipCount === 0}
                 min={1}
                 step={1}
                 type="number"
@@ -306,7 +355,7 @@ export function SettingsPanel({
               <span className="text-sm font-medium text-neutral-700">Normal max seconds</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled}
+                disabled={disabled || settings.normalClipCount === 0}
                 min={1}
                 step={1}
                 type="number"
@@ -324,7 +373,7 @@ export function SettingsPanel({
               <span className="text-sm font-medium text-neutral-700">Short min seconds</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled}
+                disabled={disabled || settings.shortCount === 0}
                 min={1}
                 step={1}
                 type="number"
@@ -342,7 +391,7 @@ export function SettingsPanel({
               <span className="text-sm font-medium text-neutral-700">Short max seconds</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled}
+                disabled={disabled || settings.shortCount === 0}
                 min={1}
                 step={1}
                 type="number"
@@ -358,124 +407,7 @@ export function SettingsPanel({
           </div>
         </details>
 
-        <section className="border-t border-neutral-200 pt-5 md:col-span-2">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-neutral-950">字幕スタイル</h2>
-            <button
-              className="min-h-9 rounded-md border border-neutral-300 px-3 text-sm font-medium text-neutral-700"
-              disabled={disabled}
-              type="button"
-              onClick={() =>
-                onChange({
-                  ...settings,
-                  subtitleFontName: undefined,
-                  subtitleFontSize: undefined,
-                  subtitleOutline: undefined,
-                  subtitleLowerMargin: undefined,
-                  subtitleAlignment: undefined
-                })
-              }
-            >
-              既定値に戻す
-            </button>
-          </div>
-
-          <SubtitleStylePreview settings={settings} />
-
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <label className="flex flex-col gap-2 sm:col-span-2">
-              <span className="text-sm font-medium text-neutral-700">字幕フォント</span>
-              <select
-                className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-                data-testid="subtitle-font-select"
-                disabled={disabled}
-                value={settings.subtitleFontName ?? ""}
-                onChange={(event) =>
-                  onChange({
-                    ...settings,
-                    subtitleFontName: event.target.value || undefined
-                  })
-                }
-              >
-                {SUBTITLE_FONT_OPTIONS.map((font) => (
-                  <option key={font.value || "default"} value={font.value}>
-                    {font.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">文字サイズ</span>
-              <input
-                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled}
-                max={220}
-                min={12}
-                placeholder="既定"
-                step={2}
-                type="number"
-                value={settings.subtitleFontSize ?? ""}
-                onChange={(event) =>
-                  onChange(withOptionalNumber(settings, "subtitleFontSize", event.target.value))
-                }
-              />
-            </label>
-
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">縁取り</span>
-              <input
-                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled}
-                max={20}
-                min={0}
-                placeholder="既定"
-                step={1}
-                type="number"
-                value={settings.subtitleOutline ?? ""}
-                onChange={(event) =>
-                  onChange(withOptionalNumber(settings, "subtitleOutline", event.target.value))
-                }
-              />
-            </label>
-
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">下余白</span>
-              <input
-                className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled}
-                max={1600}
-                min={0}
-                placeholder="既定"
-                step={10}
-                type="number"
-                value={settings.subtitleLowerMargin ?? ""}
-                onChange={(event) =>
-                  onChange(
-                    withOptionalNumber(settings, "subtitleLowerMargin", event.target.value)
-                  )
-                }
-              />
-            </label>
-
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">表示位置</span>
-              <select
-                className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-                disabled={disabled}
-                value={settings.subtitleAlignment?.toString() ?? ""}
-                onChange={(event) =>
-                  onChange(withOptionalNumber(settings, "subtitleAlignment", event.target.value))
-                }
-              >
-                <option value="">標準</option>
-                <option value="2">下</option>
-                <option value="5">中央</option>
-                <option value="8">上</option>
-              </select>
-            </label>
-          </div>
-        </section>
+        <SubtitleStyleEditor disabled={disabled} settings={settings} onChange={onChange} />
 
         <details className="md:col-span-2">
           <summary className="cursor-pointer text-sm font-medium text-neutral-700">

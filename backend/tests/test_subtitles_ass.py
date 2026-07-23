@@ -168,6 +168,64 @@ def test_short_subtitle_style_can_be_overridden_from_settings() -> None:
     assert ",1,4,0,8,30,30,120,1" in ass
 
 
+def test_short_and_normal_subtitle_styles_use_independent_fonts_and_colors() -> None:
+    short_layout = SubtitleLayout.short(
+        settings={
+            "shortSubtitleFontName": "Source Han Sans JP Heavy",
+            "shortSubtitlePrimaryColor": "#12AB34",
+            "shortSubtitleOutlineColor": "#56789A",
+        }
+    )
+    normal_layout = SubtitleLayout.normal(
+        settings={
+            "normalSubtitleFontName": "Noto Serif CJK JP",
+            "normalSubtitlePrimaryColor": "#FEDCBA",
+            "normalSubtitleOutlineColor": "#102030",
+        }
+    )
+    short_candidate = make_candidate("short_1", "short", 0.0, 4.0)
+    normal_candidate = make_candidate("normal_1", "normal", 0.0, 4.0)
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="subtitle")]
+
+    short_ass = build_ass_document(short_candidate, segments, layout=short_layout)
+    normal_ass = build_ass_document(normal_candidate, segments, layout=normal_layout)
+
+    assert (
+        "Style: Subtitle,Source Han Sans JP Heavy,76,&H0034AB12,&H000000FF,&H009A7856"
+        in short_ass
+    )
+    assert (
+        "Style: Subtitle,Noto Serif CJK JP,65,&H00BADCFE,&H000000FF,&H00302010"
+        in normal_ass
+    )
+    assert "Style: Title,Noto Sans CJK JP,88,&H00FFFFFF,&H000000FF,&H00000000" in short_ass
+    assert "Style: Title,Noto Sans CJK JP,76,&H00FFFFFF,&H000000FF,&H00000000" in normal_ass
+
+
+def test_subtitle_layout_preserves_zero_margin_overrides() -> None:
+    short_layout = SubtitleLayout.short(
+        settings={
+            "shortSubtitleMarginX": 0,
+            "shortSubtitleLowerMargin": 0,
+            "shortTitleTopMargin": 0,
+        }
+    )
+    normal_layout = SubtitleLayout.normal(
+        settings={
+            "normalSubtitleMarginX": 0,
+            "normalSubtitleLowerMargin": 0,
+            "normalTitleTopMargin": 0,
+        }
+    )
+
+    assert short_layout.margin_x == 0
+    assert short_layout.lower_margin == 0
+    assert short_layout.top_margin == 0
+    assert normal_layout.margin_x == 0
+    assert normal_layout.lower_margin == 0
+    assert normal_layout.top_margin == 0
+
+
 def test_common_subtitle_style_overrides_ignore_type_specific_nulls() -> None:
     layout = SubtitleLayout.short(
         settings={

@@ -766,6 +766,12 @@ Troubleshooting:
 
 `POST /api/jobs` accepts advanced duration settings in `settings`:
 
+The Upload UI can generate both formats, normal clips only, or shorts only.
+For API requests, set the unused count to `0`; at least one of
+`normalClipCount` or `shortCount` must remain greater than `0`. Subtitle font,
+size, outline, colors, position, and edge margin can be configured independently
+for normal clips and shorts. Color values use `#RRGGBB`.
+
 ```json
 {
   "videoId": "vid_example",
@@ -818,7 +824,21 @@ Troubleshooting:
     "subtitleCorrectionMinConfidence": 0.9,
     "subtitleCorrectionBatchSize": 40,
     "subtitleCorrectionContextSegments": 2,
-    "subtitleCorrectionFallbackEnabled": true
+    "subtitleCorrectionFallbackEnabled": true,
+    "normalSubtitleFontName": "Noto Sans CJK JP",
+    "normalSubtitleFontSize": 65,
+    "normalSubtitleOutline": 4,
+    "normalSubtitlePrimaryColor": "#FFFFFF",
+    "normalSubtitleOutlineColor": "#000000",
+    "normalSubtitleAlignment": 2,
+    "normalSubtitleLowerMargin": 86,
+    "shortSubtitleFontName": "Source Han Sans JP Heavy",
+    "shortSubtitleFontSize": 76,
+    "shortSubtitleOutline": 5,
+    "shortSubtitlePrimaryColor": "#FFF200",
+    "shortSubtitleOutlineColor": "#000000",
+    "shortSubtitleAlignment": 2,
+    "shortSubtitleLowerMargin": 250
   }
 }
 ```
