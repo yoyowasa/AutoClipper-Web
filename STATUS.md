@@ -5282,3 +5282,56 @@ pip check: pass
 - shortの確認playerは時間範囲確認用で、最終9:16 cropと字幕焼き込みは確認完了後の書き出しで行う。
 - browser自動検証のbackground tabではvideo decode完了を観測できなかった。元動画配信APIとRange response、player state、clip境界UIは確認済み。実音声再生はforeground Chromeで最終確認する。
 - branch `codex/task-76-clip-subtitle-review-workspace`で実装・ローカル検証済み。main mergeは未実施。
+
+## 2026-07-23 Task 77 guided clip selection
+
+### 目的
+
+- 通常切り抜きとショートで、狙う場面・雰囲気・具体的な話題を別々に指定できるようにする。
+- 冒頭挨拶、終了挨拶、告知だけの区間を避け、意味のある場面がない場合は本数を減らせるようにする。
+- OpenAI APIを既定で使わず、抽象的な文脈判定が必要な場合だけ明示的に有効化する。
+
+### 変更
+
+- Upload画面へ通常・ショート別の選定presetと自由入力方針を追加。
+- preset: `auto` / `highlights` / `funny` / `important` / `emotional` / `informative`。
+- `冒頭・終了挨拶を除外`、`告知・視聴案内を除外`、`品質優先`、`AIで内容を判定`を追加。
+- UIの新規jobは`strict_quality`を既定とし、良い候補が不足する場合に無関係なclipで本数を埋めない。
+- ローカルrule scoreへ日本語hook、自由入力語句、preset語句、intro/outro・告知penaltyを追加。
+- OpenAI scoring promptへ通常/ショート別方針を渡し、cache keyにも方針を含めた。
+- 通常clip候補の基準長を設定範囲の中間から、最小長寄りの約150秒へ変更。
+- raw candidate上限を各chunk先頭から順番に消費する偏りを修正し、開始時刻全体へ均等配分。
+- 15秒の開始bucketごとに候補上限を設け、近接開始時刻の候補だけで上限を埋めないようにした。
+- 同点候補は長い文字起こしより短いclipを優先。
+- title fallbackは汎用挨拶segmentを避け、clip内の意味のあるsegmentを優先。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `358 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / frontend / worker rebuild: pass。
+- `smoke_runtime.py --skip-video`: pass。backend / frontend / worker / redis running。
+- `e2e_sample_video.py`: pass。
+  - job: `job_27456e3e2f7c4f488172b5ef68bf7b07`
+  - normal `0/0` / short `1/1`
+  - short: `1080x1920`
+  - render failures: `0`
+  - sidecar risk: `0`
+- browser:
+  - 通常・ショート別preset / 自由入力欄: 表示pass。
+  - ショートのみ選択時、通常側の方針欄を無効化: pass。
+  - AI文脈判定のON/OFF表示と最大8候補の料金注意: pass。
+- 既存32分素材 `job_2190d60e0acb4a74a87e9e916152e38a` をAPIなしで再選定:
+  - distinct 15秒 start buckets: `26 -> 121`。
+  - kept candidates: `130 -> 605`。
+  - 指示: `配信を休んだ理由と復帰後の予定。ホロライブ運動会を欠席した経緯を優先。`
+  - 1位選択: `263.16 - 412.58`、`149.42s`、rule score `95`。
+  - 内容: 運動会を欠席した理由、倒れた経緯、回復状況。
+  - OpenAI API call: `0`。
+
+### 未解決・制限
+
+- ローカル判定の自由入力は文字起こし語句とpreset特徴の照合。抽象的な意味・雰囲気の判定には明示的なOpenAI scoringが必要。
+- 長尺実データは既存artifactによる候補生成・score・selection replayまで。Task77コードでの長尺再renderは未実施。
+- branch `codex/task-77-guided-clip-selection`で実装・ローカル検証済み。親branchはTask76。main mergeは未実施。

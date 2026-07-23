@@ -1,0 +1,187 @@
+"use client";
+
+import type { ClipSelectionPreset, ClipSettings } from "../lib/types";
+
+type ClipSelectionEditorProps = {
+  settings: ClipSettings;
+  disabled?: boolean;
+  onChange: (settings: ClipSettings) => void;
+};
+
+const PRESET_OPTIONS: Array<{ value: ClipSelectionPreset; label: string }> = [
+  { value: "auto", label: "おすすめ自動" },
+  { value: "highlights", label: "見どころ" },
+  { value: "funny", label: "笑い・リアクション" },
+  { value: "important", label: "重要発言" },
+  { value: "emotional", label: "感情・本音" },
+  { value: "informative", label: "情報・解説" }
+];
+
+type OutputPreferenceProps = {
+  disabled: boolean;
+  guidance: string;
+  label: string;
+  placeholder: string;
+  preset: ClipSelectionPreset;
+  onGuidanceChange: (value: string) => void;
+  onPresetChange: (value: ClipSelectionPreset) => void;
+};
+
+function OutputPreference({
+  disabled,
+  guidance,
+  label,
+  placeholder,
+  preset,
+  onGuidanceChange,
+  onPresetChange
+}: OutputPreferenceProps) {
+  return (
+    <fieldset className="border border-neutral-300 bg-white p-4 disabled:opacity-50" disabled={disabled}>
+      <legend className="px-1 text-sm font-semibold text-neutral-900">{label}</legend>
+      <label className="mt-1 flex flex-col gap-2">
+        <span className="text-xs font-medium text-neutral-600">狙う場面</span>
+        <select
+          className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+          value={preset}
+          onChange={(event) => onPresetChange(event.target.value as ClipSelectionPreset)}
+        >
+          {PRESET_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="mt-4 flex flex-col gap-2">
+        <span className="text-xs font-medium text-neutral-600">具体的な方針（任意）</span>
+        <textarea
+          className="min-h-24 resize-y rounded-md border border-neutral-300 px-3 py-2 text-sm"
+          maxLength={1000}
+          placeholder={placeholder}
+          value={guidance}
+          onChange={(event) => onGuidanceChange(event.target.value)}
+        />
+      </label>
+    </fieldset>
+  );
+}
+
+export function ClipSelectionEditor({
+  settings,
+  disabled = false,
+  onChange
+}: ClipSelectionEditorProps) {
+  return (
+    <section className="border-y border-neutral-200 py-5 md:col-span-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold text-neutral-900">切り抜き内容</h3>
+        <span
+          className={`border px-2 py-1 text-xs font-semibold ${
+            settings.useOpenAIScoring
+              ? "border-sky-300 bg-sky-50 text-sky-800"
+              : "border-neutral-300 bg-neutral-50 text-neutral-600"
+          }`}
+        >
+          {settings.useOpenAIScoring ? "AI文脈判定" : "ローカル語句判定"}
+        </span>
+      </div>
+      <p className="mt-2 text-xs leading-5 text-neutral-600">
+        ローカル判定は文字起こし内の語句と特徴を照合します。抽象的な雰囲気や前後の意味まで判断する場合だけ、
+        AI文脈判定を使用します。
+      </p>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <OutputPreference
+          disabled={disabled || settings.normalClipCount === 0}
+          guidance={settings.normalClipGuidance}
+          label="通常切り抜き"
+          placeholder="例: 休んだ理由と復帰後の予定。運動会を欠席した経緯を優先。"
+          preset={settings.normalClipSelectionPreset}
+          onGuidanceChange={(value) => onChange({ ...settings, normalClipGuidance: value })}
+          onPresetChange={(value) =>
+            onChange({ ...settings, normalClipSelectionPreset: value })
+          }
+        />
+        <OutputPreference
+          disabled={disabled || settings.shortCount === 0}
+          guidance={settings.shortClipGuidance}
+          label="ショート"
+          placeholder="例: 一言で引きがある驚き、笑い、大きなリアクション。"
+          preset={settings.shortClipSelectionPreset}
+          onGuidanceChange={(value) => onChange({ ...settings, shortClipGuidance: value })}
+          onPresetChange={(value) =>
+            onChange({ ...settings, shortClipSelectionPreset: value })
+          }
+        />
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <label className="flex min-h-11 items-start gap-3 border border-neutral-300 px-4 py-3">
+          <input
+            checked={settings.excludeIntroOutro}
+            className="mt-0.5 h-4 w-4"
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) =>
+              onChange({ ...settings, excludeIntroOutro: event.target.checked })
+            }
+          />
+          <span className="text-sm font-medium text-neutral-800">冒頭・終了挨拶を除外</span>
+        </label>
+        <label className="flex min-h-11 items-start gap-3 border border-neutral-300 px-4 py-3">
+          <input
+            checked={settings.excludePromotionalContent}
+            className="mt-0.5 h-4 w-4"
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) =>
+              onChange({
+                ...settings,
+                excludePromotionalContent: event.target.checked
+              })
+            }
+          />
+          <span className="text-sm font-medium text-neutral-800">告知・視聴案内を除外</span>
+        </label>
+        <label className="flex min-h-11 items-start gap-3 border border-neutral-300 px-4 py-3">
+          <input
+            checked={settings.selectionPolicy === "strict_quality"}
+            className="mt-0.5 h-4 w-4"
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) =>
+              onChange({
+                ...settings,
+                selectionPolicy: event.target.checked ? "strict_quality" : "fill_requested"
+              })
+            }
+          />
+          <span className="text-sm font-medium text-neutral-800">
+            品質優先（良い場面がなければ本数を減らす）
+          </span>
+        </label>
+        <label className="flex min-h-11 items-start gap-3 border border-neutral-300 px-4 py-3">
+          <input
+            checked={settings.useOpenAIScoring}
+            className="mt-0.5 h-4 w-4"
+            disabled={disabled}
+            type="checkbox"
+            onChange={(event) =>
+              onChange({
+                ...settings,
+                useOpenAIScoring: event.target.checked
+              })
+            }
+          />
+          <span>
+            <span className="block text-sm font-medium text-neutral-800">AIで内容を判定</span>
+            <span className="mt-1 block text-xs text-neutral-500">
+              OpenAI APIを使用・最大{settings.openaiCandidateLimit}候補
+            </span>
+          </span>
+        </label>
+      </div>
+    </section>
+  );
+}

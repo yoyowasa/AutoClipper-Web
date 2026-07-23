@@ -6,6 +6,12 @@ from pydantic import BaseModel, Field
 from app.audio.silence_detect import SilenceSegment
 from app.audio.volume_features import AudioFeatures, silence_seconds
 from app.candidates.merge_boundaries import Candidate
+from app.scoring.clip_preferences import (
+    CandidateClipPreference,
+    generic_content_flags,
+    generic_content_penalty,
+    guidance_match_score,
+)
 
 
 HOOK_KEYWORDS = {
@@ -25,6 +31,26 @@ HOOK_KEYWORDS = {
     "stop",
     "truth",
     "why",
+}
+
+JAPANESE_HOOK_KEYWORDS = {
+    "なぜ",
+    "理由",
+    "実は",
+    "初めて",
+    "重要",
+    "大事",
+    "発表",
+    "結論",
+    "失敗",
+    "危険",
+    "秘密",
+    "本当",
+    "復帰",
+    "倒れ",
+    "事件",
+    "まさか",
+    "やば",
 }
 
 INCOMPLETE_START_WORDS = {
@@ -56,12 +82,14 @@ INCOMPLETE_END_WORDS = {
 
 class RuleScoreBreakdown(BaseModel):
     hook_score: float = Field(ge=0, le=15)
+    guidance_score: float = Field(ge=0, le=15)
     silence_score: float = Field(ge=0, le=15)
     speech_density_score: float = Field(ge=0, le=15)
     duration_score: float = Field(ge=0, le=20)
     transcript_length_score: float = Field(ge=0, le=15)
     audio_peak_score: float = Field(ge=0, le=10)
     incomplete_penalty: float = Field(ge=0, le=25)
+    generic_content_penalty: float = Field(ge=0, le=25)
     final_score: float = Field(ge=0, le=100)
 
 
@@ -74,17 +102,23 @@ def _words(text: str) -> list[str]:
 
 
 def _text_units(text: str) -> int:
+    compact = re.sub(r"\s+", "", text)
+    if re.search(r"[\u3040-\u30ff\u3400-\u9fff]", compact):
+        return max(0, len(compact) // 3)
     words = _words(text)
     if len(words) >= 2:
         return len(words)
-    compact = re.sub(r"\s+", "", text)
     return max(0, len(compact) // 3)
 
 
 def hook_keyword_score(transcript_text: str, hook_keywords: set[str] | None = None) -> float:
     words = set(_words(transcript_text))
-    keywords = hook_keywords or HOOK_KEYWORDS
-    hits = len(words & keywords)
+    keywords = hook_keywords or (HOOK_KEYWORDS | JAPANESE_HOOK_KEYWORDS)
+    ascii_keywords = {keyword for keyword in keywords if keyword.isascii()}
+    substring_keywords = keywords - ascii_keywords
+    hits = len(words & ascii_keywords)
+    normalized = transcript_text.lower()
+    hits += sum(1 for keyword in substring_keywords if keyword.lower() in normalized)
     return _clamp(hits * 5.0, maximum=15.0)
 
 
@@ -185,6 +219,7 @@ def score_candidate(
     audio_features: AudioFeatures | None = None,
     silence_segments: Sequence[SilenceSegment] | None = None,
     hook_keywords: set[str] | None = None,
+    selection_preference: CandidateClipPreference | None = None,
 ) -> RuleScoreBreakdown:
     fallback_silence_ratio = audio_features.silence_ratio if audio_features else 0.0
     silence_ratio = _candidate_silence_ratio(candidate, silence_segments or [], fallback_silence_ratio)
@@ -192,24 +227,31 @@ def score_candidate(
     if audio_features and not silence_segments:
         speech_density = audio_features.speech_density
     volume_peak = audio_features.volume_peak if audio_features else 0.5
+    preference = selection_preference or CandidateClipPreference()
 
     hook = hook_keyword_score(candidate.transcript_text, hook_keywords=hook_keywords)
+    guidance = guidance_match_score(candidate.transcript_text, preference)
     silence = silence_ratio_score(silence_ratio)
     speech = speech_density_score(speech_density)
     duration = duration_fit_score(candidate)
     length = transcript_length_score(candidate)
     peak = audio_peak_score(volume_peak)
     penalty = incomplete_boundary_penalty(candidate.transcript_text)
-    final = _clamp(hook + silence + speech + duration + length + peak - penalty)
+    generic_penalty = generic_content_penalty(candidate.transcript_text, preference)
+    final = _clamp(
+        hook + guidance + silence + speech + duration + length + peak - penalty - generic_penalty
+    )
 
     return RuleScoreBreakdown(
         hook_score=hook,
+        guidance_score=guidance,
         silence_score=silence,
         speech_density_score=speech,
         duration_score=duration,
         transcript_length_score=length,
         audio_peak_score=peak,
         incomplete_penalty=penalty,
+        generic_content_penalty=generic_penalty,
         final_score=round(final, 3),
     )
 
@@ -219,14 +261,21 @@ def apply_rule_score(
     audio_features: AudioFeatures | None = None,
     silence_segments: Sequence[SilenceSegment] | None = None,
     hook_keywords: set[str] | None = None,
+    selection_preference: CandidateClipPreference | None = None,
 ) -> Candidate:
     breakdown = score_candidate(
         candidate,
         audio_features=audio_features,
         silence_segments=silence_segments,
         hook_keywords=hook_keywords,
+        selection_preference=selection_preference,
     )
-    return candidate.model_copy(update={"rule_score": breakdown.final_score})
+    preference = selection_preference or CandidateClipPreference()
+    flags = list(candidate.risk_flags)
+    for flag in generic_content_flags(candidate.transcript_text, preference):
+        if flag not in flags:
+            flags.append(flag)
+    return candidate.model_copy(update={"rule_score": breakdown.final_score, "risk_flags": flags})
 
 
 def score_candidates(
@@ -234,6 +283,7 @@ def score_candidates(
     audio_features: AudioFeatures | None = None,
     silence_segments: Sequence[SilenceSegment] | None = None,
     hook_keywords: set[str] | None = None,
+    selection_preferences: dict[str, CandidateClipPreference] | None = None,
 ) -> list[Candidate]:
     return [
         apply_rule_score(
@@ -241,6 +291,7 @@ def score_candidates(
             audio_features=audio_features,
             silence_segments=silence_segments,
             hook_keywords=hook_keywords,
+            selection_preference=(selection_preferences or {}).get(candidate.type),
         )
         for candidate in candidates
     ]
