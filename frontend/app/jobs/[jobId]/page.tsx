@@ -37,7 +37,11 @@ export default function JobPage() {
         }
         setJob(nextJob);
         setError(null);
-        if (nextJob.status === "completed" || nextJob.status === "failed") {
+        if (
+          nextJob.status === "completed" ||
+          nextJob.status === "failed" ||
+          nextJob.status === "awaiting_subtitle_review"
+        ) {
           if (intervalId) {
             clearInterval(intervalId);
           }
@@ -92,7 +96,27 @@ export default function JobPage() {
         {job ? (
           <>
             <JobProgress job={job} />
-            <ProgressTimeline status={job.status} />
+            <ProgressTimeline
+              hasSubtitleReview={typeof job.details.subtitleReviewState === "string"}
+              status={job.status}
+            />
+            {job.status === "awaiting_subtitle_review" ? (
+              <section className="border border-sky-300 bg-sky-50 px-5 py-5">
+                <p className="text-sm font-semibold text-sky-950">
+                  clip選定が完了しました。次は字幕確認です。
+                </p>
+                <p className="mt-1 text-sm text-sky-800">
+                  確認済み {Number(job.details.subtitleReviewConfirmedClips ?? 0)} /{" "}
+                  {Number(job.details.subtitleReviewTotalClips ?? 0)}
+                </p>
+                <Link
+                  className="mt-4 inline-flex min-h-11 items-center bg-sky-700 px-5 text-sm font-semibold text-white"
+                  href={`/jobs/${job.id}/subtitles`}
+                >
+                  字幕確認へ進む
+                </Link>
+              </section>
+            ) : null}
             {job.status === "completed" ? (
               <Link
                 className="inline-flex min-h-11 w-fit items-center rounded-md bg-neutral-950 px-5 text-sm font-medium text-white"

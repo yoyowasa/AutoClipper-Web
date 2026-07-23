@@ -5056,3 +5056,61 @@ pip check: pass
 ### 未解決
 
 - 実際の長尺ファイルでのupload percent推移は未確認。対象動画の次回uploadで確認する。
+
+## 2026-07-23 Task 73 subtitle review workflow
+
+### 目的
+
+- 自動clip選定後、字幕焼き込み前に処理を一時停止する。
+- 通常切り抜きとショートをGUIで順に再生し、音声と異なる字幕を修正してから書き出す。
+- 複数clipでも工程と確認状況が分かる状態にする。
+
+### 変更
+
+- `requireSubtitleReview`を追加。backend/APIの互換defaultは`false`、Upload UIのdefaultは`true`。
+- 字幕焼き込みONかつ手動確認ONの場合、選定後に`awaiting_subtitle_review`で停止する。
+- source動画のRange対応preview、字幕review取得・更新、clip確認、最終確定APIを追加。
+- 選定された通常・ショートを一覧表示する字幕確認画面を追加。
+- clip区間の音声再生、segment単位の字幕修正、未保存表示、clipごとの確認状態を追加。
+- 同じsource transcript segmentを使う複数clipへ修正を共通反映する。
+- 共通segmentの再編集時は、影響するclipを未確認へ戻す。
+- 全clip確認後のみrenderを再開し、normal / short / ZIPを生成する。
+- 修正後transcriptを`reviewed_transcript_segments.json`、操作状態を`subtitle_review.json`へ保存する。
+- 完了後の字幕確認画面は確認履歴として読み取り専用表示にする。
+- 選定clipが0本の場合は確認待ちへ入らず`no_usable_output`で終了する。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `346 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker全service rebuild: pass。
+- `smoke_runtime.py --skip-video`: pass。backend / frontend / worker / redis running。
+- 既存自動sample E2E: pass。
+  - job: `job_e6d7c84ceb1143b788ded050b4359f8f`
+  - 手動確認を要求しない既存API経路で`completed`
+  - short: `1080x1920`
+- 手動字幕確認runtime E2E: pass。
+  - job: `job_9e91eab9ebf8490cabb28ca0b249ca7b`
+  - `awaiting_subtitle_review` / `78%`で停止
+  - normal `1` / short `1`
+  - 共有字幕を修正し、2本へ反映
+  - 各clip確認後にrender再開、normal / short / ZIP生成
+  - metadata / subtitle download: HTTP `200`
+  - source video Range request: HTTP `206`
+  - short: `1080x1920`
+  - sidecar risk: `0`
+- ブラウザ確認:
+  - desktopで字幕修正・保存・clip確認・最終確定: pass。
+  - mobile `390x844`: 横はみ出しなし。
+  - 完了画面の編集・保存・再render操作は無効。
+  - browser error: `0`。
+- OpenAI APIは本Taskで使用しない。
+
+### 未解決・制限
+
+- MVPでは字幕textのみ編集可能。timestamp、clip境界、clip採否は編集しない。
+- 確認対象は自動選定されたclipと、その区間に重なる字幕segmentのみ。
+- 同一source segmentの修正は、それを使う通常・ショート全clipへ共通反映する。
+- 手動確認工程は`burnSubtitles=true`かつ`requireSubtitleReview=true`の場合だけ実行する。
+- branch `codex/task-73-subtitle-review-workflow`で実装・ローカル検証済み。main mergeは未実施。

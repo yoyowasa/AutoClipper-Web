@@ -15,8 +15,33 @@ const BASE_STEPS: JobStatus[] = [
   "completed"
 ];
 
-export function ProgressTimeline({ status }: { status: JobStatus }) {
-  const steps =
+const STEP_LABELS: Partial<Record<JobStatus, string>> = {
+  queued: "受付",
+  probing: "動画確認",
+  extracting_audio: "音声抽出",
+  transcribing: "文字起こし",
+  correcting_subtitles: "AI字幕校正",
+  detecting_scenes: "シーン検出",
+  generating_candidates: "候補生成",
+  scoring_candidates: "候補評価",
+  selecting_clips: "clip選定",
+  awaiting_subtitle_review: "字幕確認",
+  rendering_normal_clips: "通常切り抜き",
+  rendering_shorts: "ショート",
+  packaging_zip: "ZIP作成",
+  completed: "完了"
+};
+
+type ProgressTimelineProps = {
+  status: JobStatus;
+  hasSubtitleReview?: boolean;
+};
+
+export function ProgressTimeline({
+  status,
+  hasSubtitleReview = false
+}: ProgressTimelineProps) {
+  let steps: JobStatus[] =
     status === "correcting_subtitles"
       ? [
           ...BASE_STEPS.slice(0, BASE_STEPS.indexOf("transcribing") + 1),
@@ -24,6 +49,14 @@ export function ProgressTimeline({ status }: { status: JobStatus }) {
           ...BASE_STEPS.slice(BASE_STEPS.indexOf("transcribing") + 1)
         ]
       : BASE_STEPS;
+  if (hasSubtitleReview || status === "awaiting_subtitle_review") {
+    const renderIndex = steps.indexOf("rendering_normal_clips");
+    steps = [
+      ...steps.slice(0, renderIndex),
+      "awaiting_subtitle_review",
+      ...steps.slice(renderIndex)
+    ];
+  }
   const activeIndex = steps.indexOf(status);
 
   return (
@@ -46,7 +79,9 @@ export function ProgressTimeline({ status }: { status: JobStatus }) {
               <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs">
                 {isDone ? "OK" : index + 1}
               </span>
-              <span className="truncate text-sm font-medium">{step.replaceAll("_", " ")}</span>
+              <span className="truncate text-sm font-medium">
+                {STEP_LABELS[step] ?? step.replaceAll("_", " ")}
+              </span>
             </div>
           );
         })}

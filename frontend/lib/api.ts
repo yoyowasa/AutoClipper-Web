@@ -3,6 +3,8 @@ import type {
   JobCreateResponse,
   JobResultsResponse,
   JobStatusResponse,
+  SubtitleReviewDocument,
+  SubtitleReviewFinalizeResponse,
   VideoUploadResponse
 } from "./types";
 
@@ -117,4 +119,54 @@ export async function getJobResults(jobId: string): Promise<JobResultsResponse> 
   });
 
   return parseJsonResponse<JobResultsResponse>(response);
+}
+
+export async function getSubtitleReview(jobId: string): Promise<SubtitleReviewDocument> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review`, {
+    cache: "no-store"
+  });
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function updateSubtitleReviewSegment(
+  jobId: string,
+  segmentId: string,
+  text: string
+): Promise<SubtitleReviewDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/segments/${segmentId}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ text })
+    }
+  );
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function confirmSubtitleReviewClip(
+  jobId: string,
+  clipId: string
+): Promise<SubtitleReviewDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/confirm`,
+    {
+      method: "POST"
+    }
+  );
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function finalizeSubtitleReview(
+  jobId: string
+): Promise<SubtitleReviewFinalizeResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/finalize`,
+    {
+      method: "POST"
+    }
+  );
+  return parseJsonResponse<SubtitleReviewFinalizeResponse>(response);
 }

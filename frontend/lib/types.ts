@@ -9,6 +9,7 @@ export type JobStatus =
   | "generating_candidates"
   | "scoring_candidates"
   | "selecting_clips"
+  | "awaiting_subtitle_review"
   | "rendering_normal_clips"
   | "rendering_shorts"
   | "packaging_zip"
@@ -36,6 +37,7 @@ export type ClipSettings = {
   maxBoundaryExpansionSeconds: number;
   allowBoundaryExpansionBeyondMaxDuration: boolean;
   burnSubtitles: boolean;
+  requireSubtitleReview: boolean;
   maxCharsPerLineShort: number;
   maxCharsPerLineNormal: number;
   maxLines: number;
@@ -156,4 +158,47 @@ export type JobResultsResponse = {
   auditSummary: JobAuditSummary | null;
   normalClips: ResultExportItem[];
   shorts: ResultExportItem[];
+};
+
+export type SubtitleReviewSegment = {
+  id: string;
+  index: number;
+  start: number;
+  end: number;
+  originalText: string;
+  text: string;
+  confidence: number | null;
+  edited: boolean;
+  affectedClipIds: string[];
+};
+
+export type SubtitleReviewClip = {
+  id: string;
+  type: ExportType;
+  title: string;
+  start: number;
+  end: number;
+  duration: number;
+  segmentIds: string[];
+  confirmed: boolean;
+  editedSegmentCount: number;
+};
+
+export type SubtitleReviewDocument = {
+  version: number;
+  jobId: string;
+  state: "awaiting_review" | "render_queued" | "rendering" | "completed";
+  sourceVideoUrl: string;
+  clips: SubtitleReviewClip[];
+  segments: SubtitleReviewSegment[];
+  confirmedClipCount: number;
+  totalClipCount: number;
+  editedSegmentCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SubtitleReviewFinalizeResponse = {
+  jobId: string;
+  status: JobStatus;
 };

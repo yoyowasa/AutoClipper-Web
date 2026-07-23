@@ -15,6 +15,7 @@ JobStatus = Literal[
     "generating_candidates",
     "scoring_candidates",
     "selecting_clips",
+    "awaiting_subtitle_review",
     "rendering_normal_clips",
     "rendering_shorts",
     "packaging_zip",
@@ -83,6 +84,7 @@ class JobSettings(BaseModel):
     candidate_chunk_seconds: float = Field(default=600.0, gt=0, alias="candidateChunkSeconds")
     candidate_chunk_overlap_seconds: float = Field(default=75.0, ge=0, alias="candidateChunkOverlapSeconds")
     burn_subtitles: bool = Field(default=True, alias="burnSubtitles")
+    require_subtitle_review: bool = Field(default=False, alias="requireSubtitleReview")
     max_chars_per_line_short: int = Field(default=16, ge=6, le=80, alias="maxCharsPerLineShort")
     max_chars_per_line_normal: int = Field(default=28, ge=8, le=100, alias="maxCharsPerLineNormal")
     max_lines: int = Field(default=2, ge=1, le=2, alias="maxLines")
@@ -195,6 +197,15 @@ class JobCreateRequest(BaseModel):
 
 
 class JobCreateResponse(BaseModel):
+    job_id: str = Field(alias="jobId")
+    status: JobStatus
+
+
+class SubtitleReviewSegmentUpdateRequest(BaseModel):
+    text: str = Field(max_length=4000)
+
+
+class SubtitleReviewFinalizeResponse(BaseModel):
     job_id: str = Field(alias="jobId")
     status: JobStatus
 

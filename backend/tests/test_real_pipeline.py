@@ -14,7 +14,7 @@ from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.volume_features import build_audio_features
 from app.db import Base, get_db
-from app.jobs.queue import get_enqueue_job
+from app.jobs.queue import get_enqueue_job, get_enqueue_render_job
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import select_candidates
 from app.jobs.runner import (
@@ -24,6 +24,7 @@ from app.jobs.runner import (
     _ensure_selected_candidates_openai_scored,
     _score_candidate_list,
     run_autoclipper_job,
+    run_subtitle_review_render,
 )
 from app.jobs.status import SUCCESS_STATUSES
 from app.main import app
@@ -568,6 +569,144 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "metadata/selected_clips_summary.json" in names
     assert "normal_01.mp4" not in names
     assert "short_01.ass" not in names
+
+
+def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(client: TestClient) -> None:
+    upload_response = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    )
+    upload = upload_response.json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 180,
+                "shortMinDuration": 20,
+                "shortMaxDuration": 75,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+                "useOpenAIScoring": False,
+                "burnSubtitles": True,
+                "requireSubtitleReview": True,
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=240.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=lambda _path: fake_transcript(),
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        normal_renderer=fake_render,
+        short_renderer=fake_render,
+    )
+
+    visited_statuses = run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    assert visited_statuses[-1] == "awaiting_subtitle_review"
+    status_payload = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert status_payload["status"] == "awaiting_subtitle_review"
+    assert status_payload["details"]["subtitleReviewConfirmedClips"] == 0
+    assert status_payload["details"]["subtitleReviewTotalClips"] == 2
+    assert client.get(f"/api/jobs/{created['jobId']}/results").json()["normalClips"] == []
+    assert client.get(f"/api/jobs/{created['jobId']}/source-video").content == b"fake video bytes"
+
+    review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
+    edited_segment = next(
+        (segment for segment in review["segments"] if len(segment["affectedClipIds"]) > 1),
+        review["segments"][0],
+    )
+    updated = client.patch(
+        f"/api/jobs/{created['jobId']}/subtitle-review/segments/{edited_segment['id']}",
+        json={"text": "ManualEdit"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["editedSegmentCount"] == 1
+
+    blocked = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/finalize")
+    assert blocked.status_code == 409
+
+    review = updated.json()
+    for clip in review["clips"]:
+        response = client.post(
+            f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm"
+        )
+        assert response.status_code == 200
+        review = response.json()
+    assert review["confirmedClipCount"] == review["totalClipCount"] == 2
+
+    queued_jobs: list[str] = []
+    app.dependency_overrides[get_enqueue_render_job] = lambda: queued_jobs.append
+    finalized = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/finalize")
+    assert finalized.status_code == 202
+    assert finalized.json()["status"] == "rendering_normal_clips"
+    assert queued_jobs == [created["jobId"]]
+
+    resume_statuses = run_subtitle_review_render(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    assert resume_statuses == [
+        "rendering_normal_clips",
+        "rendering_shorts",
+        "packaging_zip",
+        "completed",
+    ]
+    assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == "completed"
+    completed_review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
+    assert completed_review["state"] == "completed"
+    assert completed_review["editedSegmentCount"] == 1
+    reviewed_transcript = json.loads(
+        (storage.job_outputs(created["jobId"]) / "reviewed_transcript_segments.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert reviewed_transcript[edited_segment["index"]]["text"] == "ManualEdit"
+    ass_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (storage.job_outputs(created["jobId"]) / "subtitles").rglob("*.ass")
+    )
+    assert "ManualEdit" in ass_text
+    assert storage.zip_path(created["jobId"]).is_file()
 
 
 def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_duration_settings(

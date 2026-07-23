@@ -75,6 +75,18 @@ from app.db import SessionLocal
 from app.ids import make_id
 from app.jobs.summaries import write_generation_summaries
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
+from app.jobs.subtitle_review import (
+    apply_reviewed_text,
+    build_subtitle_review,
+    load_subtitle_review,
+    mark_review_completed,
+    mark_review_rendering,
+    reviewed_transcript_output_path,
+    subtitle_review_output_path,
+    subtitle_review_summary_path,
+    write_subtitle_review,
+    write_subtitle_review_summary,
+)
 from app.models import ExportItem, Job, Video, utc_now
 from app.render.render_normal import NormalRenderBatchResult, render_normal_clip, render_selected_normal_candidates
 from app.render.render_short import ShortRenderBatchResult, render_selected_short_candidates, render_short_clip
@@ -1412,6 +1424,97 @@ def score_candidate_batch_for_worker(
     )
 
 
+def _render_selected_outputs(
+    *,
+    db: Session,
+    job: Job,
+    video: Video,
+    input_path: Path,
+    selection: CandidateSelection,
+    transcript_segments: Sequence[TranscriptSegment],
+    settings: dict[str, Any],
+    storage_paths: StoragePaths,
+    dependencies: AutoClipperPipelineDependencies,
+    visited_statuses: list[str],
+) -> tuple[NormalRenderBatchResult, ShortRenderBatchResult, list[ExportItem], Path]:
+    _set_status(db, job, "rendering_normal_clips")
+    visited_statuses.append("rendering_normal_clips")
+    normal_result = render_selected_normal_candidates(
+        db=db,
+        job=job,
+        input_path=input_path,
+        selected_candidates=selection.normal_clips,
+        transcript_segments=transcript_segments,
+        burn_subtitles=bool(settings.get("burnSubtitles", True)),
+        normalize_audio=bool(settings.get("normalizeAudio", False)),
+        paths=storage_paths,
+        renderer=dependencies.normal_renderer,
+        normal_width=video.width or 1920,
+        normal_height=video.height or 1080,
+        subtitle_settings=settings,
+    )
+
+    _set_status(db, job, "rendering_shorts")
+    visited_statuses.append("rendering_shorts")
+    short_result = render_selected_short_candidates(
+        db=db,
+        job=job,
+        input_path=input_path,
+        selected_candidates=selection.shorts,
+        transcript_segments=transcript_segments,
+        burn_subtitles=bool(settings.get("burnSubtitles", True)),
+        normalize_audio=bool(settings.get("normalizeAudio", False)),
+        layout=settings.get("shortLayout", settings.get("layout", "auto")),
+        paths=storage_paths,
+        renderer=dependencies.short_renderer,
+        source_width=video.width,
+        source_height=video.height,
+        subtitle_settings=settings,
+        mode=settings.get("mode"),
+        short_overlay_title_mode=settings.get("shortOverlayTitleMode"),
+    )
+
+    render_failures_path = _write_json(
+        storage_paths.job_outputs(job.id) / "render_failures.json",
+        _render_failures_to_jsonable(normal_result, short_result),
+    )
+    exports = [*normal_result.exports, *short_result.exports]
+    return normal_result, short_result, exports, render_failures_path
+
+
+def _read_json_file(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _read_model_list(path: Path, model_type: type[Candidate]) -> list[Candidate]:
+    if not path.is_file():
+        return []
+    payload = _read_json_file(path)
+    if not isinstance(payload, list):
+        raise ValueError(f"expected a list in {path.name}")
+    return [model_type.model_validate(item) for item in payload]
+
+
+def _read_transcript_segments(path: Path) -> list[TranscriptSegment]:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    payload = _read_json_file(path)
+    if not isinstance(payload, list):
+        raise ValueError(f"expected a list in {path.name}")
+    return [TranscriptSegment.model_validate(item) for item in payload]
+
+
+def _top_level_metadata_files(job_dir: Path) -> list[Path]:
+    return sorted(
+        (
+            path
+            for path in job_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in {".json", ".md"}
+        ),
+        key=lambda path: path.name,
+    )
+
+
 def run_autoclipper_job(
     job_id: str,
     session_factory: SessionFactory = SessionLocal,
@@ -1862,49 +1965,41 @@ def run_autoclipper_job(
             selected_path = write_selected_clips(selection, job_dir / "selected_clips.json")
             metadata_files.append(selected_path)
 
-            _set_status(db, job, "rendering_normal_clips")
-            visited_statuses.append("rendering_normal_clips")
-            normal_result = render_selected_normal_candidates(
+            if bool(settings.get("requireSubtitleReview", False)) and bool(settings.get("burnSubtitles", True)):
+                if not selection.normal_clips and not selection.shorts:
+                    raise PipelineExpectedError(
+                        "no_usable_output",
+                        "Pipeline completed analysis but produced no usable clips.",
+                    )
+                review_document = build_subtitle_review(job.id, selection, transcript_segments)
+                review_path = write_subtitle_review(
+                    review_document,
+                    subtitle_review_output_path(job_dir),
+                )
+                review_summary_path = write_subtitle_review_summary(
+                    review_document,
+                    subtitle_review_summary_path(job_dir),
+                )
+                metadata_files.extend([review_path, review_summary_path])
+                summary_files = write_summaries()
+                metadata_files.extend(path for path in summary_files if path not in metadata_files)
+                _set_status(db, job, "awaiting_subtitle_review")
+                visited_statuses.append("awaiting_subtitle_review")
+                return visited_statuses
+
+            normal_result, short_result, exports, render_failures_path = _render_selected_outputs(
                 db=db,
                 job=job,
+                video=video,
                 input_path=input_path,
-                selected_candidates=selection.normal_clips,
+                selection=selection,
                 transcript_segments=transcript_segments,
-                burn_subtitles=bool(settings.get("burnSubtitles", True)),
-                normalize_audio=bool(settings.get("normalizeAudio", False)),
-                paths=storage_paths,
-                renderer=deps.normal_renderer,
-                normal_width=metadata.width or 1920,
-                normal_height=metadata.height or 1080,
-                subtitle_settings=settings,
-            )
-
-            _set_status(db, job, "rendering_shorts")
-            visited_statuses.append("rendering_shorts")
-            short_result = render_selected_short_candidates(
-                db=db,
-                job=job,
-                input_path=input_path,
-                selected_candidates=selection.shorts,
-                transcript_segments=transcript_segments,
-                burn_subtitles=bool(settings.get("burnSubtitles", True)),
-                normalize_audio=bool(settings.get("normalizeAudio", False)),
-                layout=settings.get("shortLayout", settings.get("layout", "auto")),
-                paths=storage_paths,
-                renderer=deps.short_renderer,
-                source_width=metadata.width,
-                source_height=metadata.height,
-                subtitle_settings=settings,
-                mode=settings.get("mode"),
-                short_overlay_title_mode=settings.get("shortOverlayTitleMode"),
-            )
-
-            render_failures_path = _write_json(
-                job_dir / "render_failures.json",
-                _render_failures_to_jsonable(normal_result, short_result),
+                settings=settings,
+                storage_paths=storage_paths,
+                dependencies=deps,
+                visited_statuses=visited_statuses,
             )
             metadata_files.append(render_failures_path)
-            exports = [*normal_result.exports, *short_result.exports]
             summary_files = write_summaries()
             metadata_files.extend(path for path in summary_files if path not in metadata_files)
             if not exports:
@@ -1932,5 +2027,134 @@ def run_autoclipper_job(
                     pass
             if temp_dir is not None:
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return visited_statuses
+
+
+def run_subtitle_review_render(
+    job_id: str,
+    session_factory: SessionFactory = SessionLocal,
+    paths: StoragePaths | None = None,
+    dependencies: AutoClipperPipelineDependencies | None = None,
+) -> list[str]:
+    storage_paths = paths or get_storage_paths()
+    deps = dependencies or AutoClipperPipelineDependencies()
+    visited_statuses: list[str] = []
+
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"job not found: {job_id}")
+        video = db.get(Video, job.video_id)
+        if video is None:
+            raise ValueError(f"video not found for job: {job_id}")
+
+        job_dir = storage_paths.job_outputs(job.id)
+        review_path = subtitle_review_output_path(job_dir)
+        settings = dict(job.settings_json or {})
+        input_path = storage_paths.resolve_stored_file(video.stored_path)
+
+        try:
+            review_document = load_subtitle_review(review_path)
+            if review_document.state not in {"render_queued", "rendering"}:
+                raise PipelineExpectedError(
+                    "subtitle_review_not_ready",
+                    "Subtitle review has not been finalized.",
+                )
+
+            review_document = mark_review_rendering(review_document)
+            write_subtitle_review(review_document, review_path)
+            write_subtitle_review_summary(
+                review_document,
+                subtitle_review_summary_path(job_dir),
+            )
+
+            transcript_segments = _read_transcript_segments(transcript_output_path(job_dir))
+            transcript_segments = apply_reviewed_text(transcript_segments, review_document)
+            write_transcript_segments(
+                transcript_segments,
+                reviewed_transcript_output_path(job_dir),
+            )
+            write_transcript_segments(
+                transcript_segments,
+                transcript_output_path(job_dir),
+            )
+
+            selection_payload = _read_json_file(job_dir / "selected_clips.json")
+            selection = CandidateSelection.model_validate(selection_payload)
+            normal_result, short_result, exports, _render_failures_path = _render_selected_outputs(
+                db=db,
+                job=job,
+                video=video,
+                input_path=input_path,
+                selection=selection,
+                transcript_segments=transcript_segments,
+                settings=settings,
+                storage_paths=storage_paths,
+                dependencies=deps,
+                visited_statuses=visited_statuses,
+            )
+            if not exports:
+                raise PipelineExpectedError(
+                    "no_usable_output",
+                    "Pipeline completed analysis but produced no usable clips.",
+                )
+
+            audio_features_payload = _read_json_file(job_dir / "audio_features.json")
+            audio_features = AudioFeatures.model_validate(audio_features_payload)
+            normal_candidates = _read_model_list(job_dir / "normal_candidates.json", Candidate)
+            short_candidates = _read_model_list(job_dir / "short_candidates.json", Candidate)
+            scored_candidates = _read_model_list(job_dir / "scored_candidates.json", Candidate)
+            candidate_generation_summary = _read_json_file(job_dir / "candidate_generation_summary.json")
+            openai_summary_path = job_dir / "openai_scoring_summary.json"
+            openai_scoring_summary = _read_json_file(openai_summary_path) if openai_summary_path.is_file() else None
+            transcript_summary_path = job_dir / "transcript_summary.json"
+            transcript_summary = (
+                _read_json_file(transcript_summary_path)
+                if transcript_summary_path.is_file()
+                else {}
+            )
+
+            write_generation_summaries(
+                job_dir,
+                transcript_segments=transcript_segments,
+                audio_features=audio_features,
+                normal_candidates=normal_candidates,
+                short_candidates=short_candidates,
+                candidate_generation_summary=candidate_generation_summary,
+                scored_candidates=scored_candidates,
+                selection=selection,
+                openai_scoring_summary=openai_scoring_summary,
+                normal_result=normal_result,
+                short_result=short_result,
+                exports=exports,
+                transcription_engine=str(transcript_summary.get("transcription_engine", "not_run")),
+                used_fixture_transcript=bool(transcript_summary.get("used_fixture_transcript", False)),
+                transcription_model=transcript_summary.get("transcription_model"),
+                transcription_language=transcript_summary.get("transcription_language"),
+                transcription_diagnostics=transcript_summary.get("transcription_runtime"),
+            )
+
+            _set_status(db, job, "packaging_zip")
+            visited_statuses.append("packaging_zip")
+            review_document = mark_review_completed(review_document)
+            write_subtitle_review(review_document, review_path)
+            write_subtitle_review_summary(
+                review_document,
+                subtitle_review_summary_path(job_dir),
+            )
+            _create_zip(
+                storage_paths.zip_path(job.id),
+                exports,
+                metadata_files=_top_level_metadata_files(job_dir),
+            )
+
+            _set_status(db, job, "completed")
+            visited_statuses.append("completed")
+        except PipelineExpectedError as exc:
+            _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
+        except Exception as exc:
+            _fail_job(db, job_id, "subtitle_review_render_failed", str(exc))
+            raise
 
     return visited_statuses

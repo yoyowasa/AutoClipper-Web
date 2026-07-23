@@ -18,6 +18,8 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
     correctionProgress !== null &&
     correctionCompleted !== null &&
     correctionTotal !== null;
+  const currentStep =
+    job.status === "awaiting_subtitle_review" ? "字幕を確認してください" : job.currentStep;
 
   return (
     <section className="rounded-md border border-neutral-300 bg-white p-5">
@@ -32,7 +34,7 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
 
         <div className="flex items-end justify-between gap-4">
           <div>
-            <p className="text-sm font-medium text-neutral-700">{job.currentStep}</p>
+            <p className="text-sm font-medium text-neutral-700">{currentStep}</p>
             {job.error ? (
               <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
                 <p className="font-medium">{job.error.code}</p>

@@ -1,4 +1,5 @@
 import json
+import mimetypes
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,19 @@ from sqlalchemy.orm import Session
 from app.audio.openai_transcript_correction import TRANSCRIPT_CORRECTION_PROGRESS_FILENAME
 from app.db import get_db
 from app.ids import make_id
-from app.jobs.queue import JobEnqueue, get_enqueue_job
+from app.jobs.queue import JobEnqueue, RenderEnqueue, get_enqueue_job, get_enqueue_render_job
+from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP
+from app.jobs.subtitle_review import (
+    SubtitleReviewDocument,
+    confirm_review_clip,
+    load_subtitle_review,
+    queue_review_render,
+    subtitle_review_output_path,
+    subtitle_review_summary_path,
+    update_review_segment,
+    write_subtitle_review,
+    write_subtitle_review_summary,
+)
 from app.models import ExportItem, Job, Video
 from app.models import utc_now
 from app.schemas import (
@@ -22,6 +35,8 @@ from app.schemas import (
     JobResultsResponse,
     JobStatusResponse,
     ResultExportItem,
+    SubtitleReviewFinalizeResponse,
+    SubtitleReviewSegmentUpdateRequest,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
 
@@ -29,7 +44,7 @@ from app.storage.paths import StoragePaths, get_storage_paths
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 TERMINAL_STATUSES = {"completed", "failed"}
-NON_WORKER_STATUSES = {"uploaded", "queued"}
+NON_WORKER_STATUSES = {"uploaded", "queued", "awaiting_subtitle_review"}
 DEFAULT_STALE_WORKER_SECONDS = 1800
 
 
@@ -38,6 +53,25 @@ def _get_job_or_404(db: Session, job_id: str) -> Job:
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
     return job
+
+
+def _get_subtitle_review_or_404(job_id: str, paths: StoragePaths) -> SubtitleReviewDocument:
+    review_path = subtitle_review_output_path(paths.job_outputs(job_id))
+    if not review_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subtitle review not found")
+    try:
+        return load_subtitle_review(review_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="subtitle review artifact is invalid",
+        ) from exc
+
+
+def _persist_subtitle_review(document: SubtitleReviewDocument, paths: StoragePaths) -> None:
+    output_dir = paths.job_outputs(document.job_id)
+    write_subtitle_review(document, subtitle_review_output_path(output_dir))
+    write_subtitle_review_summary(document, subtitle_review_summary_path(output_dir))
 
 
 def _selected_clips_by_candidate(output_dir: Path) -> dict[str, dict[str, Any]]:
@@ -274,6 +308,13 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
             if key in correction_progress:
                 details[key] = correction_progress[key]
 
+    subtitle_review = _read_json_if_exists(subtitle_review_output_path(output_dir))
+    if isinstance(subtitle_review, dict):
+        details["subtitleReviewState"] = subtitle_review.get("state")
+        details["subtitleReviewConfirmedClips"] = subtitle_review.get("confirmedClipCount", 0)
+        details["subtitleReviewTotalClips"] = subtitle_review.get("totalClipCount", 0)
+        details["subtitleReviewEditedSegments"] = subtitle_review.get("editedSegmentCount", 0)
+
     return details
 
 
@@ -354,6 +395,136 @@ def get_job_status(
         details=_job_details(job, paths),
         error=error,
     )
+
+
+@router.get("/{job_id}/source-video")
+def get_job_source_video(
+    job_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> FileResponse:
+    job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="video not found")
+    source_path = paths.resolve_stored_file(video.stored_path)
+    if not source_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source video not found")
+    media_type = mimetypes.guess_type(video.original_filename)[0] or "video/mp4"
+    return FileResponse(source_path, media_type=media_type)
+
+
+@router.get("/{job_id}/subtitle-review", response_model=SubtitleReviewDocument)
+def get_subtitle_review(
+    job_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> SubtitleReviewDocument:
+    _get_job_or_404(db, job_id)
+    return _get_subtitle_review_or_404(job_id, paths)
+
+
+@router.patch(
+    "/{job_id}/subtitle-review/segments/{segment_id}",
+    response_model=SubtitleReviewDocument,
+)
+def update_subtitle_review_segment(
+    job_id: str,
+    segment_id: str,
+    request: SubtitleReviewSegmentUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_subtitle_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not editable",
+        )
+    document = _get_subtitle_review_or_404(job_id, paths)
+    try:
+        document = update_review_segment(document, segment_id, request.text)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subtitle segment not found") from exc
+    _persist_subtitle_review(document, paths)
+    return document
+
+
+@router.post(
+    "/{job_id}/subtitle-review/clips/{clip_id}/confirm",
+    response_model=SubtitleReviewDocument,
+)
+def confirm_subtitle_review_clip(
+    job_id: str,
+    clip_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_subtitle_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not editable",
+        )
+    document = _get_subtitle_review_or_404(job_id, paths)
+    try:
+        document = confirm_review_clip(document, clip_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="clip not found") from exc
+    _persist_subtitle_review(document, paths)
+    return document
+
+
+@router.post(
+    "/{job_id}/subtitle-review/finalize",
+    response_model=SubtitleReviewFinalizeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def finalize_subtitle_review(
+    job_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_render: RenderEnqueue = Depends(get_enqueue_render_job),
+) -> SubtitleReviewFinalizeResponse:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_subtitle_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not awaiting finalization",
+        )
+    document = _get_subtitle_review_or_404(job_id, paths)
+    try:
+        document = queue_review_render(document)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    _persist_subtitle_review(document, paths)
+    job.status = "rendering_normal_clips"
+    job.progress = PROGRESS_MAP["rendering_normal_clips"]
+    job.current_step = CURRENT_STEP_MAP["rendering_normal_clips"]
+    job.updated_at = utc_now()
+    db.commit()
+    db.refresh(job)
+
+    try:
+        enqueue_render(job.id)
+    except Exception as exc:
+        document.state = "awaiting_review"
+        _persist_subtitle_review(document, paths)
+        job.status = "awaiting_subtitle_review"
+        job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
+        job.updated_at = utc_now()
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="could not queue subtitle rendering",
+        ) from exc
+
+    return SubtitleReviewFinalizeResponse(jobId=job.id, status=job.status)
 
 
 @router.get("/{job_id}/results", response_model=JobResultsResponse)

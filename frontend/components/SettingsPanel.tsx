@@ -28,6 +28,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   maxBoundaryExpansionSeconds: 3,
   allowBoundaryExpansionBeyondMaxDuration: false,
   burnSubtitles: true,
+  requireSubtitleReview: true,
   maxCharsPerLineShort: 16,
   maxCharsPerLineNormal: 28,
   maxLines: 2,
@@ -189,8 +190,52 @@ export function SettingsPanel({
               })
             }
           />
-          <span className="text-sm font-medium text-neutral-700">Burn subtitles</span>
+          <span className="text-sm font-medium text-neutral-700">字幕を動画へ焼き込む</span>
         </label>
+
+        <section className="border-y border-neutral-200 py-5 md:col-span-2">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="border-l-4 border-emerald-500 bg-emerald-50 px-4 py-3">
+              <p className="text-xs font-semibold text-emerald-800">1. 自動処理</p>
+              <p className="mt-1 text-sm font-medium text-neutral-900">文字起こし・clip選定</p>
+            </div>
+            <div className="border-l-4 border-sky-500 bg-sky-50 px-4 py-3">
+              <p className="text-xs font-semibold text-sky-800">2. 手動確認</p>
+              <p className="mt-1 text-sm font-medium text-neutral-900">clipごとに字幕を修正</p>
+            </div>
+            <div className="border-l-4 border-amber-500 bg-amber-50 px-4 py-3">
+              <p className="text-xs font-semibold text-amber-800">3. 書き出し</p>
+              <p className="mt-1 text-sm font-medium text-neutral-900">字幕焼き込み・ZIP生成</p>
+            </div>
+          </div>
+          <label className="mt-4 flex min-h-11 items-start gap-3 border border-neutral-300 bg-white px-4 py-3">
+            <input
+              checked={settings.requireSubtitleReview}
+              className="mt-0.5 h-4 w-4"
+              disabled={disabled || !settings.burnSubtitles}
+              type="checkbox"
+              onChange={(event) =>
+                onChange({
+                  ...settings,
+                  requireSubtitleReview: event.target.checked
+                })
+              }
+            />
+            <span>
+              <span className="block text-sm font-semibold text-neutral-900">
+                レンダリング前に字幕を確認する
+              </span>
+              <span className="mt-1 block text-xs text-neutral-600">
+                選定完了後に一時停止し、通常切り抜きとショートを1本ずつ確認します。
+              </span>
+            </span>
+          </label>
+          {!settings.burnSubtitles ? (
+            <p className="mt-2 text-xs text-amber-700">
+              字幕焼き込みがOFFのため、手動確認工程は実行されません。
+            </p>
+          ) : null}
+        </section>
 
         <label className="flex flex-col gap-2 md:col-span-2">
           <span className="text-sm font-medium text-neutral-700">Short overlay title</span>
