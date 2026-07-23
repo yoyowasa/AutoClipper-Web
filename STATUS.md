@@ -5122,3 +5122,50 @@ pip check: pass
 - 同一source segmentの修正は、それを使う通常・ショート全clipへ共通反映する。
 - 手動確認工程は`burnSubtitles=true`かつ`requireSubtitleReview=true`の場合だけ実行する。
 - branch `codex/task-73-subtitle-review-workflow`で実装・ローカル検証済み。main mergeは未実施。
+
+## 2026-07-23 Task 74 Source Han Sans JP Heavy font
+
+### 目的
+
+- 前案件で使用した`Source Han Sans JP Heavy`を字幕font選択へ追加する。
+- 開発PCだけでなく配布ZIPとDocker workerでも同じfontを利用可能にする。
+
+### 変更
+
+- `SourceHanSansJP-Heavy.otf` Version 2.005と公式SIL Open Font License 1.1を配布物へ同梱。
+- Upload UIへ`前案件・極太ゴシック（Source Han Sans JP Heavy）`を追加。
+- ブラウザの字幕style previewへ同梱Web fontを適用。
+- backend / workerへ同梱font fileをread-only mountし、そのdirectoryをFFmpeg/libassの`fontsdir`へ渡す。
+- `ASS_FONTS_DIR`未指定時は従来のASS filterを維持する。
+
+### 検証
+
+- font asset:
+  - family: `Source Han Sans JP Heavy`
+  - version: `2.005`
+  - SHA-256: `F875DE9C62ACE2082B90AB1DA940F3E8CEFFA933F500E49D205CB74E6E5D03BB`
+  - SIL Open Font License 1.1を同梱。
+- backend ruff: pass。
+- backend pytest: `347 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker CPU backend / GPU worker / frontend rebuild: pass。
+- worker:
+  - `ASS_FONTS_DIR=/app/fonts`
+  - font family / fullnameを`fc-scan`で確認。
+  - mounted fontは`SourceHanSansJP-Heavy.otf`のみ。
+- actual burn-in:
+  - libass `fontselect`が`SourceHanSansJP-Heavy`を選択。
+  - Japanese subtitle burn-in: pass。
+  - output: H.264 / `1080x1920` / `2.000s`。
+  - font fallback / license file load warning: `0`。
+- browser:
+  - font option表示・選択値更新: pass。
+  - preview computed font: `Source Han Sans JP Heavy`。
+  - bundled font HTTP: `200`。
+  - browser error: `0`。
+- `smoke_runtime.py --skip-video`: pass。backend / frontend / worker / redis running。
+
+### 未解決・制限
+
+- branch `codex/task-74-source-han-heavy-font`で実装・ローカル検証済み。main mergeは未実施。
+- Task74 branchはPR #53のheadを親にしている。PR #53 merge後にmainへretarget / rebaseする。

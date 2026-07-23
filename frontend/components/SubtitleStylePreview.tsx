@@ -26,6 +26,9 @@ const PREVIEW_DEFAULTS = {
 } as const;
 
 function previewFontFamily(fontName: string | undefined): string {
+  if (fontName === "Source Han Sans JP Heavy") {
+    return '"Source Han Sans JP Heavy", "Noto Sans CJK JP", "Yu Gothic", sans-serif';
+  }
   if (fontName === "Noto Serif CJK JP") {
     return '"Noto Serif CJK JP", "Yu Mincho", YuMincho, serif';
   }

@@ -2,6 +2,14 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: "Source Han Sans JP Heavy";
+  src: url("/fonts/SourceHanSansJP-Heavy.otf") format("opentype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 900;
+}
+
 :root {
   color-scheme: light;
 }

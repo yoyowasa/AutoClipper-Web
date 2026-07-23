@@ -67,6 +67,10 @@ export function settingsForRuntimeProfile(profile: string | null): ClipSettings 
 
 const SUBTITLE_FONT_OPTIONS = [
   { value: "", label: "標準ゴシック（Noto Sans CJK JP）" },
+  {
+    value: "Source Han Sans JP Heavy",
+    label: "前案件・極太ゴシック（Source Han Sans JP Heavy）"
+  },
   { value: "Noto Serif CJK JP", label: "明朝（Noto Serif CJK JP）" },
   { value: "Noto Sans Mono CJK JP", label: "等幅ゴシック（Noto Sans Mono CJK JP）" }
 ] as const;

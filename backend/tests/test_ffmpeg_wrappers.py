@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from app.audio.extract import build_extract_audio_command, extract_mono_wav
+from app.render.filters import ass_filter
 from app.render.render_normal import build_render_normal_command, render_normal_clip
 from app.render.render_short import (
     build_center_crop_filter,
@@ -118,6 +119,14 @@ def test_build_render_normal_command_with_subtitles_and_loudnorm() -> None:
         "+faststart",
         "normal.mp4",
     ]
+
+
+def test_ass_filter_uses_configured_fonts_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ASS_FONTS_DIR", "/app/fonts")
+
+    assert ass_filter("subtitles.ass") == "ass='subtitles.ass':fontsdir='/app/fonts'"
 
 
 def test_build_render_short_command_center_crop() -> None:
