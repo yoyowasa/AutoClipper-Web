@@ -211,6 +211,81 @@ def test_job_status_exposes_subtitle_correction_progress_artifact(client: TestCl
     assert payload["details"]["correctionRetryCount"] == 1
 
 
+def test_create_job_accepts_normal_only_and_short_only_requests(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    normal_only = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"normalClipCount": 2, "shortCount": 0},
+        },
+    )
+    short_only = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"normalClipCount": 0, "shortCount": 3},
+        },
+    )
+
+    assert normal_only.status_code == 201
+    assert short_only.status_code == 201
+
+
+def test_create_job_rejects_request_without_any_output_type(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"normalClipCount": 0, "shortCount": 0},
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_create_job_persists_type_specific_subtitle_styles(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "shortSubtitleFontName": "Source Han Sans JP Heavy",
+                "shortSubtitlePrimaryColor": "#FFF200",
+                "shortSubtitleOutlineColor": "#000000",
+                "normalSubtitleFontName": "Noto Serif CJK JP",
+                "normalSubtitlePrimaryColor": "#FFFFFF",
+                "normalSubtitleOutlineColor": "#102030",
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, response.json()["jobId"])
+        assert job is not None
+        assert job.settings_json["shortSubtitleFontName"] == "Source Han Sans JP Heavy"
+        assert job.settings_json["shortSubtitlePrimaryColor"] == "#FFF200"
+        assert job.settings_json["shortSubtitleOutlineColor"] == "#000000"
+        assert job.settings_json["normalSubtitleFontName"] == "Noto Serif CJK JP"
+        assert job.settings_json["normalSubtitlePrimaryColor"] == "#FFFFFF"
+        assert job.settings_json["normalSubtitleOutlineColor"] == "#102030"
+
+
 def test_create_job_persists_advanced_duration_settings(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",

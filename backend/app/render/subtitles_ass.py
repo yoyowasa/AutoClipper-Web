@@ -28,6 +28,8 @@ DEFAULT_SHORT_LOWER_MARGIN = 250
 DEFAULT_SHORT_TOP_MARGIN = 150
 DEFAULT_SUBTITLE_ALIGNMENT = 2
 DEFAULT_TITLE_ALIGNMENT = 8
+DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFFFFF"
+DEFAULT_SUBTITLE_OUTLINE_COLOR = "#000000"
 PUNCTUATION_BREAKS = "。、！？!?"
 PHRASE_BREAKS = "、，, "
 SOFT_JA_BOUNDARIES = "でにはをがともやへ"
@@ -43,6 +45,9 @@ class SubtitleRenderSettings:
     min_gap_between_subtitles: float = DEFAULT_MIN_GAP_BETWEEN_SUBTITLES
     subtitle_font_name: str = DEFAULT_ASS_FONT
     title_font_name: str = DEFAULT_ASS_FONT
+    subtitle_primary_color: str = DEFAULT_SUBTITLE_PRIMARY_COLOR
+    subtitle_outline_color: str = DEFAULT_SUBTITLE_OUTLINE_COLOR
+    short_font_name: str | None = None
     short_font_size: int | None = None
     short_title_font_size: int | None = None
     short_outline: int | None = None
@@ -52,6 +57,9 @@ class SubtitleRenderSettings:
     short_top_margin: int | None = None
     short_subtitle_alignment: int | None = None
     short_title_alignment: int | None = None
+    short_primary_color: str | None = None
+    short_outline_color: str | None = None
+    normal_font_name: str | None = None
     normal_font_size: int | None = None
     normal_title_font_size: int | None = None
     normal_outline: int | None = None
@@ -61,6 +69,8 @@ class SubtitleRenderSettings:
     normal_top_margin: int | None = None
     normal_subtitle_alignment: int | None = None
     normal_title_alignment: int | None = None
+    normal_primary_color: str | None = None
+    normal_outline_color: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +95,8 @@ class SubtitleLayout:
     top_margin: int
     subtitle_alignment: int
     title_alignment: int
+    primary_color: str
+    outline_color: str
     max_chars_per_line: int
     max_lines: int
     min_subtitle_duration: float
@@ -97,17 +109,31 @@ class SubtitleLayout:
         return cls(
             width=SHORT_WIDTH,
             height=SHORT_HEIGHT,
-            font_name=parsed_settings.subtitle_font_name,
+            font_name=parsed_settings.short_font_name or parsed_settings.subtitle_font_name,
             title_font_name=parsed_settings.title_font_name,
             font_size=parsed_settings.short_font_size or DEFAULT_SHORT_SUBTITLE_FONT_SIZE,
             title_font_size=parsed_settings.short_title_font_size or DEFAULT_SHORT_TITLE_FONT_SIZE,
             outline=parsed_settings.short_outline if parsed_settings.short_outline is not None else DEFAULT_SHORT_SUBTITLE_OUTLINE,
             shadow=parsed_settings.short_shadow if parsed_settings.short_shadow is not None else DEFAULT_SHORT_SUBTITLE_SHADOW,
-            margin_x=parsed_settings.short_margin_x or DEFAULT_SHORT_MARGIN_X,
-            lower_margin=parsed_settings.short_lower_margin or DEFAULT_SHORT_LOWER_MARGIN,
-            top_margin=parsed_settings.short_top_margin or DEFAULT_SHORT_TOP_MARGIN,
+            margin_x=(
+                parsed_settings.short_margin_x
+                if parsed_settings.short_margin_x is not None
+                else DEFAULT_SHORT_MARGIN_X
+            ),
+            lower_margin=(
+                parsed_settings.short_lower_margin
+                if parsed_settings.short_lower_margin is not None
+                else DEFAULT_SHORT_LOWER_MARGIN
+            ),
+            top_margin=(
+                parsed_settings.short_top_margin
+                if parsed_settings.short_top_margin is not None
+                else DEFAULT_SHORT_TOP_MARGIN
+            ),
             subtitle_alignment=parsed_settings.short_subtitle_alignment or DEFAULT_SUBTITLE_ALIGNMENT,
             title_alignment=parsed_settings.short_title_alignment or DEFAULT_TITLE_ALIGNMENT,
+            primary_color=parsed_settings.short_primary_color or parsed_settings.subtitle_primary_color,
+            outline_color=parsed_settings.short_outline_color or parsed_settings.subtitle_outline_color,
             max_chars_per_line=parsed_settings.max_chars_per_line_short,
             max_lines=parsed_settings.max_lines,
             min_subtitle_duration=parsed_settings.min_subtitle_duration,
@@ -129,17 +155,31 @@ class SubtitleLayout:
         return cls(
             width=safe_width,
             height=safe_height,
-            font_name=parsed_settings.subtitle_font_name,
+            font_name=parsed_settings.normal_font_name or parsed_settings.subtitle_font_name,
             title_font_name=parsed_settings.title_font_name,
             font_size=font_size,
             title_font_size=parsed_settings.normal_title_font_size or max(font_size + 6, round(safe_height * 0.07)),
             outline=parsed_settings.normal_outline if parsed_settings.normal_outline is not None else max(3, round(safe_height * 0.004)),
             shadow=parsed_settings.normal_shadow if parsed_settings.normal_shadow is not None else max(1, round(safe_height * 0.002)),
-            margin_x=parsed_settings.normal_margin_x or round(safe_width * 0.08),
-            lower_margin=parsed_settings.normal_lower_margin or round(safe_height * 0.08),
-            top_margin=parsed_settings.normal_top_margin or round(safe_height * 0.08),
+            margin_x=(
+                parsed_settings.normal_margin_x
+                if parsed_settings.normal_margin_x is not None
+                else round(safe_width * 0.08)
+            ),
+            lower_margin=(
+                parsed_settings.normal_lower_margin
+                if parsed_settings.normal_lower_margin is not None
+                else round(safe_height * 0.08)
+            ),
+            top_margin=(
+                parsed_settings.normal_top_margin
+                if parsed_settings.normal_top_margin is not None
+                else round(safe_height * 0.08)
+            ),
             subtitle_alignment=parsed_settings.normal_subtitle_alignment or DEFAULT_SUBTITLE_ALIGNMENT,
             title_alignment=parsed_settings.normal_title_alignment or DEFAULT_TITLE_ALIGNMENT,
+            primary_color=parsed_settings.normal_primary_color or parsed_settings.subtitle_primary_color,
+            outline_color=parsed_settings.normal_outline_color or parsed_settings.subtitle_outline_color,
             max_chars_per_line=parsed_settings.max_chars_per_line_normal,
             max_lines=parsed_settings.max_lines,
             min_subtitle_duration=parsed_settings.min_subtitle_duration,
@@ -183,6 +223,41 @@ def _coerce_str(value: Any, default: str) -> str:
     return parsed or default
 
 
+def _coerce_optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    parsed = str(value).strip()
+    return parsed or None
+
+
+def _coerce_hex_color(value: Any, default: str) -> str:
+    parsed = _coerce_optional_str(value)
+    if parsed is None:
+        return default
+    normalized = parsed.upper()
+    if len(normalized) != 7 or not normalized.startswith("#"):
+        return default
+    try:
+        int(normalized[1:], 16)
+    except ValueError:
+        return default
+    return normalized
+
+
+def _coerce_optional_hex_color(value: Any) -> str | None:
+    parsed = _coerce_optional_str(value)
+    if parsed is None:
+        return None
+    normalized = parsed.upper()
+    if len(normalized) != 7 or not normalized.startswith("#"):
+        return None
+    try:
+        int(normalized[1:], 16)
+    except ValueError:
+        return None
+    return normalized
+
+
 def _first_value(mapping: dict[str, Any], *keys: str) -> Any:
     for key in keys:
         value = mapping.get(key)
@@ -218,6 +293,9 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
         "subtitleAlignment": "subtitle_alignment",
         "titleAlignment": "title_alignment",
         "subtitleTitleAlignment": "title_alignment",
+        "subtitlePrimaryColor": "subtitle_primary_color",
+        "subtitleOutlineColor": "subtitle_outline_color",
+        "shortSubtitleFontName": "short_font_name",
         "shortSubtitleFontSize": "short_font_size",
         "shortTitleFontSize": "short_title_font_size",
         "shortSubtitleOutline": "short_outline",
@@ -227,6 +305,9 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
         "shortTitleTopMargin": "short_top_margin",
         "shortSubtitleAlignment": "short_subtitle_alignment",
         "shortTitleAlignment": "short_title_alignment",
+        "shortSubtitlePrimaryColor": "short_primary_color",
+        "shortSubtitleOutlineColor": "short_outline_color",
+        "normalSubtitleFontName": "normal_font_name",
         "normalSubtitleFontSize": "normal_font_size",
         "normalTitleFontSize": "normal_title_font_size",
         "normalSubtitleOutline": "normal_outline",
@@ -236,6 +317,8 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
         "normalTitleTopMargin": "normal_top_margin",
         "normalSubtitleAlignment": "normal_subtitle_alignment",
         "normalTitleAlignment": "normal_title_alignment",
+        "normalSubtitlePrimaryColor": "normal_primary_color",
+        "normalSubtitleOutlineColor": "normal_outline_color",
     }
     normalized = {aliases.get(key, key): value for key, value in settings.items()}
     min_duration = _coerce_float(
@@ -279,6 +362,15 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
         ),
         subtitle_font_name=_coerce_str(normalized.get("subtitle_font_name"), DEFAULT_ASS_FONT),
         title_font_name=_coerce_str(normalized.get("title_font_name"), DEFAULT_ASS_FONT),
+        subtitle_primary_color=_coerce_hex_color(
+            normalized.get("subtitle_primary_color"),
+            DEFAULT_SUBTITLE_PRIMARY_COLOR,
+        ),
+        subtitle_outline_color=_coerce_hex_color(
+            normalized.get("subtitle_outline_color"),
+            DEFAULT_SUBTITLE_OUTLINE_COLOR,
+        ),
+        short_font_name=_coerce_optional_str(normalized.get("short_font_name")),
         short_font_size=_coerce_optional_int(
             _first_value(normalized, "short_font_size", "subtitle_font_size"),
             minimum=20,
@@ -324,6 +416,9 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
             minimum=1,
             maximum=9,
         ),
+        short_primary_color=_coerce_optional_hex_color(normalized.get("short_primary_color")),
+        short_outline_color=_coerce_optional_hex_color(normalized.get("short_outline_color")),
+        normal_font_name=_coerce_optional_str(normalized.get("normal_font_name")),
         normal_font_size=_coerce_optional_int(
             _first_value(normalized, "normal_font_size", "subtitle_font_size"),
             minimum=12,
@@ -369,6 +464,8 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
             minimum=1,
             maximum=9,
         ),
+        normal_primary_color=_coerce_optional_hex_color(normalized.get("normal_primary_color")),
+        normal_outline_color=_coerce_optional_hex_color(normalized.get("normal_outline_color")),
     )
 
 
@@ -602,6 +699,14 @@ def subtitle_events_for_candidate(
     )
 
 
+def _ass_color(color: str, default: str) -> str:
+    normalized = _coerce_hex_color(color, default)
+    red = normalized[1:3]
+    green = normalized[3:5]
+    blue = normalized[5:7]
+    return f"&H00{blue}{green}{red}"
+
+
 def _style_line(
     name: str,
     font_name: str,
@@ -609,9 +714,15 @@ def _style_line(
     layout: SubtitleLayout,
     alignment: int,
     margin_v: int,
+    *,
+    primary_color: str = DEFAULT_SUBTITLE_PRIMARY_COLOR,
+    outline_color: str = DEFAULT_SUBTITLE_OUTLINE_COLOR,
 ) -> str:
+    ass_primary_color = _ass_color(primary_color, DEFAULT_SUBTITLE_PRIMARY_COLOR)
+    ass_outline_color = _ass_color(outline_color, DEFAULT_SUBTITLE_OUTLINE_COLOR)
     return (
-        f"Style: {name},{font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,"
+        f"Style: {name},{font_name},{font_size},{ass_primary_color},&H000000FF,"
+        f"{ass_outline_color},&H80000000,"
         f"1,0,0,0,100,100,0,0,1,{layout.outline},{layout.shadow},{alignment},"
         f"{layout.margin_x},{layout.margin_x},{margin_v},1"
     )
@@ -652,6 +763,8 @@ def build_ass_document(
             active_layout,
             alignment=active_layout.subtitle_alignment,
             margin_v=active_layout.lower_margin,
+            primary_color=active_layout.primary_color,
+            outline_color=active_layout.outline_color,
         ),
         _style_line(
             "Title",
