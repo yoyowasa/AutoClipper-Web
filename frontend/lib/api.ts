@@ -30,6 +30,16 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+function apiErrorMessage(payload: unknown, fallback: string): string {
+  const parsed = payload as {
+    detail?: string | { code?: string; message?: string };
+  } | null;
+  if (typeof parsed?.detail === "string") {
+    return parsed.detail;
+  }
+  return parsed?.detail?.message ?? fallback;
+}
+
 export function toApiUrl(pathOrUrl: string): string {
   if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
     return pathOrUrl;
@@ -37,16 +47,42 @@ export function toApiUrl(pathOrUrl: string): string {
   return `${API_BASE_URL}${pathOrUrl}`;
 }
 
-export async function uploadVideo(file: File): Promise<VideoUploadResponse> {
-  const body = new FormData();
-  body.append("file", file);
+export function uploadVideo(
+  file: File,
+  onProgress?: (percentage: number) => void
+): Promise<VideoUploadResponse> {
+  return new Promise((resolve, reject) => {
+    const body = new FormData();
+    body.append("file", file);
 
-  const response = await fetch(`${API_BASE_URL}/api/videos/upload`, {
-    method: "POST",
-    body
+    const request = new XMLHttpRequest();
+    request.open("POST", `${API_BASE_URL}/api/videos/upload`);
+    request.responseType = "json";
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        onProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      }
+    });
+    request.addEventListener("load", () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress?.(100);
+        resolve(request.response as VideoUploadResponse);
+        return;
+      }
+      reject(
+        new Error(
+          apiErrorMessage(
+            request.response,
+            `${request.status} ${request.statusText || "Upload failed"}`
+          )
+        )
+      );
+    });
+    request.addEventListener("error", () => {
+      reject(new Error("Upload failed because the server could not be reached"));
+    });
+    request.send(body);
   });
-
-  return parseJsonResponse<VideoUploadResponse>(response);
 }
 
 export async function createJob(

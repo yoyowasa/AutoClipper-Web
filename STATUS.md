@@ -5021,3 +5021,38 @@ pip check: pass
 ### 未解決
 
 - 実際の512 MiB超ファイルのブラウザアップロードは未確認。対象動画で再試行して確認する。
+
+## 2026-07-23 Task 72 upload feedback and subtitle preview
+
+### 目的
+
+- 動画アップロード中・完了後の状態を明確に表示する。
+- 字幕スタイルの変更結果をレンダリング前に確認できるようにする。
+
+### 変更
+
+- upload API呼び出しを進捗取得可能なXMLHttpRequestへ変更。
+- Upload画面へ実percent、progress bar、アップロード完了、ジョブ準備中の状態表示を追加。
+- Job画面へアップロード完了通知を追加。
+- 選択動画のファイルサイズ表示を追加。
+- 字幕スタイルを常時表示し、ショート9:16 / 通常16:9のライブプレビューを追加。
+- フォント、文字サイズ、縁取り、下余白、表示位置をプレビューへ即時反映。
+- 字幕スタイルの既定値リセットを追加。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- backend ruff: pass。
+- backend pytest: `341 passed, 1 skipped`。
+- Docker frontend rebuild: pass。
+- Playwright + 実Chrome確認:
+  - upload中表示: pass。
+  - upload完了表示: pass。
+  - Job画面の完了通知: pass。
+  - 字幕設定変更の即時反映: pass。
+  - desktop `1440x1000`: pass。
+  - mobile `390x844`: 横スクロールなし。
+
+### 未解決
+
+- 実際の長尺ファイルでのupload percent推移は未確認。対象動画の次回uploadで確認する。

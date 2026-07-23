@@ -2,6 +2,15 @@
 
 import { useRef, useState } from "react";
 
+function formatFileSize(size: number): string {
+  const gibibyte = 1024 ** 3;
+  const mebibyte = 1024 ** 2;
+  if (size >= gibibyte) {
+    return `${(size / gibibyte).toFixed(2)} GiB`;
+  }
+  return `${(size / mebibyte).toFixed(1)} MiB`;
+}
+
 type UploadDropzoneProps = {
   file: File | null;
   disabled?: boolean;
@@ -57,6 +66,9 @@ export function UploadDropzone({
           <p className="text-sm text-neutral-600">
             {file ? file.name : "No file selected"}
           </p>
+          {file ? (
+            <p className="text-xs font-medium text-neutral-500">{formatFileSize(file.size)}</p>
+          ) : null}
         </div>
         <button
           type="button"
