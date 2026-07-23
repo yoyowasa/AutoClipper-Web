@@ -9,12 +9,14 @@ services:
       REDIS_URL: redis://redis:6379/0
       RQ_QUEUE_NAME: autoclipper
       STORAGE_ROOT: /app/storage
+      ASS_FONTS_DIR: /app/fonts
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-8589934592}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
     ports:
       - "8000:8000"
     volumes:
       - ./storage:/app/storage
+      - ./frontend/public/fonts/SourceHanSansJP-Heavy.otf:/app/fonts/SourceHanSansJP-Heavy.otf:ro
     depends_on:
       - redis
     healthcheck:
@@ -33,11 +35,13 @@ services:
       REDIS_URL: redis://redis:6379/0
       RQ_QUEUE_NAME: autoclipper
       STORAGE_ROOT: /app/storage
+      ASS_FONTS_DIR: /app/fonts
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-8589934592}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       AUTOCLIPPER_RUNTIME_PROFILE: cpu
     volumes:
       - ./storage:/app/storage
+      - ./frontend/public/fonts/SourceHanSansJP-Heavy.otf:/app/fonts/SourceHanSansJP-Heavy.otf:ro
     depends_on:
       - redis
 
