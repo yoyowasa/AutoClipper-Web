@@ -5133,7 +5133,7 @@ pip check: pass
 ### 変更
 
 - `SourceHanSansJP-Heavy.otf` Version 2.005と公式SIL Open Font License 1.1を配布物へ同梱。
-- Upload UIへ`前案件・極太ゴシック（Source Han Sans JP Heavy）`を追加。
+- Upload UIへ`極太ゴシック（Source Han Sans JP Heavy）`を追加。
 - ブラウザの字幕style previewへ同梱Web fontを適用。
 - backend / workerへ同梱font fileをread-only mountし、そのdirectoryをFFmpeg/libassの`fontsdir`へ渡す。
 - `ASS_FONTS_DIR`未指定時は従来のASS filterを維持する。
