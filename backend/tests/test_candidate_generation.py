@@ -192,6 +192,33 @@ def test_candidate_limit_is_spread_across_timeline() -> None:
     assert min(candidate.start for candidate in candidates) == 0.0
 
 
+def test_bounded_normal_generation_prefers_focused_duration_over_range_midpoint() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=float(start), end=float(start + 20), text=f"topic {start}")
+        for start in range(0, 600, 30)
+    ]
+    silence_segments = [
+        SilenceSegment(start=float(start + 20), end=float(start + 30), duration=10.0)
+        for start in range(0, 570, 30)
+    ]
+
+    candidates = generate_normal_candidates(
+        transcript_segments=transcript_segments,
+        scene_segments=[SceneSegment(start=0.0, end=600.0)],
+        silence_segments=silence_segments,
+        settings={
+            "normalMinDuration": 90,
+            "normalMaxDuration": 600,
+            "maxCandidates": 20,
+            "maxCandidatesPerTimeBucket": 20,
+            "candidateTimeBucketSeconds": 600,
+        },
+    )
+
+    assert candidates
+    assert max(candidate.duration for candidate in candidates) < 300
+
+
 def test_bounded_generation_handles_2000_segments_without_unbounded_output() -> None:
     transcript_segments = [
         TranscriptSegment(start=float(index * 2), end=float(index * 2 + 1), text=f"segment {index}")
@@ -263,6 +290,8 @@ def test_bounded_generation_respects_raw_candidate_cap() -> None:
     assert result.summary["stopped_due_to_raw_candidate_cap"] is False
     assert result.summary["candidates_dropped_due_to_cap"] >= 1
     assert len(result.candidates) <= 100
+    assert any(400 <= candidate.start < 600 for candidate in result.candidates)
+    assert any(candidate.start >= 800 for candidate in result.candidates)
 
 
 def test_bounded_generation_memory_guard_raises_clear_error() -> None:

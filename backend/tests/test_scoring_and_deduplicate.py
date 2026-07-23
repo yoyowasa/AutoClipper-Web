@@ -12,6 +12,7 @@ from app.scoring.rule_score import (
     score_candidate,
     score_candidates,
 )
+from app.scoring.clip_preferences import CandidateClipPreference
 
 
 def make_candidate(
@@ -112,6 +113,58 @@ def test_rule_score_uses_candidate_local_silence_ratio() -> None:
 
     assert breakdown.silence_score == 0.0
     assert breakdown.speech_density_score == 6.0
+
+
+def test_rule_score_detects_japanese_hooks_and_guidance() -> None:
+    candidate = make_candidate(
+        "cand_japanese",
+        0.0,
+        120.0,
+        "実は一週間休んだ理由とホロライブ運動会を欠席した経緯を説明します",
+        candidate_type="normal",
+    )
+    preference = CandidateClipPreference(
+        preset="important",
+        guidance="ホロライブ運動会を欠席した理由",
+    )
+
+    breakdown = score_candidate(candidate, selection_preference=preference)
+
+    assert breakdown.hook_score > 0
+    assert breakdown.guidance_score > 0
+    assert breakdown.transcript_length_score > 0
+
+
+def test_rule_score_penalizes_generic_outro_when_requested() -> None:
+    outro = make_candidate(
+        "cand_outro",
+        0.0,
+        90.0,
+        "動画アップされたらぜひご覧ください。本日の配信はこの辺で終わりにしようと思います。"
+        "ご視聴ありがとうございました。次の動画でお会いしましょう。バイバイ。",
+        candidate_type="normal",
+    )
+    focused = make_candidate(
+        "cand_focused",
+        100.0,
+        190.0,
+        "実は配信を休んだ理由があります。運動会の直前に倒れてしまった経緯を説明します。",
+        candidate_type="normal",
+    )
+    preference = CandidateClipPreference(
+        preset="important",
+        exclude_intro_outro=True,
+        exclude_promotional_content=True,
+    )
+
+    outro_score = score_candidate(outro, selection_preference=preference)
+    focused_score = score_candidate(focused, selection_preference=preference)
+    scored_outro = apply_rule_score(outro, selection_preference=preference)
+
+    assert outro_score.generic_content_penalty == 25.0
+    assert focused_score.final_score > outro_score.final_score
+    assert "generic_intro_outro" in scored_outro.risk_flags
+    assert "promotional_content" in scored_outro.risk_flags
 
 
 def test_incomplete_boundary_penalty_detects_fragments() -> None:

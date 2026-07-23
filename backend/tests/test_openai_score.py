@@ -17,6 +17,7 @@ from app.scoring.openai_score import (
     score_candidate_batch,
     score_candidate_with_openai,
 )
+from app.scoring.clip_preferences import CandidateClipPreference
 from app.scoring.score_schema import (
     ClipCandidateScore,
     clip_candidate_score_json_schema,
@@ -138,6 +139,41 @@ def test_build_score_input_payload_sends_transcript_and_features_only() -> None:
     assert "video_path" not in encoded
     assert "stored_path" not in encoded
     assert "mp4" not in encoded.lower()
+
+
+def test_score_payload_includes_type_specific_selection_preference() -> None:
+    preference = CandidateClipPreference(
+        preset="important",
+        guidance="休んだ理由と復帰後の予定",
+        exclude_intro_outro=True,
+        exclude_promotional_content=True,
+    )
+    payload = build_score_input_payload(
+        make_candidate(),
+        selection_preference=preference,
+    )
+
+    assert payload["selection_preference"] == {
+        "preset": "important",
+        "guidance": "休んだ理由と復帰後の予定",
+        "exclude_intro_outro": True,
+        "exclude_promotional_content": True,
+    }
+
+
+def test_score_cache_key_changes_with_selection_preference() -> None:
+    candidate = make_candidate()
+
+    automatic = candidate_score_cache_key(candidate)
+    guided = candidate_score_cache_key(
+        candidate,
+        selection_preference=CandidateClipPreference(
+            preset="funny",
+            guidance="笑えるリアクション",
+        ),
+    )
+
+    assert automatic != guided
 
 
 def test_mocked_openai_score_updates_candidate() -> None:

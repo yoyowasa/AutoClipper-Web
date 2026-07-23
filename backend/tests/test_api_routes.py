@@ -303,6 +303,12 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "normalMaxDuration": 60,
                 "shortMinDuration": 15,
                 "shortMaxDuration": 45,
+                "normalClipSelectionPreset": "important",
+                "shortClipSelectionPreset": "funny",
+                "normalClipGuidance": "復帰理由と今後の予定",
+                "shortClipGuidance": "笑えるリアクション",
+                "excludeIntroOutro": True,
+                "excludePromotionalContent": True,
                 "maxCandidates": 300,
                 "maxRawCandidatesPerType": 5000,
                 "maxKeptCandidatesPerType": 300,
@@ -348,6 +354,12 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["normalMaxDuration"] == 60.0
         assert job.settings_json["shortMinDuration"] == 15.0
         assert job.settings_json["shortMaxDuration"] == 45.0
+        assert job.settings_json["normalClipSelectionPreset"] == "important"
+        assert job.settings_json["shortClipSelectionPreset"] == "funny"
+        assert job.settings_json["normalClipGuidance"] == "復帰理由と今後の予定"
+        assert job.settings_json["shortClipGuidance"] == "笑えるリアクション"
+        assert job.settings_json["excludeIntroOutro"] is True
+        assert job.settings_json["excludePromotionalContent"] is True
         assert job.settings_json["maxCandidates"] == 300
         assert job.settings_json["maxRawCandidatesPerType"] == 5000
         assert job.settings_json["maxKeptCandidatesPerType"] == 300
@@ -430,11 +442,19 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["normalMaxDuration"]["default"] == 600.0
     assert properties["shortMinDuration"]["default"] == 20.0
     assert properties["shortMaxDuration"]["default"] == 75.0
+    assert properties["normalClipSelectionPreset"]["default"] == "auto"
+    assert properties["shortClipSelectionPreset"]["default"] == "auto"
+    assert properties["normalClipGuidance"]["default"] == ""
+    assert properties["shortClipGuidance"]["default"] == ""
+    assert properties["excludeIntroOutro"]["default"] is True
+    assert properties["excludePromotionalContent"]["default"] is False
     assert properties["maxCandidates"]["default"] == 1200
     assert properties["maxRawCandidatesPerType"]["default"] == 250000
     assert properties["maxKeptCandidatesPerType"]["default"] == 1200
     assert properties["maxCandidatesPerTimeBucket"]["default"] == 100
     assert properties["candidateTimeBucketSeconds"]["default"] == 300.0
+    assert properties["maxCandidatesPerStartBucket"]["default"] == 5
+    assert properties["candidateStartBucketSeconds"]["default"] == 15.0
     assert properties["maxCandidateGenerationMemoryMb"]["default"] == 12000
     assert properties["candidateChunkSeconds"]["default"] == 600.0
     assert properties["candidateChunkOverlapSeconds"]["default"] == 75.0

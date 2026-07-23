@@ -771,6 +771,12 @@ For API requests, set the unused count to `0`; at least one of
 `normalClipCount` or `shortCount` must remain greater than `0`. Subtitle font,
 size, outline, colors, position, and edge margin can be configured independently
 for normal clips and shorts. Color values use `#RRGGBB`.
+Clip selection can also be configured independently for normal clips and shorts:
+choose a preset (`auto`, `highlights`, `funny`, `important`, `emotional`, or
+`informative`) and optionally provide free-text guidance. Local scoring matches
+transcript terms and deterministic content signals. Enable OpenAI scoring only
+when semantic interpretation of abstract guidance is required; it remains off by
+default and the Upload UI limits the initial pool to 8 candidates.
 
 ```json
 {
@@ -787,9 +793,17 @@ for normal clips and shorts. Color values use `#RRGGBB`.
     "maxKeptCandidatesPerType": 1200,
     "maxCandidatesPerTimeBucket": 100,
     "candidateTimeBucketSeconds": 300,
+    "maxCandidatesPerStartBucket": 5,
+    "candidateStartBucketSeconds": 15,
     "candidateChunkSeconds": 600,
     "candidateChunkOverlapSeconds": 75,
     "maxCandidateGenerationMemoryMb": 12000,
+    "normalClipSelectionPreset": "important",
+    "shortClipSelectionPreset": "funny",
+    "normalClipGuidance": "休んだ理由と復帰後の予定を優先",
+    "shortClipGuidance": "驚きや笑いが一言で伝わる場面",
+    "excludeIntroOutro": true,
+    "excludePromotionalContent": false,
     "selectionPolicy": "fill_requested",
     "crossTypeOverlapDedupe": false,
     "useOpenAIScoring": false,
@@ -854,9 +868,17 @@ Production-safe defaults remain:
 - `maxKeptCandidatesPerType`: `1200`
 - `maxCandidatesPerTimeBucket`: `100`
 - `candidateTimeBucketSeconds`: `300`
+- `maxCandidatesPerStartBucket`: `5`
+- `candidateStartBucketSeconds`: `15`
 - `candidateChunkSeconds`: `600`
 - `candidateChunkOverlapSeconds`: `75`
 - `maxCandidateGenerationMemoryMb`: `12000`
+- `normalClipSelectionPreset`: `auto`
+- `shortClipSelectionPreset`: `auto`
+- `normalClipGuidance`: empty
+- `shortClipGuidance`: empty
+- `excludeIntroOutro`: `true`
+- `excludePromotionalContent`: `false`
 - `selectionPolicy`: `fill_requested`
 - `crossTypeOverlapDedupe`: `false`
 - `useOpenAIScoring`: `false`
@@ -1031,7 +1053,7 @@ Subtitle readability behavior:
 - Task 35 subtitle-only 58-minute smoke regenerated ASS files without re-rendering MP4 and reduced subtitle density warnings to normal `1`, short `0`.
 - Backend and worker containers install `fonts-noto-cjk`; generated ASS files use `Noto Sans CJK JP` so Japanese subtitles do not render as missing-glyph boxes.
 - Upload settings expose Japanese-capable fonts verified for rendering: `Noto Sans CJK JP`, `Source Han Sans JP Heavy`, `Noto Serif CJK JP`, and `Noto Sans Mono CJK JP`.
-- `Source Han Sans JP Heavy` is bundled under the SIL Open Font License 1.1 and is available as the `前案件・極太ゴシック` option. Docker mounts the bundled font read-only into the worker and passes its directory to FFmpeg/libass.
+- `Source Han Sans JP Heavy` is bundled under the SIL Open Font License 1.1 and is available as the `極太ゴシック` option. Docker mounts the bundled font read-only into the worker and passes its directory to FFmpeg/libass.
 
 Short composition fallback behavior:
 

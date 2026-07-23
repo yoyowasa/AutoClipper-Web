@@ -18,6 +18,14 @@ export type JobStatus =
 
 export type ExportType = "normal" | "short";
 
+export type ClipSelectionPreset =
+  | "auto"
+  | "highlights"
+  | "funny"
+  | "important"
+  | "emotional"
+  | "informative";
+
 export type ClipSettings = {
   mode: "fast" | "high_quality";
   profile: "auto" | "talk" | "gameplay" | "lecture";
@@ -27,8 +35,18 @@ export type ClipSettings = {
   normalMaxDuration: number;
   shortMinDuration: number;
   shortMaxDuration: number;
+  normalClipSelectionPreset: ClipSelectionPreset;
+  shortClipSelectionPreset: ClipSelectionPreset;
+  normalClipGuidance: string;
+  shortClipGuidance: string;
+  excludeIntroOutro: boolean;
+  excludePromotionalContent: boolean;
   selectionPolicy: "fill_requested" | "strict_quality";
   crossTypeOverlapDedupe: boolean;
+  useOpenAIScoring: boolean;
+  openaiCandidateLimit: number;
+  openaiModel: string;
+  openaiFallbackToRuleScore: boolean;
   ensureSelectedOpenAIScored?: boolean;
   openaiFinalistScoringLimit?: number;
   enableBoundaryRefinement: boolean;

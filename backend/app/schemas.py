@@ -28,6 +28,14 @@ ClipMode = Literal["low_cost", "fast", "high_quality"]
 ClipProfile = Literal["auto", "talk", "gameplay", "lecture"]
 ShortLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
 SelectionPolicy = Literal["fill_requested", "strict_quality"]
+ClipSelectionPreset = Literal[
+    "auto",
+    "highlights",
+    "funny",
+    "important",
+    "emotional",
+    "informative",
+]
 ShortOverlayTitleMode = Literal["auto", "always", "high_quality_only", "never"]
 WhisperModelSize = Literal["base", "small", "medium", "large-v3", "turbo"]
 TranscriptionLanguage = Literal["auto", "ja"]
@@ -75,11 +83,25 @@ class JobSettings(BaseModel):
     normal_max_duration: float = Field(default=600.0, gt=0, alias="normalMaxDuration")
     short_min_duration: float = Field(default=20.0, gt=0, alias="shortMinDuration")
     short_max_duration: float = Field(default=75.0, gt=0, alias="shortMaxDuration")
+    normal_clip_selection_preset: ClipSelectionPreset = Field(
+        default="auto",
+        alias="normalClipSelectionPreset",
+    )
+    short_clip_selection_preset: ClipSelectionPreset = Field(
+        default="auto",
+        alias="shortClipSelectionPreset",
+    )
+    normal_clip_guidance: str = Field(default="", max_length=1000, alias="normalClipGuidance")
+    short_clip_guidance: str = Field(default="", max_length=1000, alias="shortClipGuidance")
+    exclude_intro_outro: bool = Field(default=True, alias="excludeIntroOutro")
+    exclude_promotional_content: bool = Field(default=False, alias="excludePromotionalContent")
     max_candidates: int = Field(default=1200, gt=0, alias="maxCandidates")
     max_raw_candidates_per_type: int = Field(default=250_000, gt=0, alias="maxRawCandidatesPerType")
     max_kept_candidates_per_type: int = Field(default=1200, gt=0, alias="maxKeptCandidatesPerType")
     max_candidates_per_time_bucket: int = Field(default=100, gt=0, alias="maxCandidatesPerTimeBucket")
     candidate_time_bucket_seconds: float = Field(default=300.0, gt=0, alias="candidateTimeBucketSeconds")
+    max_candidates_per_start_bucket: int = Field(default=5, gt=0, alias="maxCandidatesPerStartBucket")
+    candidate_start_bucket_seconds: float = Field(default=15.0, gt=0, alias="candidateStartBucketSeconds")
     max_candidate_generation_memory_mb: int = Field(default=12_000, gt=0, alias="maxCandidateGenerationMemoryMb")
     candidate_chunk_seconds: float = Field(default=600.0, gt=0, alias="candidateChunkSeconds")
     candidate_chunk_overlap_seconds: float = Field(default=75.0, ge=0, alias="candidateChunkOverlapSeconds")

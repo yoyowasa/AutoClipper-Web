@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, TitleSource
+from app.scoring.clip_preferences import is_generic_intro_outro_text
 
 
 TITLE_MAX_CHARS = 34
@@ -85,6 +86,24 @@ def _candidate_transcript_text(
     return _plain_text(_segments_text_for_candidate(candidate, transcript_segments))
 
 
+def _meaningful_segment_title(
+    candidate: Candidate,
+    transcript_segments: Sequence[TranscriptSegment] | None,
+) -> str | None:
+    if not transcript_segments:
+        return None
+    for segment in transcript_segments:
+        if segment.end <= candidate.start or segment.start >= candidate.end:
+            continue
+        clean = _plain_text(segment.text)
+        if not clean or is_generic_intro_outro_text(clean):
+            continue
+        title = title_from_transcript(clean)
+        if title:
+            return title
+    return None
+
+
 def title_from_transcript(text: str, *, max_chars: int = TITLE_MAX_CHARS) -> str | None:
     clean = _strip_filler_prefixes(_plain_text(text))
     if not _usable_title(clean):
@@ -119,7 +138,11 @@ def resolve_candidate_title(
         overlay_title = _plain_text(candidate.overlay_title) or (existing_title if candidate.type == "short" else None)
         return TitleResolution(title=existing_title, overlay_title=overlay_title, title_source=source)
 
-    transcript_title = title_from_transcript(_candidate_transcript_text(candidate, transcript_segments))
+    transcript_title = _meaningful_segment_title(candidate, transcript_segments)
+    if transcript_title is None:
+        transcript_title = title_from_transcript(
+            _candidate_transcript_text(candidate, transcript_segments)
+        )
     if transcript_title:
         overlay_title = _plain_text(candidate.overlay_title) or (transcript_title if candidate.type == "short" else None)
         return TitleResolution(

@@ -91,6 +91,7 @@ from app.models import ExportItem, Job, Video, utc_now
 from app.render.render_normal import NormalRenderBatchResult, render_normal_clip, render_selected_normal_candidates
 from app.render.render_short import ShortRenderBatchResult, render_selected_short_candidates, render_short_clip
 from app.scoring.openai_score import OpenAICandidateScorer, score_candidate_batch
+from app.scoring.clip_preferences import build_clip_selection_preferences
 from app.scoring.quality_gate import evaluate_hard_gate
 from app.scoring.rule_score import score_candidates
 from app.storage.paths import StoragePaths, get_storage_paths
@@ -713,10 +714,11 @@ def _openai_summary(
     return summary
 
 
-def _candidate_rank_value(candidate: Candidate) -> tuple[float, float, int, float]:
+def _candidate_rank_value(candidate: Candidate) -> tuple[float, float, float, int, float]:
     return (
         float(candidate.rule_score or candidate.final_score or 0.0),
         float(candidate.final_score or candidate.rule_score or 0.0),
+        -candidate.duration,
         len(candidate.transcript_text),
         -candidate.start,
     )
@@ -747,7 +749,11 @@ def _openai_cluster_diverse_order(candidates: Sequence[Candidate], requested_cou
 
     cluster_order = sorted(
         grouped,
-        key=lambda cluster: _candidate_rank_value(grouped[cluster][0]) if grouped[cluster] else (0.0, 0.0, 0, 0.0),
+        key=lambda cluster: (
+            _candidate_rank_value(grouped[cluster][0])
+            if grouped[cluster]
+            else (0.0, 0.0, 0.0, 0, 0.0)
+        ),
         reverse=True,
     )
     ordered: list[Candidate] = []
@@ -945,10 +951,12 @@ def _score_candidate_list(
     visual_quality: VisualQuality,
     scorer: OpenAICandidateScorer | None,
 ) -> ScoringResult:
+    selection_preferences = build_clip_selection_preferences(settings)
     rule_scored = score_candidates(
         candidates,
         audio_features=audio_features,
         silence_segments=silence_segments,
+        selection_preferences=selection_preferences,
     )
     use_openai = _openai_enabled(settings)
     if not use_openai:
@@ -965,7 +973,12 @@ def _score_candidate_list(
 
     fallback_enabled = _bool_setting(settings, "openaiFallbackToRuleScore", True)
     candidate_limit = _int_setting(settings, "openaiCandidateLimit", DEFAULT_OPENAI_CANDIDATE_LIMIT)
-    active_scorer = scorer or OpenAICandidateScorer(model=_openai_model_setting(settings))
+    active_scorer = scorer or OpenAICandidateScorer(
+        model=_openai_model_setting(settings),
+        selection_preferences=selection_preferences,
+    )
+    if scorer is not None and hasattr(active_scorer, "selection_preferences"):
+        active_scorer.selection_preferences = selection_preferences
     ranked_for_openai = _build_openai_scoring_pool(
         rule_scored,
         settings=settings,

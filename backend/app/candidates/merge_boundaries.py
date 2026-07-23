@@ -92,6 +92,8 @@ class CandidateGenerationSettings(BaseModel):
     max_kept_candidates_per_type: int = Field(default=1200, gt=0)
     max_candidates_per_time_bucket: int = Field(default=100, gt=0)
     candidate_time_bucket_seconds: float = Field(default=300.0, gt=0)
+    max_candidates_per_start_bucket: int = Field(default=5, gt=0)
+    candidate_start_bucket_seconds: float = Field(default=15.0, gt=0)
     max_candidate_generation_memory_mb: int = Field(default=12_000, gt=0)
     candidate_chunk_seconds: float = Field(default=600.0, gt=0)
     candidate_chunk_overlap_seconds: float = Field(default=75.0, ge=0)
@@ -162,6 +164,8 @@ def parse_generation_settings(settings: CandidateGenerationSettings | dict[str, 
         "maxKeptCandidatesPerType": "max_kept_candidates_per_type",
         "maxCandidatesPerTimeBucket": "max_candidates_per_time_bucket",
         "candidateTimeBucketSeconds": "candidate_time_bucket_seconds",
+        "maxCandidatesPerStartBucket": "max_candidates_per_start_bucket",
+        "candidateStartBucketSeconds": "candidate_start_bucket_seconds",
         "maxCandidateGenerationMemoryMb": "max_candidate_generation_memory_mb",
         "candidateChunkSeconds": "candidate_chunk_seconds",
         "candidateChunkOverlapSeconds": "candidate_chunk_overlap_seconds",
@@ -336,6 +340,14 @@ def make_candidate_id(candidate_type: CandidateType, start: float, end: float, t
     return f"cand_{candidate_type}_{int(start * 1000)}_{int(end * 1000)}_{digest}"
 
 
+def _preferred_candidate_duration(min_duration: float, max_duration: float) -> float:
+    duration_span = max(max_duration - min_duration, 1.0)
+    return min(
+        max_duration,
+        min_duration + min(60.0, duration_span * 0.4),
+    )
+
+
 def _candidate_rank_score(
     *,
     duration: float,
@@ -345,16 +357,17 @@ def _candidate_rank_score(
     speech_seconds: float,
     silence_ratio: float,
 ) -> float:
-    midpoint = (min_duration + max_duration) / 2
     duration_span = max(max_duration - min_duration, 1.0)
-    duration_fit = max(0.0, 1.0 - abs(duration - midpoint) / duration_span)
+    preferred_duration = _preferred_candidate_duration(min_duration, max_duration)
+    duration_scale = max(30.0, min(120.0, duration_span * 0.5))
+    duration_fit = 1.0 / (1.0 + abs(duration - preferred_duration) / duration_scale)
     speech_density = min(1.0, speech_seconds / max(duration, 1.0))
     text_signal = min(1.0, transcript_char_count / 600)
     silence_signal = max(0.0, 1.0 - silence_ratio)
     return (
-        speech_density * 45.0
-        + text_signal * 25.0
-        + duration_fit * 20.0
+        speech_density * 30.0
+        + text_signal * 15.0
+        + duration_fit * 45.0
         + silence_signal * 10.0
     )
 
@@ -419,6 +432,9 @@ class _BoundedCandidateKeeper:
     def bucket_index(self, start: float) -> int:
         return int(start // self.settings.candidate_time_bucket_seconds)
 
+    def start_bucket_index(self, start: float) -> int:
+        return int(start // self.settings.candidate_start_bucket_seconds)
+
     def _update_memory(self) -> None:
         current = _current_rss_mb()
         if current is None:
@@ -441,6 +457,28 @@ class _BoundedCandidateKeeper:
         bucket = self.buckets.setdefault(self.bucket_index(candidate.start), {})
         if candidate.key in bucket:
             self.dropped_due_to_duplicate += 1
+            self.maybe_heartbeat()
+            return True
+
+        same_start_bucket = [
+            (key, item)
+            for key, item in bucket.items()
+            if self.start_bucket_index(item.start) == self.start_bucket_index(candidate.start)
+        ]
+        if len(same_start_bucket) >= self.settings.max_candidates_per_start_bucket:
+            worst_key, worst_candidate = min(
+                same_start_bucket,
+                key=lambda item: (
+                    item[1].rank_score,
+                    item[1].transcript_char_count,
+                    -item[1].duration,
+                    -item[1].start,
+                ),
+            )
+            if candidate.rank_score > worst_candidate.rank_score:
+                bucket.pop(worst_key)
+                bucket[candidate.key] = candidate
+            self.dropped_due_to_cap += 1
             self.maybe_heartbeat()
             return True
 
@@ -501,6 +539,8 @@ class _BoundedCandidateKeeper:
                 "maxKeptCandidatesPerType": self.settings.max_kept_candidates_per_type,
                 "maxCandidatesPerTimeBucket": self.settings.max_candidates_per_time_bucket,
                 "candidateTimeBucketSeconds": self.settings.candidate_time_bucket_seconds,
+                "maxCandidatesPerStartBucket": self.settings.max_candidates_per_start_bucket,
+                "candidateStartBucketSeconds": self.settings.candidate_start_bucket_seconds,
                 "maxCandidateGenerationMemoryMb": self.settings.max_candidate_generation_memory_mb,
                 "candidateChunkSeconds": self.settings.candidate_chunk_seconds,
                 "candidateChunkOverlapSeconds": self.settings.candidate_chunk_overlap_seconds,
@@ -585,16 +625,52 @@ def _candidate_end_targets(
     step_seconds: float,
     timeline_duration: float,
 ) -> list[float]:
-    targets = {
-        boundary
-        for boundary in boundaries
-        if min_duration <= boundary - start <= max_duration
-    }
+    minimum_end = start + min_duration
+    maximum_end = start + max_duration
+    left = bisect_left(boundaries, minimum_end)
+    right = bisect_right(boundaries, maximum_end)
+    targets = set(boundaries[left:right])
     for duration in _duration_targets(min_duration, max_duration, step_seconds):
         target = start + duration
         if target <= timeline_duration:
             targets.add(_round_time(target))
     return sorted(targets)
+
+
+def _spread_across_timeline(values: Sequence[float], limit: int) -> list[float]:
+    if limit <= 0 or not values:
+        return []
+    if len(values) <= limit:
+        return list(values)
+    if limit == 1:
+        return [values[len(values) // 2]]
+    indices = {
+        round(index * (len(values) - 1) / (limit - 1))
+        for index in range(limit)
+    }
+    return [values[index] for index in sorted(indices)]
+
+
+def _prioritize_end_targets(
+    targets: Sequence[float],
+    *,
+    start: float,
+    min_duration: float,
+    max_duration: float,
+    limit: int,
+) -> list[float]:
+    if limit <= 0:
+        return []
+    preferred_duration = _preferred_candidate_duration(min_duration, max_duration)
+    ranked = sorted(
+        targets,
+        key=lambda end: (
+            abs((end - start) - preferred_duration),
+            abs((end - start) - min_duration),
+            end,
+        ),
+    )
+    return ranked[:limit]
 
 
 def _configured_duration_range(
@@ -751,25 +827,55 @@ def generate_window_candidates_with_summary(
             chunk_start,
             chunk_end,
         )
+        adjusted_starts: list[float] = []
+        seen_starts: set[float] = set()
         for raw_start in raw_starts:
-            if chunk_cap_reached:
-                break
             start = adjust_start_to_speech_boundary(
                 raw_start,
                 transcript_segments,
                 tolerance=speech_boundary_tolerance,
             )
-            if start >= timeline_duration or is_inside_speech(start, transcript_segments):
+            if (
+                start in seen_starts
+                or start >= timeline_duration
+                or is_inside_speech(start, transcript_segments)
+            ):
                 continue
+            seen_starts.add(start)
+            adjusted_starts.append(start)
 
-            for raw_end in _candidate_end_targets(
+        if len(adjusted_starts) > raw_candidate_cap_for_chunk:
+            keeper.dropped_due_to_cap += len(adjusted_starts) - raw_candidate_cap_for_chunk
+            adjusted_starts = _spread_across_timeline(
+                adjusted_starts,
+                raw_candidate_cap_for_chunk,
+            )
+
+        start_count = max(1, len(adjusted_starts))
+        base_budget = raw_candidate_cap_for_chunk // start_count
+        budget_remainder = raw_candidate_cap_for_chunk % start_count
+        for start_index, start in enumerate(adjusted_starts):
+            if chunk_cap_reached:
+                break
+
+            end_targets = _candidate_end_targets(
                 start,
                 boundaries,
                 min_duration=min_duration,
                 max_duration=max_duration,
                 step_seconds=step_seconds,
                 timeline_duration=timeline_duration,
-            ):
+            )
+            start_budget = base_budget + (1 if start_index < budget_remainder else 0)
+            prioritized_targets = _prioritize_end_targets(
+                end_targets,
+                start=start,
+                min_duration=min_duration,
+                max_duration=max_duration,
+                limit=max(1, start_budget),
+            )
+            keeper.dropped_due_to_cap += max(0, len(end_targets) - len(prioritized_targets))
+            for raw_end in prioritized_targets:
                 end = adjust_end_to_speech_boundary(
                     raw_end,
                     transcript_segments,

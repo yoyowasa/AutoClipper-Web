@@ -124,11 +124,12 @@ def parse_selection_settings(
     return CandidateSelectionSettings(**normalized)
 
 
-def _rank_key(candidate: Candidate) -> tuple[float, int, float, int, float]:
+def _rank_key(candidate: Candidate) -> tuple[float, int, float, float, int, float]:
     return (
         effective_final_score(candidate),
         1 if candidate.should_use is True else 0,
         candidate.rule_score if candidate.rule_score is not None else 0.0,
+        -candidate.duration,
         len(candidate.transcript_text),
         -candidate.start,
     )
@@ -232,7 +233,11 @@ def _cluster_diverse_order(candidates: Sequence[Candidate], cluster_ids: dict[st
 
     cluster_order = sorted(
         grouped,
-        key=lambda cluster: _rank_key(grouped[cluster][0]) if grouped[cluster] else (0.0, 0, 0.0, 0, 0.0),
+        key=lambda cluster: (
+            _rank_key(grouped[cluster][0])
+            if grouped[cluster]
+            else (0.0, 0, 0.0, 0.0, 0, 0.0)
+        ),
         reverse=True,
     )
     ordered: list[Candidate] = []

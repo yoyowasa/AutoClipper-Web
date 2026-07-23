@@ -58,6 +58,24 @@ def test_clip_without_candidate_text_uses_overlapping_transcript_segments() -> N
     assert titled.title_source == "transcript_fallback"
 
 
+def test_title_skips_generic_intro_segments() -> None:
+    candidate = make_candidate(
+        transcript_text=(
+            "ご視聴ありがとうございました こんばんは 声は聞こえていますか "
+            "一週間休んだ理由と運動会を欠席した経緯を話します"
+        )
+    )
+    segments = [
+        TranscriptSegment(start=12.0, end=14.0, text="ご視聴ありがとうございました"),
+        TranscriptSegment(start=14.0, end=16.0, text="こんばんは"),
+        TranscriptSegment(start=16.0, end=20.0, text="一週間休んだ理由を話します"),
+    ]
+
+    titled = candidate_with_title(candidate, index=1, transcript_segments=segments)
+
+    assert titled.title == "一週間休んだ理由を話します"
+
+
 def test_clip_without_transcript_gets_deterministic_fallback_title() -> None:
     candidate = make_candidate(candidate_type="short", transcript_text="")
 
