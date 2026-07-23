@@ -2,12 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState
-} from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   confirmSubtitleReviewClip,
@@ -46,11 +41,18 @@ function clipLabel(clip: SubtitleReviewClip, clips: SubtitleReviewClip[]): strin
   return `${clip.type === "normal" ? "通常" : "ショート"} ${index}`;
 }
 
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
 export default function SubtitleReviewPage() {
   const params = useParams();
   const router = useRouter();
   const jobId = useMemo(() => readJobId(params.jobId), [params.jobId]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const playerShellRef = useRef<HTMLDivElement | null>(null);
+  const subtitleListRef = useRef<HTMLDivElement | null>(null);
+  const segmentRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [review, setReview] = useState<SubtitleReviewDocument | null>(null);
   const [selectedClipId, setSelectedClipId] = useState("");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -58,6 +60,13 @@ export default function SubtitleReviewPage() {
   const [savingSegmentId, setSavingSegmentId] = useState<string | null>(null);
   const [confirmingClipId, setConfirmingClipId] = useState<string | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const [isPlayerReady, setIsPlayerReady] = useState(false);
+  const [clipTime, setClipTime] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [isMuted, setIsMuted] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -102,39 +111,206 @@ export default function SubtitleReviewPage() {
         .filter((segment): segment is SubtitleReviewSegment => Boolean(segment)) ?? [],
     [segmentsById, selectedClip]
   );
+  const clipDuration = selectedClip
+    ? Math.max(0, selectedClip.end - selectedClip.start)
+    : 0;
   const selectedClipStart = selectedClip?.start ?? null;
   const selectedClipHasDirtySegments = selectedSegments.some((segment) =>
     dirtySegmentIds.has(segment.id)
   );
+  const absolutePlaybackTime = selectedClip
+    ? selectedClip.start + clipTime
+    : 0;
+  const activeSegmentId = useMemo(() => {
+    if (!selectedClip) {
+      return null;
+    }
+    return (
+      selectedSegments.find(
+        (segment) =>
+          absolutePlaybackTime >= Math.max(segment.start, selectedClip.start) &&
+          absolutePlaybackTime < Math.min(segment.end, selectedClip.end)
+      )?.id ?? null
+    );
+  }, [absolutePlaybackTime, selectedClip, selectedSegments]);
 
   useEffect(() => {
-    if (selectedClipStart === null || !videoRef.current) {
+    const video = videoRef.current;
+    subtitleListRef.current?.scrollTo({ top: 0 });
+    if (!video || selectedClipStart === null) {
       return;
     }
-    videoRef.current.currentTime = selectedClipStart;
+    video.pause();
+
+    const moveToClipStart = () => {
+      video.currentTime = selectedClipStart;
+    };
+
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      moveToClipStart();
+      return;
+    }
+
+    video.addEventListener("loadedmetadata", moveToClipStart, { once: true });
+    return () => {
+      video.removeEventListener("loadedmetadata", moveToClipStart);
+    };
   }, [selectedClipId, selectedClipStart]);
 
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = playbackRate;
+    }
+  }, [playbackRate]);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.volume = volume;
+      videoRef.current.muted = isMuted;
+    }
+  }, [isMuted, volume]);
+
+  useEffect(() => {
+    if (!activeSegmentId || !isPlaying) {
+      return;
+    }
+    const container = subtitleListRef.current;
+    const row = segmentRowRefs.current[activeSegmentId];
+    if (!container || !row) {
+      return;
+    }
+    const containerRect = container.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const visibleTop = containerRect.top + 12;
+    const visibleBottom = containerRect.bottom - 12;
+    if (rowRect.top >= visibleTop && rowRect.bottom <= visibleBottom) {
+      return;
+    }
+    container.scrollBy({
+      top: rowRect.top - containerRect.top - container.clientHeight * 0.28,
+      behavior: "smooth"
+    });
+  }, [activeSegmentId, isPlaying]);
+
   function selectClip(clip: SubtitleReviewClip) {
+    videoRef.current?.pause();
+    setClipTime(0);
+    setIsPlaying(false);
+    setIsBuffering(false);
     setSelectedClipId(clip.id);
     setError(null);
+  }
+
+  function seekToClipTime(nextTime: number) {
+    if (!videoRef.current || !selectedClip) {
+      return;
+    }
+    const relativeTime = clamp(nextTime, 0, clipDuration);
+    videoRef.current.currentTime = selectedClip.start + relativeTime;
+    setClipTime(relativeTime);
   }
 
   function playFrom(start: number) {
     if (!videoRef.current || !selectedClip) {
       return;
     }
-    videoRef.current.currentTime = Math.max(selectedClip.start, start - 0.15);
+    const absoluteTime = clamp(
+      Math.max(selectedClip.start, start - 0.15),
+      selectedClip.start,
+      Math.max(selectedClip.start, selectedClip.end - 0.05)
+    );
+    videoRef.current.currentTime = absoluteTime;
+    setClipTime(absoluteTime - selectedClip.start);
     void videoRef.current.play();
   }
 
-  function handleVideoTimeUpdate() {
-    if (!videoRef.current || !selectedClip) {
+  function togglePlayback() {
+    const video = videoRef.current;
+    if (!video || !selectedClip) {
       return;
     }
-    if (videoRef.current.currentTime >= selectedClip.end) {
-      videoRef.current.pause();
-      videoRef.current.currentTime = selectedClip.end;
+    if (video.paused) {
+      if (clipTime >= clipDuration - 0.05) {
+        seekToClipTime(0);
+      }
+      void video.play();
+      return;
     }
+    video.pause();
+  }
+
+  function skipBy(seconds: number) {
+    seekToClipTime(clipTime + seconds);
+  }
+
+  function handleVideoTimeUpdate() {
+    const video = videoRef.current;
+    if (!video || !selectedClip) {
+      return;
+    }
+    if (video.currentTime < selectedClip.start - 0.05) {
+      video.currentTime = selectedClip.start;
+      setClipTime(0);
+      return;
+    }
+    if (video.currentTime >= selectedClip.end) {
+      video.pause();
+      video.currentTime = selectedClip.end;
+      setClipTime(clipDuration);
+      return;
+    }
+    setClipTime(clamp(video.currentTime - selectedClip.start, 0, clipDuration));
+  }
+
+  function handleVideoSeeking() {
+    const video = videoRef.current;
+    if (!video || !selectedClip) {
+      return;
+    }
+    if (video.currentTime < selectedClip.start) {
+      video.currentTime = selectedClip.start;
+    } else if (video.currentTime > selectedClip.end) {
+      video.currentTime = selectedClip.end;
+    }
+  }
+
+  function toggleMuted() {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    const nextMuted = !video.muted;
+    video.muted = nextMuted;
+    setIsMuted(nextMuted);
+  }
+
+  function changeVolume(nextVolume: number) {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    video.volume = nextVolume;
+    video.muted = nextVolume === 0;
+    setVolume(nextVolume);
+    setIsMuted(nextVolume === 0);
+  }
+
+  function changePlaybackRate(nextRate: number) {
+    if (videoRef.current) {
+      videoRef.current.playbackRate = nextRate;
+    }
+    setPlaybackRate(nextRate);
+  }
+
+  async function toggleFullscreen() {
+    if (!playerShellRef.current) {
+      return;
+    }
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+    await playerShellRef.current.requestFullscreen();
   }
 
   function updateDraft(segmentId: string, text: string) {
@@ -213,14 +389,15 @@ export default function SubtitleReviewPage() {
     review.totalClipCount > 0 && review.confirmedClipCount === review.totalClipCount;
 
   return (
-    <main className="min-h-screen bg-[#f7f7f4] px-4 py-6 text-neutral-950 sm:px-6">
-      <section className="mx-auto flex w-full max-w-7xl flex-col gap-5">
-        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-neutral-300 pb-5">
+    <main className="min-h-screen bg-[#f7f7f4] px-3 py-4 text-neutral-950 sm:px-5">
+      <section className="mx-auto flex w-full max-w-[1600px] flex-col gap-4">
+        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-neutral-300 pb-4">
           <div>
             <p className="text-sm font-medium uppercase text-neutral-500">AutoClipper</p>
-            <h1 className="mt-2 text-3xl font-semibold">字幕確認</h1>
-            <p className="mt-2 text-sm text-neutral-600">
-              確認済み {review.confirmedClipCount} / {review.totalClipCount} ・ 修正{" "}
+            <h1 className="mt-1 text-3xl font-semibold">clip別 字幕確認</h1>
+            <p className="mt-1 text-sm text-neutral-600">
+              左でclipを選び、動画を見ながら右側の字幕だけを確認します。確認済み{" "}
+              {review.confirmedClipCount} / {review.totalClipCount} ・ 修正{" "}
               {review.editedSegmentCount}件
             </p>
           </div>
@@ -249,7 +426,7 @@ export default function SubtitleReviewPage() {
                 isEditable ? "text-sky-800" : "text-emerald-800"
               }`}
             >
-              2. 字幕確認
+              2. clip別 字幕確認
             </p>
             <p className="mt-1 text-sm font-semibold">
               {isEditable ? "現在の工程" : "完了"}
@@ -273,13 +450,13 @@ export default function SubtitleReviewPage() {
                     : "text-sky-800"
               }`}
             >
-              3. 書き出し
+              3. 字幕焼き込み・書き出し
             </p>
             <p className="mt-1 text-sm font-semibold">
               {review.state === "completed"
                 ? "完了"
                 : isEditable
-                  ? "確認後に開始"
+                  ? "全clip確認後に開始"
                   : "処理中"}
             </p>
           </div>
@@ -299,11 +476,12 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
-        <div className="grid min-h-[680px] border border-neutral-300 bg-white lg:grid-cols-[280px_minmax(0,1fr)]">
-          <aside className="border-b border-neutral-300 lg:border-b-0 lg:border-r">
+        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-14rem)] lg:min-h-[560px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_430px]">
+          <aside className="flex min-h-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
             <div className="border-b border-neutral-200 px-4 py-4">
               <p className="text-sm font-semibold">生成予定clip</p>
-              <div className="mt-2 h-2 overflow-hidden bg-neutral-100">
+              <p className="mt-1 text-xs text-neutral-500">選ぶと動画と字幕が切り替わります</p>
+              <div className="mt-3 h-2 overflow-hidden bg-neutral-100">
                 <div
                   className="h-full bg-sky-600"
                   style={{
@@ -314,7 +492,7 @@ export default function SubtitleReviewPage() {
                 />
               </div>
             </div>
-            <div className="max-h-72 overflow-y-auto lg:max-h-[760px]">
+            <div className="max-h-64 min-h-0 overflow-y-auto lg:max-h-none lg:flex-1">
               {review.clips.map((clip) => (
                 <button
                   className={`block w-full border-b border-neutral-200 px-4 py-4 text-left ${
@@ -348,7 +526,7 @@ export default function SubtitleReviewPage() {
                       clip.id === selectedClipId ? "text-neutral-300" : "text-neutral-500"
                     }`}
                   >
-                    {formatTime(clip.start)} - {formatTime(clip.end)}
+                    clip長 {formatTime(clip.duration)} ・ {clip.segmentIds.length}字幕
                     {clip.editedSegmentCount > 0 ? ` ・ 修正${clip.editedSegmentCount}件` : ""}
                   </span>
                 </button>
@@ -356,160 +534,300 @@ export default function SubtitleReviewPage() {
             </div>
           </aside>
 
-          <section className="min-w-0">
+          <section className="flex min-h-0 min-w-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
             {selectedClip ? (
               <>
-                <div className="border-b border-neutral-300 p-4 sm:p-5">
+                <div className="border-b border-neutral-300 px-4 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase text-neutral-500">
-                        {clipLabel(selectedClip, review.clips)}
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase text-sky-700">
+                        {clipLabel(selectedClip, review.clips)} ・ 選択clipのみ再生
                       </p>
-                      <h2 className="mt-1 text-xl font-semibold">{selectedClip.title}</h2>
-                      <p className="mt-1 text-sm text-neutral-600">
+                      <h2 className="mt-1 line-clamp-2 text-lg font-semibold">{selectedClip.title}</h2>
+                      <p className="mt-1 text-xs text-neutral-500">
+                        clip長 {formatTime(clipDuration)} ・ 元動画{" "}
                         {formatTime(selectedClip.start)} - {formatTime(selectedClip.end)}
                       </p>
                     </div>
                     <button
-                      className="min-h-10 border border-neutral-300 bg-white px-4 text-sm font-medium"
+                      className="min-h-10 border border-neutral-300 bg-white px-3 text-sm font-medium"
                       type="button"
                       onClick={() => playFrom(selectedClip.start)}
                     >
-                      clip先頭から再生
+                      先頭から再生
                     </button>
-                  </div>
-
-                  <div className="mt-4 overflow-hidden bg-black">
-                    <video
-                      className="aspect-video w-full bg-black"
-                      controls
-                      playsInline
-                      preload="metadata"
-                      ref={videoRef}
-                      src={toApiUrl(review.sourceVideoUrl)}
-                      onTimeUpdate={handleVideoTimeUpdate}
-                    />
                   </div>
                 </div>
 
-                <div className="px-4 py-5 sm:px-5">
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-300 pb-3">
+                <div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto bg-neutral-100 p-3 sm:p-4">
+                  <div
+                    className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white"
+                    ref={playerShellRef}
+                  >
+                    <div className="relative">
+                      <video
+                        className="aspect-video w-full cursor-pointer bg-black object-contain lg:max-h-[calc(100vh-30rem)] lg:min-h-[220px]"
+                        playsInline
+                        preload="metadata"
+                        ref={videoRef}
+                        src={toApiUrl(review.sourceVideoUrl)}
+                        onCanPlay={() => {
+                          setIsBuffering(false);
+                          setIsPlayerReady(true);
+                        }}
+                        onClick={togglePlayback}
+                        onLoadedMetadata={() => setIsPlayerReady(true)}
+                        onPause={() => setIsPlaying(false)}
+                        onPlay={() => setIsPlaying(true)}
+                        onPlaying={() => setIsBuffering(false)}
+                        onSeeking={handleVideoSeeking}
+                        onTimeUpdate={handleVideoTimeUpdate}
+                        onWaiting={() => setIsBuffering(true)}
+                      />
+                      {!isPlayerReady || isBuffering ? (
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/50 text-sm font-semibold">
+                          {isBuffering ? "選択位置を読み込み中" : "動画を準備中"}
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="border-t border-neutral-700 bg-neutral-900 px-3 py-3">
+                      <input
+                        aria-label="clip再生位置"
+                        className="block h-2 w-full cursor-pointer accent-sky-500"
+                        max={Math.max(clipDuration, 0.1)}
+                        min={0}
+                        step={0.05}
+                        type="range"
+                        value={clamp(clipTime, 0, clipDuration)}
+                        onChange={(event) => seekToClipTime(Number(event.target.value))}
+                      />
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <button
+                          aria-label={isPlaying ? "一時停止" : "再生"}
+                          className="min-h-10 min-w-20 bg-white px-3 text-sm font-semibold text-neutral-950"
+                          type="button"
+                          onClick={togglePlayback}
+                        >
+                          {isPlaying ? "一時停止" : "再生"}
+                        </button>
+                        <button
+                          aria-label="5秒戻る"
+                          className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
+                          type="button"
+                          onClick={() => skipBy(-5)}
+                        >
+                          5秒戻る
+                        </button>
+                        <button
+                          aria-label="5秒進む"
+                          className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
+                          type="button"
+                          onClick={() => skipBy(5)}
+                        >
+                          5秒進む
+                        </button>
+                        <span className="min-w-32 text-sm font-medium tabular-nums">
+                          {formatTime(clipTime)} / {formatTime(clipDuration)}
+                        </span>
+                        <div className="ml-auto flex flex-wrap items-center gap-2">
+                          <button
+                            aria-label={isMuted ? "音声をオン" : "ミュート"}
+                            className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
+                            type="button"
+                            onClick={toggleMuted}
+                          >
+                            {isMuted ? "音声オフ" : "音声オン"}
+                          </button>
+                          <input
+                            aria-label="音量"
+                            className="w-20 accent-sky-500"
+                            max={1}
+                            min={0}
+                            step={0.05}
+                            type="range"
+                            value={isMuted ? 0 : volume}
+                            onChange={(event) => changeVolume(Number(event.target.value))}
+                          />
+                          <select
+                            aria-label="再生速度"
+                            className="min-h-10 border border-neutral-600 bg-neutral-900 px-2 text-sm"
+                            value={playbackRate}
+                            onChange={(event) => changePlaybackRate(Number(event.target.value))}
+                          >
+                            <option value={0.75}>0.75x</option>
+                            <option value={1}>1.0x</option>
+                            <option value={1.25}>1.25x</option>
+                            <option value={1.5}>1.5x</option>
+                            <option value={2}>2.0x</option>
+                          </select>
+                          <button
+                            aria-label="全画面"
+                            className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
+                            type="button"
+                            onClick={() => void toggleFullscreen()}
+                          >
+                            全画面
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </section>
+
+          <section className="flex min-h-0 flex-col">
+            {selectedClip ? (
+              <>
+                <div className="border-b border-neutral-300 bg-white px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
                     <div>
-                      <h3 className="text-base font-semibold">字幕テキスト</h3>
+                      <h3 className="text-base font-semibold">
+                        {clipLabel(selectedClip, review.clips)} の字幕
+                      </h3>
                       <p className="mt-1 text-xs text-neutral-500">
-                        時刻は固定です。再生して音声と違う文字だけ修正します。
+                        再生中の字幕へ自動で追従します
                       </p>
                     </div>
                     <p className="text-xs font-medium text-neutral-600">
-                      {selectedSegments.length} segments
+                      {selectedSegments.length}件
                     </p>
                   </div>
+                </div>
 
+                <div
+                  className="relative max-h-[640px] min-h-0 flex-1 overflow-y-auto lg:max-h-none"
+                  ref={subtitleListRef}
+                >
                   {selectedSegments.length > 0 ? (
-                    <div>
-                      {selectedSegments.map((segment) => {
-                        const isDirty = dirtySegmentIds.has(segment.id);
-                        const isSaving = savingSegmentId === segment.id;
-                        return (
-                          <div
-                            className="grid gap-3 border-b border-neutral-200 py-4 md:grid-cols-[120px_minmax(0,1fr)_92px]"
-                            key={segment.id}
-                          >
+                    selectedSegments.map((segment) => {
+                      const isDirty = dirtySegmentIds.has(segment.id);
+                      const isSaving = savingSegmentId === segment.id;
+                      const isActive = activeSegmentId === segment.id;
+                      const relativeStart = clamp(
+                        segment.start - selectedClip.start,
+                        0,
+                        clipDuration
+                      );
+                      return (
+                        <div
+                          className={`border-b px-3 py-3 ${
+                            isActive
+                              ? "border-sky-300 bg-sky-50 shadow-[inset_4px_0_0_#0369a1]"
+                              : "border-neutral-200 bg-white"
+                          }`}
+                          key={segment.id}
+                          ref={(element) => {
+                            segmentRowRefs.current[segment.id] = element;
+                          }}
+                        >
+                          <div className="mb-2 flex items-center justify-between gap-3">
                             <button
-                              className="h-fit text-left text-sm font-semibold text-sky-700"
+                              className={`text-left text-sm font-semibold ${
+                                isActive ? "text-sky-800" : "text-sky-700"
+                              }`}
                               type="button"
                               onClick={() => playFrom(segment.start)}
                             >
-                              {formatTime(segment.start)}
-                              <span className="mt-1 block text-xs font-normal text-neutral-500">
-                                音声を再生
-                              </span>
+                              {formatTime(relativeStart)} から再生
                             </button>
-                            <div className="min-w-0">
-                              <textarea
-                                className={`min-h-24 w-full resize-y border px-3 py-2 text-base leading-7 outline-none ${
-                                  isDirty
-                                    ? "border-amber-500 bg-amber-50"
-                                    : "border-neutral-300 bg-white focus:border-sky-600"
-                                }`}
-                                disabled={!isEditable}
-                                value={drafts[segment.id] ?? segment.text}
-                                onChange={(event) => updateDraft(segment.id, event.target.value)}
-                              />
-                              <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                                {segment.edited ? (
-                                  <span className="bg-sky-100 px-2 py-1 font-medium text-sky-800">
-                                    修正済み
-                                  </span>
-                                ) : null}
-                                {segment.affectedClipIds.length > 1 ? (
-                                  <span className="bg-violet-100 px-2 py-1 font-medium text-violet-800">
-                                    {segment.affectedClipIds.length}本のclipへ共通反映
-                                  </span>
-                                ) : null}
-                                {isDirty ? (
-                                  <span className="bg-amber-100 px-2 py-1 font-medium text-amber-800">
-                                    未保存
-                                  </span>
-                                ) : null}
-                              </div>
+                            <div className="flex flex-wrap justify-end gap-1 text-[11px]">
+                              {isActive ? (
+                                <span className="bg-sky-700 px-2 py-1 font-medium text-white">
+                                  {isPlaying ? "再生中" : "現在位置"}
+                                </span>
+                              ) : null}
+                              {segment.edited ? (
+                                <span className="bg-sky-100 px-2 py-1 font-medium text-sky-800">
+                                  修正済み
+                                </span>
+                              ) : null}
+                              {segment.affectedClipIds.length > 1 ? (
+                                <span className="bg-violet-100 px-2 py-1 font-medium text-violet-800">
+                                  {segment.affectedClipIds.length}本へ反映
+                                </span>
+                              ) : null}
+                              {isDirty ? (
+                                <span className="bg-amber-100 px-2 py-1 font-medium text-amber-800">
+                                  未保存
+                                </span>
+                              ) : null}
                             </div>
+                          </div>
+                          <textarea
+                            className={`min-h-20 w-full resize-y border px-3 py-2 text-sm leading-6 outline-none ${
+                              isDirty
+                                ? "border-amber-500 bg-amber-50"
+                                : "border-neutral-300 bg-white focus:border-sky-600"
+                            }`}
+                            disabled={!isEditable}
+                            value={drafts[segment.id] ?? segment.text}
+                            onChange={(event) => updateDraft(segment.id, event.target.value)}
+                          />
+                          <div className="mt-2 flex items-center justify-between gap-3">
+                            <span className="text-[11px] text-neutral-400">
+                              元動画 {formatTime(segment.start)}
+                            </span>
                             <button
-                              className="min-h-10 h-fit bg-neutral-950 px-3 text-sm font-semibold text-white disabled:bg-neutral-300"
+                              className="min-h-9 bg-neutral-950 px-4 text-xs font-semibold text-white disabled:bg-neutral-300"
                               disabled={!isEditable || !isDirty || isSaving}
                               type="button"
                               onClick={() => void saveSegment(segment)}
                             >
-                              {isSaving ? "保存中" : "保存"}
+                              {isSaving ? "保存中" : "この字幕を保存"}
                             </button>
                           </div>
-                        );
-                      })}
-                    </div>
+                        </div>
+                      );
+                    })
                   ) : (
-                    <div className="border-b border-neutral-200 py-8 text-sm text-neutral-600">
+                    <div className="px-4 py-8 text-sm text-neutral-600">
                       このclipに表示対象の字幕はありません。
                     </div>
                   )}
+                </div>
 
-                  <div className="mt-5 flex flex-wrap items-center justify-between gap-4 border-t border-neutral-300 pt-5">
-                    <p className="text-sm text-neutral-600">
-                      {selectedClip.confirmed
-                        ? "このclipは確認済みです。字幕を再編集すると未確認へ戻ります。"
-                        : "音声と字幕を確認後、確認済みにしてください。"}
-                    </p>
-                    <button
-                      className="min-h-11 bg-sky-700 px-5 text-sm font-semibold text-white disabled:bg-neutral-300"
-                      disabled={
-                        selectedClip.confirmed ||
-                        !isEditable ||
-                        selectedClipHasDirtySegments ||
-                        confirmingClipId === selectedClip.id
-                      }
-                      type="button"
-                      onClick={() => void confirmSelectedClip()}
-                    >
-                      {confirmingClipId === selectedClip.id
-                        ? "確認中"
-                        : selectedClip.confirmed
-                          ? "確認済み"
-                          : "このclipを確認済みにする"}
-                    </button>
-                  </div>
+                <div className="border-t border-neutral-300 bg-neutral-50 p-4">
+                  <p className="mb-3 text-xs text-neutral-600">
+                    {selectedClip.confirmed
+                      ? "このclipは確認済みです。字幕を再編集すると未確認へ戻ります。"
+                      : selectedClipHasDirtySegments
+                        ? "未保存の字幕があります。保存後に確認済みにできます。"
+                        : "このclipの動画と字幕を確認したら完了にします。"}
+                  </p>
+                  <button
+                    className="min-h-11 w-full bg-sky-700 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
+                    disabled={
+                      selectedClip.confirmed ||
+                      !isEditable ||
+                      selectedClipHasDirtySegments ||
+                      confirmingClipId === selectedClip.id
+                    }
+                    type="button"
+                    onClick={() => void confirmSelectedClip()}
+                  >
+                    {confirmingClipId === selectedClip.id
+                      ? "確認中"
+                      : selectedClip.confirmed
+                        ? "このclipは確認済み"
+                        : "このclipを確認済みにする"}
+                  </button>
                 </div>
               </>
             ) : null}
           </section>
         </div>
 
-        <section className="sticky bottom-0 border border-neutral-300 bg-white px-5 py-4 shadow-[0_-6px_20px_rgba(0,0,0,0.08)]">
+        <section className="border border-neutral-300 bg-white px-5 py-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
               <p className="text-sm font-semibold">
-                確認済み {review.confirmedClipCount} / {review.totalClipCount}
+                全clip確認済み {review.confirmedClipCount} / {review.totalClipCount}
               </p>
               <p className="mt-1 text-xs text-neutral-600">
-                全clip確認後に字幕焼き込みとZIP作成を開始します。
+                通常・ショートをすべて確認後、字幕焼き込みとZIP作成を開始します。
               </p>
             </div>
             <button

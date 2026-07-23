@@ -5239,3 +5239,46 @@ pip check: pass
 - 本Taskの実render確認は25秒fixtureで実施。長尺実動画の再renderは実施していない。
 - 共通subtitle style fieldは互換用途で残るが、Upload UIは通常/ショート別fieldを送信する。
 - branch `codex/task-75-output-and-subtitle-style-controls`で実装・ローカル検証済み。main mergeは未実施。
+
+## 2026-07-23 Task 76 clip-based subtitle review workspace
+
+### 目的
+
+- 字幕確認時にフル尺動画のtimelineを操作させず、選択した通常・ショートclipだけを確認できるようにする。
+- 動画の再生・一時停止を常に操作できる位置へ固定し、字幕一覧だけを独立してscroll可能にする。
+- 通常1、通常2、ショート1などを切り替え、clip単位で字幕確認・修正・確認済み操作を行う。
+
+### 変更
+
+- 字幕確認画面をclip一覧、選択clip player、選択clip字幕の3pane workspaceへ変更。
+- 元動画のRange配信を再利用しながら、playerのtimelineとseek範囲を選択clipの`0:00`からclip終了までに制限。
+- 元動画の対象外範囲へUIから移動できないようにし、clip切替時は選択clip先頭へ戻す。
+- 字幕paneを独立scrollにし、再生中segmentのhighlightと自動追従を追加。
+- 字幕時刻をclip相対時刻で表示し、元動画時刻は補助情報へ移動。
+- playerへ再生・一時停止、5秒移動、音量、再生速度、全画面操作を追加。
+- clipごとの確認済み操作を字幕pane下部へ固定。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでfrontend / backend rebuild: pass。
+- existing review job `job_2190d60e0acb4a74a87e9e916152e38a`:
+  - 通常1: `6:37.5` / `143`字幕。
+  - 通常2: `1:30.0` / `51`字幕。
+  - clip切替時にplayer duration、字幕見出し、字幕件数が連動: pass。
+  - 通常2のplayer seek範囲: `0` - `90`秒。
+- desktop Chrome `1905x855`:
+  - 再生buttonがviewport内に残る: pass。
+  - 字幕pane独立scroll: `455px` viewport / `26174px` content。
+  - 横overflow: なし。
+- mobile Chrome `390x844`:
+  - responsive stack: pass。
+  - 横overflow: なし。
+- browser console error: なし。
+
+### 未解決・制限
+
+- 確認playerは新しい動画fileを生成せず、元動画をclip境界内へ制限して再生する。preview生成待ちと追加storageは発生しない。
+- shortの確認playerは時間範囲確認用で、最終9:16 cropと字幕焼き込みは確認完了後の書き出しで行う。
+- browser自動検証のbackground tabではvideo decode完了を観測できなかった。元動画配信APIとRange response、player state、clip境界UIは確認済み。実音声再生はforeground Chromeで最終確認する。
+- branch `codex/task-76-clip-subtitle-review-workspace`で実装・ローカル検証済み。main mergeは未実施。
