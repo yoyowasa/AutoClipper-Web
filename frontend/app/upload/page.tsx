@@ -77,58 +77,22 @@ function UploadForm() {
             {submissionStage === "uploading"
               ? `アップロード中 ${uploadProgress}%`
               : submissionStage === "creating_job"
-                ? "アップロード完了"
-                : "処理を開始"}
+                ? "処理を準備中"
+                : file
+                  ? "この動画で処理を開始"
+                  : "動画を選択してください"}
           </button>
         </header>
 
-        <UploadDropzone disabled={isSubmitting} file={file} onFileChange={setFile} />
-
-        {submissionStage !== "idle" ? (
-          <section
-            aria-live="polite"
-            className={`border px-5 py-4 ${
-              submissionStage === "creating_job"
-                ? "border-emerald-300 bg-emerald-50"
-                : "border-sky-300 bg-sky-50"
-            }`}
-          >
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-semibold text-neutral-950">
-                  {submissionStage === "creating_job"
-                    ? "動画のアップロードが完了しました"
-                    : "動画をアップロードしています"}
-                </p>
-                <p className="mt-1 text-sm text-neutral-600">
-                  {submissionStage === "creating_job"
-                    ? "切り抜き処理を準備しています"
-                    : `${file?.name ?? "動画"} - ${uploadProgress}%`}
-                </p>
-              </div>
-              <span className="text-2xl font-semibold tabular-nums text-neutral-950">
-                {submissionStage === "creating_job" ? "完了" : `${uploadProgress}%`}
-              </span>
-            </div>
-            <div
-              aria-label="アップロード進捗"
-              aria-valuemax={100}
-              aria-valuemin={0}
-              aria-valuenow={submissionStage === "creating_job" ? 100 : uploadProgress}
-              className="mt-4 h-2 overflow-hidden bg-white"
-              role="progressbar"
-            >
-              <div
-                className={`h-full transition-[width] duration-200 ${
-                  submissionStage === "creating_job" ? "bg-emerald-600" : "bg-sky-600"
-                }`}
-                style={{
-                  width: `${submissionStage === "creating_job" ? 100 : uploadProgress}%`
-                }}
-              />
-            </div>
-          </section>
-        ) : null}
+        <UploadDropzone
+          disabled={isSubmitting}
+          file={file}
+          uploadProgress={uploadProgress}
+          uploadState={
+            submissionStage === "creating_job" ? "uploaded" : submissionStage
+          }
+          onFileChange={setFile}
+        />
 
         <SettingsPanel disabled={isSubmitting} settings={settings} onChange={setSettings} />
 

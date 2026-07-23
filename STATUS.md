@@ -5078,6 +5078,9 @@ pip check: pass
 - 修正後transcriptを`reviewed_transcript_segments.json`、操作状態を`subtitle_review.json`へ保存する。
 - 完了後の字幕確認画面は確認履歴として読み取り専用表示にする。
 - 選定clipが0本の場合は確認待ちへ入らず`no_usable_output`で終了する。
+- Uploadの動画選択欄を、未選択・選択完了・アップロード中・アップロード完了で全面的に切り替える。
+- 選択後はファイル名・容量・選択解除・別動画選択を明示し、送信進捗を同じ欄へ表示する。
+- 画面上部の実行ボタンも、未選択・アップロード中・ジョブ準備中に合わせて文言を切り替える。
 
 ### 検証
 
@@ -5104,6 +5107,11 @@ pip check: pass
   - desktopで字幕修正・保存・clip確認・最終確定: pass。
   - mobile `390x844`: 横はみ出しなし。
   - 完了画面の編集・保存・再render操作は無効。
+  - browser error: `0`。
+- Upload選択状態のブラウザ確認:
+  - desktopで未選択の白い破線表示から、選択完了の緑色表示へ全面切替: pass。
+  - 長い日本語ファイル名を表示したmobile `390x844`: 横はみ出しなし。
+  - 選択解除で未選択表示へ復帰: pass。
   - browser error: `0`。
 - OpenAI APIは本Taskで使用しない。
 
