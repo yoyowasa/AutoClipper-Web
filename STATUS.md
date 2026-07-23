@@ -4994,3 +4994,30 @@ pip check: pass
 - Docker Desktop、WSL2、Python 3.11+は前提条件。
 - installer、Python同梱、Docker Desktop導入支援、自動更新は`v1.2.0`対象外。
 - docs-only PR merge後、runtime差分がないことを確認して`v1.2.0` tagを作成する。
+
+## 2026-07-23 Task 71 large-video upload limit
+
+### 目的
+
+- 長尺動画が固定の512 MiB上限で拒否される問題を解消する。
+
+### 変更
+
+- upload上限の互換設定`MAX_UPLOAD_SIZE_BYTES`を維持したまま、既定値を512 MiBから8 GiBへ変更。
+- Compose、`.env.example`、backend既定値を8 GiBへ統一。
+- 容量超過エラーをbyte数だけでなく`GiB` / `MiB`で読める表示へ変更。
+- READMEへ8 GiBの既定値と`.env`によるoverride方法を記録。
+
+### 検証
+
+- backend ruff: pass。
+- upload API tests: `16 passed`。
+- backend pytest: `341 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- backend / worker Docker rebuild・再作成: pass。
+- container設定: `MAX_UPLOAD_SIZE_BYTES=8 GiB`一致確認。
+- backend `/health`: pass。
+
+### 未解決
+
+- 実際の512 MiB超ファイルのブラウザアップロードは未確認。対象動画で再試行して確認する。

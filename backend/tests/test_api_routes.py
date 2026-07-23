@@ -95,6 +95,7 @@ def test_upload_video_rejects_oversized_file_and_removes_partial_file(client: Te
 
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "file_too_large"
+    assert response.json()["detail"]["message"] == "upload exceeds maximum size of 4 bytes"
     storage = app.dependency_overrides[get_storage_paths]()
     assert list(storage.uploads.iterdir()) == []
 
