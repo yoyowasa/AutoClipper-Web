@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal, Sequence
 
@@ -13,6 +14,7 @@ from app.candidates.select_candidates import CandidateSelection
 SUBTITLE_REVIEW_FILENAME = "subtitle_review.json"
 SUBTITLE_REVIEW_SUMMARY_FILENAME = "subtitle_review_summary.json"
 REVIEWED_TRANSCRIPT_FILENAME = "reviewed_transcript_segments.json"
+SUBTITLE_REVIEW_PREVIEW_DIRNAME = "subtitle_review_previews"
 
 SubtitleReviewState = Literal["awaiting_review", "render_queued", "rendering", "completed"]
 
@@ -42,6 +44,7 @@ class SubtitleReviewClip(BaseModel):
     start: float = Field(ge=0)
     end: float = Field(ge=0)
     duration: float = Field(ge=0)
+    preview_video_url: str | None = Field(default=None, alias="previewVideoUrl")
     segment_ids: list[str] = Field(default_factory=list, alias="segmentIds")
     confirmed: bool = False
     edited_segment_count: int = Field(default=0, ge=0, alias="editedSegmentCount")
@@ -75,6 +78,15 @@ def subtitle_review_summary_path(output_dir: str | Path) -> Path:
 
 def reviewed_transcript_output_path(output_dir: str | Path) -> Path:
     return Path(output_dir) / REVIEWED_TRANSCRIPT_FILENAME
+
+
+def subtitle_review_preview_path(output_dir: str | Path, clip_id: str) -> Path:
+    digest = sha256(clip_id.encode("utf-8")).hexdigest()[:16]
+    return Path(output_dir) / SUBTITLE_REVIEW_PREVIEW_DIRNAME / f"{digest}.mp4"
+
+
+def subtitle_review_preview_url(job_id: str, clip_id: str) -> str:
+    return f"/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/preview-video"
 
 
 def _candidate_title(candidate: Candidate, index: int) -> str:

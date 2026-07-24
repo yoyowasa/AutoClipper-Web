@@ -83,12 +83,15 @@ from app.jobs.subtitle_review import (
     mark_review_rendering,
     reviewed_transcript_output_path,
     subtitle_review_output_path,
+    subtitle_review_preview_path,
+    subtitle_review_preview_url,
     subtitle_review_summary_path,
     write_subtitle_review,
     write_subtitle_review_summary,
 )
 from app.models import ExportItem, Job, Video, utc_now
 from app.render.render_normal import NormalRenderBatchResult, render_normal_clip, render_selected_normal_candidates
+from app.render.render_review_preview import render_review_preview
 from app.render.render_short import ShortRenderBatchResult, render_selected_short_candidates, render_short_clip
 from app.scoring.openai_score import OpenAICandidateScorer, score_candidate_batch
 from app.scoring.clip_preferences import build_clip_selection_preferences
@@ -158,6 +161,7 @@ class AutoClipperPipelineDependencies:
     detect_black_screen: DetectBlackScreen = detect_black_screen
     normal_renderer: Callable[..., Path] = render_normal_clip
     short_renderer: Callable[..., Any] = render_short_clip
+    subtitle_review_preview_renderer: Callable[..., Path] = render_review_preview
     openai_scorer: OpenAICandidateScorer | None = None
     transcript_corrector: OpenAITranscriptCorrector | None = None
 
@@ -414,6 +418,25 @@ def _set_status(db: Session, job: Job, status: str) -> None:
 
 def _heartbeat_job(db: Session, job: Job) -> None:
     job.updated_at = utc_now()
+    db.commit()
+    db.refresh(job)
+
+
+def _set_subtitle_review_preview_progress(
+    db: Session,
+    job: Job,
+    *,
+    completed: int,
+    total: int,
+) -> None:
+    bounded_total = max(1, total)
+    bounded_completed = max(0, min(completed, bounded_total))
+    job.status = "preparing_subtitle_review"
+    job.progress = 74 + int(3 * bounded_completed / bounded_total)
+    job.current_step = f"字幕確認用動画を準備中 ({bounded_completed}/{total})"
+    job.updated_at = utc_now()
+    job.error_code = None
+    job.error_message = None
     db.commit()
     db.refresh(job)
 
@@ -1985,6 +2008,34 @@ def run_autoclipper_job(
                         "Pipeline completed analysis but produced no usable clips.",
                     )
                 review_document = build_subtitle_review(job.id, selection, transcript_segments)
+                preview_total = len(review_document.clips)
+                _set_subtitle_review_preview_progress(
+                    db,
+                    job,
+                    completed=0,
+                    total=preview_total,
+                )
+                visited_statuses.append("preparing_subtitle_review")
+                for preview_index, clip in enumerate(review_document.clips, start=1):
+                    try:
+                        deps.subtitle_review_preview_renderer(
+                            input_path,
+                            subtitle_review_preview_path(job_dir, clip.id),
+                            start=clip.start,
+                            duration=clip.duration,
+                        )
+                    except Exception as exc:
+                        raise PipelineExpectedError(
+                            "subtitle_review_preview_failed",
+                            f"Could not prepare subtitle review video for clip {preview_index}/{preview_total}: {exc}",
+                        ) from exc
+                    clip.preview_video_url = subtitle_review_preview_url(job.id, clip.id)
+                    _set_subtitle_review_preview_progress(
+                        db,
+                        job,
+                        completed=preview_index,
+                        total=preview_total,
+                    )
                 review_path = write_subtitle_review(
                     review_document,
                     subtitle_review_output_path(job_dir),

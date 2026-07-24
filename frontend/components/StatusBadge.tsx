@@ -11,6 +11,7 @@ const STATUS_STYLES: Record<JobStatus, string> = {
   generating_candidates: "border-blue-200 bg-blue-50 text-blue-800",
   scoring_candidates: "border-blue-200 bg-blue-50 text-blue-800",
   selecting_clips: "border-blue-200 bg-blue-50 text-blue-800",
+  preparing_subtitle_review: "border-sky-200 bg-sky-50 text-sky-800",
   awaiting_subtitle_review: "border-sky-300 bg-sky-50 text-sky-900",
   rendering_normal_clips: "border-amber-200 bg-amber-50 text-amber-800",
   rendering_shorts: "border-amber-200 bg-amber-50 text-amber-800",
@@ -20,6 +21,7 @@ const STATUS_STYLES: Record<JobStatus, string> = {
 };
 
 const STATUS_LABELS: Partial<Record<JobStatus, string>> = {
+  preparing_subtitle_review: "字幕確認動画を準備中",
   awaiting_subtitle_review: "字幕確認待ち",
   rendering_normal_clips: "通常切り抜き書き出し中",
   rendering_shorts: "ショート書き出し中",

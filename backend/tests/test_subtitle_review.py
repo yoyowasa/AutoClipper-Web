@@ -11,6 +11,8 @@ from app.jobs.subtitle_review import (
     confirm_review_clip,
     load_subtitle_review,
     queue_review_render,
+    subtitle_review_preview_path,
+    subtitle_review_preview_url,
     update_review_segment,
     write_subtitle_review,
 )
@@ -84,6 +86,21 @@ def test_review_artifact_round_trip(tmp_path: Path) -> None:
 
     assert restored == review
     assert not output_path.with_suffix(".json.tmp").exists()
+
+
+def test_review_preview_path_is_stable_and_not_derived_from_raw_clip_id(
+    tmp_path: Path,
+) -> None:
+    first = subtitle_review_preview_path(tmp_path, "../short 1")
+    second = subtitle_review_preview_path(tmp_path, "../short 1")
+
+    assert first == second
+    assert first.parent.name == "subtitle_review_previews"
+    assert first.suffix == ".mp4"
+    assert ".." not in first.name
+    assert subtitle_review_preview_url("job_review", "short_1") == (
+        "/api/jobs/job_review/subtitle-review/clips/short_1/preview-video"
+    )
 
 
 def test_fallback_titles_are_numbered_per_clip_type() -> None:

@@ -607,6 +607,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
         output_path: str | Path,
         **_kwargs: Any,
     ) -> Path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
         return Path(output_path)
 
@@ -630,6 +631,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
         detect_black_screen=lambda _path: [],
         normal_renderer=fake_render,
         short_renderer=fake_render,
+        subtitle_review_preview_renderer=fake_render,
     )
 
     visited_statuses = run_autoclipper_job(
@@ -648,6 +650,11 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
     assert client.get(f"/api/jobs/{created['jobId']}/source-video").content == b"fake video bytes"
 
     review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
+    assert all(clip["previewVideoUrl"] for clip in review["clips"])
+    preview_response = client.get(review["clips"][0]["previewVideoUrl"])
+    assert preview_response.status_code == 200
+    assert preview_response.headers["content-type"].startswith("video/mp4")
+    assert preview_response.content.startswith(b"rendered")
     edited_segment = next(
         (segment for segment in review["segments"] if len(segment["affectedClipIds"]) > 1),
         review["segments"][0],

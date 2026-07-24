@@ -20,6 +20,7 @@ from app.jobs.subtitle_review import (
     load_subtitle_review,
     queue_review_render,
     subtitle_review_output_path,
+    subtitle_review_preview_path,
     subtitle_review_summary_path,
     update_review_segment,
     write_subtitle_review,
@@ -422,6 +423,23 @@ def get_subtitle_review(
 ) -> SubtitleReviewDocument:
     _get_job_or_404(db, job_id)
     return _get_subtitle_review_or_404(job_id, paths)
+
+
+@router.get("/{job_id}/subtitle-review/clips/{clip_id}/preview-video")
+def get_subtitle_review_preview_video(
+    job_id: str,
+    clip_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> FileResponse:
+    _get_job_or_404(db, job_id)
+    document = _get_subtitle_review_or_404(job_id, paths)
+    if not any(clip.id == clip_id for clip in document.clips):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subtitle review clip not found")
+    preview_path = subtitle_review_preview_path(paths.job_outputs(job_id), clip_id)
+    if not preview_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subtitle review preview not found")
+    return FileResponse(preview_path, media_type="video/mp4")
 
 
 @router.patch(
