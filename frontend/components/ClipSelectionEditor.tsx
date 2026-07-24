@@ -1,6 +1,7 @@
 "use client";
 
 import type { ClipSelectionPreset, ClipSettings } from "../lib/types";
+import { isManualTimeMode } from "../lib/manualClipRanges";
 
 type ClipSelectionEditorProps = {
   settings: ClipSettings;
@@ -21,6 +22,7 @@ type OutputPreferenceProps = {
   disabled: boolean;
   guidance: string;
   label: string;
+  manualTimeMode: boolean;
   placeholder: string;
   preset: ClipSelectionPreset;
   onGuidanceChange: (value: string) => void;
@@ -31,6 +33,7 @@ function OutputPreference({
   disabled,
   guidance,
   label,
+  manualTimeMode,
   placeholder,
   preset,
   onGuidanceChange,
@@ -39,6 +42,11 @@ function OutputPreference({
   return (
     <fieldset className="border border-neutral-300 bg-white p-4 disabled:opacity-50" disabled={disabled}>
       <legend className="px-1 text-sm font-semibold text-neutral-900">{label}</legend>
+      {manualTimeMode ? (
+        <p className="mb-3 border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          時間指定中のため、自動おすすめは使用しません。
+        </p>
+      ) : null}
       <label className="mt-1 flex flex-col gap-2">
         <span className="text-xs font-medium text-neutral-600">狙う場面</span>
         <select
@@ -72,18 +80,30 @@ export function ClipSelectionEditor({
   disabled = false,
   onChange
 }: ClipSelectionEditorProps) {
+  const normalManual = isManualTimeMode(settings, "normal");
+  const shortManual = isManualTimeMode(settings, "short");
+  const hasAutomaticOutput =
+    (settings.normalClipCount > 0 && !normalManual) ||
+    (settings.shortCount > 0 && !shortManual);
+
   return (
     <section className="border-y border-neutral-200 py-5 md:col-span-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-neutral-900">切り抜き内容</h3>
         <span
           className={`border px-2 py-1 text-xs font-semibold ${
-            settings.useOpenAIScoring
+            !hasAutomaticOutput
+              ? "border-amber-300 bg-amber-50 text-amber-900"
+              : settings.useOpenAIScoring
               ? "border-sky-300 bg-sky-50 text-sky-800"
               : "border-neutral-300 bg-neutral-50 text-neutral-600"
           }`}
         >
-          {settings.useOpenAIScoring ? "AI文脈判定" : "ローカル語句判定"}
+          {!hasAutomaticOutput
+            ? "時間指定・自動選定なし"
+            : settings.useOpenAIScoring
+              ? "AI文脈判定"
+              : "ローカル語句判定"}
         </span>
       </div>
       <p className="mt-2 text-xs leading-5 text-neutral-600">
@@ -93,9 +113,10 @@ export function ClipSelectionEditor({
 
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <OutputPreference
-          disabled={disabled || settings.normalClipCount === 0}
+          disabled={disabled || settings.normalClipCount === 0 || normalManual}
           guidance={settings.normalClipGuidance}
           label="通常切り抜き"
+          manualTimeMode={normalManual}
           placeholder="例: 休んだ理由と復帰後の予定。運動会を欠席した経緯を優先。"
           preset={settings.normalClipSelectionPreset}
           onGuidanceChange={(value) => onChange({ ...settings, normalClipGuidance: value })}
@@ -104,9 +125,10 @@ export function ClipSelectionEditor({
           }
         />
         <OutputPreference
-          disabled={disabled || settings.shortCount === 0}
+          disabled={disabled || settings.shortCount === 0 || shortManual}
           guidance={settings.shortClipGuidance}
           label="ショート"
+          manualTimeMode={shortManual}
           placeholder="例: 一言で引きがある驚き、笑い、大きなリアクション。"
           preset={settings.shortClipSelectionPreset}
           onGuidanceChange={(value) => onChange({ ...settings, shortClipGuidance: value })}
@@ -121,7 +143,7 @@ export function ClipSelectionEditor({
           <input
             checked={settings.excludeIntroOutro}
             className="mt-0.5 h-4 w-4"
-            disabled={disabled}
+            disabled={disabled || !hasAutomaticOutput}
             type="checkbox"
             onChange={(event) =>
               onChange({ ...settings, excludeIntroOutro: event.target.checked })
@@ -133,7 +155,7 @@ export function ClipSelectionEditor({
           <input
             checked={settings.excludePromotionalContent}
             className="mt-0.5 h-4 w-4"
-            disabled={disabled}
+            disabled={disabled || !hasAutomaticOutput}
             type="checkbox"
             onChange={(event) =>
               onChange({
@@ -148,7 +170,7 @@ export function ClipSelectionEditor({
           <input
             checked={settings.selectionPolicy === "strict_quality"}
             className="mt-0.5 h-4 w-4"
-            disabled={disabled}
+            disabled={disabled || !hasAutomaticOutput}
             type="checkbox"
             onChange={(event) =>
               onChange({
@@ -165,7 +187,7 @@ export function ClipSelectionEditor({
           <input
             checked={settings.useOpenAIScoring}
             className="mt-0.5 h-4 w-4"
-            disabled={disabled}
+            disabled={disabled || !hasAutomaticOutput}
             type="checkbox"
             onChange={(event) =>
               onChange({

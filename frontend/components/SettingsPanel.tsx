@@ -2,7 +2,12 @@
 
 import type { ClipSettings } from "../lib/types";
 import { ClipSelectionEditor } from "./ClipSelectionEditor";
+import { ManualClipRangeEditor } from "./ManualClipRangeEditor";
 import { SubtitleStyleEditor } from "./SubtitleStyleEditor";
+import {
+  isManualTimeMode,
+  resizeManualRanges
+} from "../lib/manualClipRanges";
 
 type SettingsPanelProps = {
   settings: ClipSettings;
@@ -23,6 +28,8 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   shortClipSelectionPreset: "auto",
   normalClipGuidance: "",
   shortClipGuidance: "",
+  normalClipTimeRanges: [],
+  shortClipTimeRanges: [],
   excludeIntroOutro: true,
   excludePromotionalContent: false,
   selectionPolicy: "strict_quality",
@@ -93,14 +100,16 @@ function withOutputMode(settings: ClipSettings, mode: OutputMode): ClipSettings 
     return {
       ...settings,
       normalClipCount: settings.normalClipCount || DEFAULT_SETTINGS.normalClipCount,
-      shortCount: 0
+      shortCount: 0,
+      shortClipTimeRanges: []
     };
   }
   if (mode === "short_only") {
     return {
       ...settings,
       normalClipCount: 0,
-      shortCount: settings.shortCount || DEFAULT_SETTINGS.shortCount
+      shortCount: settings.shortCount || DEFAULT_SETTINGS.shortCount,
+      normalClipTimeRanges: []
     };
   }
   return {
@@ -192,12 +201,13 @@ export function SettingsPanel({
               min={1}
               type="number"
               value={settings.normalClipCount}
-              onChange={(event) =>
-                onChange({
+              onChange={(event) => {
+                const count = Math.max(1, Number(event.target.value) || 1);
+                onChange(resizeManualRanges({
                   ...settings,
-                  normalClipCount: Math.max(1, Number(event.target.value) || 1)
-                })
-              }
+                  normalClipCount: count
+                }, "normal", count));
+              }}
             />
           </label>
         ) : null}
@@ -212,15 +222,22 @@ export function SettingsPanel({
               min={1}
               type="number"
               value={settings.shortCount}
-              onChange={(event) =>
-                onChange({
+              onChange={(event) => {
+                const count = Math.max(1, Number(event.target.value) || 1);
+                onChange(resizeManualRanges({
                   ...settings,
-                  shortCount: Math.max(1, Number(event.target.value) || 1)
-                })
-              }
+                  shortCount: count
+                }, "short", count));
+              }}
             />
           </label>
         ) : null}
+
+        <ManualClipRangeEditor
+          disabled={disabled}
+          settings={settings}
+          onChange={onChange}
+        />
 
         <ClipSelectionEditor
           disabled={disabled}
@@ -336,7 +353,11 @@ export function SettingsPanel({
               <span className="text-sm font-medium text-neutral-700">Normal min seconds</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled || settings.normalClipCount === 0}
+                disabled={
+                  disabled ||
+                  settings.normalClipCount === 0 ||
+                  isManualTimeMode(settings, "normal")
+                }
                 min={1}
                 step={1}
                 type="number"
@@ -354,7 +375,11 @@ export function SettingsPanel({
               <span className="text-sm font-medium text-neutral-700">Normal max seconds</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled || settings.normalClipCount === 0}
+                disabled={
+                  disabled ||
+                  settings.normalClipCount === 0 ||
+                  isManualTimeMode(settings, "normal")
+                }
                 min={1}
                 step={1}
                 type="number"
@@ -372,7 +397,11 @@ export function SettingsPanel({
               <span className="text-sm font-medium text-neutral-700">Short min seconds</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled || settings.shortCount === 0}
+                disabled={
+                  disabled ||
+                  settings.shortCount === 0 ||
+                  isManualTimeMode(settings, "short")
+                }
                 min={1}
                 step={1}
                 type="number"
@@ -390,7 +419,11 @@ export function SettingsPanel({
               <span className="text-sm font-medium text-neutral-700">Short max seconds</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                disabled={disabled || settings.shortCount === 0}
+                disabled={
+                  disabled ||
+                  settings.shortCount === 0 ||
+                  isManualTimeMode(settings, "short")
+                }
                 min={1}
                 step={1}
                 type="number"

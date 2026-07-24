@@ -571,6 +571,106 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "short_01.ass" not in names
 
 
+def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 2,
+                "normalClipTimeRanges": [
+                    {"startSeconds": 5, "endSeconds": 55},
+                ],
+                "shortClipTimeRanges": [
+                    {"startSeconds": 60, "endSeconds": 75},
+                    {"startSeconds": 150, "endSeconds": 180},
+                ],
+                "useOpenAIScoring": True,
+                "enableBoundaryRefinement": True,
+                "burnSubtitles": True,
+                "requireSubtitleReview": True,
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"preview")
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=240.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=lambda _path: fake_transcript(),
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        subtitle_review_preview_renderer=fake_render,
+    )
+
+    run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    selected = json.loads(
+        (storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [
+        (clip["start"], clip["end"], clip["selection_reason"])
+        for clip in selected["normalClips"]
+    ] == [(5.0, 55.0, "manual_time_range")]
+    assert [
+        (clip["start"], clip["end"], clip["selection_reason"])
+        for clip in selected["shorts"]
+    ] == [
+        (60.0, 75.0, "manual_time_range"),
+        (150.0, 180.0, "manual_time_range"),
+    ]
+    assert all(
+        clip["boundary_refinement_reason"] == "manual_time_range_locked"
+        for clip in [*selected["normalClips"], *selected["shorts"]]
+    )
+    assert not (storage.job_outputs(created["jobId"]) / "openai_scoring_summary.json").exists()
+    review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
+    assert [(clip["start"], clip["end"]) for clip in review["clips"]] == [
+        (5.0, 55.0),
+        (60.0, 75.0),
+        (150.0, 180.0),
+    ]
+
+
 def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(client: TestClient) -> None:
     upload_response = client.post(
         "/api/videos/upload",

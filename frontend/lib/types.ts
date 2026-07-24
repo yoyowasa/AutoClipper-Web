@@ -27,6 +27,11 @@ export type ClipSelectionPreset =
   | "emotional"
   | "informative";
 
+export type ClipTimeRange = {
+  startSeconds: number | null;
+  endSeconds: number | null;
+};
+
 export type ClipSettings = {
   mode: "fast" | "high_quality";
   profile: "auto" | "talk" | "gameplay" | "lecture";
@@ -40,6 +45,8 @@ export type ClipSettings = {
   shortClipSelectionPreset: ClipSelectionPreset;
   normalClipGuidance: string;
   shortClipGuidance: string;
+  normalClipTimeRanges: ClipTimeRange[];
+  shortClipTimeRanges: ClipTimeRange[];
   excludeIntroOutro: boolean;
   excludePromotionalContent: boolean;
   selectionPolicy: "fill_requested" | "strict_quality";
