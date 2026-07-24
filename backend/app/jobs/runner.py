@@ -81,6 +81,13 @@ from app.candidates.select_candidates import (
 from app.candidates.title_fallback import titled_candidates
 from app.db import SessionLocal
 from app.ids import make_id
+from app.jobs.clip_plan import (
+    build_clip_plan,
+    clip_plan_output_path,
+    load_clip_plan,
+    mark_clip_plan_awaiting_review,
+    write_clip_plan,
+)
 from app.jobs.summaries import write_generation_summaries
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
 from app.jobs.subtitle_review import (
@@ -442,6 +449,27 @@ def _set_subtitle_review_preview_progress(
     job.status = "preparing_subtitle_review"
     job.progress = 74 + int(3 * bounded_completed / bounded_total)
     job.current_step = f"字幕確認用動画を準備中 ({bounded_completed}/{total})"
+    job.updated_at = utc_now()
+    job.error_code = None
+    job.error_message = None
+    db.commit()
+    db.refresh(job)
+
+
+def _set_clip_plan_preview_progress(
+    db: Session,
+    job: Job,
+    *,
+    completed: int,
+    total: int,
+) -> None:
+    bounded_total = max(1, total)
+    bounded_completed = max(0, min(completed, bounded_total))
+    job.status = "preparing_clip_review"
+    job.progress = 73 + int(2 * bounded_completed / bounded_total)
+    job.current_step = (
+        f"切り抜き予定の確認動画を準備中 ({bounded_completed}/{total})"
+    )
     job.updated_at = utc_now()
     job.error_code = None
     job.error_message = None
@@ -1562,6 +1590,88 @@ def _top_level_metadata_files(job_dir: Path) -> list[Path]:
     )
 
 
+def _next_clip_plan_revision(job_dir: Path) -> int:
+    path = clip_plan_output_path(job_dir)
+    if not path.is_file():
+        return 1
+    try:
+        return load_clip_plan(path).revision + 1
+    except (OSError, ValueError, json.JSONDecodeError):
+        return 1
+
+
+def _prepare_clip_plan_review(
+    *,
+    db: Session,
+    job: Job,
+    input_path: Path,
+    selection: CandidateSelection,
+    settings: dict[str, Any],
+    job_dir: Path,
+    preview_renderer: Callable[..., Path],
+) -> Path:
+    selected = [*selection.normal_clips, *selection.shorts]
+    if not selected:
+        raise PipelineExpectedError(
+            "no_usable_output",
+            "Pipeline completed analysis but produced no usable clips.",
+        )
+
+    document = build_clip_plan(
+        job.id,
+        selection,
+        settings,
+        revision=_next_clip_plan_revision(job_dir),
+    )
+    output_path = clip_plan_output_path(job_dir)
+    write_clip_plan(document, output_path)
+    total = len(selected)
+    _set_clip_plan_preview_progress(db, job, completed=0, total=total)
+
+    available_clip_ids: list[str] = []
+    current_preview_paths: set[Path] = set()
+    for preview_index, candidate in enumerate(selected, start=1):
+        preview_path = subtitle_review_preview_path(job_dir, candidate.id)
+        current_preview_paths.add(preview_path.resolve())
+        try:
+            if not preview_path.is_file() or preview_path.stat().st_size <= 0:
+                preview_renderer(
+                    input_path,
+                    preview_path,
+                    start=candidate.start,
+                    duration=candidate.duration,
+                )
+        except Exception as exc:
+            raise PipelineExpectedError(
+                "clip_plan_preview_failed",
+                (
+                    "Could not prepare clip plan preview for "
+                    f"clip {preview_index}/{total}: {exc}"
+                ),
+            ) from exc
+        available_clip_ids.append(candidate.id)
+        _set_clip_plan_preview_progress(
+            db,
+            job,
+            completed=preview_index,
+            total=total,
+        )
+
+    preview_dir = subtitle_review_preview_path(job_dir, "placeholder").parent
+    if preview_dir.is_dir():
+        for stale_path in preview_dir.glob("*.mp4"):
+            if stale_path.resolve() not in current_preview_paths:
+                stale_path.unlink(missing_ok=True)
+
+    document = mark_clip_plan_awaiting_review(
+        document,
+        preview_clip_ids=available_clip_ids,
+    )
+    write_clip_plan(document, output_path)
+    _set_status(db, job, "awaiting_clip_review")
+    return output_path
+
+
 def run_autoclipper_job(
     job_id: str,
     session_factory: SessionFactory = SessionLocal,
@@ -2070,6 +2180,30 @@ def run_autoclipper_job(
             selected_path = write_selected_clips(selection, job_dir / "selected_clips.json")
             metadata_files.append(selected_path)
 
+            if (
+                bool(settings.get("requireClipPlanReview", False))
+                and bool(settings.get("requireSubtitleReview", False))
+                and bool(settings.get("burnSubtitles", True))
+            ):
+                plan_path = _prepare_clip_plan_review(
+                    db=db,
+                    job=job,
+                    input_path=input_path,
+                    selection=selection,
+                    settings=settings,
+                    job_dir=job_dir,
+                    preview_renderer=deps.subtitle_review_preview_renderer,
+                )
+                metadata_files.append(plan_path)
+                summary_files = write_summaries()
+                metadata_files.extend(
+                    path for path in summary_files if path not in metadata_files
+                )
+                visited_statuses.extend(
+                    ["preparing_clip_review", "awaiting_clip_review"]
+                )
+                return visited_statuses
+
             if bool(settings.get("requireSubtitleReview", False)) and bool(settings.get("burnSubtitles", True)):
                 if not selection.normal_clips and not selection.shorts:
                     raise PipelineExpectedError(
@@ -2160,6 +2294,283 @@ def run_autoclipper_job(
                     pass
             if temp_dir is not None:
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return visited_statuses
+
+
+def _restore_clip_plan_after_reselection_failure(
+    db: Session,
+    job: Job,
+    *,
+    job_dir: Path,
+    previous_plan: Any,
+    previous_artifacts: dict[Path, bytes | None],
+    code: str,
+    message: str,
+) -> None:
+    for path, payload in previous_artifacts.items():
+        if payload is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+    if previous_plan is not None:
+        previous_plan.state = "awaiting_review"
+        write_clip_plan(previous_plan, clip_plan_output_path(job_dir))
+        job.settings_json = dict(previous_plan.settings)
+    job.status = "awaiting_clip_review"
+    job.progress = PROGRESS_MAP["awaiting_clip_review"]
+    job.current_step = "再選定に失敗しました。設定を確認して再試行してください"
+    job.error_code = code
+    job.error_message = message
+    job.updated_at = utc_now()
+    db.commit()
+    db.refresh(job)
+
+
+def run_clip_plan_reselection(
+    job_id: str,
+    session_factory: SessionFactory = SessionLocal,
+    paths: StoragePaths | None = None,
+    dependencies: AutoClipperPipelineDependencies | None = None,
+) -> list[str]:
+    storage_paths = paths or get_storage_paths()
+    deps = dependencies or AutoClipperPipelineDependencies()
+    visited_statuses: list[str] = []
+
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"job not found: {job_id}")
+        video = db.get(Video, job.video_id)
+        if video is None:
+            raise ValueError(f"video not found for job: {job_id}")
+
+        job_dir = storage_paths.job_outputs(job.id)
+        settings = dict(job.settings_json or {})
+        input_path = storage_paths.resolve_stored_file(video.stored_path)
+        previous_plan_path = clip_plan_output_path(job_dir)
+        previous_plan = (
+            load_clip_plan(previous_plan_path)
+            if previous_plan_path.is_file()
+            else None
+        )
+        previous_artifact_paths = [
+            job_dir / "selected_clips.json",
+            job_dir / "scored_candidates.json",
+            job_dir / "openai_scoring_summary.json",
+            job_dir / "candidate_summary.json",
+            job_dir / "rejection_summary.json",
+            job_dir / "selected_clips_summary.json",
+        ]
+        previous_artifacts = {
+            path: path.read_bytes() if path.is_file() else None
+            for path in previous_artifact_paths
+        }
+
+        try:
+            _set_status(db, job, "reselecting_clips")
+            visited_statuses.append("reselecting_clips")
+            transcript_segments = _read_transcript_segments(
+                transcript_output_path(job_dir)
+            )
+            audio_features = AudioFeatures.model_validate(
+                _read_json_file(job_dir / "audio_features.json")
+            )
+            silence_segments = [
+                SilenceSegment.model_validate(item)
+                for item in _read_json_file(job_dir / "silence_segments.json")
+            ]
+            scene_segments = [
+                SceneSegment.model_validate(item)
+                for item in _read_json_file(job_dir / "scene_segments.json")
+            ]
+            visual_quality = VisualQuality.model_validate(
+                _read_json_file(job_dir / "visual_quality.json")
+            )
+            base_candidates = _read_model_list(
+                job_dir / "candidates.json",
+                Candidate,
+            )
+            if not base_candidates:
+                raise PipelineExpectedError(
+                    "clip_plan_candidates_missing",
+                    "Saved clip candidates are unavailable for reselection.",
+                )
+
+            normal_manual_ranges = manual_ranges_for_type(settings, "normal")
+            short_manual_ranges = manual_ranges_for_type(settings, "short")
+            automatic_settings = automatic_selection_settings(
+                settings,
+                manual_normal=bool(normal_manual_ranges),
+                manual_short=bool(short_manual_ranges),
+            )
+            normal_candidates = (
+                build_manual_candidates(
+                    "normal",
+                    normal_manual_ranges,
+                    transcript_segments,
+                ).candidates
+                if normal_manual_ranges
+                else [
+                    candidate
+                    for candidate in base_candidates
+                    if candidate.type == "normal"
+                ]
+            )
+            short_candidates = (
+                build_manual_candidates(
+                    "short",
+                    short_manual_ranges,
+                    transcript_segments,
+                ).candidates
+                if short_manual_ranges
+                else [
+                    candidate
+                    for candidate in base_candidates
+                    if candidate.type == "short"
+                ]
+            )
+            manual_candidates = [
+                *(normal_candidates if normal_manual_ranges else []),
+                *(short_candidates if short_manual_ranges else []),
+            ]
+            automatic_candidates = [
+                *(normal_candidates if not normal_manual_ranges else []),
+                *(short_candidates if not short_manual_ranges else []),
+            ]
+
+            scoring_result = (
+                _score_candidate_list(
+                    automatic_candidates,
+                    settings=automatic_settings,
+                    audio_features=audio_features,
+                    silence_segments=silence_segments,
+                    visual_quality=visual_quality,
+                    scorer=deps.openai_scorer,
+                )
+                if automatic_candidates
+                else ScoringResult(candidates=[])
+            )
+            automatic_selection = select_candidates(
+                scoring_result.candidates,
+                settings=automatic_settings,
+                audio_features=audio_features,
+                silence_segments=silence_segments,
+            )
+            automatic_selection, automatic_scored, openai_scoring_summary = (
+                _ensure_selected_candidates_openai_scored(
+                    automatic_selection,
+                    scoring_result.candidates,
+                    settings=automatic_settings,
+                    audio_features=audio_features,
+                    visual_quality=visual_quality,
+                    scorer=scoring_result.openai_scorer,
+                    openai_summary=scoring_result.openai_summary,
+                )
+            )
+            scored_candidates = [*automatic_scored, *manual_candidates]
+            selection = merge_manual_candidates_into_selection(
+                automatic_selection,
+                settings=settings,
+                manual_normal_candidates=(
+                    normal_candidates if normal_manual_ranges else []
+                ),
+                manual_short_candidates=(
+                    short_candidates if short_manual_ranges else []
+                ),
+            )
+            selection, scored_candidates = _selection_with_refined_boundaries(
+                selection,
+                scored_candidates,
+                transcript_segments=transcript_segments,
+                silence_segments=silence_segments,
+                scene_segments=scene_segments,
+                settings=settings,
+                timeline_duration=float(video.duration or visual_quality.duration),
+            )
+            selection, scored_candidates = _selection_with_fallback_titles(
+                selection,
+                scored_candidates,
+                transcript_segments,
+            )
+            write_candidates(
+                scored_candidates,
+                job_dir / "scored_candidates.json",
+            )
+            write_selected_clips(selection, job_dir / "selected_clips.json")
+
+            openai_summary_path = job_dir / "openai_scoring_summary.json"
+            if openai_scoring_summary is None:
+                openai_summary_path.unlink(missing_ok=True)
+            candidate_generation_summary = _read_json_file(
+                job_dir / "candidate_generation_summary.json"
+            )
+            transcript_summary_path = job_dir / "transcript_summary.json"
+            transcript_summary = (
+                _read_json_file(transcript_summary_path)
+                if transcript_summary_path.is_file()
+                else {}
+            )
+            write_generation_summaries(
+                job_dir,
+                transcript_segments=transcript_segments,
+                audio_features=audio_features,
+                normal_candidates=normal_candidates,
+                short_candidates=short_candidates,
+                candidate_generation_summary=candidate_generation_summary,
+                scored_candidates=scored_candidates,
+                selection=selection,
+                openai_scoring_summary=openai_scoring_summary,
+                transcription_engine=str(
+                    transcript_summary.get("transcription_engine", "not_run")
+                ),
+                used_fixture_transcript=bool(
+                    transcript_summary.get("used_fixture_transcript", False)
+                ),
+                transcription_model=transcript_summary.get(
+                    "transcription_model"
+                ),
+                transcription_language=transcript_summary.get(
+                    "transcription_language"
+                ),
+                transcription_diagnostics=transcript_summary.get(
+                    "transcription_runtime"
+                ),
+            )
+            _prepare_clip_plan_review(
+                db=db,
+                job=job,
+                input_path=input_path,
+                selection=selection,
+                settings=settings,
+                job_dir=job_dir,
+                preview_renderer=deps.subtitle_review_preview_renderer,
+            )
+            visited_statuses.extend(
+                ["preparing_clip_review", "awaiting_clip_review"]
+            )
+        except PipelineExpectedError as exc:
+            _restore_clip_plan_after_reselection_failure(
+                db,
+                job,
+                job_dir=job_dir,
+                previous_plan=previous_plan,
+                previous_artifacts=previous_artifacts,
+                code=exc.code,
+                message=exc.message,
+            )
+        except Exception as exc:
+            _restore_clip_plan_after_reselection_failure(
+                db,
+                job,
+                job_dir=job_dir,
+                previous_plan=previous_plan,
+                previous_artifacts=previous_artifacts,
+                code="clip_plan_reselection_failed",
+                message=str(exc),
+            )
+            raise
 
     return visited_statuses
 

@@ -1,4 +1,7 @@
 import type {
+  ClipPlanActionResponse,
+  ClipPlanDocument,
+  ClipPlanReselectionRequest,
   ClipSettings,
   JobCreateResponse,
   JobResultsResponse,
@@ -119,6 +122,34 @@ export async function getJobResults(jobId: string): Promise<JobResultsResponse> 
   });
 
   return parseJsonResponse<JobResultsResponse>(response);
+}
+
+export async function getClipPlan(jobId: string): Promise<ClipPlanDocument> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/clip-plan`, {
+    cache: "no-store"
+  });
+  return parseJsonResponse<ClipPlanDocument>(response);
+}
+
+export async function reselectClipPlan(
+  jobId: string,
+  settings: ClipPlanReselectionRequest
+): Promise<ClipPlanActionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/clip-plan/reselect`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(settings)
+  });
+  return parseJsonResponse<ClipPlanActionResponse>(response);
+}
+
+export async function approveClipPlan(jobId: string): Promise<ClipPlanActionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/clip-plan/approve`, {
+    method: "POST"
+  });
+  return parseJsonResponse<ClipPlanActionResponse>(response);
 }
 
 export async function getSubtitleReview(jobId: string): Promise<SubtitleReviewDocument> {

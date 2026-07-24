@@ -46,6 +46,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   maxBoundaryExpansionSeconds: 3,
   allowBoundaryExpansionBeyondMaxDuration: false,
   burnSubtitles: true,
+  requireClipPlanReview: true,
   requireSubtitleReview: true,
   maxCharsPerLineShort: 16,
   maxCharsPerLineNormal: 28,
@@ -281,20 +282,46 @@ export function SettingsPanel({
         </label>
 
         <section className="border-y border-neutral-200 py-5 md:col-span-2">
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="border-l-4 border-emerald-500 bg-emerald-50 px-4 py-3">
               <p className="text-xs font-semibold text-emerald-800">1. 自動処理</p>
               <p className="mt-1 text-sm font-medium text-neutral-900">文字起こし・clip選定</p>
             </div>
+            <div className="border-l-4 border-blue-500 bg-blue-50 px-4 py-3">
+              <p className="text-xs font-semibold text-blue-800">2. 予定確認</p>
+              <p className="mt-1 text-sm font-medium text-neutral-900">範囲を再生・再選定</p>
+            </div>
             <div className="border-l-4 border-sky-500 bg-sky-50 px-4 py-3">
-              <p className="text-xs font-semibold text-sky-800">2. 手動確認</p>
+              <p className="text-xs font-semibold text-sky-800">3. 字幕確認</p>
               <p className="mt-1 text-sm font-medium text-neutral-900">clipごとに字幕を修正</p>
             </div>
             <div className="border-l-4 border-amber-500 bg-amber-50 px-4 py-3">
-              <p className="text-xs font-semibold text-amber-800">3. 書き出し</p>
+              <p className="text-xs font-semibold text-amber-800">4. 書き出し</p>
               <p className="mt-1 text-sm font-medium text-neutral-900">字幕焼き込み・ZIP生成</p>
             </div>
           </div>
+          <label className="mt-4 flex min-h-11 items-start gap-3 border border-neutral-300 bg-white px-4 py-3">
+            <input
+              checked={settings.requireClipPlanReview}
+              className="mt-0.5 h-4 w-4"
+              disabled={disabled || !settings.burnSubtitles || !settings.requireSubtitleReview}
+              type="checkbox"
+              onChange={(event) =>
+                onChange({
+                  ...settings,
+                  requireClipPlanReview: event.target.checked
+                })
+              }
+            />
+            <span>
+              <span className="block text-sm font-semibold text-neutral-900">
+                字幕確認の前に切り抜き範囲を確認する
+              </span>
+              <span className="mt-1 block text-xs text-neutral-600">
+                軽量プレビューで予定範囲を確認し、狙う場面を変えて再選定できます。
+              </span>
+            </span>
+          </label>
           <label className="mt-4 flex min-h-11 items-start gap-3 border border-neutral-300 bg-white px-4 py-3">
             <input
               checked={settings.requireSubtitleReview}
@@ -302,9 +329,12 @@ export function SettingsPanel({
               disabled={disabled || !settings.burnSubtitles}
               type="checkbox"
               onChange={(event) =>
-                onChange({
+              onChange({
                   ...settings,
-                  requireSubtitleReview: event.target.checked
+                  requireSubtitleReview: event.target.checked,
+                  requireClipPlanReview: event.target.checked
+                    ? settings.requireClipPlanReview
+                    : false
                 })
               }
             />

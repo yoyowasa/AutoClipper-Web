@@ -5449,3 +5449,62 @@ pip check: pass
 - 時間指定は分秒の直接入力。動画timeline上の範囲選択は未実装。
 - 指定範囲は固定するため、発話途中などを指定してもboundary refinementでは変更しない。
 - branch `codex/task-79-manual-clip-time-ranges`で実装・ローカル検証済み。親branchはTask78。main mergeは未実施。
+
+## 2026-07-24 Task 80 clip plan review stage
+
+### 目的
+
+- 字幕確認・最終レンダリングへ進む前に、通常切り抜きとショートの生成予定範囲を確認できるようにする。
+- 予定が合わない場合、狙う場面の設定を変更し、保存済み解析結果から短時間で再選定できるようにする。
+- `解析・選定 -> 予定確認 -> 字幕確認 -> 書き出し`の作業工程を画面上で明示する。
+
+### 変更
+
+- `clip_plan.json`とclip plan APIを追加し、予定clipの種類、開始・終了、長さ、タイトル、選定時の文字起こし抜粋、軽量preview URLを保持。
+- `preparing_clip_review` / `awaiting_clip_review` / `reselecting_clips` statusを追加。
+- Upload画面ではclip plan reviewを既定ONとし、字幕確認前に処理を一時停止。
+- `/jobs/{jobId}/clips`へ予定確認画面を追加。
+  - 左: 通常・ショートの生成予定一覧。
+  - 中央: 選択範囲だけの軽量動画、元動画上の開始・終了、文字起こし抜粋。
+  - 右: 通常・ショート別のpreset、具体的な方針、除外条件、品質優先、OpenAI scoring設定。
+- 再選定では保存済みtranscript、候補、音声特徴、無音区間、scene/visual情報を再利用。
+- OpenAI scoringがOFFの場合、再選定によるAPI料金は発生しないことを画面へ明記。
+- 予定承認後に初めてclip別字幕確認artifactを作成し、字幕確認完了後に最終レンダリングを開始。
+- 再選定失敗時は直前のplan、settings、selected/scored artifactへ復元。
+
+### 検証
+
+- backend ruff (`backend/app`): pass。
+- backend pytest: `372 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / frontend / worker rebuild: pass。
+- `smoke_runtime.py --skip-video`: pass。
+- clip plan実API E2E: pass。
+  - job: `job_940f247a87444979a5ff7d4abf7547ce`
+  - plan revision: `1 -> 2`
+  - 再選定前後のtranscript hash: 完全一致
+  - OpenAI scoring: OFF、API call `0`
+  - 予定承認後に字幕確認を作成し、最終renderまで完走
+  - normal `0/0` / short `1/1`
+  - short: `1080x1920`
+  - render failures: `0`
+  - audit inspection: `0`
+  - sidecar risk: `0`
+- browser実操作: pass。
+  - job: `job_6f8ab866e39f4f4b9f303655edb8fcb0`
+  - 第1案を表示し、選択範囲だけの25秒previewを再生可能。
+  - ショートpresetを`重要発言`へ変更し、自由入力を追加して第2案へ再選定。
+  - 再選定中の二重操作防止と、完了後の操作復帰を確認。
+  - `この切り抜き予定で字幕確認へ`から、選択clipだけの字幕確認画面へ遷移。
+  - 字幕確認後の最終renderまで完走。
+- `git diff --check`: pass。
+
+### 未解決・制限
+
+- 自動おすすめの初回選定には内容解析用transcriptが必要。ユーザー向け字幕確認artifactの作成と字幕焼き込みは予定承認後まで行わない。
+- 再選定でOpenAI scoringをONにした場合だけAPI料金が発生する。
+- 予定確認画面では選定方針を変更できる。開始・終了時刻の直接指定はUpload画面のTask79機能を使用する。
+- `ruff check backend scripts`は今回未変更の既存2件で失敗:
+  - `scripts/make_plotwith_solar_finished_variants.py:197` F841。
+  - `scripts/smoke_runtime.py:173` F541。
+- branch `codex/task-80-clip-plan-review`で実装・ローカル検証済み。親branchはTask79。main mergeは未実施。

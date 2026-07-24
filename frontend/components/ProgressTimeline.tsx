@@ -25,6 +25,9 @@ const STEP_LABELS: Partial<Record<JobStatus, string>> = {
   generating_candidates: "候補生成",
   scoring_candidates: "候補評価",
   selecting_clips: "clip選定",
+  reselecting_clips: "再選定",
+  preparing_clip_review: "予定動画準備",
+  awaiting_clip_review: "範囲確認",
   preparing_subtitle_review: "確認動画準備",
   awaiting_subtitle_review: "字幕確認",
   rendering_normal_clips: "通常切り抜き",
@@ -35,11 +38,13 @@ const STEP_LABELS: Partial<Record<JobStatus, string>> = {
 
 type ProgressTimelineProps = {
   status: JobStatus;
+  hasClipPlanReview?: boolean;
   hasSubtitleReview?: boolean;
 };
 
 export function ProgressTimeline({
   status,
+  hasClipPlanReview = false,
   hasSubtitleReview = false
 }: ProgressTimelineProps) {
   let steps: JobStatus[] =
@@ -50,6 +55,23 @@ export function ProgressTimeline({
           ...BASE_STEPS.slice(BASE_STEPS.indexOf("transcribing") + 1)
         ]
       : BASE_STEPS;
+  if (
+    hasClipPlanReview ||
+    status === "reselecting_clips" ||
+    status === "preparing_clip_review" ||
+    status === "awaiting_clip_review"
+  ) {
+    const renderIndex = steps.indexOf("rendering_normal_clips");
+    const clipReviewSteps: JobStatus[] =
+      status === "reselecting_clips"
+        ? ["reselecting_clips", "preparing_clip_review", "awaiting_clip_review"]
+        : ["preparing_clip_review", "awaiting_clip_review"];
+    steps = [
+      ...steps.slice(0, renderIndex),
+      ...clipReviewSteps,
+      ...steps.slice(renderIndex)
+    ];
+  }
   if (
     hasSubtitleReview ||
     status === "preparing_subtitle_review" ||
