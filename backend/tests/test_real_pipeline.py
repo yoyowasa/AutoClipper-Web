@@ -14,7 +14,11 @@ from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.volume_features import build_audio_features
 from app.db import Base, get_db
-from app.jobs.queue import get_enqueue_job, get_enqueue_render_job
+from app.jobs.queue import (
+    get_enqueue_clip_plan_reselection,
+    get_enqueue_job,
+    get_enqueue_render_job,
+)
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import select_candidates
 from app.jobs.runner import (
@@ -24,6 +28,7 @@ from app.jobs.runner import (
     _ensure_selected_candidates_openai_scored,
     _score_candidate_list,
     run_autoclipper_job,
+    run_clip_plan_reselection,
     run_subtitle_review_render,
 )
 from app.jobs.status import SUCCESS_STATUSES
@@ -595,6 +600,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
                 "useOpenAIScoring": True,
                 "enableBoundaryRefinement": True,
                 "burnSubtitles": True,
+                "requireClipPlanReview": True,
                 "requireSubtitleReview": True,
             },
         },
@@ -605,11 +611,14 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         Path(output_path).write_bytes(b"fake wav")
         return Path(output_path)
 
+    preview_render_calls: list[str] = []
+
     def fake_render(
         _input_path: str | Path,
         output_path: str | Path,
         **_kwargs: Any,
     ) -> Path:
+        preview_render_calls.append(Path(output_path).name)
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(b"preview")
         return Path(output_path)
@@ -635,7 +644,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         subtitle_review_preview_renderer=fake_render,
     )
 
-    run_autoclipper_job(
+    visited_statuses = run_autoclipper_job(
         created["jobId"],
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
@@ -663,6 +672,99 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         for clip in [*selected["normalClips"], *selected["shorts"]]
     )
     assert not (storage.job_outputs(created["jobId"]) / "openai_scoring_summary.json").exists()
+    assert visited_statuses[-1] == "awaiting_clip_review"
+    output_dir = storage.job_outputs(created["jobId"])
+    transcript_before = (output_dir / "transcript_segments.json").read_bytes()
+    assert not (output_dir / "subtitle_review.json").exists()
+
+    plan_response = client.get(f"/api/jobs/{created['jobId']}/clip-plan")
+    assert plan_response.status_code == 200
+    plan = plan_response.json()
+    assert plan["state"] == "awaiting_review"
+    assert plan["revision"] == 1
+    assert [(clip["start"], clip["end"]) for clip in plan["clips"]] == [
+        (5.0, 55.0),
+        (60.0, 75.0),
+        (150.0, 180.0),
+    ]
+    assert all(clip["previewVideoUrl"] for clip in plan["clips"])
+    assert client.get(plan["clips"][0]["previewVideoUrl"]).content == b"preview"
+    assert len(preview_render_calls) == 3
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        stored_job = db.get(Job, created["jobId"])
+        assert stored_job is not None
+        settings_before_queue_failure = dict(stored_job.settings_json or {})
+
+    def fail_reselection_enqueue(_job_id: str) -> None:
+        raise RuntimeError("queue unavailable")
+
+    app.dependency_overrides[get_enqueue_clip_plan_reselection] = (
+        lambda: fail_reselection_enqueue
+    )
+    failed_reselect_response = client.post(
+        f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+        json={
+            "normalClipSelectionPreset": "important",
+            "shortClipSelectionPreset": "funny",
+            "normalClipGuidance": "キュー失敗時は保存しない",
+            "shortClipGuidance": "",
+            "excludeIntroOutro": True,
+            "excludePromotionalContent": False,
+            "selectionPolicy": "strict_quality",
+            "useOpenAIScoring": False,
+        },
+    )
+    assert failed_reselect_response.status_code == 503
+    with next(app.dependency_overrides[get_db]()) as db:
+        stored_job = db.get(Job, created["jobId"])
+        assert stored_job is not None
+        assert stored_job.settings_json == settings_before_queue_failure
+    assert client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()[
+        "state"
+    ] == "awaiting_review"
+
+    queued_reselections: list[str] = []
+    app.dependency_overrides[get_enqueue_clip_plan_reselection] = (
+        lambda: queued_reselections.append
+    )
+    reselect_response = client.post(
+        f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+        json={
+            "normalClipSelectionPreset": "important",
+            "shortClipSelectionPreset": "funny",
+            "normalClipGuidance": "結論を優先",
+            "shortClipGuidance": "短いリアクションを優先",
+            "excludeIntroOutro": True,
+            "excludePromotionalContent": True,
+            "selectionPolicy": "strict_quality",
+            "useOpenAIScoring": False,
+        },
+    )
+    assert reselect_response.status_code == 202
+    assert queued_reselections == [created["jobId"]]
+
+    reselection_statuses = run_clip_plan_reselection(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+    assert reselection_statuses[-1] == "awaiting_clip_review"
+    assert (output_dir / "transcript_segments.json").read_bytes() == transcript_before
+    assert len(preview_render_calls) == 3
+    revised_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
+    assert revised_plan["revision"] == 2
+    assert revised_plan["settings"]["normalClipGuidance"] == "結論を優先"
+    assert client.get(f"/api/jobs/{created['jobId']}").json()["details"][
+        "clipPlanRevision"
+    ] == 2
+
+    approve_response = client.post(
+        f"/api/jobs/{created['jobId']}/clip-plan/approve"
+    )
+    assert approve_response.status_code == 200
+    assert approve_response.json()["status"] == "awaiting_subtitle_review"
     review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
     assert [(clip["start"], clip["end"]) for clip in review["clips"]] == [
         (5.0, 55.0),

@@ -19,7 +19,11 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
     correctionCompleted !== null &&
     correctionTotal !== null;
   const currentStep =
-    job.status === "awaiting_subtitle_review" ? "字幕を確認してください" : job.currentStep;
+    job.status === "awaiting_clip_review"
+      ? "切り抜き予定を確認してください"
+      : job.status === "awaiting_subtitle_review"
+        ? "字幕を確認してください"
+        : job.currentStep;
 
   return (
     <section className="rounded-md border border-neutral-300 bg-white p-5">

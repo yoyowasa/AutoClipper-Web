@@ -40,6 +40,7 @@ export default function JobPage() {
         if (
           nextJob.status === "completed" ||
           nextJob.status === "failed" ||
+          nextJob.status === "awaiting_clip_review" ||
           nextJob.status === "awaiting_subtitle_review"
         ) {
           if (intervalId) {
@@ -97,9 +98,29 @@ export default function JobPage() {
           <>
             <JobProgress job={job} />
             <ProgressTimeline
+              hasClipPlanReview={
+                typeof job.details.clipPlanState === "string" ||
+                job.status === "awaiting_clip_review"
+              }
               hasSubtitleReview={typeof job.details.subtitleReviewState === "string"}
               status={job.status}
             />
+            {job.status === "awaiting_clip_review" ? (
+              <section className="border border-blue-300 bg-blue-50 px-5 py-5">
+                <p className="text-sm font-semibold text-blue-950">
+                  切り抜き候補が決まりました。字幕を作る前に範囲を確認できます。
+                </p>
+                <p className="mt-1 text-sm text-blue-800">
+                  各予定clipを再生し、合わなければ狙う場面を変更して再選定してください。
+                </p>
+                <Link
+                  className="mt-4 inline-flex min-h-11 items-center bg-blue-700 px-5 text-sm font-semibold text-white"
+                  href={`/jobs/${job.id}/clips`}
+                >
+                  切り抜き予定を確認
+                </Link>
+              </section>
+            ) : null}
             {job.status === "awaiting_subtitle_review" ? (
               <section className="border border-sky-300 bg-sky-50 px-5 py-5">
                 <p className="text-sm font-semibold text-sky-950">

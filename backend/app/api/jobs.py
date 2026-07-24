@@ -10,17 +10,35 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audio.openai_transcript_correction import TRANSCRIPT_CORRECTION_PROGRESS_FILENAME
+from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.candidates.select_candidates import CandidateSelection
 from app.db import get_db
 from app.ids import make_id
-from app.jobs.queue import JobEnqueue, RenderEnqueue, get_enqueue_job, get_enqueue_render_job
+from app.jobs.clip_plan import (
+    ClipPlanDocument,
+    clip_plan_output_path,
+    load_clip_plan,
+    mark_clip_plan_approved,
+    write_clip_plan,
+)
+from app.jobs.queue import (
+    ClipPlanReselectionEnqueue,
+    JobEnqueue,
+    RenderEnqueue,
+    get_enqueue_clip_plan_reselection,
+    get_enqueue_job,
+    get_enqueue_render_job,
+)
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP
 from app.jobs.subtitle_review import (
     SubtitleReviewDocument,
+    build_subtitle_review,
     confirm_review_clip,
     load_subtitle_review,
     queue_review_render,
     subtitle_review_output_path,
     subtitle_review_preview_path,
+    subtitle_review_preview_url,
     subtitle_review_summary_path,
     update_review_segment,
     write_subtitle_review,
@@ -29,11 +47,14 @@ from app.jobs.subtitle_review import (
 from app.models import ExportItem, Job, Video
 from app.models import utc_now
 from app.schemas import (
+    ClipPlanActionResponse,
+    ClipPlanReselectionRequest,
     JobAuditSummary,
     JobCreateRequest,
     JobCreateResponse,
     JobError,
     JobResultsResponse,
+    JobSettings,
     JobStatusResponse,
     ResultExportItem,
     SubtitleReviewFinalizeResponse,
@@ -45,7 +66,12 @@ from app.storage.paths import StoragePaths, get_storage_paths
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 TERMINAL_STATUSES = {"completed", "failed"}
-NON_WORKER_STATUSES = {"uploaded", "queued", "awaiting_subtitle_review"}
+NON_WORKER_STATUSES = {
+    "uploaded",
+    "queued",
+    "awaiting_clip_review",
+    "awaiting_subtitle_review",
+}
 DEFAULT_STALE_WORKER_SECONDS = 1800
 
 
@@ -66,6 +92,25 @@ def _get_subtitle_review_or_404(job_id: str, paths: StoragePaths) -> SubtitleRev
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="subtitle review artifact is invalid",
+        ) from exc
+
+
+def _get_clip_plan_or_404(
+    job_id: str,
+    paths: StoragePaths,
+) -> ClipPlanDocument:
+    plan_path = clip_plan_output_path(paths.job_outputs(job_id))
+    if not plan_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clip plan not found",
+        )
+    try:
+        return load_clip_plan(plan_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="clip plan artifact is invalid",
         ) from exc
 
 
@@ -316,6 +361,13 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
         details["subtitleReviewTotalClips"] = subtitle_review.get("totalClipCount", 0)
         details["subtitleReviewEditedSegments"] = subtitle_review.get("editedSegmentCount", 0)
 
+    clip_plan = _read_json_if_exists(clip_plan_output_path(output_dir))
+    if isinstance(clip_plan, dict):
+        details["clipPlanState"] = clip_plan.get("state")
+        details["clipPlanRevision"] = clip_plan.get("revision", 1)
+        clips = clip_plan.get("clips")
+        details["clipPlanClipCount"] = len(clips) if isinstance(clips, list) else 0
+
     return details
 
 
@@ -413,6 +465,169 @@ def get_job_source_video(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source video not found")
     media_type = mimetypes.guess_type(video.original_filename)[0] or "video/mp4"
     return FileResponse(source_path, media_type=media_type)
+
+
+@router.get("/{job_id}/clip-plan", response_model=ClipPlanDocument)
+def get_clip_plan(
+    job_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> ClipPlanDocument:
+    _get_job_or_404(db, job_id)
+    return _get_clip_plan_or_404(job_id, paths)
+
+
+@router.get("/{job_id}/clip-plan/clips/{clip_id}/preview-video")
+def get_clip_plan_preview_video(
+    job_id: str,
+    clip_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> FileResponse:
+    _get_job_or_404(db, job_id)
+    document = _get_clip_plan_or_404(job_id, paths)
+    if not any(clip.id == clip_id for clip in document.clips):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clip plan item not found",
+        )
+    preview_path = subtitle_review_preview_path(
+        paths.job_outputs(job_id),
+        clip_id,
+    )
+    if not preview_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clip plan preview not found",
+        )
+    return FileResponse(preview_path, media_type="video/mp4")
+
+
+@router.post(
+    "/{job_id}/clip-plan/reselect",
+    response_model=ClipPlanActionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def reselect_clip_plan(
+    job_id: str,
+    request: ClipPlanReselectionRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_reselection: ClipPlanReselectionEnqueue = Depends(
+        get_enqueue_clip_plan_reselection
+    ),
+) -> ClipPlanActionResponse:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_clip_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clip plan is not awaiting reselection",
+        )
+    document = _get_clip_plan_or_404(job_id, paths)
+    previous_settings = dict(job.settings_json or {})
+    settings_payload = dict(previous_settings)
+    settings_payload.update(request.model_dump(by_alias=True, mode="json"))
+    validated_settings = JobSettings.model_validate(settings_payload)
+    job.settings_json = validated_settings.model_dump(
+        by_alias=True,
+        mode="json",
+    )
+    job.status = "reselecting_clips"
+    job.progress = PROGRESS_MAP["reselecting_clips"]
+    job.current_step = CURRENT_STEP_MAP["reselecting_clips"]
+    job.error_code = None
+    job.error_message = None
+    job.updated_at = utc_now()
+    document.state = "reselecting"
+    write_clip_plan(
+        document,
+        clip_plan_output_path(paths.job_outputs(job_id)),
+    )
+    db.commit()
+    db.refresh(job)
+
+    try:
+        enqueue_reselection(job.id)
+    except Exception as exc:
+        job.settings_json = previous_settings
+        job.status = "awaiting_clip_review"
+        job.progress = PROGRESS_MAP["awaiting_clip_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
+        job.updated_at = utc_now()
+        document.state = "awaiting_review"
+        write_clip_plan(
+            document,
+            clip_plan_output_path(paths.job_outputs(job_id)),
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="could not queue clip plan reselection",
+        ) from exc
+
+    return ClipPlanActionResponse(jobId=job.id, status=job.status)
+
+
+@router.post(
+    "/{job_id}/clip-plan/approve",
+    response_model=ClipPlanActionResponse,
+)
+def approve_clip_plan(
+    job_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> ClipPlanActionResponse:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_clip_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clip plan is not awaiting approval",
+        )
+    document = _get_clip_plan_or_404(job_id, paths)
+    output_dir = paths.job_outputs(job_id)
+    selected_payload = _read_json_if_exists(output_dir / "selected_clips.json")
+    transcript_payload = _read_json_if_exists(
+        output_dir / "transcript_segments.json"
+    )
+    if not isinstance(selected_payload, dict) or not isinstance(
+        transcript_payload,
+        list,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="clip plan source artifacts are unavailable",
+        )
+    selection = CandidateSelection.model_validate(selected_payload)
+    transcript_segments = [
+        TranscriptSegment.model_validate(item)
+        for item in transcript_payload
+    ]
+    review_document = build_subtitle_review(
+        job.id,
+        selection,
+        transcript_segments,
+    )
+    for clip in review_document.clips:
+        preview_path = subtitle_review_preview_path(output_dir, clip.id)
+        if preview_path.is_file():
+            clip.preview_video_url = subtitle_review_preview_url(
+                job.id,
+                clip.id,
+            )
+    _persist_subtitle_review(review_document, paths)
+    write_clip_plan(
+        mark_clip_plan_approved(document),
+        clip_plan_output_path(output_dir),
+    )
+    job.status = "awaiting_subtitle_review"
+    job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
+    job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
+    job.error_code = None
+    job.error_message = None
+    job.updated_at = utc_now()
+    db.commit()
+    db.refresh(job)
+    return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
 
 @router.get("/{job_id}/subtitle-review", response_model=SubtitleReviewDocument)

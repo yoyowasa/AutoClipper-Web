@@ -9,6 +9,9 @@ export type JobStatus =
   | "generating_candidates"
   | "scoring_candidates"
   | "selecting_clips"
+  | "reselecting_clips"
+  | "preparing_clip_review"
+  | "awaiting_clip_review"
   | "preparing_subtitle_review"
   | "awaiting_subtitle_review"
   | "rendering_normal_clips"
@@ -63,6 +66,7 @@ export type ClipSettings = {
   maxBoundaryExpansionSeconds: number;
   allowBoundaryExpansionBeyondMaxDuration: boolean;
   burnSubtitles: boolean;
+  requireClipPlanReview: boolean;
   requireSubtitleReview: boolean;
   maxCharsPerLineShort: number;
   maxCharsPerLineNormal: number;
@@ -242,6 +246,51 @@ export type SubtitleReviewDocument = {
 };
 
 export type SubtitleReviewFinalizeResponse = {
+  jobId: string;
+  status: JobStatus;
+};
+
+export type ClipPlanClip = {
+  id: string;
+  type: ExportType;
+  title: string;
+  start: number;
+  end: number;
+  duration: number;
+  previewVideoUrl: string | null;
+  transcriptExcerpt: string;
+  finalScore: number | null;
+  ruleScore: number | null;
+  aiScore: number | null;
+  selectionReason: string | null;
+  boundaryRefined: boolean;
+};
+
+export type ClipPlanDocument = {
+  version: number;
+  jobId: string;
+  state: "preparing" | "awaiting_review" | "reselecting" | "approved";
+  revision: number;
+  sourceVideoUrl: string;
+  clips: ClipPlanClip[];
+  settings: ClipSettings;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ClipPlanReselectionRequest = Pick<
+  ClipSettings,
+  | "normalClipSelectionPreset"
+  | "shortClipSelectionPreset"
+  | "normalClipGuidance"
+  | "shortClipGuidance"
+  | "excludeIntroOutro"
+  | "excludePromotionalContent"
+  | "selectionPolicy"
+  | "useOpenAIScoring"
+>;
+
+export type ClipPlanActionResponse = {
   jobId: string;
   status: JobStatus;
 };

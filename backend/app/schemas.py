@@ -15,6 +15,9 @@ JobStatus = Literal[
     "generating_candidates",
     "scoring_candidates",
     "selecting_clips",
+    "reselecting_clips",
+    "preparing_clip_review",
+    "awaiting_clip_review",
     "preparing_subtitle_review",
     "awaiting_subtitle_review",
     "rendering_normal_clips",
@@ -124,6 +127,7 @@ class JobSettings(BaseModel):
     candidate_chunk_seconds: float = Field(default=600.0, gt=0, alias="candidateChunkSeconds")
     candidate_chunk_overlap_seconds: float = Field(default=75.0, ge=0, alias="candidateChunkOverlapSeconds")
     burn_subtitles: bool = Field(default=True, alias="burnSubtitles")
+    require_clip_plan_review: bool = Field(default=False, alias="requireClipPlanReview")
     require_subtitle_review: bool = Field(default=False, alias="requireSubtitleReview")
     max_chars_per_line_short: int = Field(default=16, ge=6, le=80, alias="maxCharsPerLineShort")
     max_chars_per_line_normal: int = Field(default=28, ge=8, le=100, alias="maxCharsPerLineNormal")
@@ -316,6 +320,28 @@ class JobCreateResponse(BaseModel):
 
 class SubtitleReviewSegmentUpdateRequest(BaseModel):
     text: str = Field(max_length=4000)
+
+
+class ClipPlanReselectionRequest(BaseModel):
+    normal_clip_selection_preset: ClipSelectionPreset = Field(
+        alias="normalClipSelectionPreset"
+    )
+    short_clip_selection_preset: ClipSelectionPreset = Field(
+        alias="shortClipSelectionPreset"
+    )
+    normal_clip_guidance: str = Field(max_length=1000, alias="normalClipGuidance")
+    short_clip_guidance: str = Field(max_length=1000, alias="shortClipGuidance")
+    exclude_intro_outro: bool = Field(alias="excludeIntroOutro")
+    exclude_promotional_content: bool = Field(alias="excludePromotionalContent")
+    selection_policy: SelectionPolicy = Field(alias="selectionPolicy")
+    use_openai_scoring: bool = Field(alias="useOpenAIScoring")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ClipPlanActionResponse(BaseModel):
+    job_id: str = Field(alias="jobId")
+    status: JobStatus
 
 
 class SubtitleReviewFinalizeResponse(BaseModel):
