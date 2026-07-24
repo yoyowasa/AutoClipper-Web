@@ -9,6 +9,7 @@ import {
 } from "../../components/SettingsPanel";
 import { UploadDropzone } from "../../components/UploadDropzone";
 import { createJob, uploadVideo } from "../../lib/api";
+import { manualRangeValidationError } from "../../lib/manualClipRanges";
 import type { ClipSettings } from "../../lib/types";
 
 type SubmissionStage = "idle" | "uploading" | "creating_job";
@@ -32,6 +33,11 @@ function UploadForm() {
     event.preventDefault();
     if (!file) {
       setError("No file selected");
+      return;
+    }
+    const rangeError = manualRangeValidationError(settings);
+    if (rangeError) {
+      setError(rangeError);
       return;
     }
 

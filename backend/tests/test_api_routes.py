@@ -434,6 +434,69 @@ def test_create_job_rejects_invalid_duration_ranges(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_create_job_persists_manual_clip_ranges_and_disables_unused_openai(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 0,
+                "shortCount": 2,
+                "shortClipSelectionPreset": "funny",
+                "shortClipGuidance": "大きなリアクション",
+                "shortClipTimeRanges": [
+                    {"startSeconds": 65, "endSeconds": 82},
+                    {"startSeconds": 120.5, "endSeconds": 145},
+                ],
+                "useOpenAIScoring": True,
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, response.json()["jobId"])
+        assert job is not None
+        assert job.settings_json["shortClipTimeRanges"] == [
+            {"startSeconds": 65.0, "endSeconds": 82.0},
+            {"startSeconds": 120.5, "endSeconds": 145.0},
+        ]
+        assert job.settings_json["useOpenAIScoring"] is False
+
+
+def test_create_job_rejects_partially_entered_manual_clip_ranges(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 0,
+                "shortCount": 2,
+                "shortClipTimeRanges": [
+                    {"startSeconds": 65, "endSeconds": 82},
+                    {"startSeconds": 120.5, "endSeconds": None},
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> None:
     payload = client.get("/openapi.json").json()
     properties = payload["components"]["schemas"]["JobSettings"]["properties"]
@@ -446,6 +509,10 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["shortClipSelectionPreset"]["default"] == "auto"
     assert properties["normalClipGuidance"]["default"] == ""
     assert properties["shortClipGuidance"]["default"] == ""
+    assert properties["normalClipTimeRanges"]["type"] == "array"
+    assert properties["normalClipTimeRanges"]["maxItems"] == 12
+    assert properties["shortClipTimeRanges"]["type"] == "array"
+    assert properties["shortClipTimeRanges"]["maxItems"] == 24
     assert properties["excludeIntroOutro"]["default"] is True
     assert properties["excludePromotionalContent"]["default"] is False
     assert properties["maxCandidates"]["default"] == 1200

@@ -5388,3 +5388,64 @@ pip check: pass
 - 問題jobは既存artifactへ確認用動画をbackfillして復旧した。Task78コードによる同じ65分素材の新規job再実行は行っていない。
 - short確認用動画は時間範囲と字幕内容の確認用16:9 proxy。最終9:16 cropと字幕焼き込みは確認完了後の書き出しで行う。
 - branch `codex/task-78-subtitle-review-preview-proxies`で実装・ローカル検証済み。親branchはTask77。main mergeは未実施。
+
+## 2026-07-24 Task 79 manual clip time ranges
+
+### 目的
+
+- 通常切り抜きとショートを、開始・終了の分秒を直接指定して生成できるようにする。
+- 時間指定した種類では、おすすめ、AI採点、境界の自動調整を使用せず、指定範囲を固定する。
+- 通常は自動・ショートは時間指定など、種類ごとの混在運用を可能にする。
+
+### 変更
+
+- Upload画面へ通常・ショート別の時間指定欄を追加し、指定本数と同じ数の入力行を表示。
+- 1行でも入力するとその種類を時間指定モードに切り替え、全行の開始・終了を必須化。
+- 分・秒入力、指定時間の長さ表示、一括クリア、本数変更時の行数追従を追加。
+- 時間指定中の種類では選定preset、自由入力方針、推奨長さ設定を無効化。
+- すべての生成対象が時間指定の場合は`useOpenAIScoring=false`へ自動補正。
+- backendで本数、入力完了、開始・終了順、重複、元動画尺超過を検証。
+- 時間指定を固定candidateとして生成し、rule/OpenAI scoringとboundary refinementから除外。
+- 混在時は時間未指定の種類だけ既存の自動候補生成・選定を実行。
+- 時間指定candidateへ`selection_reason=manual_time_range`と
+  `boundary_refinement_reason=manual_time_range_locked`を記録。
+- 既存のclip別字幕確認、確認用preview、字幕焼き込み、MP4/ZIP出力を再利用。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `372 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / frontend / worker rebuild: pass。
+- `smoke_runtime.py --skip-video`: pass。
+- 既存自動選定sample E2E: pass。
+  - job: `job_db10f63b82ae42bba03701c9bf799202`
+  - normal `0/0` / short `1/1`
+  - short: `1080x1920`
+  - render failures: `0`
+  - sidecar risk: `0`
+- 時間指定sample E2E: pass。
+  - job: `job_3ae5eb340d4a40ef80931b5c57c3d1aa`
+  - short指定: `0.00-6.00` / `7.00-14.00` / `15.00-24.00`
+  - 字幕確認preview: `3/3`
+  - 生成: short `3/3`、すべて`1080x1920`
+  - 指定時刻と最終start/end: 完全一致
+  - OpenAI scoring: 自動無効、summary生成なし
+  - boundary refinement: `0/3`
+  - render failures: `0`
+  - sidecar risk: `0`
+- browser:
+  - 通常2行・ショート3行の初期表示: pass。
+  - ショート3本入力で時間指定モードへ切替: pass。
+  - 混在時にショート側だけ自動おすすめを無効化: pass。
+  - ショートのみ時間指定時に全選定設定とAIを無効化: pass。
+  - 本数`3 -> 4 -> 3`で入力行追従、既存値保持: pass。
+  - desktop横overflow: なし。
+  - console error: `0`。
+
+### 未解決・制限
+
+- 元動画の長さはupload前には確定しないため、指定終了時刻の尺超過はjob開始後のprobeで停止する。
+- 時間指定は分秒の直接入力。動画timeline上の範囲選択は未実装。
+- 指定範囲は固定するため、発話途中などを指定してもboundary refinementでは変更しない。
+- branch `codex/task-79-manual-clip-time-ranges`で実装・ローカル検証済み。親branchはTask78。main mergeは未実施。

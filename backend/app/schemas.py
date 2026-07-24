@@ -75,6 +75,13 @@ class VideoUploadResponse(BaseModel):
     filename: str
 
 
+class ClipTimeRange(BaseModel):
+    start_seconds: float | None = Field(default=None, ge=0, alias="startSeconds")
+    end_seconds: float | None = Field(default=None, ge=0, alias="endSeconds")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class JobSettings(BaseModel):
     mode: ClipMode = "high_quality"
     profile: ClipProfile = "auto"
@@ -94,6 +101,16 @@ class JobSettings(BaseModel):
     )
     normal_clip_guidance: str = Field(default="", max_length=1000, alias="normalClipGuidance")
     short_clip_guidance: str = Field(default="", max_length=1000, alias="shortClipGuidance")
+    normal_clip_time_ranges: list[ClipTimeRange] = Field(
+        default_factory=list,
+        max_length=12,
+        alias="normalClipTimeRanges",
+    )
+    short_clip_time_ranges: list[ClipTimeRange] = Field(
+        default_factory=list,
+        max_length=24,
+        alias="shortClipTimeRanges",
+    )
     exclude_intro_outro: bool = Field(default=True, alias="excludeIntroOutro")
     exclude_promotional_content: bool = Field(default=False, alias="excludePromotionalContent")
     max_candidates: int = Field(default=1200, gt=0, alias="maxCandidates")
@@ -240,12 +257,51 @@ class JobSettings(BaseModel):
             raise ValueError("shortMaxDuration must be >= shortMinDuration")
         if self.max_subtitle_duration < self.min_subtitle_duration:
             raise ValueError("maxSubtitleDuration must be >= minSubtitleDuration")
+        self._validate_clip_time_ranges(
+            self.normal_clip_time_ranges,
+            requested_count=self.normal_clip_count,
+            field_name="normalClipTimeRanges",
+        )
+        self._validate_clip_time_ranges(
+            self.short_clip_time_ranges,
+            requested_count=self.short_count,
+            field_name="shortClipTimeRanges",
+        )
+        has_automatic_output = (
+            self.normal_clip_count > 0 and not self.normal_clip_time_ranges
+        ) or (
+            self.short_count > 0 and not self.short_clip_time_ranges
+        )
+        if not has_automatic_output:
+            self.use_openai_scoring = False
         if self.ensure_selected_openai_scored is None:
             self.ensure_selected_openai_scored = self.mode == "high_quality"
         if self.openai_finalist_scoring_limit is None:
             requested_count = self.normal_clip_count + self.short_count
             self.openai_finalist_scoring_limit = requested_count + 2 if requested_count > 0 else 0
         return self
+
+    @staticmethod
+    def _validate_clip_time_ranges(
+        ranges: list[ClipTimeRange],
+        *,
+        requested_count: int,
+        field_name: str,
+    ) -> None:
+        if not ranges:
+            return
+        if len(ranges) != requested_count:
+            raise ValueError(f"{field_name} must contain exactly {requested_count} ranges")
+        seen: set[tuple[float, float]] = set()
+        for index, clip_range in enumerate(ranges, start=1):
+            if clip_range.start_seconds is None or clip_range.end_seconds is None:
+                raise ValueError(f"{field_name}[{index}] requires both startSeconds and endSeconds")
+            if clip_range.end_seconds <= clip_range.start_seconds:
+                raise ValueError(f"{field_name}[{index}] endSeconds must be greater than startSeconds")
+            key = (clip_range.start_seconds, clip_range.end_seconds)
+            if key in seen:
+                raise ValueError(f"{field_name}[{index}] duplicates an earlier range")
+            seen.add(key)
 
 
 class JobCreateRequest(BaseModel):

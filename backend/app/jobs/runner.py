@@ -56,6 +56,14 @@ from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.boundary_refinement import refine_selected_candidates
 from app.candidates.generate_normal_candidates import generate_normal_candidates_with_summary
 from app.candidates.generate_short_candidates import generate_short_candidates_with_summary
+from app.candidates.manual_ranges import (
+    MANUAL_SELECTION_REASON,
+    automatic_selection_settings,
+    build_manual_candidates,
+    manual_ranges_for_type,
+    merge_manual_candidates_into_selection,
+    validate_manual_ranges_for_duration,
+)
 from app.candidates.merge_boundaries import (
     Candidate,
     CandidateGenerationMemoryLimitError,
@@ -1161,22 +1169,25 @@ def _selection_with_refined_boundaries(
     settings: dict[str, Any],
     timeline_duration: float,
 ) -> tuple[CandidateSelection, list[Candidate]]:
-    normal_clips = refine_selected_candidates(
-        selection.normal_clips,
-        transcript_segments=transcript_segments,
-        silence_segments=silence_segments,
-        scene_segments=scene_segments,
-        settings=settings,
-        timeline_duration=timeline_duration,
-    )
-    shorts = refine_selected_candidates(
-        selection.shorts,
-        transcript_segments=transcript_segments,
-        silence_segments=silence_segments,
-        scene_segments=scene_segments,
-        settings=settings,
-        timeline_duration=timeline_duration,
-    )
+    def refine_unlocked(candidates: Sequence[Candidate]) -> list[Candidate]:
+        unlocked = [
+            candidate
+            for candidate in candidates
+            if candidate.selection_reason != MANUAL_SELECTION_REASON
+        ]
+        refined = refine_selected_candidates(
+            unlocked,
+            transcript_segments=transcript_segments,
+            silence_segments=silence_segments,
+            scene_segments=scene_segments,
+            settings=settings,
+            timeline_duration=timeline_duration,
+        )
+        replacements = {candidate.id: candidate for candidate in refined}
+        return [replacements.get(candidate.id, candidate) for candidate in candidates]
+
+    normal_clips = refine_unlocked(selection.normal_clips)
+    shorts = refine_unlocked(selection.shorts)
     replacements = {candidate.id: candidate for candidate in [*normal_clips, *shorts]}
     return (
         selection.model_copy(update={"normal_clips": normal_clips, "shorts": shorts}),
@@ -1652,6 +1663,16 @@ def run_autoclipper_job(
             _update_video_metadata(db, video, metadata)
             metadata_files.append(_write_json(job_dir / "video_metadata.json", _metadata_to_jsonable(metadata)))
             duration = float(metadata.duration or 0.0)
+            try:
+                validate_manual_ranges_for_duration(
+                    settings,
+                    video_duration=duration,
+                )
+            except ValueError as exc:
+                raise PipelineExpectedError(
+                    "manual_clip_range_invalid",
+                    f"Manual clip time range is invalid: {exc}",
+                ) from exc
             if not metadata.has_audio:
                 raise PipelineExpectedError(
                     "missing_audio",
@@ -1903,21 +1924,44 @@ def run_autoclipper_job(
                 _write_json(candidate_generation_summary_path, summary)
                 _heartbeat_job(db, job)
 
+            normal_manual_ranges = manual_ranges_for_type(settings, "normal")
+            short_manual_ranges = manual_ranges_for_type(settings, "short")
+            automatic_settings = automatic_selection_settings(
+                settings,
+                manual_normal=bool(normal_manual_ranges),
+                manual_short=bool(short_manual_ranges),
+            )
             try:
-                normal_generation_result = generate_normal_candidates_with_summary(
-                    transcript_segments,
-                    scene_segments,
-                    silence_segments,
-                    settings=settings,
-                    heartbeat=candidate_generation_heartbeat,
+                normal_generation_result = (
+                    build_manual_candidates(
+                        "normal",
+                        normal_manual_ranges,
+                        transcript_segments,
+                    )
+                    if normal_manual_ranges
+                    else generate_normal_candidates_with_summary(
+                        transcript_segments,
+                        scene_segments,
+                        silence_segments,
+                        settings=settings,
+                        heartbeat=candidate_generation_heartbeat,
+                    )
                 )
                 normal_candidates = normal_generation_result.candidates
-                short_generation_result = generate_short_candidates_with_summary(
-                    transcript_segments,
-                    scene_segments,
-                    silence_segments,
-                    settings=settings,
-                    heartbeat=candidate_generation_heartbeat,
+                short_generation_result = (
+                    build_manual_candidates(
+                        "short",
+                        short_manual_ranges,
+                        transcript_segments,
+                    )
+                    if short_manual_ranges
+                    else generate_short_candidates_with_summary(
+                        transcript_segments,
+                        scene_segments,
+                        silence_segments,
+                        settings=settings,
+                        heartbeat=candidate_generation_heartbeat,
+                    )
                 )
                 short_candidates = short_generation_result.candidates
                 candidate_generation_summary = merge_candidate_generation_summaries(
@@ -1953,35 +1997,60 @@ def run_autoclipper_job(
                     "No clip candidates were found for the selected settings.",
                 )
 
+            manual_candidates = [
+                *(normal_candidates if normal_manual_ranges else []),
+                *(short_candidates if short_manual_ranges else []),
+            ]
+            automatic_candidates = [
+                *(normal_candidates if not normal_manual_ranges else []),
+                *(short_candidates if not short_manual_ranges else []),
+            ]
             _set_status(db, job, "scoring_candidates")
             visited_statuses.append("scoring_candidates")
-            scoring_result = _score_candidate_list(
-                all_candidates,
-                settings=settings,
-                audio_features=audio_features,
-                silence_segments=silence_segments,
-                visual_quality=visual_quality,
-                scorer=deps.openai_scorer,
+            scoring_result = (
+                _score_candidate_list(
+                    automatic_candidates,
+                    settings=automatic_settings,
+                    audio_features=audio_features,
+                    silence_segments=silence_segments,
+                    visual_quality=visual_quality,
+                    scorer=deps.openai_scorer,
+                )
+                if automatic_candidates
+                else ScoringResult(candidates=[])
             )
-            scored_candidates = scoring_result.candidates
+            scored_candidates = [*scoring_result.candidates, *manual_candidates]
             openai_scoring_summary = scoring_result.openai_summary
 
             _set_status(db, job, "selecting_clips")
             visited_statuses.append("selecting_clips")
-            selection = select_candidates(
-                scored_candidates,
-                settings=settings,
+            automatic_selection = select_candidates(
+                scoring_result.candidates,
+                settings=automatic_settings,
                 audio_features=audio_features,
                 silence_segments=silence_segments,
             )
-            selection, scored_candidates, openai_scoring_summary = _ensure_selected_candidates_openai_scored(
-                selection,
-                scored_candidates,
+            automatic_selection, automatic_scored, openai_scoring_summary = (
+                _ensure_selected_candidates_openai_scored(
+                    automatic_selection,
+                    scoring_result.candidates,
+                    settings=automatic_settings,
+                    audio_features=audio_features,
+                    visual_quality=visual_quality,
+                    scorer=scoring_result.openai_scorer,
+                    openai_summary=openai_scoring_summary,
+                )
+            )
+            scored_candidates = [*automatic_scored, *manual_candidates]
+            selection = merge_manual_candidates_into_selection(
+                automatic_selection,
                 settings=settings,
-                audio_features=audio_features,
-                visual_quality=visual_quality,
-                scorer=scoring_result.openai_scorer,
-                openai_summary=openai_scoring_summary,
+                manual_normal_candidates=(
+                    normal_candidates if normal_manual_ranges else []
+                ),
+                manual_short_candidates=(
+                    short_candidates if short_manual_ranges else []
+                ),
             )
             selection, scored_candidates = _selection_with_refined_boundaries(
                 selection,
