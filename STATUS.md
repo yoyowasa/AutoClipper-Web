@@ -5335,3 +5335,56 @@ pip check: pass
 - ローカル判定の自由入力は文字起こし語句とpreset特徴の照合。抽象的な意味・雰囲気の判定には明示的なOpenAI scoringが必要。
 - 長尺実データは既存artifactによる候補生成・score・selection replayまで。Task77コードでの長尺再renderは未実施。
 - branch `codex/task-77-guided-clip-selection`で実装・ローカル検証済み。親branchはTask76。main mergeは未実施。
+
+## 2026-07-24 Task 78 subtitle review preview proxies
+
+### 目的
+
+- 長尺・大容量の元動画を字幕確認playerが直接読み込み続け、`字幕確認の動画準備中`から進まないように見える問題を解消する。
+- 通常・ショートごとに、選択区間だけの軽量な確認用動画を準備して安定して再生できるようにする。
+- 確認用動画の準備状況と読み込み遅延を画面上で明示する。
+
+### 原因
+
+- 字幕確認用job自体は完了していたが、確認playerが約65分・`1,470,830,350 bytes`の元動画を直接参照していた。
+- 選択clipが元動画の後半にある場合、browserが多数のRange requestを行ってもmedia metadataを確定できず、`readyState=0`のまま停止したように見えていた。
+
+### 変更
+
+- 選択clipごとにH.264/AAC、960x540、30fps、faststartの軽量な確認用MP4を生成する処理を追加。
+- `preparing_subtitle_review` statusと`字幕確認用動画を準備中 (n/total)` progressを追加。
+- 字幕確認artifactへclip別`previewVideoUrl`を追加し、Range対応のpreview配信endpointを追加。
+- 字幕確認画面はpreviewを優先し、既存artifactでは元動画へfallbackする。
+- previewの時刻をclip相対時刻として扱い、字幕segmentの絶対時刻との変換を維持。
+- clip切替時に`video.load()`を明示実行。
+- 15秒以上読み込みが続く場合は、停止ではない旨と再読み込みbuttonを表示。
+- preview生成失敗時はjobを曖昧な待機状態にせず、`subtitle_review_preview_failed`として明示する。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `361 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / frontend / worker rebuild: pass。
+- `smoke_runtime.py --skip-video`: pass。backend / frontend / worker / redis running。
+- `e2e_sample_video.py`: pass。
+  - job: `job_ac4068ec075c4b48a791d33949c3191c`
+  - normal `0/0` / short `1/1`
+  - short: `1080x1920`
+  - render failures: `0`
+  - sidecar risk: `0`
+- 問題が発生したjob `job_bc148159ccf54b0bbcd52a0e1552c98c`:
+  - job処理時間: `9m44.874s`。statusは`awaiting_subtitle_review`。
+  - short確認用動画: `3/3`生成。
+  - duration: `40.233s` / `42.333s` / `42.500s`。
+  - size: `6.223MiB` / `6.686MiB` / `6.827MiB`。
+  - codec/resolution: H.264 + AAC / `960x540`。
+  - preview endpointのRange response: `206`、3本ともpass。
+  - browserで3本の切替、再生、一時停止、字幕表示連動: pass。
+  - browser console error: `0`。
+
+### 未解決・制限
+
+- 問題jobは既存artifactへ確認用動画をbackfillして復旧した。Task78コードによる同じ65分素材の新規job再実行は行っていない。
+- short確認用動画は時間範囲と字幕内容の確認用16:9 proxy。最終9:16 cropと字幕焼き込みは確認完了後の書き出しで行う。
+- branch `codex/task-78-subtitle-review-preview-proxies`で実装・ローカル検証済み。親branchはTask77。main mergeは未実施。

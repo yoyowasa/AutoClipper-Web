@@ -25,6 +25,7 @@ const STEP_LABELS: Partial<Record<JobStatus, string>> = {
   generating_candidates: "候補生成",
   scoring_candidates: "候補評価",
   selecting_clips: "clip選定",
+  preparing_subtitle_review: "確認動画準備",
   awaiting_subtitle_review: "字幕確認",
   rendering_normal_clips: "通常切り抜き",
   rendering_shorts: "ショート",
@@ -49,10 +50,15 @@ export function ProgressTimeline({
           ...BASE_STEPS.slice(BASE_STEPS.indexOf("transcribing") + 1)
         ]
       : BASE_STEPS;
-  if (hasSubtitleReview || status === "awaiting_subtitle_review") {
+  if (
+    hasSubtitleReview ||
+    status === "preparing_subtitle_review" ||
+    status === "awaiting_subtitle_review"
+  ) {
     const renderIndex = steps.indexOf("rendering_normal_clips");
     steps = [
       ...steps.slice(0, renderIndex),
+      "preparing_subtitle_review",
       "awaiting_subtitle_review",
       ...steps.slice(renderIndex)
     ];

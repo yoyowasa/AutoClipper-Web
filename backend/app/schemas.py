@@ -15,6 +15,7 @@ JobStatus = Literal[
     "generating_candidates",
     "scoring_candidates",
     "selecting_clips",
+    "preparing_subtitle_review",
     "awaiting_subtitle_review",
     "rendering_normal_clips",
     "rendering_shorts",

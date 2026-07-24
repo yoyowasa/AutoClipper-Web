@@ -63,6 +63,10 @@ export default function SubtitleReviewPage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
+  const [videoLoadSeconds, setVideoLoadSeconds] = useState(0);
+  const [previewFallbackClipIds, setPreviewFallbackClipIds] = useState<Set<string>>(
+    new Set()
+  );
   const [clipTime, setClipTime] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
@@ -114,7 +118,24 @@ export default function SubtitleReviewPage() {
   const clipDuration = selectedClip
     ? Math.max(0, selectedClip.end - selectedClip.start)
     : 0;
-  const selectedClipStart = selectedClip?.start ?? null;
+  const usesClipPreview = Boolean(
+    selectedClip?.previewVideoUrl && !previewFallbackClipIds.has(selectedClip.id)
+  );
+  const selectedVideoUrl = selectedClip
+    ? usesClipPreview
+      ? selectedClip.previewVideoUrl
+      : review?.sourceVideoUrl
+    : null;
+  const selectedMediaStart = selectedClip
+    ? usesClipPreview
+      ? 0
+      : selectedClip.start
+    : null;
+  const selectedMediaEnd = selectedClip
+    ? usesClipPreview
+      ? clipDuration
+      : selectedClip.end
+    : null;
   const selectedClipHasDirtySegments = selectedSegments.some((segment) =>
     dirtySegmentIds.has(segment.id)
   );
@@ -137,13 +158,13 @@ export default function SubtitleReviewPage() {
   useEffect(() => {
     const video = videoRef.current;
     subtitleListRef.current?.scrollTo({ top: 0 });
-    if (!video || selectedClipStart === null) {
+    if (!video || selectedMediaStart === null) {
       return;
     }
     video.pause();
 
     const moveToClipStart = () => {
-      video.currentTime = selectedClipStart;
+      video.currentTime = selectedMediaStart;
     };
 
     if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
@@ -152,10 +173,21 @@ export default function SubtitleReviewPage() {
     }
 
     video.addEventListener("loadedmetadata", moveToClipStart, { once: true });
+    video.load();
     return () => {
       video.removeEventListener("loadedmetadata", moveToClipStart);
     };
-  }, [selectedClipId, selectedClipStart]);
+  }, [selectedClipId, selectedMediaStart, selectedVideoUrl]);
+
+  useEffect(() => {
+    if (isPlayerReady || !selectedClip) {
+      return;
+    }
+    const intervalId = window.setInterval(() => {
+      setVideoLoadSeconds((current) => current + 1);
+    }, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [isPlayerReady, selectedClip]);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -196,9 +228,18 @@ export default function SubtitleReviewPage() {
     videoRef.current?.pause();
     setClipTime(0);
     setIsPlaying(false);
-    setIsBuffering(false);
+    setIsBuffering(true);
+    setIsPlayerReady(false);
+    setVideoLoadSeconds(0);
     setSelectedClipId(clip.id);
     setError(null);
+  }
+
+  function mediaTimeForClipTime(relativeTime: number): number {
+    if (!selectedClip) {
+      return 0;
+    }
+    return usesClipPreview ? relativeTime : selectedClip.start + relativeTime;
   }
 
   function seekToClipTime(nextTime: number) {
@@ -206,7 +247,7 @@ export default function SubtitleReviewPage() {
       return;
     }
     const relativeTime = clamp(nextTime, 0, clipDuration);
-    videoRef.current.currentTime = selectedClip.start + relativeTime;
+    videoRef.current.currentTime = mediaTimeForClipTime(relativeTime);
     setClipTime(relativeTime);
   }
 
@@ -219,8 +260,9 @@ export default function SubtitleReviewPage() {
       selectedClip.start,
       Math.max(selectedClip.start, selectedClip.end - 0.05)
     );
-    videoRef.current.currentTime = absoluteTime;
-    setClipTime(absoluteTime - selectedClip.start);
+    const relativeTime = absoluteTime - selectedClip.start;
+    videoRef.current.currentTime = mediaTimeForClipTime(relativeTime);
+    setClipTime(relativeTime);
     void videoRef.current.play();
   }
 
@@ -245,33 +287,69 @@ export default function SubtitleReviewPage() {
 
   function handleVideoTimeUpdate() {
     const video = videoRef.current;
-    if (!video || !selectedClip) {
+    if (
+      !video ||
+      !selectedClip ||
+      selectedMediaStart === null ||
+      selectedMediaEnd === null
+    ) {
       return;
     }
-    if (video.currentTime < selectedClip.start - 0.05) {
-      video.currentTime = selectedClip.start;
+    if (video.currentTime < selectedMediaStart - 0.05) {
+      video.currentTime = selectedMediaStart;
       setClipTime(0);
       return;
     }
-    if (video.currentTime >= selectedClip.end) {
+    if (video.currentTime >= selectedMediaEnd) {
       video.pause();
-      video.currentTime = selectedClip.end;
+      video.currentTime = selectedMediaEnd;
       setClipTime(clipDuration);
       return;
     }
-    setClipTime(clamp(video.currentTime - selectedClip.start, 0, clipDuration));
+    setClipTime(
+      clamp(
+        usesClipPreview ? video.currentTime : video.currentTime - selectedClip.start,
+        0,
+        clipDuration
+      )
+    );
   }
 
   function handleVideoSeeking() {
     const video = videoRef.current;
-    if (!video || !selectedClip) {
+    if (!video || selectedMediaStart === null || selectedMediaEnd === null) {
       return;
     }
-    if (video.currentTime < selectedClip.start) {
-      video.currentTime = selectedClip.start;
-    } else if (video.currentTime > selectedClip.end) {
-      video.currentTime = selectedClip.end;
+    if (video.currentTime < selectedMediaStart) {
+      video.currentTime = selectedMediaStart;
+    } else if (video.currentTime > selectedMediaEnd) {
+      video.currentTime = selectedMediaEnd;
     }
+  }
+
+  function retryVideoLoad() {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    setError(null);
+    setVideoLoadSeconds(0);
+    setIsPlayerReady(false);
+    setIsBuffering(true);
+    video.load();
+  }
+
+  function handleVideoError() {
+    if (selectedClip?.previewVideoUrl && !previewFallbackClipIds.has(selectedClip.id)) {
+      setPreviewFallbackClipIds((current) => new Set(current).add(selectedClip.id));
+      setError("確認用動画を読み込めなかったため、元動画へ切り替えました。");
+      setIsPlayerReady(false);
+      setIsBuffering(true);
+      setVideoLoadSeconds(0);
+      return;
+    }
+    setError("動画を読み込めませんでした。再読み込みしてください。");
+    setIsBuffering(false);
   }
 
   function toggleMuted() {
@@ -567,16 +645,23 @@ export default function SubtitleReviewPage() {
                     <div className="relative">
                       <video
                         className="aspect-video w-full cursor-pointer bg-black object-contain lg:max-h-[calc(100vh-30rem)] lg:min-h-[220px]"
+                        key={`${selectedClip.id}:${selectedVideoUrl ?? ""}`}
                         playsInline
                         preload="metadata"
                         ref={videoRef}
-                        src={toApiUrl(review.sourceVideoUrl)}
+                        src={selectedVideoUrl ? toApiUrl(selectedVideoUrl) : undefined}
                         onCanPlay={() => {
                           setIsBuffering(false);
                           setIsPlayerReady(true);
                         }}
                         onClick={togglePlayback}
+                        onError={handleVideoError}
                         onLoadedMetadata={() => setIsPlayerReady(true)}
+                        onLoadStart={() => {
+                          setIsPlayerReady(false);
+                          setIsBuffering(true);
+                          setVideoLoadSeconds(0);
+                        }}
                         onPause={() => setIsPlaying(false)}
                         onPlay={() => setIsPlaying(true)}
                         onPlaying={() => setIsBuffering(false)}
@@ -585,8 +670,28 @@ export default function SubtitleReviewPage() {
                         onWaiting={() => setIsBuffering(true)}
                       />
                       {!isPlayerReady || isBuffering ? (
-                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/50 text-sm font-semibold">
-                          {isBuffering ? "選択位置を読み込み中" : "動画を準備中"}
+                        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/60 px-5 text-center text-sm font-semibold">
+                          <p>
+                            {isPlayerReady
+                              ? "選択位置を読み込み中"
+                              : usesClipPreview
+                                ? `確認用clip動画を読み込み中 (${videoLoadSeconds}秒)`
+                                : `元動画を読み込み中 (${videoLoadSeconds}秒)`}
+                          </p>
+                          {videoLoadSeconds >= 15 ? (
+                            <>
+                              <p className="text-xs font-normal text-neutral-200">
+                                読み込みに時間がかかっています。停止状態ではありません。
+                              </p>
+                              <button
+                                className="min-h-10 border border-white bg-white px-4 text-sm font-semibold text-neutral-950"
+                                type="button"
+                                onClick={retryVideoLoad}
+                              >
+                                動画を再読み込み
+                              </button>
+                            </>
+                          ) : null}
                         </div>
                       ) : null}
                     </div>

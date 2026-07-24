@@ -9,6 +9,7 @@ export type JobStatus =
   | "generating_candidates"
   | "scoring_candidates"
   | "selecting_clips"
+  | "preparing_subtitle_review"
   | "awaiting_subtitle_review"
   | "rendering_normal_clips"
   | "rendering_shorts"
@@ -213,6 +214,7 @@ export type SubtitleReviewClip = {
   start: number;
   end: number;
   duration: number;
+  previewVideoUrl: string | null;
   segmentIds: string[];
   confirmed: boolean;
   editedSegmentCount: number;
