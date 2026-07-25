@@ -459,6 +459,19 @@ class ClipPlanReselectionRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class ClipPlanBoundaryUpdateRequest(BaseModel):
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ClipPlanBoundaryUpdateRequest":
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        if self.end - self.start < 1:
+            raise ValueError("clip duration must be at least 1 second")
+        return self
+
+
 class ClipPlanActionResponse(BaseModel):
     job_id: str = Field(alias="jobId")
     status: JobStatus

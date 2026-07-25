@@ -15,6 +15,7 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.volume_features import build_audio_features
 from app.db import Base, get_db
 from app.jobs.queue import (
+    get_enqueue_clip_plan_boundary_update,
     get_enqueue_clip_plan_reselection,
     get_enqueue_job,
     get_enqueue_render_job,
@@ -28,6 +29,7 @@ from app.jobs.runner import (
     _ensure_selected_candidates_openai_scored,
     _score_candidate_list,
     run_autoclipper_job,
+    run_clip_plan_boundary_update,
     run_clip_plan_reselection,
     run_subtitle_review_render,
 )
@@ -611,14 +613,20 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         Path(output_path).write_bytes(b"fake wav")
         return Path(output_path)
 
-    preview_render_calls: list[str] = []
+    preview_render_calls: list[tuple[str, float, float]] = []
 
     def fake_render(
         _input_path: str | Path,
         output_path: str | Path,
-        **_kwargs: Any,
+        **kwargs: Any,
     ) -> Path:
-        preview_render_calls.append(Path(output_path).name)
+        preview_render_calls.append(
+            (
+                Path(output_path).name,
+                float(kwargs["start"]),
+                float(kwargs["duration"]),
+            )
+        )
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(b"preview")
         return Path(output_path)
@@ -682,6 +690,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     plan = plan_response.json()
     assert plan["state"] == "awaiting_review"
     assert plan["revision"] == 1
+    assert plan["sourceDuration"] == 240.0
     assert [(clip["start"], clip["end"]) for clip in plan["clips"]] == [
         (5.0, 55.0),
         (60.0, 75.0),
@@ -760,6 +769,93 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         "clipPlanRevision"
     ] == 2
 
+    invalid_boundary = client.patch(
+        (
+            f"/api/jobs/{created['jobId']}/clip-plan/clips/"
+            f"{revised_plan['clips'][0]['id']}/boundary"
+        ),
+        json={"start": 2, "end": 241},
+    )
+    assert invalid_boundary.status_code == 422
+
+    def fail_boundary_enqueue(
+        _job_id: str,
+        _clip_id: str,
+        _start: float,
+        _end: float,
+    ) -> None:
+        raise RuntimeError("queue unavailable")
+
+    app.dependency_overrides[get_enqueue_clip_plan_boundary_update] = (
+        lambda: fail_boundary_enqueue
+    )
+    failed_boundary_response = client.patch(
+        (
+            f"/api/jobs/{created['jobId']}/clip-plan/clips/"
+            f"{revised_plan['clips'][0]['id']}/boundary"
+        ),
+        json={"start": 2, "end": 58},
+    )
+    assert failed_boundary_response.status_code == 503
+    assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == (
+        "awaiting_clip_review"
+    )
+    assert client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()[
+        "state"
+    ] == "awaiting_review"
+
+    queued_boundary_updates: list[tuple[str, str, float, float]] = []
+    app.dependency_overrides[get_enqueue_clip_plan_boundary_update] = (
+        lambda: lambda job_id, clip_id, start, end: queued_boundary_updates.append(
+            (job_id, clip_id, start, end)
+        )
+    )
+    adjusted_clip_id = revised_plan["clips"][0]["id"]
+    boundary_response = client.patch(
+        f"/api/jobs/{created['jobId']}/clip-plan/clips/{adjusted_clip_id}/boundary",
+        json={"start": 2, "end": 58},
+    )
+    assert boundary_response.status_code == 202
+    assert boundary_response.json()["status"] == "preparing_clip_review"
+    assert queued_boundary_updates == [
+        (created["jobId"], adjusted_clip_id, 2.0, 58.0)
+    ]
+
+    boundary_statuses = run_clip_plan_boundary_update(
+        created["jobId"],
+        adjusted_clip_id,
+        2.0,
+        58.0,
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+    assert boundary_statuses == [
+        "preparing_clip_review",
+        "awaiting_clip_review",
+    ]
+    adjusted_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
+    adjusted_item = next(
+        clip for clip in adjusted_plan["clips"] if clip["id"] == adjusted_clip_id
+    )
+    assert (adjusted_item["start"], adjusted_item["end"]) == (2.0, 58.0)
+    assert adjusted_item["duration"] == 56.0
+    assert adjusted_item["recommendedStart"] == 5.0
+    assert adjusted_item["recommendedEnd"] == 55.0
+    assert adjusted_item["manuallyAdjusted"] is True
+    selected_after_boundary = json.loads(
+        (output_dir / "selected_clips.json").read_text(encoding="utf-8")
+    )
+    assert (
+        selected_after_boundary["normalClips"][0]["start"],
+        selected_after_boundary["normalClips"][0]["end"],
+    ) == (2.0, 58.0)
+    assert selected_after_boundary["normalClips"][0][
+        "clip_plan_boundary_adjusted"
+    ] is True
+    assert len(preview_render_calls) == 4
+    assert preview_render_calls[-1][1:] == (2.0, 56.0)
+
     approve_response = client.post(
         f"/api/jobs/{created['jobId']}/clip-plan/approve"
     )
@@ -767,7 +863,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     assert approve_response.json()["status"] == "awaiting_subtitle_review"
     review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
     assert [(clip["start"], clip["end"]) for clip in review["clips"]] == [
-        (5.0, 55.0),
+        (2.0, 58.0),
         (60.0, 75.0),
         (150.0, 180.0),
     ]

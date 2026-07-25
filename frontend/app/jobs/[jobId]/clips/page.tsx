@@ -4,13 +4,15 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ClipBoundaryEditor } from "../../../../components/ClipBoundaryEditor";
 import { ClipSelectionEditor } from "../../../../components/ClipSelectionEditor";
 import {
   approveClipPlan,
   getClipPlan,
   getJobStatus,
   reselectClipPlan,
-  toApiUrl
+  toApiUrl,
+  updateClipPlanBoundary
 } from "../../../../lib/api";
 import type {
   ClipPlanClip,
@@ -66,6 +68,7 @@ export default function ClipPlanReviewPage() {
   const [selectedClipId, setSelectedClipId] = useState("");
   const [job, setJob] = useState<JobStatusResponse | null>(null);
   const [isReselecting, setIsReselecting] = useState(false);
+  const [isAdjusting, setIsAdjusting] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -111,7 +114,7 @@ export default function ClipPlanReviewPage() {
   }, [jobId]);
 
   useEffect(() => {
-    if (!isReselecting || !jobId) {
+    if ((!isReselecting && !isAdjusting) || !jobId) {
       return;
     }
     let active = true;
@@ -126,19 +129,27 @@ export default function ClipPlanReviewPage() {
             window.clearInterval(intervalId);
             await loadPlan();
             setIsReselecting(false);
+            setIsAdjusting(false);
             if (status.error) {
               setError(status.error.message);
             }
           } else if (status.status === "failed") {
             window.clearInterval(intervalId);
             setIsReselecting(false);
-            setError(status.error?.message ?? "再選定に失敗しました");
+            setIsAdjusting(false);
+            setError(
+              status.error?.message ??
+                (isAdjusting
+                  ? "切り抜き範囲の更新に失敗しました"
+                  : "再選定に失敗しました")
+            );
           }
         })
         .catch((caught) => {
           if (active) {
             window.clearInterval(intervalId);
             setIsReselecting(false);
+            setIsAdjusting(false);
             setError(
               caught instanceof Error ? caught.message : "再選定の状態を取得できませんでした"
             );
@@ -149,12 +160,42 @@ export default function ClipPlanReviewPage() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [isReselecting, jobId, loadPlan]);
+  }, [isAdjusting, isReselecting, jobId, loadPlan]);
 
   const selectedClip =
     plan?.clips.find((clip) => clip.id === selectedClipId) ?? null;
   const controlsDisabled =
-    isReselecting || isApproving || plan?.state !== "awaiting_review";
+    isReselecting ||
+    isAdjusting ||
+    isApproving ||
+    plan?.state !== "awaiting_review";
+
+  async function handleBoundaryUpdate(start: number, end: number) {
+    if (!selectedClip) {
+      return;
+    }
+    setError(null);
+    setIsAdjusting(true);
+    try {
+      await updateClipPlanBoundary(jobId, selectedClip.id, { start, end });
+      setJob((current) =>
+        current
+          ? {
+              ...current,
+              status: "preparing_clip_review",
+              currentStep: "調整した範囲の確認動画を準備中"
+            }
+          : current
+      );
+    } catch (caught) {
+      setIsAdjusting(false);
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "切り抜き範囲を更新できませんでした"
+      );
+    }
+  }
 
   async function handleReselect() {
     if (!draftSettings) {
@@ -323,9 +364,9 @@ export default function ClipPlanReviewPage() {
                     <video
                       className="h-full w-full object-contain"
                       controls
-                      key={selectedClip.id}
+                      key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}-${plan.updatedAt}`}
                       preload="metadata"
-                      src={toApiUrl(selectedClip.previewVideoUrl)}
+                      src={`${toApiUrl(selectedClip.previewVideoUrl)}?v=${encodeURIComponent(plan.updatedAt)}`}
                     />
                   ) : (
                     <div className="flex h-full items-center justify-center text-sm text-neutral-300">
@@ -334,6 +375,17 @@ export default function ClipPlanReviewPage() {
                   )}
                 </div>
               </div>
+
+              <ClipBoundaryEditor
+                clip={selectedClip}
+                disabled={controlsDisabled}
+                key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}`}
+                saving={isAdjusting}
+                sourceDuration={plan.sourceDuration}
+                onSave={(start, end) =>
+                  void handleBoundaryUpdate(start, end)
+                }
+              />
 
               <div className="border-b border-neutral-300 px-5 py-4">
                 <p className="text-xs font-semibold text-neutral-500">選定時の文字起こし抜粋</p>
@@ -361,6 +413,7 @@ export default function ClipPlanReviewPage() {
 
           <div className="mt-4">
             <ClipSelectionEditor
+              compact
               disabled={controlsDisabled}
               settings={draftSettings}
               onChange={setDraftSettings}

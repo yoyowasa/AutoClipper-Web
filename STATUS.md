@@ -5549,3 +5549,52 @@ pip check: pass
 - 保存設定は現在のAutoClipperインストール内で共有。別PC・別インストールとは同期しない。
 - `storage/autoclipper.db`を削除・初期化すると保存枠も削除される。
 - branch `codex/task-81-subtitle-style-presets`で実装・ローカル検証済み。親branchはTask80。main mergeは未実施。
+
+## 2026-07-25 Task 82 clip plan boundary adjustment
+
+### 目的
+
+- 切り抜き予定画面で、選ばれた場面を保持したまま開始・終了時刻を調整できるようにする。
+- 前後が不足する場合、再選定・再文字起こし・字幕生成を行わず、対象clipだけを短時間で確認し直せるようにする。
+
+### 変更
+
+- 予定確認画面へclip単位の範囲調整欄を追加。
+  - 開始・終了を分秒で直接入力。
+  - 前に／後に`+5秒`、`+15秒`、`+30秒`、`+1分`。
+  - 自動選定時の範囲へ復元。
+- 自動選定時の開始・終了と、手動調整状態を`clip_plan.json`へ保持。
+- 境界更新APIとworker taskを追加。
+  - HTTP request内ではFFmpegを実行しない。
+  - 対象clip 1本の軽量previewだけを再生成。
+  - `selected_clips.json`を更新し、字幕確認・最終renderへ調整後の範囲を引き渡す。
+- 元動画の先頭・末尾、開始／終了の逆転、1秒未満をbackendで拒否。
+- queue失敗・preview更新失敗時は直前のplan、selected clip、previewへ復元。
+- 予定確認画面の再選定欄を狭いdesktop幅では縦1列にし、横overflowを解消。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `372 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / frontend / worker rebuild: pass。
+- 境界更新統合テスト: pass。
+  - 動画末尾超過を拒否。
+  - queue失敗時に`awaiting_clip_review`へ復元。
+  - preview再生成時のstart / durationを確認。
+  - 調整後の境界が`selected_clips.json`と字幕確認clipへ一致。
+- browser実操作: pass。
+  - job: `job_6c50dc566fe4433b94fa74ae2599e5de`
+  - `34:12.71 - 34:53.91`へ前後5秒を追加し、`34:07.71 - 34:58.91`へ更新。
+  - 対象previewだけを更新し、手動調整表示を確認。
+  - 自動選定範囲へ戻し、ミリ秒精度で完全復元。
+  - 復元後preview duration: `41.200000`秒。
+  - desktop幅`1265px`、mobile幅`375px`とも横overflowなし。
+  - console error: `0`。
+
+### 未解決・制限
+
+- 範囲更新は1clipずつ行う。複数clipの一括延長は未実装。
+- preview再生成時間はclip長とPC性能に依存する。
+- 明示的な手動範囲は自動推奨の最大長を超えても許可する。最終auditではduration warningが残る場合がある。
+- branch `codex/task-82-clip-plan-boundary-adjustment`で実装・ローカル検証済み。親branchはTask81。main mergeは未実施。

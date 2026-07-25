@@ -32,16 +32,32 @@ class ClipPlanClip(BaseModel):
     ai_score: float | None = Field(default=None, alias="aiScore")
     selection_reason: str | None = Field(default=None, alias="selectionReason")
     boundary_refined: bool = Field(default=False, alias="boundaryRefined")
+    recommended_start: float | None = Field(
+        default=None,
+        ge=0,
+        alias="recommendedStart",
+    )
+    recommended_end: float | None = Field(
+        default=None,
+        ge=0,
+        alias="recommendedEnd",
+    )
+    manually_adjusted: bool = Field(default=False, alias="manuallyAdjusted")
 
     model_config = ConfigDict(populate_by_name=True)
 
 
 class ClipPlanDocument(BaseModel):
-    version: int = 1
+    version: int = 2
     job_id: str = Field(alias="jobId")
     state: ClipPlanState = "preparing"
     revision: int = Field(default=1, ge=1)
     source_video_url: str = Field(alias="sourceVideoUrl")
+    source_duration: float | None = Field(
+        default=None,
+        ge=0,
+        alias="sourceDuration",
+    )
     clips: list[ClipPlanClip] = Field(default_factory=list)
     settings: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(alias="createdAt")
@@ -76,6 +92,7 @@ def build_clip_plan(
     settings: dict[str, Any],
     *,
     revision: int = 1,
+    source_duration: float | None = None,
 ) -> ClipPlanDocument:
     type_indices = {"normal": 0, "short": 0}
     clips: list[ClipPlanClip] = []
@@ -95,6 +112,8 @@ def build_clip_plan(
                 aiScore=candidate.ai_score,
                 selectionReason=candidate.selection_reason,
                 boundaryRefined=candidate.boundary_refined,
+                recommendedStart=candidate.start,
+                recommendedEnd=candidate.end,
             )
         )
     now = _utc_iso()
@@ -103,6 +122,7 @@ def build_clip_plan(
         state="preparing",
         revision=revision,
         sourceVideoUrl=f"/api/jobs/{job_id}/source-video",
+        sourceDuration=source_duration,
         clips=clips,
         settings=settings,
         createdAt=now,
@@ -129,6 +149,36 @@ def mark_clip_plan_awaiting_review(
 
 def mark_clip_plan_approved(document: ClipPlanDocument) -> ClipPlanDocument:
     document.state = "approved"
+    document.updated_at = _utc_iso()
+    return document
+
+
+def update_clip_plan_boundary(
+    document: ClipPlanDocument,
+    clip_id: str,
+    *,
+    start: float,
+    end: float,
+    transcript_excerpt: str,
+) -> ClipPlanDocument:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+    if end <= start:
+        raise ValueError("end must be greater than start")
+
+    if clip.recommended_start is None:
+        clip.recommended_start = clip.start
+    if clip.recommended_end is None:
+        clip.recommended_end = clip.end
+    clip.start = round(float(start), 3)
+    clip.end = round(float(end), 3)
+    clip.duration = round(clip.end - clip.start, 3)
+    clip.transcript_excerpt = _excerpt(transcript_excerpt)
+    clip.manually_adjusted = not (
+        abs(clip.start - clip.recommended_start) < 0.001
+        and abs(clip.end - clip.recommended_end) < 0.001
+    )
     document.updated_at = _utc_iso()
     return document
 
