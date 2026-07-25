@@ -7,6 +7,7 @@ import {
   SubtitleStylePreview,
   type SubtitlePreviewMode
 } from "./SubtitleStylePreview";
+import { SubtitleStylePresetManager } from "./SubtitleStylePresetManager";
 
 type SubtitleStyleEditorProps = {
   settings: ClipSettings;
@@ -234,6 +235,12 @@ export function SubtitleStyleEditor({
           このスタイルを既定値に戻す
         </button>
       </div>
+
+      <SubtitleStylePresetManager
+        disabled={disabled}
+        settings={settings}
+        onChange={onChange}
+      />
 
       <SubtitleStylePreview mode={mode} settings={settings} />
 

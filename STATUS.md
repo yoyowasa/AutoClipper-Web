@@ -5508,3 +5508,33 @@ pip check: pass
   - `scripts/make_plotwith_solar_finished_variants.py:197` F841。
   - `scripts/smoke_runtime.py:173` F541。
 - branch `codex/task-80-clip-plan-review`で実装・ローカル検証済み。親branchはTask79。main mergeは未実施。
+
+## 2026-07-25 Task 81 subtitle style presets
+
+### 目的
+
+- 字幕スタイルを毎回設定し直さず、通常・ショート両方の設定を3枠まで保存して再利用できるようにする。
+
+### 変更
+
+- Upload画面の字幕スタイル内に、固定3枠の保存欄を追加。
+- 各枠で名前変更、現在設定の保存・上書き、呼び出し、削除に対応。
+- 1枠に通常・ショート両方のフォント、文字サイズ、縁取り、余白、位置、文字色、縁取り色を保存。
+- 保存先はブラウザの`localStorage`。動画本数、選定方針、AI設定、API keyなど字幕以外の設定は保存しない。
+- 保存データをversion管理し、不正な保存値は設定へ適用しない。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでfrontend rebuild: pass。
+- browser実操作: pass。
+  - 設定名を変更して保存。
+  - フォント、文字色、表示位置を変更後、保存設定の呼び出しで復元。
+  - ページ再読込後も保存名と設定を復元。
+  - mobile幅`375px`で3枠が縦並びになり、横overflowなし。
+
+### 未解決・制限
+
+- 保存設定はブラウザ・端末ごとのローカル保存。別ブラウザや別PCとは同期しない。
+- ブラウザデータを削除すると保存枠も削除される。
+- branch `codex/task-81-subtitle-style-presets`で実装・ローカル検証済み。親branchはTask80。main mergeは未実施。
