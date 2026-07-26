@@ -12,6 +12,7 @@ from app.jobs.subtitle_review import (
     confirm_review_clip,
     load_subtitle_review,
     queue_review_render,
+    reopen_completed_review,
     subtitle_review_preview_path,
     subtitle_review_preview_url,
     update_review_clip_content,
@@ -77,6 +78,22 @@ def test_review_requires_every_clip_confirmation_before_render() -> None:
 
     assert review.state == "render_queued"
     assert review.confirmed_clip_count == review.total_clip_count == 2
+
+
+def test_completed_review_can_be_reopened_for_another_render() -> None:
+    _transcript, review = _review_fixture()
+    review = confirm_review_clip(review, "normal_1")
+    review = confirm_review_clip(review, "short_1")
+    review = queue_review_render(review)
+    review.state = "completed"
+
+    review = reopen_completed_review(review)
+
+    assert review.state == "awaiting_review"
+    assert review.render_revision == 2
+    assert review.reopened_at is not None
+    assert review.confirmed_clip_count == 0
+    assert all(not clip.confirmed for clip in review.clips)
 
 
 def test_clip_title_and_hook_update_invalidates_confirmation_and_updates_selection() -> None:

@@ -669,6 +669,13 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
+        {isEditable && review.renderRevision > 1 ? (
+          <div className="border border-violet-300 bg-violet-50 px-4 py-3 text-sm text-violet-950">
+            完成済みjobの再編集です。元の動画、選定範囲、字幕修正を引き継いでいます。
+            新しい書き出しが完了するまで、現在のMP4とZIPは保持されます。
+          </div>
+        ) : null}
+
         {error ? (
           <div className="border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
             {error}

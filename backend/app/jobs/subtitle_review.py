@@ -60,6 +60,8 @@ class SubtitleReviewDocument(BaseModel):
     version: int = 1
     job_id: str = Field(alias="jobId")
     state: SubtitleReviewState = "awaiting_review"
+    render_revision: int = Field(default=1, ge=1, alias="renderRevision")
+    reopened_at: str | None = Field(default=None, alias="reopenedAt")
     source_video_url: str = Field(alias="sourceVideoUrl")
     clips: list[SubtitleReviewClip] = Field(default_factory=list)
     segments: list[SubtitleReviewSegment] = Field(default_factory=list)
@@ -289,6 +291,24 @@ def mark_review_completed(document: SubtitleReviewDocument) -> SubtitleReviewDoc
     return _refresh_counts(document)
 
 
+def reopen_completed_review(document: SubtitleReviewDocument) -> SubtitleReviewDocument:
+    if document.state != "completed":
+        raise ValueError("subtitle review is not completed")
+    document.state = "awaiting_review"
+    document.render_revision += 1
+    document.reopened_at = _utc_iso()
+    for clip in document.clips:
+        clip.confirmed = False
+    return _refresh_counts(document)
+
+
+def restore_review_after_render_failure(
+    document: SubtitleReviewDocument,
+) -> SubtitleReviewDocument:
+    document.state = "awaiting_review"
+    return _refresh_counts(document)
+
+
 def apply_reviewed_text(
     transcript_segments: Sequence[TranscriptSegment],
     document: SubtitleReviewDocument,
@@ -339,6 +359,8 @@ def write_subtitle_review_summary(
     payload = {
         "enabled": True,
         "state": document.state,
+        "render_revision": document.render_revision,
+        "reopened_at": document.reopened_at,
         "total_clip_count": document.total_clip_count,
         "confirmed_clip_count": document.confirmed_clip_count,
         "reviewed_segment_count": len(document.segments),

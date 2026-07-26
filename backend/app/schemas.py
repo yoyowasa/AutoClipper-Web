@@ -575,6 +575,7 @@ class JobAuditSummary(BaseModel):
 class JobResultsResponse(BaseModel):
     job_id: str = Field(alias="jobId")
     zip_download_url: str = Field(alias="zipDownloadUrl")
+    can_reopen_for_editing: bool = Field(alias="canReopenForEditing")
     audit_summary: JobAuditSummary | None = Field(default=None, alias="auditSummary")
     normal_clips: list[ResultExportItem] = Field(alias="normalClips")
     shorts: list[ResultExportItem]

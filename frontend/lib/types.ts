@@ -201,6 +201,7 @@ export type JobAuditSummary = {
 export type JobResultsResponse = {
   jobId: string;
   zipDownloadUrl: string;
+  canReopenForEditing: boolean;
   auditSummary: JobAuditSummary | null;
   normalClips: ResultExportItem[];
   shorts: ResultExportItem[];
@@ -239,6 +240,8 @@ export type SubtitleReviewDocument = {
   version: number;
   jobId: string;
   state: "awaiting_review" | "render_queued" | "rendering" | "completed";
+  renderRevision: number;
+  reopenedAt: string | null;
   sourceVideoUrl: string;
   clips: SubtitleReviewClip[];
   segments: SubtitleReviewSegment[];
