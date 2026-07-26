@@ -489,6 +489,7 @@ def _write_export_metadata(
     overlay_title_expected: bool,
     overlay_title_rendered: bool,
     overlay_title_mode: str,
+    hook_rendered: bool,
 ) -> Path:
     path.write_text(
         json.dumps(
@@ -502,6 +503,9 @@ def _write_export_metadata(
                 "overlay_title_rendered": overlay_title_rendered,
                 "overlay_title_mode": overlay_title_mode,
                 "title_source": candidate.title_source,
+                "hook_text": candidate.hook_text,
+                "hook_duration_seconds": candidate.hook_duration_seconds,
+                "hook_rendered": hook_rendered,
                 "start": candidate.start,
                 "end": candidate.end,
                 "duration": candidate.duration,
@@ -593,11 +597,17 @@ def render_selected_short_candidates(
     overlay_title_mode = _normalize_overlay_title_mode(
         short_overlay_title_mode or _setting_text(subtitle_settings, "shortOverlayTitleMode")
     )
-    overlay_expected = _overlay_title_expected(mode=resolved_mode, overlay_title_mode=overlay_title_mode)
+    base_overlay_expected = _overlay_title_expected(
+        mode=resolved_mode,
+        overlay_title_mode=overlay_title_mode,
+    )
 
     short_candidates = [candidate for candidate in selected_candidates if candidate.type == "short"]
     for index, candidate in enumerate(short_candidates, start=1):
         candidate = candidate_with_title(candidate, index=index, transcript_segments=transcript_segments)
+        overlay_expected = base_overlay_expected or (
+            overlay_title_mode == "auto" and candidate.title_source == "manual_review"
+        )
         export_id = make_id("exp")
         output_path = output_dir / f"short_{index:02d}.mp4"
         metadata_path = output_dir / f"short_{index:02d}.json"
@@ -606,7 +616,15 @@ def render_selected_short_candidates(
         try:
             title = _candidate_title(candidate, index)
             top_title = _overlay_title_for_burn(candidate, expected=overlay_expected, fallback_title=title)
-            overlay_rendered = bool(burn_subtitles and top_title)
+            hook_rendered = bool(burn_subtitles and candidate.hook_text)
+            overlay_rendered = bool(
+                burn_subtitles
+                and top_title
+                and (
+                    not hook_rendered
+                    or (candidate.hook_duration_seconds or 3.0) < candidate.duration
+                )
+            )
             if burn_subtitles:
                 subtitle_path = subtitle_dir / f"short_{index:02d}.ass"
                 write_ass_for_candidate(
@@ -674,6 +692,7 @@ def render_selected_short_candidates(
                 overlay_title_expected=overlay_expected,
                 overlay_title_rendered=overlay_rendered,
                 overlay_title_mode=overlay_title_mode,
+                hook_rendered=hook_rendered,
             )
 
             export = ExportItem(

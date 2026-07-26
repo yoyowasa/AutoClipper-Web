@@ -25,6 +25,7 @@ TitleSource = Literal[
     "transcript_fallback",
     "deterministic_fallback",
     "existing",
+    "manual_review",
 ]
 
 
@@ -47,6 +48,8 @@ class Candidate(BaseModel):
     title: str | None = None
     overlay_title: str | None = None
     title_source: TitleSource | None = None
+    hook_text: str | None = None
+    hook_duration_seconds: float | None = Field(default=None, ge=1, le=8)
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
     reject_reason: str | None = None

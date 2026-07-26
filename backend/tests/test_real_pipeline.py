@@ -980,6 +980,21 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
     assert preview_response.status_code == 200
     assert preview_response.headers["content-type"].startswith("video/mp4")
     assert preview_response.content.startswith(b"rendered")
+    short_clip = next(clip for clip in review["clips"] if clip["type"] == "short")
+    content_updated = client.patch(
+        f"/api/jobs/{created['jobId']}/subtitle-review/clips/{short_clip['id']}/content",
+        json={
+            "title": "魚は「耳石」で音を聞く？",
+            "hookText": "魚の耳には、本当に「石」が入ってるらしい",
+            "hookDurationSeconds": 3.0,
+        },
+    )
+    assert content_updated.status_code == 200
+    updated_short = next(
+        clip for clip in content_updated.json()["clips"] if clip["id"] == short_clip["id"]
+    )
+    assert updated_short["titleEdited"] is True
+    assert updated_short["hookText"] == "魚の耳には、本当に「石」が入ってるらしい"
     edited_segment = next(
         (segment for segment in review["segments"] if len(segment["affectedClipIds"]) > 1),
         review["segments"][0],
@@ -1038,6 +1053,16 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
         for path in (storage.job_outputs(created["jobId"]) / "subtitles").rglob("*.ass")
     )
     assert "ManualEdit" in ass_text
+    assert "魚の耳には、本当に「石」が入ってるらしい" in ass_text
+    selected_clips = json.loads(
+        (storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    rendered_short = selected_clips["shorts"][0]
+    assert rendered_short["title"] == "魚は「耳石」で音を聞く？"
+    assert rendered_short["title_source"] == "manual_review"
+    assert rendered_short["hook_text"] == "魚の耳には、本当に「石」が入ってるらしい"
     assert storage.zip_path(created["jobId"]).is_file()
 
 

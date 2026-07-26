@@ -92,6 +92,7 @@ from app.jobs.clip_plan import (
 from app.jobs.summaries import write_generation_summaries
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
 from app.jobs.subtitle_review import (
+    apply_reviewed_clip_content,
     apply_reviewed_text,
     build_subtitle_review,
     load_subtitle_review,
@@ -2864,6 +2865,8 @@ def run_subtitle_review_render(
 
             selection_payload = _read_json_file(job_dir / "selected_clips.json")
             selection = CandidateSelection.model_validate(selection_payload)
+            selection = apply_reviewed_clip_content(selection, review_document)
+            write_selected_clips(selection, job_dir / "selected_clips.json")
             normal_result, short_result, exports, _render_failures_path = _render_selected_outputs(
                 db=db,
                 job=job,

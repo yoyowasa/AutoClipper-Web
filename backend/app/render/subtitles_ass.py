@@ -740,6 +740,12 @@ def build_ass_document(
     subtitle_events = subtitle_events_for_candidate(transcript_segments, candidate, active_layout)
     title_text = _normalize_text(top_title if top_title is not None else (candidate.overlay_title or ""))
     include_title = candidate.type == "short" and bool(title_text)
+    hook_text = _normalize_text(candidate.hook_text or "")
+    include_hook = candidate.type == "short" and bool(hook_text)
+    hook_end = min(
+        candidate.duration,
+        candidate.hook_duration_seconds or 3.0,
+    )
 
     lines = [
         "[Script Info]",
@@ -780,11 +786,21 @@ def build_ass_document(
     ]
 
     if include_title:
+        title_start = hook_end if include_hook else 0.0
+        if title_start < candidate.duration:
+            lines.append(
+                "Dialogue: "
+                f"1,{format_ass_timestamp(title_start)},{format_ass_timestamp(candidate.duration)},"
+                f"Title,,0,0,0,,"
+                f"{_escape_ass_text(split_subtitle_lines(title_text, max_chars_per_line=20, max_lines=2))}"
+            )
+
+    if include_hook:
         lines.append(
             "Dialogue: "
-            f"1,{format_ass_timestamp(0.0)},{format_ass_timestamp(candidate.duration)},"
-            f"Title,,0,0,0,,"
-            f"{_escape_ass_text(split_subtitle_lines(title_text, max_chars_per_line=20, max_lines=2))}"
+            f"2,{format_ass_timestamp(0.0)},{format_ass_timestamp(hook_end)},"
+            f"Title,Hook,0,0,0,,"
+            f"{_escape_ass_text(split_subtitle_lines(hook_text, max_chars_per_line=20, max_lines=2))}"
         )
 
     for event in subtitle_events:

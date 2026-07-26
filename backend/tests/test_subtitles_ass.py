@@ -129,6 +129,37 @@ def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None
     assert "Dialogue: 0,0:00:07.14,0:00:10.00,Subtitle" in ass
 
 
+def test_short_hook_precedes_title_without_overlapping_title_events() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 10.0, overlay_title="本編タイトル").model_copy(
+        update={
+            "hook_text": "最初の3秒で続きを見たくなる一言",
+            "hook_duration_seconds": 3.0,
+        }
+    )
+
+    ass = build_ass_document(candidate, [], layout=SubtitleLayout.short())
+
+    assert "Dialogue: 2,0:00:00.00,0:00:03.00,Title,Hook" in ass
+    assert "Dialogue: 1,0:00:03.00,0:00:10.00,Title,," in ass
+    assert "Dialogue: 1,0:00:00.00,0:00:10.00,Title,," not in ass
+
+
+def test_short_hook_can_render_when_overlay_title_is_disabled() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 10.0).model_copy(
+        update={"hook_text": "冒頭フック", "hook_duration_seconds": 2.0}
+    )
+
+    ass = build_ass_document(
+        candidate,
+        [],
+        layout=SubtitleLayout.short(),
+        top_title="",
+    )
+
+    assert "Dialogue: 2,0:00:00.00,0:00:02.00,Title,Hook" in ass
+    assert "Dialogue: 1," not in ass
+
+
 def test_short_subtitle_style_defaults_remain_stable() -> None:
     candidate = make_candidate("short_1", "short", 0.0, 4.0, overlay_title="Top title")
     segments = [TranscriptSegment(start=0.0, end=4.0, text="short subtitle")]

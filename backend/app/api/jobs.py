@@ -42,6 +42,7 @@ from app.jobs.subtitle_review import (
     subtitle_review_preview_path,
     subtitle_review_preview_url,
     subtitle_review_summary_path,
+    update_review_clip_content,
     update_review_segment,
     write_subtitle_review,
     write_subtitle_review_summary,
@@ -61,6 +62,7 @@ from app.schemas import (
     JobStatusResponse,
     ResultExportItem,
     SubtitleReviewFinalizeResponse,
+    SubtitleReviewClipContentUpdateRequest,
     SubtitleReviewSegmentUpdateRequest,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
@@ -804,6 +806,46 @@ def get_subtitle_review_preview_video(
     if not preview_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subtitle review preview not found")
     return FileResponse(preview_path, media_type="video/mp4")
+
+
+@router.patch(
+    "/{job_id}/subtitle-review/clips/{clip_id}/content",
+    response_model=SubtitleReviewDocument,
+)
+def update_subtitle_review_clip_content(
+    job_id: str,
+    clip_id: str,
+    request: SubtitleReviewClipContentUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_subtitle_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not editable",
+        )
+    document = _get_subtitle_review_or_404(job_id, paths)
+    try:
+        document = update_review_clip_content(
+            document,
+            clip_id,
+            title=request.title,
+            hook_text=request.hook_text,
+            hook_duration_seconds=request.hook_duration_seconds,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="subtitle review clip not found",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    _persist_subtitle_review(document, paths)
+    return document
 
 
 @router.patch(
