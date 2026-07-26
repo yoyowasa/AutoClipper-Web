@@ -5,6 +5,7 @@ import type {
   ClipPlanReselectionRequest,
   ClipPlanTranscriptSegment,
   ClipSettings,
+  CompletedVideoReeditResponse,
   JobCreateResponse,
   JobResultsResponse,
   JobStatusResponse,
@@ -120,6 +121,44 @@ export function uploadVideo(
     });
     request.addEventListener("error", () => {
       reject(new Error("Upload failed because the server could not be reached"));
+    });
+    request.send(body);
+  });
+}
+
+export function reopenCompletedVideo(
+  file: File,
+  onProgress?: (percentage: number) => void
+): Promise<CompletedVideoReeditResponse> {
+  return new Promise((resolve, reject) => {
+    const body = new FormData();
+    body.append("file", file);
+
+    const request = new XMLHttpRequest();
+    request.open("POST", `${API_BASE_URL}/api/jobs/reedit-upload`);
+    request.responseType = "json";
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        onProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      }
+    });
+    request.addEventListener("load", () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress?.(100);
+        resolve(request.response as CompletedVideoReeditResponse);
+        return;
+      }
+      reject(
+        new Error(
+          apiErrorMessage(
+            request.response,
+            `${request.status} ${request.statusText || "Re-edit upload failed"}`
+          )
+        )
+      );
+    });
+    request.addEventListener("error", () => {
+      reject(new Error("再編集用MP4を照合できませんでした。Backendへ接続できません。"));
     });
     request.send(body);
   });

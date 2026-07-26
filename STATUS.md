@@ -5783,3 +5783,56 @@ pip check: pass
 - 元動画またはreview artifactを削除した古いjobは再編集不可。
 - 再レンダリング成功後は既存auditを無効化する。必要な場合は新成果物へauditを再実行する。
 - Task 84 branchはTask 83 branchを親にしている。Task 83 merge後にmainへ統合する。
+
+## 2026-07-27 Task 85 完成MP4の再アップロード再編集
+
+### 目的
+
+- Upload画面からAutoClipperの完成MP4を再投入し、対応する元jobのタイトル・フック・字幕編集へ戻れるようにする。
+- 焼き込み済みMP4へ重ね書きせず、元動画と保存済み編集データを使って再レンダリングする。
+
+### 変更
+
+- Upload画面へ`新しい動画を作成 / 完成動画を再編集`の切替を追加。
+- 完成MP4のSHA-256と保存済みExportItemを照合するAPIを追加。
+  - 再投入MP4は識別にだけ使用し、`storage/uploads`へ複製しない。
+  - ファイル名を変更したMP4も内容が同一なら照合可能。
+- 一致した元jobを`awaiting_subtitle_review`へ戻し、該当clipを選択して字幕確認画面を開く。
+- 二重送信時は同じ編集状態を返し、`renderRevision`を重複加算しない。
+- 元job、元動画、選定結果、文字起こしが不足する場合は再編集を停止して理由を表示。
+- 完成MP4と一致しないファイル、MP4以外、上限超過を明示的に拒否。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `383 passed, 1 skipped`。
+- 再アップロードAPI tests: pass。
+  - renamed MP4から元jobを照合。
+  - 再投入ファイルを保存しない。
+  - job status、review state、確認状態、revisionを確認。
+  - 二重送信、未知MP4、MP4以外を確認。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / frontend rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- browser実操作: pass。
+  - Upload画面で`完成動画を再編集`へ切替。
+  - 完成MP4を選択し、元jobと照合。
+  - 該当ショートを選択した字幕確認画面へ直接遷移。
+  - タイトル、冒頭フック、表示秒数、字幕を復元。
+  - 確認済み→再レンダリング→completed。
+  - console error: `0`。
+  - mobile `390x844`: 横overflow `0`。
+- Docker実MP4再アップロード再編集E2E: pass。
+  - job: `job_701530dfaf214022a84faeb3333877a8`
+  - short `1/1`、再レンダリング完走。
+  - sidecar risk: `0`。
+  - Results: short重複なし、再編集可能状態を維持。
+
+### 未解決・制限
+
+- 同じAutoClipper環境に元jobと元動画が残る場合だけ再編集可能。
+- MP4を再圧縮・加工するとSHA-256が変わるため照合不可。
+- 完成MP4単体から焼き込み済み文字を除去する機能ではない。
+- 別PCへの持ち出しやjob削除後の復元には、将来の編集用プロジェクトZIPが必要。
+- 保存済みexportが非常に多い環境では初回照合に時間がかかる可能性がある。
+- Task 85 branchはTask 84 branchを親にしている。Task 84 merge後にmainへ統合する。

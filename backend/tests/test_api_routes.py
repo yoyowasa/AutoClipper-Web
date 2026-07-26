@@ -100,6 +100,155 @@ def test_upload_video_rejects_oversized_file_and_removes_partial_file(client: Te
     assert list(storage.uploads.iterdir()) == []
 
 
+def _seed_reeditable_export() -> tuple[str, str, bytes]:
+    storage = app.dependency_overrides[get_storage_paths]()
+    job_id = "job_reedit_upload"
+    source_path = storage.uploads / "vid_reedit_source.mp4"
+    source_path.write_bytes(b"source video")
+    output_dir = storage.job_outputs(job_id)
+    rendered_path = output_dir / "shorts" / "short_01.mp4"
+    rendered_path.parent.mkdir(parents=True, exist_ok=True)
+    rendered_bytes = b"completed rendered short"
+    rendered_path.write_bytes(rendered_bytes)
+    candidate_id = "candidate_short_reedit"
+    timestamp = "2026-07-27T00:00:00+00:00"
+    (output_dir / "subtitle_review.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "jobId": job_id,
+                "state": "completed",
+                "renderRevision": 1,
+                "reopenedAt": None,
+                "sourceVideoUrl": "/api/jobs/job_reedit_upload/source-video",
+                "clips": [
+                    {
+                        "id": candidate_id,
+                        "type": "short",
+                        "title": "完成したショート",
+                        "originalTitle": "完成したショート",
+                        "titleEdited": False,
+                        "hookText": "",
+                        "hookDurationSeconds": 3,
+                        "start": 0,
+                        "end": 10,
+                        "duration": 10,
+                        "previewVideoUrl": None,
+                        "segmentIds": ["segment_00000"],
+                        "confirmed": True,
+                        "editedSegmentCount": 0,
+                    }
+                ],
+                "segments": [
+                    {
+                        "id": "segment_00000",
+                        "index": 0,
+                        "start": 0,
+                        "end": 2,
+                        "originalText": "字幕",
+                        "text": "字幕",
+                        "confidence": 0.9,
+                        "edited": False,
+                        "affectedClipIds": [candidate_id],
+                    }
+                ],
+                "confirmedClipCount": 1,
+                "totalClipCount": 1,
+                "editedSegmentCount": 0,
+                "createdAt": timestamp,
+                "updatedAt": timestamp,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (output_dir / "selected_clips.json").write_text("{}\n", encoding="utf-8")
+    (output_dir / "transcript_segments.json").write_text("[]\n", encoding="utf-8")
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        video = Video(
+            id="vid_reedit_upload",
+            original_filename="source.mp4",
+            stored_path=str(source_path),
+        )
+        job = Job(
+            id=job_id,
+            video_id=video.id,
+            status="completed",
+            progress=100,
+            current_step="Completed",
+            settings_json={},
+        )
+        export = ExportItem(
+            id="exp_reedit_upload",
+            job_id=job.id,
+            video_id=video.id,
+            candidate_id=candidate_id,
+            type="short",
+            title="完成したショート",
+            duration=10,
+            score=0.8,
+            video_path=str(rendered_path),
+        )
+        db.add_all([video, job, export])
+        db.commit()
+    return job_id, candidate_id, rendered_bytes
+
+
+def test_completed_mp4_upload_reopens_matching_job_without_saving_copy(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    upload_files_before = set(storage.uploads.iterdir())
+
+    response = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("renamed-finished.mp4", rendered_bytes, "video/mp4")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "jobId": job_id,
+        "exportId": "exp_reedit_upload",
+        "matchedClipId": candidate_id,
+        "clipType": "short",
+        "title": "完成したショート",
+        "reviewState": "awaiting_review",
+    }
+    assert set(storage.uploads.iterdir()) == upload_files_before
+    review = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
+    assert review["state"] == "awaiting_review"
+    assert review["renderRevision"] == 2
+    assert review["confirmedClipCount"] == 0
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "awaiting_subtitle_review"
+
+    repeated = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("finished-again.mp4", rendered_bytes, "video/mp4")},
+    )
+    assert repeated.status_code == 200
+    assert client.get(f"/api/jobs/{job_id}/subtitle-review").json()["renderRevision"] == 2
+
+
+def test_completed_mp4_upload_rejects_unknown_or_invalid_file(client: TestClient) -> None:
+    _seed_reeditable_export()
+
+    unknown = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("unknown.mp4", b"different output", "video/mp4")},
+    )
+    invalid = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("metadata.json", b"{}", "application/json")},
+    )
+
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"]["code"] == "reedit_source_not_found"
+    assert invalid.status_code == 415
+    assert invalid.json()["detail"]["code"] == "reedit_mp4_required"
+
+
 def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) -> None:
     initial_response = client.get("/api/preferences/subtitle-style-presets")
 

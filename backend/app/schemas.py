@@ -78,6 +78,15 @@ class VideoUploadResponse(BaseModel):
     filename: str
 
 
+class CompletedVideoReeditResponse(BaseModel):
+    job_id: str = Field(alias="jobId")
+    export_id: str = Field(alias="exportId")
+    matched_clip_id: str | None = Field(default=None, alias="matchedClipId")
+    clip_type: Literal["normal", "short"] = Field(alias="clipType")
+    title: str
+    review_state: str = Field(alias="reviewState")
+
+
 class ClipTimeRange(BaseModel):
     start_seconds: float | None = Field(default=None, ge=0, alias="startSeconds")
     end_seconds: float | None = Field(default=None, ge=0, alias="endSeconds")

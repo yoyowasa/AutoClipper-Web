@@ -104,19 +104,27 @@ export default function SubtitleReviewPage() {
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [error, setError] = useState<string | null>(null);
+  const [openedFromReupload, setOpenedFromReupload] = useState(false);
 
   useEffect(() => {
     if (!jobId) {
       return;
     }
     let active = true;
+    const search = new URLSearchParams(window.location.search);
     void getSubtitleReview(jobId)
       .then((document) => {
         if (!active) {
           return;
         }
         setReview(document);
-        setSelectedClipId(document.clips[0]?.id ?? "");
+        setOpenedFromReupload(search.get("source") === "reupload");
+        const requestedClipId = search.get("clipId");
+        setSelectedClipId(
+          document.clips.some((clip) => clip.id === requestedClipId)
+            ? requestedClipId ?? ""
+            : document.clips[0]?.id ?? ""
+        );
         setDrafts(
           Object.fromEntries(document.segments.map((segment) => [segment.id, segment.text]))
         );
@@ -679,6 +687,11 @@ export default function SubtitleReviewPage() {
         {error ? (
           <div className="border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
             {error}
+          </div>
+        ) : null}
+        {openedFromReupload ? (
+          <div className="border-l-4 border-emerald-600 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
+            完成MP4と元jobを照合しました。選択したclipのタイトル・フック・字幕を変更できます。
           </div>
         ) : null}
 

@@ -4,7 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.audio.openai_transcript_correction import TRANSCRIPT_CORRECTION_PROGRESS_FILENAME
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.select_candidates import CandidateSelection
+from app.config import Settings, get_settings
 from app.db import get_db
 from app.ids import make_id
 from app.jobs.clip_plan import (
@@ -20,6 +21,11 @@ from app.jobs.clip_plan import (
     load_clip_plan,
     mark_clip_plan_approved,
     write_clip_plan,
+)
+from app.jobs.reedit_upload import (
+    UploadSizeLimitExceeded,
+    fingerprint_stream,
+    matching_exports,
 )
 from app.jobs.queue import (
     ClipPlanBoundaryUpdateEnqueue,
@@ -54,6 +60,7 @@ from app.schemas import (
     ClipPlanActionResponse,
     ClipPlanBoundaryUpdateRequest,
     ClipPlanReselectionRequest,
+    CompletedVideoReeditResponse,
     JobAuditSummary,
     JobCreateRequest,
     JobCreateResponse,
@@ -126,14 +133,12 @@ def _persist_subtitle_review(document: SubtitleReviewDocument, paths: StoragePat
     write_subtitle_review_summary(document, subtitle_review_summary_path(output_dir))
 
 
-def _can_reopen_subtitle_review(
-    job: Job,
+def _reedit_artifacts_available(
+    job_id: str,
     video: Video,
     paths: StoragePaths,
 ) -> bool:
-    if job.status != "completed":
-        return False
-    output_dir = paths.job_outputs(job.id)
+    output_dir = paths.job_outputs(job_id)
     required_artifacts = (
         subtitle_review_output_path(output_dir),
         output_dir / "selected_clips.json",
@@ -143,6 +148,50 @@ def _can_reopen_subtitle_review(
         all(path.is_file() for path in required_artifacts)
         and paths.resolve_stored_file(video.stored_path).is_file()
     )
+
+
+def _can_reopen_subtitle_review(
+    job: Job,
+    video: Video,
+    paths: StoragePaths,
+) -> bool:
+    return job.status == "completed" and _reedit_artifacts_available(job.id, video, paths)
+
+
+def _reopen_job_subtitle_review(
+    job: Job,
+    video: Video,
+    paths: StoragePaths,
+) -> SubtitleReviewDocument:
+    document = _get_subtitle_review_or_404(job.id, paths)
+    if job.status == "awaiting_subtitle_review" and document.state == "awaiting_review":
+        if not _reedit_artifacts_available(job.id, video, paths):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="source artifacts are unavailable",
+            )
+        return document
+    if not _can_reopen_subtitle_review(job, video, paths):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="completed job cannot be reopened because source artifacts are unavailable",
+        )
+    try:
+        document = reopen_completed_review(document)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    _persist_subtitle_review(document, paths)
+    job.status = "awaiting_subtitle_review"
+    job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
+    job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
+    job.error_code = None
+    job.error_message = None
+    job.updated_at = utc_now()
+    return document
 
 
 def _selected_clips_by_candidate(output_dir: Path) -> dict[str, dict[str, Any]]:
@@ -425,6 +474,106 @@ def _mark_stale_running_job_failed(db: Session, job: Job) -> None:
     job.updated_at = utc_now()
     db.commit()
     db.refresh(job)
+
+
+@router.post(
+    "/reedit-upload",
+    response_model=CompletedVideoReeditResponse,
+)
+def reopen_from_completed_video(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    settings: Settings = Depends(get_settings),
+) -> CompletedVideoReeditResponse:
+    filename = file.filename or ""
+    if Path(filename).suffix.lower() != ".mp4":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "reedit_mp4_required",
+                "message": "AutoClipperで書き出したMP4を選択してください。",
+            },
+        )
+    content_type = (file.content_type or "").lower()
+    if content_type not in {"", "application/octet-stream", "video/mp4"}:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail={
+                "code": "reedit_mp4_required",
+                "message": "AutoClipperで書き出したMP4を選択してください。",
+            },
+        )
+
+    try:
+        fingerprint = fingerprint_stream(file.file, settings.max_upload_size_bytes)
+    except UploadSizeLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail={
+                "code": "file_too_large",
+                "message": "再編集するMP4がアップロード上限を超えています。",
+            },
+        ) from exc
+
+    exports = matching_exports(db, paths, fingerprint)
+    if not exports:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "reedit_source_not_found",
+                "message": (
+                    "このMP4に対応する完成済みjobが見つかりません。"
+                    "同じPCで作成した未変更のAutoClipper出力を選択してください。"
+                ),
+            },
+        )
+
+    unavailable_match_found = False
+    for export in exports:
+        job = db.get(Job, export.job_id)
+        video = db.get(Video, export.video_id)
+        if job is None or video is None:
+            unavailable_match_found = True
+            continue
+        try:
+            document = _reopen_job_subtitle_review(job, video, paths)
+        except HTTPException as exc:
+            if exc.status_code not in {
+                status.HTTP_404_NOT_FOUND,
+                status.HTTP_409_CONFLICT,
+            }:
+                raise
+            unavailable_match_found = True
+            continue
+        db.commit()
+        return CompletedVideoReeditResponse(
+            jobId=job.id,
+            exportId=export.id,
+            matchedClipId=export.candidate_id,
+            clipType=export.type,
+            title=export.title,
+            reviewState=document.state,
+        )
+
+    if unavailable_match_found:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "reedit_source_unavailable",
+                "message": (
+                    "対応するjobは見つかりましたが、元動画または編集データが残っていないため"
+                    "再編集できません。"
+                ),
+            },
+        )
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={
+            "code": "reedit_source_not_found",
+            "message": "このMP4に対応する完成済みjobが見つかりません。",
+        },
+    )
 
 
 @router.post("", response_model=JobCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -827,28 +976,7 @@ def reopen_subtitle_review(
             status_code=status.HTTP_409_CONFLICT,
             detail="source video record is unavailable",
         )
-    if not _can_reopen_subtitle_review(job, video, paths):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="completed job cannot be reopened because source artifacts are unavailable",
-        )
-
-    document = _get_subtitle_review_or_404(job_id, paths)
-    try:
-        document = reopen_completed_review(document)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-
-    _persist_subtitle_review(document, paths)
-    job.status = "awaiting_subtitle_review"
-    job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
-    job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
-    job.error_code = None
-    job.error_message = None
-    job.updated_at = utc_now()
+    document = _reopen_job_subtitle_review(job, video, paths)
     db.commit()
     return document
 

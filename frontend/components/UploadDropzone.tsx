@@ -13,7 +13,9 @@ function formatFileSize(size: number): string {
 
 type UploadDropzoneProps = {
   file: File | null;
+  accept?: string;
   disabled?: boolean;
+  purpose?: "new" | "reedit";
   uploadProgress?: number;
   uploadState?: "idle" | "uploading" | "uploaded";
   onFileChange: (file: File | null) => void;
@@ -21,7 +23,9 @@ type UploadDropzoneProps = {
 
 export function UploadDropzone({
   file,
+  accept = "video/*",
   disabled = false,
+  purpose = "new",
   uploadProgress = 0,
   uploadState = "idle",
   onFileChange
@@ -74,7 +78,7 @@ export function UploadDropzone({
         ref={inputRef}
         className="hidden"
         type="file"
-        accept="video/*"
+        accept={accept}
         disabled={disabled}
         onChange={(event) => selectFile(event.target.files?.[0])}
       />
@@ -103,17 +107,27 @@ export function UploadDropzone({
               </p>
               <h2 className="mt-1 text-2xl font-semibold text-neutral-950">
                 {isUploaded
-                  ? "動画を受け取りました"
+                  ? purpose === "reedit"
+                    ? "元の編集データを確認しました"
+                    : "動画を受け取りました"
                   : isUploading
-                    ? "動画をアップロードしています"
-                    : "動画を選択しました"}
+                    ? purpose === "reedit"
+                      ? "完成MP4を照合しています"
+                      : "動画をアップロードしています"
+                    : purpose === "reedit"
+                      ? "再編集する完成MP4を選択しました"
+                      : "動画を選択しました"}
               </h2>
               <p className="mt-1 text-sm text-neutral-600">
                 {isUploaded
-                  ? "切り抜き処理を準備しています"
+                  ? purpose === "reedit"
+                    ? "元jobの編集画面を開いています"
+                    : "切り抜き処理を準備しています"
                   : isUploading
                     ? "この画面を閉じずにお待ちください"
-                    : "選択内容を確認し、設定後に処理を開始してください"}
+                    : purpose === "reedit"
+                      ? "元jobに保存されたタイトル・フック・字幕を使用します"
+                      : "選択内容を確認し、設定後に処理を開始してください"}
               </p>
             </div>
           </div>
@@ -181,9 +195,13 @@ export function UploadDropzone({
             MP4
           </div>
           <div className="flex max-w-md flex-col gap-1">
-            <h2 className="text-xl font-semibold text-neutral-950">動画を選択</h2>
+            <h2 className="text-xl font-semibold text-neutral-950">
+              {purpose === "reedit" ? "完成MP4を選択" : "動画を選択"}
+            </h2>
             <p className="text-sm text-neutral-600">
-              動画ファイルを選ぶか、ここへドロップしてください
+              {purpose === "reedit"
+                ? "AutoClipperで書き出したMP4を選ぶか、ここへドロップしてください"
+                : "動画ファイルを選ぶか、ここへドロップしてください"}
             </p>
           </div>
           <button
@@ -192,7 +210,7 @@ export function UploadDropzone({
             className="min-h-10 bg-neutral-950 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300"
             onClick={() => inputRef.current?.click()}
           >
-            動画ファイルを選ぶ
+            {purpose === "reedit" ? "完成MP4を選ぶ" : "動画ファイルを選ぶ"}
           </button>
         </div>
       )}
