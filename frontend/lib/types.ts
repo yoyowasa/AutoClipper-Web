@@ -264,6 +264,9 @@ export type ClipPlanClip = {
   aiScore: number | null;
   selectionReason: string | null;
   boundaryRefined: boolean;
+  recommendedStart: number | null;
+  recommendedEnd: number | null;
+  manuallyAdjusted: boolean;
 };
 
 export type ClipPlanDocument = {
@@ -272,6 +275,7 @@ export type ClipPlanDocument = {
   state: "preparing" | "awaiting_review" | "reselecting" | "approved";
   revision: number;
   sourceVideoUrl: string;
+  sourceDuration: number | null;
   clips: ClipPlanClip[];
   settings: ClipSettings;
   createdAt: string;
@@ -293,4 +297,16 @@ export type ClipPlanReselectionRequest = Pick<
 export type ClipPlanActionResponse = {
   jobId: string;
   status: JobStatus;
+};
+
+export type ClipPlanBoundaryUpdateRequest = {
+  start: number;
+  end: number;
+};
+
+export type ClipPlanTranscriptSegment = {
+  start: number;
+  end: number;
+  text: string;
+  confidence: number | null;
 };

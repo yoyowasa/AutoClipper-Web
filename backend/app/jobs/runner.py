@@ -86,6 +86,7 @@ from app.jobs.clip_plan import (
     clip_plan_output_path,
     load_clip_plan,
     mark_clip_plan_awaiting_review,
+    update_clip_plan_boundary,
     write_clip_plan,
 )
 from app.jobs.summaries import write_generation_summaries
@@ -1609,6 +1610,7 @@ def _prepare_clip_plan_review(
     settings: dict[str, Any],
     job_dir: Path,
     preview_renderer: Callable[..., Path],
+    source_duration: float,
 ) -> Path:
     selected = [*selection.normal_clips, *selection.shorts]
     if not selected:
@@ -1622,6 +1624,7 @@ def _prepare_clip_plan_review(
         selection,
         settings,
         revision=_next_clip_plan_revision(job_dir),
+        source_duration=source_duration,
     )
     output_path = clip_plan_output_path(job_dir)
     write_clip_plan(document, output_path)
@@ -2193,6 +2196,7 @@ def run_autoclipper_job(
                     settings=settings,
                     job_dir=job_dir,
                     preview_renderer=deps.subtitle_review_preview_renderer,
+                    source_duration=duration,
                 )
                 metadata_files.append(plan_path)
                 summary_files = write_summaries()
@@ -2326,6 +2330,239 @@ def _restore_clip_plan_after_reselection_failure(
     job.updated_at = utc_now()
     db.commit()
     db.refresh(job)
+
+
+def _candidate_with_clip_plan_boundary(
+    candidate: Candidate,
+    transcript_segments: Sequence[TranscriptSegment],
+    *,
+    start: float,
+    end: float,
+) -> Candidate:
+    overlapping = [
+        (index, segment)
+        for index, segment in enumerate(transcript_segments)
+        if segment.end > start and segment.start < end
+    ]
+    transcript_text = _transcript_text([segment for _, segment in overlapping])
+    recommended_start = (
+        candidate.clip_plan_recommended_start
+        if candidate.clip_plan_recommended_start is not None
+        else candidate.start
+    )
+    recommended_end = (
+        candidate.clip_plan_recommended_end
+        if candidate.clip_plan_recommended_end is not None
+        else candidate.end
+    )
+    updated = candidate.model_dump()
+    updated.update(
+        {
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "duration": round(end - start, 3),
+            "transcript_text": transcript_text,
+            "segment_start_index": overlapping[0][0] if overlapping else None,
+            "segment_end_index": overlapping[-1][0] + 1 if overlapping else None,
+            "transcript_char_count": sum(
+                len(segment.text.strip()) for _, segment in overlapping
+            ),
+            "speech_seconds": round(
+                sum(
+                    max(
+                        0.0,
+                        min(float(segment.end), end)
+                        - max(float(segment.start), start),
+                    )
+                    for _, segment in overlapping
+                    if segment.text.strip()
+                ),
+                3,
+            ),
+            "clip_plan_recommended_start": recommended_start,
+            "clip_plan_recommended_end": recommended_end,
+            "clip_plan_boundary_adjusted": not (
+                abs(start - recommended_start) < 0.001
+                and abs(end - recommended_end) < 0.001
+            ),
+        }
+    )
+    return Candidate.model_validate(updated)
+
+
+def _restore_clip_plan_after_boundary_failure(
+    db: Session,
+    job: Job,
+    *,
+    document: Any,
+    plan_path: Path,
+    selected_path: Path,
+    selected_payload: bytes | None,
+    preview_path: Path,
+    preview_payload: bytes | None,
+    code: str,
+    message: str,
+) -> None:
+    if selected_payload is not None:
+        selected_path.write_bytes(selected_payload)
+    if preview_payload is None:
+        preview_path.unlink(missing_ok=True)
+    else:
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        preview_path.write_bytes(preview_payload)
+    if document is not None:
+        document.state = "awaiting_review"
+        write_clip_plan(document, plan_path)
+    job.status = "awaiting_clip_review"
+    job.progress = PROGRESS_MAP["awaiting_clip_review"]
+    job.current_step = "範囲の更新に失敗しました。時間を確認して再試行してください"
+    job.error_code = code
+    job.error_message = message
+    job.updated_at = utc_now()
+    db.commit()
+    db.refresh(job)
+
+
+def run_clip_plan_boundary_update(
+    job_id: str,
+    clip_id: str,
+    start: float,
+    end: float,
+    session_factory: SessionFactory = SessionLocal,
+    paths: StoragePaths | None = None,
+    dependencies: AutoClipperPipelineDependencies | None = None,
+) -> list[str]:
+    storage_paths = paths or get_storage_paths()
+    deps = dependencies or AutoClipperPipelineDependencies()
+    visited_statuses: list[str] = []
+
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"job not found: {job_id}")
+        video = db.get(Video, job.video_id)
+        if video is None:
+            raise ValueError(f"video not found for job: {job_id}")
+
+        job_dir = storage_paths.job_outputs(job.id)
+        plan_path = clip_plan_output_path(job_dir)
+        selected_path = job_dir / "selected_clips.json"
+        preview_path = subtitle_review_preview_path(job_dir, clip_id)
+        document = None
+        selected_payload = (
+            selected_path.read_bytes() if selected_path.is_file() else None
+        )
+        preview_payload = (
+            preview_path.read_bytes() if preview_path.is_file() else None
+        )
+        try:
+            document = load_clip_plan(plan_path)
+            selection = CandidateSelection.model_validate(
+                _read_json_file(selected_path)
+            )
+            transcript_segments = _read_transcript_segments(
+                transcript_output_path(job_dir)
+            )
+            planned_clip = next(
+                (clip for clip in document.clips if clip.id == clip_id),
+                None,
+            )
+            if planned_clip is None:
+                raise ValueError(f"clip plan item not found: {clip_id}")
+            candidates = [*selection.normal_clips, *selection.shorts]
+            candidate = next(
+                (item for item in candidates if item.id == clip_id),
+                None,
+            )
+            if candidate is None:
+                raise ValueError(f"selected clip not found: {clip_id}")
+
+            source_duration = float(
+                video.duration
+                or document.source_duration
+                or max((clip.end for clip in document.clips), default=0.0)
+            )
+            if start < 0 or end <= start or end > source_duration + 0.001:
+                raise ValueError(
+                    "requested clip boundary is outside the source video"
+                )
+
+            _set_status(db, job, "preparing_clip_review")
+            job.current_step = "調整した範囲の確認動画を準備中"
+            job.error_code = None
+            job.error_message = None
+            job.updated_at = utc_now()
+            document.state = "preparing"
+            write_clip_plan(document, plan_path)
+            db.commit()
+            db.refresh(job)
+            visited_statuses.append("preparing_clip_review")
+
+            deps.subtitle_review_preview_renderer(
+                storage_paths.resolve_stored_file(video.stored_path),
+                preview_path,
+                start=start,
+                duration=end - start,
+            )
+            updated_candidate = _candidate_with_clip_plan_boundary(
+                candidate,
+                transcript_segments,
+                start=start,
+                end=end,
+            )
+            target_collection = (
+                selection.normal_clips
+                if updated_candidate.type == "normal"
+                else selection.shorts
+            )
+            target_index = next(
+                index
+                for index, item in enumerate(target_collection)
+                if item.id == clip_id
+            )
+            target_collection[target_index] = updated_candidate
+            write_selected_clips(selection, selected_path)
+
+            update_clip_plan_boundary(
+                document,
+                clip_id,
+                start=start,
+                end=end,
+                transcript_excerpt=updated_candidate.transcript_text,
+            )
+            document.source_duration = source_duration
+            available_clip_ids = [
+                clip.id
+                for clip in document.clips
+                if subtitle_review_preview_path(job_dir, clip.id).is_file()
+            ]
+            mark_clip_plan_awaiting_review(
+                document,
+                preview_clip_ids=available_clip_ids,
+            )
+            write_clip_plan(document, plan_path)
+            _set_status(db, job, "awaiting_clip_review")
+            job.error_code = None
+            job.error_message = None
+            db.commit()
+            db.refresh(job)
+            visited_statuses.append("awaiting_clip_review")
+        except Exception as exc:
+            _restore_clip_plan_after_boundary_failure(
+                db,
+                job,
+                document=document,
+                plan_path=plan_path,
+                selected_path=selected_path,
+                selected_payload=selected_payload,
+                preview_path=preview_path,
+                preview_payload=preview_payload,
+                code="clip_plan_boundary_update_failed",
+                message=str(exc),
+            )
+            raise
+
+    return visited_statuses
 
 
 def run_clip_plan_reselection(
@@ -2546,6 +2783,7 @@ def run_clip_plan_reselection(
                 settings=settings,
                 job_dir=job_dir,
                 preview_renderer=deps.subtitle_review_preview_renderer,
+                source_duration=float(video.duration or visual_quality.duration),
             )
             visited_statuses.extend(
                 ["preparing_clip_review", "awaiting_clip_review"]

@@ -22,9 +22,11 @@ from app.jobs.clip_plan import (
     write_clip_plan,
 )
 from app.jobs.queue import (
+    ClipPlanBoundaryUpdateEnqueue,
     ClipPlanReselectionEnqueue,
     JobEnqueue,
     RenderEnqueue,
+    get_enqueue_clip_plan_boundary_update,
     get_enqueue_clip_plan_reselection,
     get_enqueue_job,
     get_enqueue_render_job,
@@ -48,6 +50,7 @@ from app.models import ExportItem, Job, Video
 from app.models import utc_now
 from app.schemas import (
     ClipPlanActionResponse,
+    ClipPlanBoundaryUpdateRequest,
     ClipPlanReselectionRequest,
     JobAuditSummary,
     JobCreateRequest,
@@ -477,6 +480,61 @@ def get_clip_plan(
     return _get_clip_plan_or_404(job_id, paths)
 
 
+@router.get(
+    "/{job_id}/clip-plan/clips/{clip_id}/transcript-segments",
+    response_model=list[TranscriptSegment],
+)
+def get_clip_plan_transcript_segments(
+    job_id: str,
+    clip_id: str,
+    start: float,
+    end: float,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> list[TranscriptSegment]:
+    job = _get_job_or_404(db, job_id)
+    document = _get_clip_plan_or_404(job_id, paths)
+    if not any(clip.id == clip_id for clip in document.clips):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clip plan item not found",
+        )
+    if start < 0 or end <= start or end - start < 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="invalid clip transcript range",
+        )
+    video = db.get(Video, job.video_id)
+    source_duration = float(
+        (video.duration if video is not None else None)
+        or document.source_duration
+        or 0
+    )
+    if source_duration > 0 and end > source_duration + 0.001:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="clip end exceeds source video duration",
+        )
+
+    transcript_payload = _read_json_if_exists(
+        paths.job_outputs(job_id) / "transcript_segments.json"
+    )
+    if not isinstance(transcript_payload, list):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="transcript segments are unavailable",
+        )
+    transcript_segments = [
+        TranscriptSegment.model_validate(item)
+        for item in transcript_payload
+    ]
+    return [
+        segment
+        for segment in transcript_segments
+        if segment.end > start and segment.start < end
+    ]
+
+
 @router.get("/{job_id}/clip-plan/clips/{clip_id}/preview-video")
 def get_clip_plan_preview_video(
     job_id: str,
@@ -501,6 +559,97 @@ def get_clip_plan_preview_video(
             detail="clip plan preview not found",
         )
     return FileResponse(preview_path, media_type="video/mp4")
+
+
+@router.patch(
+    "/{job_id}/clip-plan/clips/{clip_id}/boundary",
+    response_model=ClipPlanActionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def update_clip_plan_clip_boundary(
+    job_id: str,
+    clip_id: str,
+    request: ClipPlanBoundaryUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_boundary_update: ClipPlanBoundaryUpdateEnqueue = Depends(
+        get_enqueue_clip_plan_boundary_update
+    ),
+) -> ClipPlanActionResponse:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_clip_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clip plan is not awaiting boundary adjustment",
+        )
+    document = _get_clip_plan_or_404(job_id, paths)
+    if document.state != "awaiting_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clip plan is not awaiting boundary adjustment",
+        )
+    if not any(clip.id == clip_id for clip in document.clips):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clip plan item not found",
+        )
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="video not found",
+        )
+    source_duration = float(video.duration or document.source_duration or 0)
+    if source_duration <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video duration is unavailable",
+        )
+    if request.end > source_duration + 0.001:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="clip end exceeds source video duration",
+        )
+
+    job.status = "preparing_clip_review"
+    job.progress = PROGRESS_MAP["preparing_clip_review"]
+    job.current_step = "調整した範囲の確認動画を準備中"
+    job.error_code = None
+    job.error_message = None
+    job.updated_at = utc_now()
+    document.state = "preparing"
+    document.source_duration = source_duration
+    write_clip_plan(
+        document,
+        clip_plan_output_path(paths.job_outputs(job_id)),
+    )
+    db.commit()
+    db.refresh(job)
+
+    try:
+        enqueue_boundary_update(
+            job.id,
+            clip_id,
+            request.start,
+            request.end,
+        )
+    except Exception as exc:
+        job.status = "awaiting_clip_review"
+        job.progress = PROGRESS_MAP["awaiting_clip_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
+        job.updated_at = utc_now()
+        document.state = "awaiting_review"
+        write_clip_plan(
+            document,
+            clip_plan_output_path(paths.job_outputs(job_id)),
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="could not queue clip plan boundary adjustment",
+        ) from exc
+
+    return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
 
 @router.post(

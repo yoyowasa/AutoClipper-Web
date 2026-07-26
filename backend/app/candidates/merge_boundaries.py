@@ -69,6 +69,9 @@ class Candidate(BaseModel):
     boundary_refined: bool | None = None
     boundary_refinement_reason: str | None = None
     boundary_expansion_seconds: float | None = Field(default=None, ge=0)
+    clip_plan_recommended_start: float | None = Field(default=None, ge=0)
+    clip_plan_recommended_end: float | None = Field(default=None, ge=0)
+    clip_plan_boundary_adjusted: bool | None = None
 
     @model_validator(mode="after")
     def validate_range(self) -> "Candidate":

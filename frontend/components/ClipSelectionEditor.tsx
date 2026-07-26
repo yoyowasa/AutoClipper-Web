@@ -6,6 +6,7 @@ import { isManualTimeMode } from "../lib/manualClipRanges";
 type ClipSelectionEditorProps = {
   settings: ClipSettings;
   disabled?: boolean;
+  compact?: boolean;
   onChange: (settings: ClipSettings) => void;
 };
 
@@ -40,7 +41,7 @@ function OutputPreference({
   onPresetChange
 }: OutputPreferenceProps) {
   return (
-    <fieldset className="border border-neutral-300 bg-white p-4 disabled:opacity-50" disabled={disabled}>
+    <fieldset className="min-w-0 border border-neutral-300 bg-white p-4 disabled:opacity-50" disabled={disabled}>
       <legend className="px-1 text-sm font-semibold text-neutral-900">{label}</legend>
       {manualTimeMode ? (
         <p className="mb-3 border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900">
@@ -50,7 +51,7 @@ function OutputPreference({
       <label className="mt-1 flex flex-col gap-2">
         <span className="text-xs font-medium text-neutral-600">狙う場面</span>
         <select
-          className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+          className="min-h-10 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm"
           value={preset}
           onChange={(event) => onPresetChange(event.target.value as ClipSelectionPreset)}
         >
@@ -64,7 +65,7 @@ function OutputPreference({
       <label className="mt-4 flex flex-col gap-2">
         <span className="text-xs font-medium text-neutral-600">具体的な方針（任意）</span>
         <textarea
-          className="min-h-24 resize-y rounded-md border border-neutral-300 px-3 py-2 text-sm"
+          className="min-h-24 w-full resize-y rounded-md border border-neutral-300 px-3 py-2 text-sm"
           maxLength={1000}
           placeholder={placeholder}
           value={guidance}
@@ -78,6 +79,7 @@ function OutputPreference({
 export function ClipSelectionEditor({
   settings,
   disabled = false,
+  compact = false,
   onChange
 }: ClipSelectionEditorProps) {
   const normalManual = isManualTimeMode(settings, "normal");
@@ -111,7 +113,7 @@ export function ClipSelectionEditor({
         AI文脈判定を使用します。
       </p>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+      <div className={`mt-4 grid gap-4 ${compact ? "" : "lg:grid-cols-2"}`}>
         <OutputPreference
           disabled={disabled || settings.normalClipCount === 0 || normalManual}
           guidance={settings.normalClipGuidance}
@@ -138,7 +140,7 @@ export function ClipSelectionEditor({
         />
       </div>
 
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+      <div className={`mt-4 grid gap-3 ${compact ? "" : "sm:grid-cols-2"}`}>
         <label className="flex min-h-11 items-start gap-3 border border-neutral-300 px-4 py-3">
           <input
             checked={settings.excludeIntroOutro}

@@ -5549,3 +5549,146 @@ pip check: pass
 - 保存設定は現在のAutoClipperインストール内で共有。別PC・別インストールとは同期しない。
 - `storage/autoclipper.db`を削除・初期化すると保存枠も削除される。
 - branch `codex/task-81-subtitle-style-presets`で実装・ローカル検証済み。親branchはTask80。main mergeは未実施。
+
+## 2026-07-25 Task 82 clip plan boundary adjustment
+
+### 目的
+
+- 切り抜き予定画面で、選ばれた場面を保持したまま開始・終了時刻を調整できるようにする。
+- 前後が不足する場合、再選定・再文字起こし・字幕生成を行わず、対象clipだけを短時間で確認し直せるようにする。
+
+### 変更
+
+- 予定確認画面へclip単位の範囲調整欄を追加。
+  - 開始・終了を分秒で直接入力。
+  - 前に／後に`+5秒`、`+15秒`、`+30秒`、`+1分`。
+  - 自動選定時の範囲へ復元。
+- 自動選定時の開始・終了と、手動調整状態を`clip_plan.json`へ保持。
+- 境界更新APIとworker taskを追加。
+  - HTTP request内ではFFmpegを実行しない。
+  - 対象clip 1本の軽量previewだけを再生成。
+  - `selected_clips.json`を更新し、字幕確認・最終renderへ調整後の範囲を引き渡す。
+- 元動画の先頭・末尾、開始／終了の逆転、1秒未満をbackendで拒否。
+- queue失敗・preview更新失敗時は直前のplan、selected clip、previewへ復元。
+- 予定確認画面の再選定欄を狭いdesktop幅では縦1列にし、横overflowを解消。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `372 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / frontend / worker rebuild: pass。
+- 境界更新統合テスト: pass。
+  - 動画末尾超過を拒否。
+  - queue失敗時に`awaiting_clip_review`へ復元。
+  - preview再生成時のstart / durationを確認。
+  - 調整後の境界が`selected_clips.json`と字幕確認clipへ一致。
+- browser実操作: pass。
+  - job: `job_6c50dc566fe4433b94fa74ae2599e5de`
+  - `34:12.71 - 34:53.91`へ前後5秒を追加し、`34:07.71 - 34:58.91`へ更新。
+  - 対象previewだけを更新し、手動調整表示を確認。
+  - 自動選定範囲へ戻し、ミリ秒精度で完全復元。
+  - 復元後preview duration: `41.200000`秒。
+  - desktop幅`1265px`、mobile幅`375px`とも横overflowなし。
+  - console error: `0`。
+
+### 未解決・制限
+
+- 範囲更新は1clipずつ行う。複数clipの一括延長は未実装。
+- preview再生成時間はclip長とPC性能に依存する。
+- 明示的な手動範囲は自動推奨の最大長を超えても許可する。最終auditではduration warningが残る場合がある。
+- branch `codex/task-82-clip-plan-boundary-adjustment`で実装・ローカル検証済み。親branchはTask81。main mergeは未実施。
+
+## 2026-07-26 Task 82 範囲調整欄の表示位置修正
+
+### 目的
+
+- 開始・終了の調整欄が動画の下に隠れ、予定確認画面を開いただけでは操作箇所を認識できない問題を解消する。
+
+### 変更
+
+- clip範囲調整欄をpreview動画の下から、選択clip見出しの直下へ移動。
+- 状態表示の`選定範囲`を`自動選定のまま`へ変更し、操作ボタンとの誤認を防止。
+- 手動変更後は`範囲を手動調整済み`と表示。
+- 説明文へ、分秒の直接変更と前後追加ボタンを明記。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- Docker frontend rebuild: pass。
+- browser表示確認: pass。
+  - `1777x879`、scroll位置`0`で分秒入力、前後追加、復元、preview更新ボタンを表示。
+  - mobile `390x844`で横overflowなし。
+  - console error: `0`。
+
+### 未解決・制限
+
+- Task 82全体はDraft PR #62でreview・merge待ち。
+
+## 2026-07-26 Task 82 入力範囲の文字起こし同期
+
+### 目的
+
+- 開始・終了を調整しても、動画下の文字起こしが選定時の短い抜粋に見える問題を解消する。
+- preview保存前でも、入力中の範囲に含まれる文字起こしを確認できるようにする。
+
+### 変更
+
+- 保存済み`transcript_segments.json`から、指定範囲と重なるsegmentを返すread-only APIを追加。
+- 分秒入力と前後追加ボタンの変更を250ms debounceでAPIへ反映。
+- 360文字固定の「選定時の文字起こし抜粋」を廃止。
+- 入力中の範囲、区間数、各segmentの元動画時刻、全文をスクロール表示。
+- 再文字起こし、preview再生成、OpenAI API、DB更新は行わない。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `374 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker backend / frontend rebuild: pass。
+- API統合テスト: pass。
+  - 指定範囲と重なるsegmentだけを返す。
+  - 開始・終了の逆転を`422`で拒否。
+- browser実操作: pass。
+  - job: `job_627620b5cdfb44cbaa693cf8a4a78dab`
+  - 保存済み範囲`14:52.4 - 18:09.0`で`181区間`を表示。
+  - `前に+5秒`後、入力範囲`14:47.4 - 18:09.0`と`186区間`へ保存前に自動更新。
+  - 追加された先頭segment`14:46.9 - 14:48.0`を表示。
+  - 未保存の確認操作はページ再読込で破棄。
+
+### 未解決・制限
+
+- 表示内容は既存の文字起こし結果。誤字修正は次の字幕確認工程で行う。
+- Task 82全体はDraft PR #62でreview・merge待ち。
+
+## 2026-07-26 Task 82 予定確認画面の文字起こし配置
+
+### 目的
+
+- 開始・終了の調整欄と、変更範囲の文字起こしを同時に確認できる配置へ変更する。
+
+### 変更
+
+- 文字起こし欄を動画下からdesktop右列へ移動。
+- 右列をviewport内に固定し、文字起こし一覧だけを独立スクロール可能に変更。
+- 右列にあった再選定、狙う場面設定、字幕確認への遷移を動画下へ移動。
+- 動画下の再選定欄は通常・ショート設定を2列表示できる幅へ変更。
+- 狭い画面では、clip一覧、境界調整・動画、文字起こし、再選定の順に縦並びになる。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- Docker backend / frontend rebuild: pass。
+- browser実操作: pass。
+  - viewport: `1280x720`
+  - 開始・終了欄と右の文字起こし`181区間`を同一viewportへ表示。
+  - `前に+5秒`後、右欄が`14:47.4 - 18:09.0`、`186区間`へ自動更新。
+  - 右欄の表示高`406px`、内容高`12771px`、`overflow-y: auto`を確認。
+  - 横overflow: `0`。
+  - 動画下の再選定欄までスクロール後も、右の文字起こしを固定表示。
+  - 未保存の確認操作はページ再読込で破棄。
+
+### 未解決・制限
+
+- 文字起こし欄は閲覧用。本文修正は次の字幕確認工程で行う。
+- Task 82全体はDraft PR #62でreview・merge待ち。
