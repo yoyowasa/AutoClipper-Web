@@ -303,3 +303,10 @@ export type ClipPlanBoundaryUpdateRequest = {
   start: number;
   end: number;
 };
+
+export type ClipPlanTranscriptSegment = {
+  start: number;
+  end: number;
+  text: string;
+  confidence: number | null;
+};

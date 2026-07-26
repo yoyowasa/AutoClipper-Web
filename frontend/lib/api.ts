@@ -3,6 +3,7 @@ import type {
   ClipPlanBoundaryUpdateRequest,
   ClipPlanDocument,
   ClipPlanReselectionRequest,
+  ClipPlanTranscriptSegment,
   ClipSettings,
   JobCreateResponse,
   JobResultsResponse,
@@ -195,6 +196,26 @@ export async function updateClipPlanBoundary(
     }
   );
   return parseJsonResponse<ClipPlanActionResponse>(response);
+}
+
+export async function getClipPlanTranscriptSegments(
+  jobId: string,
+  clipId: string,
+  boundary: ClipPlanBoundaryUpdateRequest,
+  signal?: AbortSignal
+): Promise<ClipPlanTranscriptSegment[]> {
+  const query = new URLSearchParams({
+    start: String(boundary.start),
+    end: String(boundary.end)
+  });
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/clip-plan/clips/${clipId}/transcript-segments?${query}`,
+    {
+      cache: "no-store",
+      signal
+    }
+  );
+  return parseJsonResponse<ClipPlanTranscriptSegment[]>(response);
 }
 
 export async function approveClipPlan(jobId: string): Promise<ClipPlanActionResponse> {

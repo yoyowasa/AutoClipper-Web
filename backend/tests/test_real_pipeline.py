@@ -699,6 +699,33 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     assert all(clip["previewVideoUrl"] for clip in plan["clips"])
     assert client.get(plan["clips"][0]["previewVideoUrl"]).content == b"preview"
     assert len(preview_render_calls) == 3
+    transcript_preview = client.get(
+        (
+            f"/api/jobs/{created['jobId']}/clip-plan/clips/"
+            f"{plan['clips'][0]['id']}/transcript-segments"
+        ),
+        params={"start": 2, "end": 58},
+    )
+    assert transcript_preview.status_code == 200
+    assert [
+        (segment["start"], segment["end"], segment["text"])
+        for segment in transcript_preview.json()
+    ] == [
+        (0.0, 30.0, "why automation mistakes matter before launch"),
+        (
+            35.0,
+            80.0,
+            "how teams can fix the process with a clear checklist",
+        ),
+    ]
+    invalid_transcript_preview = client.get(
+        (
+            f"/api/jobs/{created['jobId']}/clip-plan/clips/"
+            f"{plan['clips'][0]['id']}/transcript-segments"
+        ),
+        params={"start": 58, "end": 2},
+    )
+    assert invalid_transcript_preview.status_code == 422
 
     with next(app.dependency_overrides[get_db]()) as db:
         stored_job = db.get(Job, created["jobId"])

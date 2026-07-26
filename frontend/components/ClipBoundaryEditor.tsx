@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { ClipPlanClip } from "../lib/types";
 
@@ -9,7 +9,14 @@ type ClipBoundaryEditorProps = {
   sourceDuration: number | null;
   disabled?: boolean;
   saving?: boolean;
+  onDraftChange?: (draft: ClipBoundaryDraft | null) => void;
   onSave: (start: number, end: number) => void;
+};
+
+export type ClipBoundaryDraft = {
+  clipId: string;
+  start: number;
+  end: number;
 };
 
 type TimeParts = {
@@ -110,6 +117,7 @@ export function ClipBoundaryEditor({
   sourceDuration,
   disabled = false,
   saving = false,
+  onDraftChange,
   onSave
 }: ClipBoundaryEditorProps) {
   const recommendedStart = clip.recommendedStart ?? clip.start;
@@ -141,6 +149,21 @@ export function ClipBoundaryEditor({
       Math.abs(end - clip.end) >= 0.0005);
   const draftDuration =
     start !== null && end !== null && end > start ? end - start : null;
+
+  useEffect(() => {
+    if (!onDraftChange) {
+      return;
+    }
+    if (start === null || end === null || validation !== null) {
+      onDraftChange(null);
+      return;
+    }
+    onDraftChange({
+      clipId: clip.id,
+      start,
+      end
+    });
+  }, [clip.id, end, onDraftChange, start, validation]);
 
   function replaceStart(value: number) {
     setStartParts(splitTime(Math.max(0, value)));

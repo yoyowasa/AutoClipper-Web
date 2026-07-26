@@ -4,11 +4,15 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ClipBoundaryEditor } from "../../../../components/ClipBoundaryEditor";
+import {
+  ClipBoundaryEditor,
+  type ClipBoundaryDraft
+} from "../../../../components/ClipBoundaryEditor";
 import { ClipSelectionEditor } from "../../../../components/ClipSelectionEditor";
 import {
   approveClipPlan,
   getClipPlan,
+  getClipPlanTranscriptSegments,
   getJobStatus,
   reselectClipPlan,
   toApiUrl,
@@ -18,6 +22,7 @@ import type {
   ClipPlanClip,
   ClipPlanDocument,
   ClipPlanReselectionRequest,
+  ClipPlanTranscriptSegment,
   ClipSettings,
   JobStatusResponse
 } from "../../../../lib/types";
@@ -46,6 +51,10 @@ function clipLabel(clip: ClipPlanClip, clips: ClipPlanClip[]): string {
   return `${clip.type === "normal" ? "通常" : "ショート"} ${index}`;
 }
 
+type TranscriptPreview = ClipBoundaryDraft & {
+  segments: ClipPlanTranscriptSegment[];
+};
+
 function reselectionPayload(settings: ClipSettings): ClipPlanReselectionRequest {
   return {
     normalClipSelectionPreset: settings.normalClipSelectionPreset,
@@ -70,6 +79,16 @@ export default function ClipPlanReviewPage() {
   const [isReselecting, setIsReselecting] = useState(false);
   const [isAdjusting, setIsAdjusting] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
+  const [boundaryDraft, setBoundaryDraft] = useState<ClipBoundaryDraft | null>(
+    null
+  );
+  const [transcriptPreview, setTranscriptPreview] =
+    useState<TranscriptPreview | null>(null);
+  const [isTranscriptPreviewLoading, setIsTranscriptPreviewLoading] =
+    useState(false);
+  const [transcriptPreviewError, setTranscriptPreviewError] = useState<
+    string | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadPlan = useCallback(async () => {
@@ -162,8 +181,74 @@ export default function ClipPlanReviewPage() {
     };
   }, [isAdjusting, isReselecting, jobId, loadPlan]);
 
+  const handleBoundaryDraftChange = useCallback(
+    (draft: ClipBoundaryDraft | null) => {
+      setBoundaryDraft(draft);
+      setTranscriptPreview(null);
+      setTranscriptPreviewError(null);
+      if (!draft) {
+        setIsTranscriptPreviewLoading(false);
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!boundaryDraft || !jobId) {
+      return;
+    }
+    let active = true;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      setIsTranscriptPreviewLoading(true);
+      void getClipPlanTranscriptSegments(
+        jobId,
+        boundaryDraft.clipId,
+        boundaryDraft,
+        controller.signal
+      )
+        .then((segments) => {
+          if (!active) {
+            return;
+          }
+          setTranscriptPreview({
+            ...boundaryDraft,
+            segments
+          });
+          setTranscriptPreviewError(null);
+        })
+        .catch((caught) => {
+          if (
+            !active ||
+            (caught instanceof DOMException && caught.name === "AbortError")
+          ) {
+            return;
+          }
+          setTranscriptPreviewError(
+            caught instanceof Error
+              ? caught.message
+              : "変更範囲の文字起こしを取得できませんでした"
+          );
+        })
+        .finally(() => {
+          if (active) {
+            setIsTranscriptPreviewLoading(false);
+          }
+        });
+    }, 250);
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [boundaryDraft, jobId]);
+
   const selectedClip =
     plan?.clips.find((clip) => clip.id === selectedClipId) ?? null;
+  const selectedBoundaryDraft =
+    boundaryDraft?.clipId === selectedClipId ? boundaryDraft : null;
+  const selectedTranscriptPreview =
+    transcriptPreview?.clipId === selectedClipId ? transcriptPreview : null;
   const controlsDisabled =
     isReselecting ||
     isAdjusting ||
@@ -368,6 +453,7 @@ export default function ClipPlanReviewPage() {
                 key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}`}
                 saving={isAdjusting}
                 sourceDuration={plan.sourceDuration}
+                onDraftChange={handleBoundaryDraftChange}
                 onSave={(start, end) =>
                   void handleBoundaryUpdate(start, end)
                 }
@@ -392,12 +478,59 @@ export default function ClipPlanReviewPage() {
               </div>
 
               <div className="border-b border-neutral-300 px-5 py-4">
-                <p className="text-xs font-semibold text-neutral-500">選定時の文字起こし抜粋</p>
-                <p className="mt-2 text-sm leading-6 text-neutral-800">
-                  {selectedClip.transcriptExcerpt || "文字起こし抜粋なし"}
-                </p>
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-neutral-950">
+                      入力中の範囲に含まれる文字起こし
+                    </p>
+                    <p className="mt-1 text-xs tabular-nums text-neutral-500">
+                      {selectedBoundaryDraft
+                        ? `${formatTime(selectedBoundaryDraft.start)} - ${formatTime(selectedBoundaryDraft.end)}`
+                        : "開始・終了を正しく入力してください"}
+                    </p>
+                  </div>
+                  <span className="border border-neutral-300 bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
+                    {isTranscriptPreviewLoading
+                      ? "更新中"
+                      : `${selectedTranscriptPreview?.segments.length ?? 0}区間`}
+                  </span>
+                </div>
+
+                {transcriptPreviewError ? (
+                  <p className="mt-3 border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    {transcriptPreviewError}
+                  </p>
+                ) : null}
+
+                {selectedTranscriptPreview &&
+                selectedTranscriptPreview.segments.length > 0 ? (
+                  <div className="mt-3 max-h-80 overflow-y-auto border border-neutral-200 bg-neutral-50">
+                    {selectedTranscriptPreview.segments.map((segment, index) => (
+                      <div
+                        className="grid gap-1 border-b border-neutral-200 px-3 py-2 last:border-b-0 sm:grid-cols-[120px_minmax(0,1fr)] sm:gap-3"
+                        key={`${segment.start}-${segment.end}-${index}`}
+                      >
+                        <span className="text-xs tabular-nums text-neutral-500">
+                          {formatTime(segment.start)} - {formatTime(segment.end)}
+                        </span>
+                        <p className="break-words text-sm leading-6 text-neutral-900">
+                          {segment.text}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : isTranscriptPreviewLoading ? (
+                  <p className="mt-3 text-sm text-neutral-600">
+                    変更した時間範囲から文字起こしを読み込んでいます
+                  </p>
+                ) : (
+                  <p className="mt-3 text-sm text-neutral-600">
+                    この範囲に発話の文字起こしはありません
+                  </p>
+                )}
+
                 <p className="mt-2 text-xs text-neutral-500">
-                  これは選定用の内部データです。字幕の修正は次の工程で行います。
+                  分秒入力と前後追加に合わせて自動更新します。字幕の修正は次の工程で行います。
                 </p>
               </div>
             </>

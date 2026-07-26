@@ -5624,3 +5624,39 @@ pip check: pass
 ### 未解決・制限
 
 - Task 82全体はDraft PR #62でreview・merge待ち。
+
+## 2026-07-26 Task 82 入力範囲の文字起こし同期
+
+### 目的
+
+- 開始・終了を調整しても、動画下の文字起こしが選定時の短い抜粋に見える問題を解消する。
+- preview保存前でも、入力中の範囲に含まれる文字起こしを確認できるようにする。
+
+### 変更
+
+- 保存済み`transcript_segments.json`から、指定範囲と重なるsegmentを返すread-only APIを追加。
+- 分秒入力と前後追加ボタンの変更を250ms debounceでAPIへ反映。
+- 360文字固定の「選定時の文字起こし抜粋」を廃止。
+- 入力中の範囲、区間数、各segmentの元動画時刻、全文をスクロール表示。
+- 再文字起こし、preview再生成、OpenAI API、DB更新は行わない。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `374 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker backend / frontend rebuild: pass。
+- API統合テスト: pass。
+  - 指定範囲と重なるsegmentだけを返す。
+  - 開始・終了の逆転を`422`で拒否。
+- browser実操作: pass。
+  - job: `job_627620b5cdfb44cbaa693cf8a4a78dab`
+  - 保存済み範囲`14:52.4 - 18:09.0`で`181区間`を表示。
+  - `前に+5秒`後、入力範囲`14:47.4 - 18:09.0`と`186区間`へ保存前に自動更新。
+  - 追加された先頭segment`14:46.9 - 14:48.0`を表示。
+  - 未保存の確認操作はページ再読込で破棄。
+
+### 未解決・制限
+
+- 表示内容は既存の文字起こし結果。誤字修正は次の字幕確認工程で行う。
+- Task 82全体はDraft PR #62でreview・merge待ち。
