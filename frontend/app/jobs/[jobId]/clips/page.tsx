@@ -375,7 +375,7 @@ export default function ClipPlanReviewPage() {
       ) : null}
 
       <div className="mx-auto grid max-w-[1600px] lg:grid-cols-[280px_minmax(0,1fr)_390px]">
-        <aside className="border-r border-neutral-300 bg-white lg:min-h-[calc(100vh-145px)]">
+        <aside className="border-r border-neutral-300 bg-white lg:row-span-2 lg:min-h-[calc(100vh-145px)]">
           <div className="border-b border-neutral-300 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold">生成予定clip</h2>
@@ -422,7 +422,7 @@ export default function ClipPlanReviewPage() {
           </div>
         </aside>
 
-        <section className="min-w-0 border-b border-neutral-300 bg-white lg:border-r">
+        <section className="min-w-0 border-b border-neutral-300 bg-white lg:col-start-2 lg:row-start-1 lg:border-r">
           {selectedClip ? (
             <>
               <div className="border-b border-neutral-300 px-5 py-4">
@@ -476,70 +476,71 @@ export default function ClipPlanReviewPage() {
                   )}
                 </div>
               </div>
-
-              <div className="border-b border-neutral-300 px-5 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-neutral-950">
-                      入力中の範囲に含まれる文字起こし
-                    </p>
-                    <p className="mt-1 text-xs tabular-nums text-neutral-500">
-                      {selectedBoundaryDraft
-                        ? `${formatTime(selectedBoundaryDraft.start)} - ${formatTime(selectedBoundaryDraft.end)}`
-                        : "開始・終了を正しく入力してください"}
-                    </p>
-                  </div>
-                  <span className="border border-neutral-300 bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
-                    {isTranscriptPreviewLoading
-                      ? "更新中"
-                      : `${selectedTranscriptPreview?.segments.length ?? 0}区間`}
-                  </span>
-                </div>
-
-                {transcriptPreviewError ? (
-                  <p className="mt-3 border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                    {transcriptPreviewError}
-                  </p>
-                ) : null}
-
-                {selectedTranscriptPreview &&
-                selectedTranscriptPreview.segments.length > 0 ? (
-                  <div className="mt-3 max-h-80 overflow-y-auto border border-neutral-200 bg-neutral-50">
-                    {selectedTranscriptPreview.segments.map((segment, index) => (
-                      <div
-                        className="grid gap-1 border-b border-neutral-200 px-3 py-2 last:border-b-0 sm:grid-cols-[120px_minmax(0,1fr)] sm:gap-3"
-                        key={`${segment.start}-${segment.end}-${index}`}
-                      >
-                        <span className="text-xs tabular-nums text-neutral-500">
-                          {formatTime(segment.start)} - {formatTime(segment.end)}
-                        </span>
-                        <p className="break-words text-sm leading-6 text-neutral-900">
-                          {segment.text}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                ) : isTranscriptPreviewLoading ? (
-                  <p className="mt-3 text-sm text-neutral-600">
-                    変更した時間範囲から文字起こしを読み込んでいます
-                  </p>
-                ) : (
-                  <p className="mt-3 text-sm text-neutral-600">
-                    この範囲に発話の文字起こしはありません
-                  </p>
-                )}
-
-                <p className="mt-2 text-xs text-neutral-500">
-                  分秒入力と前後追加に合わせて自動更新します。字幕の修正は次の工程で行います。
-                </p>
-              </div>
             </>
           ) : (
             <div className="p-5 text-sm text-neutral-600">clipがありません</div>
           )}
         </section>
 
-        <aside className="bg-[#f7f7f4] px-5 py-5">
+        <aside className="border-b border-neutral-300 bg-white px-5 py-5 lg:sticky lg:top-0 lg:col-start-3 lg:row-span-2 lg:row-start-1 lg:flex lg:h-[calc(100vh-145px)] lg:min-h-0 lg:flex-col lg:border-b-0">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold text-blue-700">選択clip</p>
+              <h2 className="mt-1 text-lg font-semibold text-neutral-950">
+                入力中の範囲に含まれる文字起こし
+              </h2>
+              <p className="mt-1 text-xs tabular-nums text-neutral-500">
+                {selectedBoundaryDraft
+                  ? `${formatTime(selectedBoundaryDraft.start)} - ${formatTime(selectedBoundaryDraft.end)}`
+                  : "開始・終了を正しく入力してください"}
+              </p>
+            </div>
+            <span className="border border-neutral-300 bg-neutral-50 px-2 py-1 text-xs text-neutral-700">
+              {isTranscriptPreviewLoading
+                ? "更新中"
+                : `${selectedTranscriptPreview?.segments.length ?? 0}区間`}
+            </span>
+          </div>
+
+          {transcriptPreviewError ? (
+            <p className="mt-3 border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {transcriptPreviewError}
+            </p>
+          ) : null}
+
+          {selectedTranscriptPreview &&
+          selectedTranscriptPreview.segments.length > 0 ? (
+            <div className="mt-3 max-h-80 overflow-y-auto border border-neutral-200 bg-neutral-50 lg:min-h-0 lg:max-h-none lg:flex-1">
+              {selectedTranscriptPreview.segments.map((segment, index) => (
+                <div
+                  className="border-b border-neutral-200 px-3 py-2 last:border-b-0"
+                  key={`${segment.start}-${segment.end}-${index}`}
+                >
+                  <span className="text-xs tabular-nums text-neutral-500">
+                    {formatTime(segment.start)} - {formatTime(segment.end)}
+                  </span>
+                  <p className="mt-1 break-words text-sm leading-6 text-neutral-900">
+                    {segment.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : isTranscriptPreviewLoading ? (
+            <p className="mt-3 text-sm text-neutral-600">
+              変更した時間範囲から文字起こしを読み込んでいます
+            </p>
+          ) : (
+            <p className="mt-3 text-sm text-neutral-600">
+              この範囲に発話の文字起こしはありません
+            </p>
+          )}
+
+          <p className="mt-2 text-xs leading-5 text-neutral-500">
+            分秒入力と前後追加に合わせて自動更新します。字幕の修正は次の工程で行います。
+          </p>
+        </aside>
+
+        <section className="border-b border-neutral-300 bg-[#f7f7f4] px-5 py-5 lg:col-start-2 lg:row-start-2 lg:border-r">
           <div>
             <p className="text-xs font-semibold text-neutral-500">再選定</p>
             <h2 className="mt-1 text-lg font-semibold">狙う場面を調整</h2>
@@ -550,7 +551,6 @@ export default function ClipPlanReviewPage() {
 
           <div className="mt-4">
             <ClipSelectionEditor
-              compact
               disabled={controlsDisabled}
               settings={draftSettings}
               onChange={setDraftSettings}
@@ -594,7 +594,7 @@ export default function ClipPlanReviewPage() {
           >
             {isApproving ? "字幕確認を準備中" : "この切り抜き予定で字幕確認へ"}
           </button>
-        </aside>
+        </section>
       </div>
     </main>
   );
