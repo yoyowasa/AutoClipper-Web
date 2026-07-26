@@ -5734,3 +5734,52 @@ pip check: pass
 - 動画上の表示は内容と切替時間を確認する簡易プレビュー。実際の字体、色、縁取り、位置はrender時の字幕スタイル設定を使用する。
 - タイトル・フックの文案自動生成は未実装。ユーザーがclip内容を確認して入力する。
 - Task 83 branchはTask 82 branchを親にしている。Task 82 merge後にmainへ統合する。
+
+## 2026-07-26 Task 84 完成jobの再編集・再レンダリング
+
+### 目的
+
+- 完成済みjobを再アップロードせずに開き直し、タイトル・フック・字幕を微調整して再レンダリングできるようにする。
+
+### 変更
+
+- Results画面へ`タイトル・フック・字幕を再編集`を追加。
+- 完成済みsubtitle reviewを編集状態へ戻すAPIを追加。
+  - 保存済みの元動画、選定範囲、文字起こし、既存修正を再利用。
+  - 全clipを未確認へ戻し、再確認後に再レンダリング。
+  - ASR、候補選定、OpenAI処理は再実行しない。
+- review artifactへ`renderRevision`と`reopenedAt`を追加。
+- 再レンダリングは短い一時パスへ出力し、全clip成功後に既存成果物へ反映。
+- 再レンダリング時のExportItem重複を防止。
+- 新ZIPを一時ファイルへ作成し、完成後に既存ZIPと置換。
+- 再レンダリング失敗時は旧MP4・ZIP・download情報を保持し、字幕確認工程へ戻す。
+- 成功時は旧auditを無効化し、変更前の警告を新成果物へ表示しない。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `381 passed, 1 skipped`。
+- 再編集統合テスト: pass。
+  - 完成→再編集→タイトル/フック変更→再完成。
+  - normal / shortのExportItem件数が重複しない。
+  - 変更タイトルがresultsへ反映。
+  - 再レンダリング失敗時に旧成果物を保持し、`awaiting_subtitle_review`へ復帰。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / frontend / worker rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- backend `/health`: `200 / ok`。
+- Results画面表示確認: pass。
+  - desktop `1440x1000`で再編集説明と操作ボタンを表示。
+  - mobile `390x844`で横overflow `0`。
+- Docker実MP4再編集E2E: pass。
+  - job: `job_701530dfaf214022a84faeb3333877a8`
+  - 30秒sample、手動範囲`0:00 - 0:22`、short 1本、OpenAI無効。
+  - 初回render完了後に再編集し、タイトル・フックを変更して再render完走。
+  - 再アップロード・再文字起こしなし、short ExportItem重複なし、変更タイトル反映。
+
+### 未解決・制限
+
+- 再編集対象はタイトル、ショートの冒頭フック、字幕本文。切り抜き範囲の再選定は今回の対象外。
+- 元動画またはreview artifactを削除した古いjobは再編集不可。
+- 再レンダリング成功後は既存auditを無効化する。必要な場合は新成果物へauditを再実行する。
+- Task 84 branchはTask 83 branchを親にしている。Task 83 merge後にmainへ統合する。

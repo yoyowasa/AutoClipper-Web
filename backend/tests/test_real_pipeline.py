@@ -1065,6 +1065,108 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
     assert rendered_short["hook_text"] == "魚の耳には、本当に「石」が入ってるらしい"
     assert storage.zip_path(created["jobId"]).is_file()
 
+    first_results = client.get(f"/api/jobs/{created['jobId']}/results").json()
+    assert first_results["canReopenForEditing"] is True
+    assert len(first_results["normalClips"]) == 1
+    assert len(first_results["shorts"]) == 1
+
+    reopened = client.post(
+        f"/api/jobs/{created['jobId']}/subtitle-review/reopen"
+    )
+    assert reopened.status_code == 200
+    reopened_review = reopened.json()
+    assert reopened_review["state"] == "awaiting_review"
+    assert reopened_review["renderRevision"] == 2
+    assert reopened_review["confirmedClipCount"] == 0
+    assert all(not clip["confirmed"] for clip in reopened_review["clips"])
+    assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == (
+        "awaiting_subtitle_review"
+    )
+
+    reopened_short = next(
+        clip for clip in reopened_review["clips"] if clip["type"] == "short"
+    )
+    retitled = client.patch(
+        (
+            f"/api/jobs/{created['jobId']}/subtitle-review/clips/"
+            f"{reopened_short['id']}/content"
+        ),
+        json={
+            "title": "完成後に変更したタイトル",
+            "hookText": "完成後に変更したフック",
+            "hookDurationSeconds": 2.5,
+        },
+    )
+    assert retitled.status_code == 200
+    reopened_review = retitled.json()
+    for clip in reopened_review["clips"]:
+        response = client.post(
+            f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm"
+        )
+        assert response.status_code == 200
+        reopened_review = response.json()
+
+    queued_jobs.clear()
+    rerender_queued = client.post(
+        f"/api/jobs/{created['jobId']}/subtitle-review/finalize"
+    )
+    assert rerender_queued.status_code == 202
+    assert queued_jobs == [created["jobId"]]
+    rerender_statuses = run_subtitle_review_render(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+    assert rerender_statuses[-1] == "completed"
+
+    rerendered_results = client.get(
+        f"/api/jobs/{created['jobId']}/results"
+    ).json()
+    assert rerendered_results["canReopenForEditing"] is True
+    assert len(rerendered_results["normalClips"]) == 1
+    assert len(rerendered_results["shorts"]) == 1
+    assert rerendered_results["shorts"][0]["title"] == "完成後に変更したタイトル"
+    assert not (
+        storage.temp
+        / "rr"
+        / f"{created['jobId'][-12:]}_r2"
+    ).exists()
+
+    reopened_again = client.post(
+        f"/api/jobs/{created['jobId']}/subtitle-review/reopen"
+    ).json()
+    for clip in reopened_again["clips"]:
+        client.post(
+            f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm"
+        )
+    client.post(f"/api/jobs/{created['jobId']}/subtitle-review/finalize")
+
+    def failing_render(
+        _input_path: str | Path,
+        _output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        raise RuntimeError("intentional rerender failure")
+
+    failed_statuses = run_subtitle_review_render(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=AutoClipperPipelineDependencies(
+            normal_renderer=failing_render,
+            short_renderer=failing_render,
+        ),
+    )
+    assert failed_statuses == ["rendering_normal_clips", "rendering_shorts"]
+    failed_job = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert failed_job["status"] == "awaiting_subtitle_review"
+    assert failed_job["error"]["code"] == "no_usable_output"
+    preserved_results = client.get(f"/api/jobs/{created['jobId']}/results").json()
+    assert len(preserved_results["normalClips"]) == 1
+    assert len(preserved_results["shorts"]) == 1
+    assert preserved_results["shorts"][0]["title"] == "完成後に変更したタイトル"
+
 
 def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_duration_settings(
     client: TestClient,

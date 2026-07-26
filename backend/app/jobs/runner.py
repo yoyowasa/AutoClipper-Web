@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from zipfile import ZIP_DEFLATED, ZipFile
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audio.extract import extract_mono_wav
@@ -92,6 +93,7 @@ from app.jobs.clip_plan import (
 from app.jobs.summaries import write_generation_summaries
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
 from app.jobs.subtitle_review import (
+    SubtitleReviewDocument,
     apply_reviewed_clip_content,
     apply_reviewed_text,
     build_subtitle_review,
@@ -99,6 +101,7 @@ from app.jobs.subtitle_review import (
     mark_review_completed,
     mark_review_rendering,
     reviewed_transcript_output_path,
+    restore_review_after_render_failure,
     subtitle_review_output_path,
     subtitle_review_preview_path,
     subtitle_review_preview_url,
@@ -1559,6 +1562,166 @@ def _render_selected_outputs(
     return normal_result, short_result, exports, render_failures_path
 
 
+@dataclass(frozen=True)
+class _RerenderStoragePaths(StoragePaths):
+    def ensure(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+
+    def job_outputs(self, _job_id: str) -> Path:
+        self.root.mkdir(parents=True, exist_ok=True)
+        return self.root
+
+    def job_subtitles(self, _job_id: str, clip_type: str) -> Path:
+        folder_name = "shorts" if clip_type == "short" else "normal"
+        path = self.root / "subtitles" / folder_name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+
+def _prepare_subtitle_rerender_staging(
+    storage_paths: StoragePaths,
+    job_id: str,
+    render_revision: int,
+) -> StoragePaths:
+    staging_root = (
+        storage_paths.temp
+        / "rr"
+        / f"{job_id[-12:]}_r{render_revision}"
+    )
+    shutil.rmtree(staging_root, ignore_errors=True)
+    staging_paths = _RerenderStoragePaths(staging_root)
+    staging_paths.ensure()
+    return staging_paths
+
+
+def _promote_staged_export_file(
+    source_value: str | None,
+    *,
+    staging_job_dir: Path,
+    canonical_job_dir: Path,
+) -> str | None:
+    if source_value is None:
+        return None
+    source = Path(source_value)
+    relative_path = source.resolve().relative_to(staging_job_dir.resolve())
+    destination = canonical_job_dir / relative_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source.replace(destination)
+    return str(destination)
+
+
+def _rewrite_export_metadata_paths(export: ExportItem) -> None:
+    if not export.metadata_path:
+        return
+    metadata_path = Path(export.metadata_path)
+    if not metadata_path.is_file():
+        return
+    payload = _read_json_file(metadata_path)
+    if not isinstance(payload, dict):
+        return
+    payload["video_path"] = export.video_path
+    payload["subtitle_path"] = export.subtitle_path
+    _write_json(metadata_path, payload)
+
+
+def _promote_subtitle_rerender(
+    *,
+    db: Session,
+    job: Job,
+    previous_exports: Sequence[ExportItem],
+    staged_exports: Sequence[ExportItem],
+    staged_render_failures_path: Path,
+    staging_paths: StoragePaths,
+    storage_paths: StoragePaths,
+) -> tuple[list[ExportItem], Path]:
+    staging_job_dir = staging_paths.job_outputs(job.id)
+    canonical_job_dir = storage_paths.job_outputs(job.id)
+
+    for export in staged_exports:
+        export.video_path = _promote_staged_export_file(
+            export.video_path,
+            staging_job_dir=staging_job_dir,
+            canonical_job_dir=canonical_job_dir,
+        ) or export.video_path
+        export.subtitle_path = _promote_staged_export_file(
+            export.subtitle_path,
+            staging_job_dir=staging_job_dir,
+            canonical_job_dir=canonical_job_dir,
+        )
+        export.metadata_path = _promote_staged_export_file(
+            export.metadata_path,
+            staging_job_dir=staging_job_dir,
+            canonical_job_dir=canonical_job_dir,
+        )
+        _rewrite_export_metadata_paths(export)
+
+    successful_candidate_ids = {
+        export.candidate_id
+        for export in staged_exports
+        if export.candidate_id is not None
+    }
+    for previous in previous_exports:
+        if previous.candidate_id in successful_candidate_ids:
+            db.delete(previous)
+
+    canonical_render_failures_path = canonical_job_dir / "render_failures.json"
+    if staged_render_failures_path.is_file():
+        staged_render_failures_path.replace(canonical_render_failures_path)
+
+    db.commit()
+    current_exports = list(
+        db.scalars(
+            select(ExportItem)
+            .where(ExportItem.job_id == job.id)
+            .order_by(ExportItem.type, ExportItem.video_path)
+        ).all()
+    )
+    shutil.rmtree(canonical_job_dir / "audit", ignore_errors=True)
+    shutil.rmtree(staging_paths.root, ignore_errors=True)
+    return current_exports, canonical_render_failures_path
+
+
+def _discard_subtitle_rerender_staging(
+    *,
+    db: Session,
+    job_id: str,
+    previous_export_ids: set[str],
+    staging_paths: StoragePaths,
+) -> None:
+    current_exports = db.scalars(
+        select(ExportItem).where(ExportItem.job_id == job_id)
+    ).all()
+    for export in current_exports:
+        if export.id not in previous_export_ids:
+            db.delete(export)
+    db.commit()
+    shutil.rmtree(staging_paths.root, ignore_errors=True)
+
+
+def _restore_subtitle_rerender_for_retry(
+    *,
+    db: Session,
+    job: Job,
+    review_document: SubtitleReviewDocument,
+    review_path: Path,
+    code: str,
+    message: str,
+) -> None:
+    review_document = restore_review_after_render_failure(review_document)
+    write_subtitle_review(review_document, review_path)
+    write_subtitle_review_summary(
+        review_document,
+        subtitle_review_summary_path(review_path.parent),
+    )
+    job.status = "awaiting_subtitle_review"
+    job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
+    job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
+    job.error_code = code
+    job.error_message = message
+    job.updated_at = utc_now()
+    db.commit()
+
+
 def _read_json_file(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -2836,9 +2999,16 @@ def run_subtitle_review_render(
         review_path = subtitle_review_output_path(job_dir)
         settings = dict(job.settings_json or {})
         input_path = storage_paths.resolve_stored_file(video.stored_path)
+        review_document: SubtitleReviewDocument | None = None
+        rerender_staging_paths: StoragePaths | None = None
+        previous_export_ids: set[str] = set()
+        rerender_promoted = False
+        is_rerender = False
+        pending_rerender_zip: Path | None = None
 
         try:
             review_document = load_subtitle_review(review_path)
+            is_rerender = review_document.render_revision > 1
             if review_document.state not in {"render_queued", "rendering"}:
                 raise PipelineExpectedError(
                     "subtitle_review_not_ready",
@@ -2867,6 +3037,20 @@ def run_subtitle_review_render(
             selection = CandidateSelection.model_validate(selection_payload)
             selection = apply_reviewed_clip_content(selection, review_document)
             write_selected_clips(selection, job_dir / "selected_clips.json")
+            previous_exports = list(
+                db.scalars(
+                    select(ExportItem).where(ExportItem.job_id == job.id)
+                ).all()
+            )
+            previous_export_ids = {export.id for export in previous_exports}
+            render_paths = storage_paths
+            if is_rerender:
+                rerender_staging_paths = _prepare_subtitle_rerender_staging(
+                    storage_paths,
+                    job.id,
+                    review_document.render_revision,
+                )
+                render_paths = rerender_staging_paths
             normal_result, short_result, exports, _render_failures_path = _render_selected_outputs(
                 db=db,
                 job=job,
@@ -2875,7 +3059,7 @@ def run_subtitle_review_render(
                 selection=selection,
                 transcript_segments=transcript_segments,
                 settings=settings,
-                storage_paths=storage_paths,
+                storage_paths=render_paths,
                 dependencies=deps,
                 visited_statuses=visited_statuses,
             )
@@ -2884,6 +3068,24 @@ def run_subtitle_review_render(
                     "no_usable_output",
                     "Pipeline completed analysis but produced no usable clips.",
                 )
+            if rerender_staging_paths is not None and (
+                normal_result.failures or short_result.failures
+            ):
+                raise PipelineExpectedError(
+                    "subtitle_rerender_incomplete",
+                    "Re-render did not complete for every existing clip. Previous outputs were kept.",
+                )
+            if rerender_staging_paths is not None:
+                exports, _render_failures_path = _promote_subtitle_rerender(
+                    db=db,
+                    job=job,
+                    previous_exports=previous_exports,
+                    staged_exports=exports,
+                    staged_render_failures_path=_render_failures_path,
+                    staging_paths=rerender_staging_paths,
+                    storage_paths=storage_paths,
+                )
+                rerender_promoted = True
 
             audio_features_payload = _read_json_file(job_dir / "audio_features.json")
             audio_features = AudioFeatures.model_validate(audio_features_payload)
@@ -2928,18 +3130,71 @@ def run_subtitle_review_render(
                 review_document,
                 subtitle_review_summary_path(job_dir),
             )
-            _create_zip(
-                storage_paths.zip_path(job.id),
-                exports,
-                metadata_files=_top_level_metadata_files(job_dir),
-            )
+            zip_path = storage_paths.zip_path(job.id)
+            if is_rerender:
+                pending_rerender_zip = (
+                    job_dir
+                    / f".download_revision_{review_document.render_revision}.tmp.zip"
+                )
+                pending_rerender_zip.unlink(missing_ok=True)
+                _create_zip(
+                    pending_rerender_zip,
+                    exports,
+                    metadata_files=_top_level_metadata_files(job_dir),
+                )
+                pending_rerender_zip.replace(zip_path)
+                pending_rerender_zip = None
+            else:
+                _create_zip(
+                    zip_path,
+                    exports,
+                    metadata_files=_top_level_metadata_files(job_dir),
+                )
 
             _set_status(db, job, "completed")
             visited_statuses.append("completed")
         except PipelineExpectedError as exc:
-            _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
+            if pending_rerender_zip is not None:
+                pending_rerender_zip.unlink(missing_ok=True)
+            if is_rerender and review_document is not None:
+                if rerender_staging_paths is not None and not rerender_promoted:
+                    _discard_subtitle_rerender_staging(
+                        db=db,
+                        job_id=job.id,
+                        previous_export_ids=previous_export_ids,
+                        staging_paths=rerender_staging_paths,
+                    )
+                _restore_subtitle_rerender_for_retry(
+                    db=db,
+                    job=job,
+                    review_document=review_document,
+                    review_path=review_path,
+                    code=exc.code,
+                    message=exc.message,
+                )
+            else:
+                _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
         except Exception as exc:
-            _fail_job(db, job_id, "subtitle_review_render_failed", str(exc))
+            if pending_rerender_zip is not None:
+                pending_rerender_zip.unlink(missing_ok=True)
+            if is_rerender and review_document is not None:
+                if rerender_staging_paths is not None and not rerender_promoted:
+                    _discard_subtitle_rerender_staging(
+                        db=db,
+                        job_id=job.id,
+                        previous_export_ids=previous_export_ids,
+                        staging_paths=rerender_staging_paths,
+                    )
+                _restore_subtitle_rerender_for_retry(
+                    db=db,
+                    job=job,
+                    review_document=review_document,
+                    review_path=review_path,
+                    code="subtitle_review_render_failed",
+                    message=str(exc),
+                )
+            else:
+                _fail_job(db, job_id, "subtitle_review_render_failed", str(exc))
             raise
 
     return visited_statuses

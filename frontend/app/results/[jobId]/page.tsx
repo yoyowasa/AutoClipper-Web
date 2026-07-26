@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { ResultVideoCard } from "../../../components/ResultVideoCard";
-import { getJobResults, toApiUrl } from "../../../lib/api";
+import { getJobResults, reopenSubtitleReview, toApiUrl } from "../../../lib/api";
 import type { JobAuditSummary, JobResultsResponse } from "../../../lib/types";
 
 const IMPORTANT_AUDIT_WARNINGS = [
@@ -76,9 +76,11 @@ function AuditSummaryPanel({ summary }: { summary: JobAuditSummary | null }) {
 
 export default function ResultsPage() {
   const params = useParams();
+  const router = useRouter();
   const jobId = useMemo(() => readJobId(params.jobId), [params.jobId]);
   const [results, setResults] = useState<JobResultsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isReopening, setIsReopening] = useState(false);
 
   useEffect(() => {
     if (!jobId) {
@@ -97,6 +99,22 @@ export default function ResultsPage() {
 
     void loadResults();
   }, [jobId]);
+
+  async function reopenForEditing() {
+    setIsReopening(true);
+    setError(null);
+    try {
+      await reopenSubtitleReview(jobId);
+      router.push(`/jobs/${jobId}/subtitles`);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "完成jobを再編集用に開けませんでした"
+      );
+      setIsReopening(false);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-[#f7f7f4] px-6 py-8 text-neutral-950">
@@ -132,6 +150,30 @@ export default function ResultsPage() {
 
         {results ? (
           <>
+            {results.canReopenForEditing ? (
+              <section className="border border-sky-300 bg-sky-50 px-5 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <h2 className="text-base font-semibold text-sky-950">
+                      完成後のタイトル・フック・字幕を微調整
+                    </h2>
+                    <p className="mt-1 max-w-3xl text-sm text-sky-800">
+                      元動画、切り抜き範囲、文字起こしをそのまま使います。再アップロード、
+                      候補選定、OpenAI処理は行いません。変更後は動画を再レンダリングします。
+                    </p>
+                  </div>
+                  <button
+                    className="min-h-11 bg-sky-700 px-5 text-sm font-semibold text-white disabled:bg-neutral-300"
+                    disabled={isReopening}
+                    type="button"
+                    onClick={() => void reopenForEditing()}
+                  >
+                    {isReopening ? "再編集画面を開いています" : "タイトル・フック・字幕を再編集"}
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
             <AuditSummaryPanel summary={results.auditSummary} />
 
             <section className="flex flex-col gap-3">
