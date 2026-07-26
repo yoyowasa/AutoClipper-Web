@@ -132,6 +132,15 @@ export type VideoUploadResponse = {
   filename: string;
 };
 
+export type CompletedVideoReeditResponse = {
+  jobId: string;
+  exportId: string;
+  matchedClipId: string | null;
+  clipType: "normal" | "short";
+  title: string;
+  reviewState: string;
+};
+
 export type JobCreateResponse = {
   jobId: string;
   status: JobStatus;
