@@ -85,6 +85,126 @@ class ClipTimeRange(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class SubtitleStyleSnapshot(BaseModel):
+    subtitle_font_name: str | None = Field(default=None, min_length=1, alias="subtitleFontName")
+    subtitle_font_size: int | None = Field(default=None, ge=12, le=220, alias="subtitleFontSize")
+    subtitle_outline: int | None = Field(default=None, ge=0, le=20, alias="subtitleOutline")
+    subtitle_lower_margin: int | None = Field(default=None, ge=0, le=1600, alias="subtitleLowerMargin")
+    subtitle_alignment: int | None = Field(default=None, ge=1, le=9, alias="subtitleAlignment")
+    subtitle_primary_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="subtitlePrimaryColor",
+    )
+    subtitle_outline_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="subtitleOutlineColor",
+    )
+    short_subtitle_font_name: str | None = Field(
+        default=None,
+        min_length=1,
+        alias="shortSubtitleFontName",
+    )
+    short_subtitle_font_size: int | None = Field(
+        default=None,
+        ge=20,
+        le=220,
+        alias="shortSubtitleFontSize",
+    )
+    short_subtitle_outline: int | None = Field(
+        default=None,
+        ge=0,
+        le=20,
+        alias="shortSubtitleOutline",
+    )
+    short_subtitle_lower_margin: int | None = Field(
+        default=None,
+        ge=0,
+        le=1600,
+        alias="shortSubtitleLowerMargin",
+    )
+    short_subtitle_alignment: int | None = Field(
+        default=None,
+        ge=1,
+        le=9,
+        alias="shortSubtitleAlignment",
+    )
+    short_subtitle_primary_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="shortSubtitlePrimaryColor",
+    )
+    short_subtitle_outline_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="shortSubtitleOutlineColor",
+    )
+    normal_subtitle_font_name: str | None = Field(
+        default=None,
+        min_length=1,
+        alias="normalSubtitleFontName",
+    )
+    normal_subtitle_font_size: int | None = Field(
+        default=None,
+        ge=12,
+        le=180,
+        alias="normalSubtitleFontSize",
+    )
+    normal_subtitle_outline: int | None = Field(
+        default=None,
+        ge=0,
+        le=20,
+        alias="normalSubtitleOutline",
+    )
+    normal_subtitle_lower_margin: int | None = Field(
+        default=None,
+        ge=0,
+        le=900,
+        alias="normalSubtitleLowerMargin",
+    )
+    normal_subtitle_alignment: int | None = Field(
+        default=None,
+        ge=1,
+        le=9,
+        alias="normalSubtitleAlignment",
+    )
+    normal_subtitle_primary_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="normalSubtitlePrimaryColor",
+    )
+    normal_subtitle_outline_color: str | None = Field(
+        default=None,
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="normalSubtitleOutlineColor",
+    )
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class SubtitleStylePreset(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    saved_at: datetime = Field(alias="savedAt")
+    style: SubtitleStyleSnapshot
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+SubtitleStylePresetSlots = tuple[
+    SubtitleStylePreset | None,
+    SubtitleStylePreset | None,
+    SubtitleStylePreset | None,
+]
+
+
+class SubtitleStylePresetDocument(BaseModel):
+    version: Literal[1] = 1
+    slots: SubtitleStylePresetSlots = Field(default_factory=lambda: (None, None, None))
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
 class JobSettings(BaseModel):
     mode: ClipMode = "high_quality"
     profile: ClipProfile = "auto"
