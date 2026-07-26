@@ -162,10 +162,10 @@ export function ClipBoundaryEditor({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-neutral-950">
-            切り抜く範囲を調整
+            このclipの開始・終了を調整
           </h3>
           <p className="mt-1 text-xs leading-5 text-neutral-600">
-            選ばれた場面は変えず、前後を追加・短縮します。再選定や字幕生成は行いません。
+            分・秒を直接変更するか、前後の追加ボタンを使います。選ばれた場面は維持され、字幕生成も行いません。
           </p>
         </div>
         {clip.manuallyAdjusted ? (

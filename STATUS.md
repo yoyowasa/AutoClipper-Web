@@ -5598,3 +5598,29 @@ pip check: pass
 - preview再生成時間はclip長とPC性能に依存する。
 - 明示的な手動範囲は自動推奨の最大長を超えても許可する。最終auditではduration warningが残る場合がある。
 - branch `codex/task-82-clip-plan-boundary-adjustment`で実装・ローカル検証済み。親branchはTask81。main mergeは未実施。
+
+## 2026-07-26 Task 82 範囲調整欄の表示位置修正
+
+### 目的
+
+- 開始・終了の調整欄が動画の下に隠れ、予定確認画面を開いただけでは操作箇所を認識できない問題を解消する。
+
+### 変更
+
+- clip範囲調整欄をpreview動画の下から、選択clip見出しの直下へ移動。
+- 状態表示の`選定範囲`を`自動選定のまま`へ変更し、操作ボタンとの誤認を防止。
+- 手動変更後は`範囲を手動調整済み`と表示。
+- 説明文へ、分秒の直接変更と前後追加ボタンを明記。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- Docker frontend rebuild: pass。
+- browser表示確認: pass。
+  - `1777x879`、scroll位置`0`で分秒入力、前後追加、復元、preview更新ボタンを表示。
+  - mobile `390x844`で横overflowなし。
+  - console error: `0`。
+
+### 未解決・制限
+
+- Task 82全体はDraft PR #62でreview・merge待ち。

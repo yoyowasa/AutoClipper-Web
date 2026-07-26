@@ -353,10 +353,25 @@ export default function ClipPlanReviewPage() {
                     </p>
                   </div>
                   <span className="border border-neutral-300 bg-neutral-50 px-3 py-2 text-xs text-neutral-700">
-                    {selectedClip.boundaryRefined ? "境界補正あり" : "選定範囲"}
+                    {selectedClip.manuallyAdjusted
+                      ? "範囲を手動調整済み"
+                      : selectedClip.boundaryRefined
+                        ? "境界補正あり"
+                        : "自動選定のまま"}
                   </span>
                 </div>
               </div>
+
+              <ClipBoundaryEditor
+                clip={selectedClip}
+                disabled={controlsDisabled}
+                key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}`}
+                saving={isAdjusting}
+                sourceDuration={plan.sourceDuration}
+                onSave={(start, end) =>
+                  void handleBoundaryUpdate(start, end)
+                }
+              />
 
               <div className="bg-neutral-950 p-4">
                 <div className="mx-auto aspect-video w-full max-w-[1100px] bg-black">
@@ -375,17 +390,6 @@ export default function ClipPlanReviewPage() {
                   )}
                 </div>
               </div>
-
-              <ClipBoundaryEditor
-                clip={selectedClip}
-                disabled={controlsDisabled}
-                key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}`}
-                saving={isAdjusting}
-                sourceDuration={plan.sourceDuration}
-                onSave={(start, end) =>
-                  void handleBoundaryUpdate(start, end)
-                }
-              />
 
               <div className="border-b border-neutral-300 px-5 py-4">
                 <p className="text-xs font-semibold text-neutral-500">選定時の文字起こし抜粋</p>
