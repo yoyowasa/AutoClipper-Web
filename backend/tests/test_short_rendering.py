@@ -989,17 +989,20 @@ def test_render_selected_short_candidates_writes_fallback_title_metadata(client:
 
 
 @pytest.mark.parametrize(
-    ("mode", "overlay_mode", "expect_title_event"),
+    ("mode", "overlay_mode", "title_source", "expect_title_event"),
     [
-        ("high_quality", "auto", True),
-        ("low_cost", "always", True),
-        ("high_quality", "never", False),
+        ("high_quality", "auto", None, True),
+        ("low_cost", "always", None, True),
+        ("high_quality", "never", None, False),
+        ("low_cost", "auto", "manual_review", True),
+        ("low_cost", "never", "manual_review", False),
     ],
 )
 def test_render_selected_short_candidates_applies_overlay_title_policy(
     client: TestClient,
     mode: str,
     overlay_mode: str,
+    title_source: str | None,
     expect_title_event: bool,
 ) -> None:
     upload = client.post(
@@ -1029,6 +1032,7 @@ def test_render_selected_short_candidates_applies_overlay_title_policy(
         transcript_text="投資判断が変わる場面です。",
         title="投資判断の転換点",
         overlay_title="投資判断の転換点",
+        title_source=title_source,
         final_score=82.0,
     )
 

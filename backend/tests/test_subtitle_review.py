@@ -6,6 +6,7 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.subtitle_review import (
+    apply_reviewed_clip_content,
     apply_reviewed_text,
     build_subtitle_review,
     confirm_review_clip,
@@ -13,6 +14,7 @@ from app.jobs.subtitle_review import (
     queue_review_render,
     subtitle_review_preview_path,
     subtitle_review_preview_url,
+    update_review_clip_content,
     update_review_segment,
     write_subtitle_review,
 )
@@ -75,6 +77,53 @@ def test_review_requires_every_clip_confirmation_before_render() -> None:
 
     assert review.state == "render_queued"
     assert review.confirmed_clip_count == review.total_clip_count == 2
+
+
+def test_clip_title_and_hook_update_invalidates_confirmation_and_updates_selection() -> None:
+    transcript, review = _review_fixture()
+    selection = CandidateSelection(
+        normalClips=[_candidate("normal_1", "normal", 0.0, 20.0)],
+        shorts=[
+            _candidate("short_1", "short", 10.0, 30.0).model_copy(
+                update={"overlay_title": "short title", "title_source": "existing"}
+            )
+        ],
+    )
+    review = confirm_review_clip(review, "short_1")
+
+    review = update_review_clip_content(
+        review,
+        "short_1",
+        title="魚は「耳石」で音を聞く？",
+        hook_text="魚の耳には、本当に「石」が入ってるらしい",
+        hook_duration_seconds=3.5,
+    )
+    updated = apply_reviewed_clip_content(selection, review)
+    short = updated.shorts[0]
+
+    assert review.confirmed_clip_count == 0
+    assert review.clips[1].title_edited is True
+    assert review.clips[1].confirmed is False
+    assert short.title == "魚は「耳石」で音を聞く？"
+    assert short.overlay_title == "魚は「耳石」で音を聞く？"
+    assert short.title_source == "manual_review"
+    assert short.hook_text == "魚の耳には、本当に「石」が入ってるらしい"
+    assert short.hook_duration_seconds == 3.5
+    assert [(segment.start, segment.end) for segment in transcript] == [
+        (segment.start, segment.end) for segment in apply_reviewed_text(transcript, review)
+    ]
+
+
+def test_normal_clip_rejects_hook_text() -> None:
+    _transcript, review = _review_fixture()
+
+    with pytest.raises(ValueError, match="only supported for short clips"):
+        update_review_clip_content(
+            review,
+            "normal_1",
+            title="通常タイトル",
+            hook_text="通常clipでは使わない",
+        )
 
 
 def test_review_artifact_round_trip(tmp_path: Path) -> None:

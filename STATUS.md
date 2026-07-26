@@ -5692,3 +5692,45 @@ pip check: pass
 
 - 文字起こし欄は閲覧用。本文修正は次の字幕確認工程で行う。
 - Task 82全体はDraft PR #62でreview・merge待ち。
+
+## 2026-07-26 Task 83 clip別タイトル・冒頭フック編集
+
+### 目的
+
+- 字幕確認工程で、生成予定clipごとの表示タイトルを手動設定できるようにする。
+- ショートでは、冒頭数秒だけ表示するフックをタイトルと分けて設定できるようにする。
+
+### 変更
+
+- 通常・ショート共通で、clip別の表示タイトル編集欄を追加。
+- ショートへ冒頭フックと表示秒数`1〜8秒`を追加。
+- 動画上に簡易プレビューを表示し、冒頭フック終了後にタイトルへ切り替える。
+- 保存APIを追加し、タイトル・フック変更時は対象clipを未確認へ戻す。
+- 最終render前にreview内容を`selected_clips.json`へ反映。
+- ショートASSでは、フックとタイトルを時間で分離して重複表示を防止。
+- `low_cost + auto`でも手入力タイトルは明示指定として焼き込む。
+  - `shortOverlayTitleMode=never`は引き続き優先する。
+- short metadataへ`hook_text`、`hook_duration_seconds`、`hook_rendered`を追加。
+- review summaryへタイトル編集clipとフック設定clipのIDを追加。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `380 passed, 1 skipped`。
+- Task 83関連backend tests: `78 passed`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU composeでbackend / frontend / worker rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- backend `/health`: `200 / ok`。
+- frontend字幕確認route: `200`。
+- browser表示確認: pass。
+  - 通常clipでは表示タイトルだけを表示。
+  - ショートでは表示タイトル、冒頭フック、表示秒数、動画上の簡易プレビューを表示。
+  - 字幕一覧とタイトル・フック欄を右列で同時操作可能。
+
+### 未解決・制限
+
+- 冒頭フックはショート専用。通常clipには設定しない。
+- 動画上の表示は内容と切替時間を確認する簡易プレビュー。実際の字体、色、縁取り、位置はrender時の字幕スタイル設定を使用する。
+- タイトル・フックの文案自動生成は未実装。ユーザーがclip内容を確認して入力する。
+- Task 83 branchはTask 82 branchを親にしている。Task 82 merge後にmainへ統合する。

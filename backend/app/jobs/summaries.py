@@ -85,6 +85,8 @@ def _candidate_summary_item(candidate: Candidate) -> dict[str, Any]:
         "title": candidate.title,
         "overlay_title": candidate.overlay_title,
         "title_source": candidate.title_source,
+        "hook_text": candidate.hook_text,
+        "hook_duration_seconds": _round(candidate.hook_duration_seconds),
         "duration": _round(candidate.duration),
         "original_start": _round(candidate.original_start),
         "original_end": _round(candidate.original_end),

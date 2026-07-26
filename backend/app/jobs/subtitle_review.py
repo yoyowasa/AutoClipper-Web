@@ -41,6 +41,10 @@ class SubtitleReviewClip(BaseModel):
     id: str
     type: Literal["normal", "short"]
     title: str
+    original_title: str | None = Field(default=None, alias="originalTitle")
+    title_edited: bool = Field(default=False, alias="titleEdited")
+    hook_text: str = Field(default="", alias="hookText")
+    hook_duration_seconds: float = Field(default=3.0, ge=1, le=8, alias="hookDurationSeconds")
     start: float = Field(ge=0)
     end: float = Field(ge=0)
     duration: float = Field(ge=0)
@@ -141,6 +145,9 @@ def build_subtitle_review(
                 id=candidate.id,
                 type=candidate.type,
                 title=_candidate_title(candidate, type_indices[candidate.type]),
+                originalTitle=_candidate_title(candidate, type_indices[candidate.type]),
+                hookText=candidate.hook_text or "",
+                hookDurationSeconds=candidate.hook_duration_seconds or 3.0,
                 start=candidate.start,
                 end=candidate.end,
                 duration=candidate.duration,
@@ -214,6 +221,49 @@ def update_review_segment(
     return _refresh_counts(document)
 
 
+def update_review_clip_content(
+    document: SubtitleReviewDocument,
+    clip_id: str,
+    *,
+    title: str,
+    hook_text: str = "",
+    hook_duration_seconds: float = 3.0,
+) -> SubtitleReviewDocument:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+
+    normalized_title = " ".join(title.split()).strip()
+    normalized_hook = " ".join(hook_text.split()).strip()
+    if not normalized_title:
+        raise ValueError("title must not be empty")
+    if len(normalized_title) > 80:
+        raise ValueError("title must be 80 characters or fewer")
+    if len(normalized_hook) > 120:
+        raise ValueError("hook text must be 120 characters or fewer")
+    if not 1 <= hook_duration_seconds <= 8:
+        raise ValueError("hook duration must be between 1 and 8 seconds")
+    if clip.type != "short" and normalized_hook:
+        raise ValueError("hook text is only supported for short clips")
+
+    changed = (
+        clip.title != normalized_title
+        or clip.hook_text != normalized_hook
+        or clip.hook_duration_seconds != hook_duration_seconds
+    )
+    if not changed:
+        return _refresh_counts(document)
+
+    original_title = clip.original_title or clip.title
+    clip.original_title = original_title
+    clip.title = normalized_title
+    clip.title_edited = normalized_title != original_title
+    clip.hook_text = normalized_hook if clip.type == "short" else ""
+    clip.hook_duration_seconds = round(hook_duration_seconds, 3)
+    clip.confirmed = False
+    return _refresh_counts(document)
+
+
 def confirm_review_clip(document: SubtitleReviewDocument, clip_id: str) -> SubtitleReviewDocument:
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
@@ -250,6 +300,36 @@ def apply_reviewed_text(
     ]
 
 
+def apply_reviewed_clip_content(
+    selection: CandidateSelection,
+    document: SubtitleReviewDocument,
+) -> CandidateSelection:
+    reviewed_by_id = {clip.id: clip for clip in document.clips}
+
+    def update_candidate(candidate: Candidate) -> Candidate:
+        clip = reviewed_by_id.get(candidate.id)
+        if clip is None:
+            return candidate
+        updates: dict[str, object] = {
+            "title": clip.title,
+        }
+        if clip.title_edited:
+            updates["title_source"] = "manual_review"
+            if candidate.type == "short":
+                updates["overlay_title"] = clip.title
+        if candidate.type == "short":
+            updates["hook_text"] = clip.hook_text or None
+            updates["hook_duration_seconds"] = clip.hook_duration_seconds
+        return candidate.model_copy(update=updates)
+
+    return selection.model_copy(
+        update={
+            "normal_clips": [update_candidate(candidate) for candidate in selection.normal_clips],
+            "shorts": [update_candidate(candidate) for candidate in selection.shorts],
+        }
+    )
+
+
 def write_subtitle_review_summary(
     document: SubtitleReviewDocument,
     output_path: str | Path,
@@ -264,6 +344,8 @@ def write_subtitle_review_summary(
         "reviewed_segment_count": len(document.segments),
         "edited_segment_count": document.edited_segment_count,
         "edited_segment_indices": [segment.index for segment in document.segments if segment.edited],
+        "edited_title_clip_ids": [clip.id for clip in document.clips if clip.title_edited],
+        "hook_clip_ids": [clip.id for clip in document.clips if clip.hook_text],
         "timestamps_changed": False,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

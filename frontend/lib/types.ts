@@ -222,6 +222,10 @@ export type SubtitleReviewClip = {
   id: string;
   type: ExportType;
   title: string;
+  originalTitle: string | null;
+  titleEdited: boolean;
+  hookText: string;
+  hookDurationSeconds: number;
   start: number;
   end: number;
   duration: number;

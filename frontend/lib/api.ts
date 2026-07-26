@@ -250,6 +250,28 @@ export async function updateSubtitleReviewSegment(
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
+export async function updateSubtitleReviewClipContent(
+  jobId: string,
+  clipId: string,
+  content: {
+    title: string;
+    hookText: string;
+    hookDurationSeconds: number;
+  }
+): Promise<SubtitleReviewDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/content`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(content)
+    }
+  );
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
 export async function confirmSubtitleReviewClip(
   jobId: string,
   clipId: string

@@ -442,6 +442,19 @@ class SubtitleReviewSegmentUpdateRequest(BaseModel):
     text: str = Field(max_length=4000)
 
 
+class SubtitleReviewClipContentUpdateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+    hook_text: str = Field(default="", max_length=120, alias="hookText")
+    hook_duration_seconds: float = Field(
+        default=3.0,
+        ge=1,
+        le=8,
+        alias="hookDurationSeconds",
+    )
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class ClipPlanReselectionRequest(BaseModel):
     normal_clip_selection_preset: ClipSelectionPreset = Field(
         alias="normalClipSelectionPreset"
