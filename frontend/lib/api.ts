@@ -10,6 +10,10 @@ import type {
   SubtitleReviewFinalizeResponse,
   VideoUploadResponse
 } from "./types";
+import type {
+  SubtitleStylePresetDocument,
+  SubtitleStylePresetSlots
+} from "./subtitleStylePresets";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -50,6 +54,35 @@ export function toApiUrl(pathOrUrl: string): string {
     return pathOrUrl;
   }
   return `${API_BASE_URL}${pathOrUrl}`;
+}
+
+export async function getSubtitleStylePresets(): Promise<SubtitleStylePresetDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/preferences/subtitle-style-presets`,
+    {
+      cache: "no-store"
+    }
+  );
+  return parseJsonResponse<SubtitleStylePresetDocument>(response);
+}
+
+export async function saveSubtitleStylePresets(
+  slots: SubtitleStylePresetSlots
+): Promise<SubtitleStylePresetDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/preferences/subtitle-style-presets`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        version: 1,
+        slots
+      })
+    }
+  );
+  return parseJsonResponse<SubtitleStylePresetDocument>(response);
 }
 
 export function uploadVideo(

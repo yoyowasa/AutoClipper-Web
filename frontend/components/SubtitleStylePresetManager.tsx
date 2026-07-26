@@ -1,7 +1,11 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 
+import {
+  getSubtitleStylePresets,
+  saveSubtitleStylePresets
+} from "../lib/api";
 import {
   SUBTITLE_STYLE_PRESET_STORAGE_KEY,
   applySubtitleStyle,
@@ -19,28 +23,34 @@ type SubtitleStylePresetManagerProps = {
   onChange: (settings: ClipSettings) => void;
 };
 
-const SUBTITLE_STYLE_PRESET_CHANGE_EVENT =
-  "autoclipper:subtitle-style-presets-changed";
-
 function defaultSlotName(index: number): string {
   return `字幕設定 ${index + 1}`;
 }
 
-function subscribeToSubtitleStylePresets(onStoreChange: () => void): () => void {
-  window.addEventListener("storage", onStoreChange);
-  window.addEventListener(SUBTITLE_STYLE_PRESET_CHANGE_EVENT, onStoreChange);
-  return () => {
-    window.removeEventListener("storage", onStoreChange);
-    window.removeEventListener(SUBTITLE_STYLE_PRESET_CHANGE_EVENT, onStoreChange);
-  };
+function storeLocalBackup(slots: SubtitleStylePresetSlots): void {
+  try {
+    window.localStorage.setItem(
+      SUBTITLE_STYLE_PRESET_STORAGE_KEY,
+      serializeSubtitleStylePresetSlots(slots)
+    );
+  } catch {
+    // SQLite is authoritative. A local backup is optional.
+  }
 }
 
-function getStoredSubtitleStylePresets(): string | null {
-  return window.localStorage.getItem(SUBTITLE_STYLE_PRESET_STORAGE_KEY);
-}
-
-function getServerSubtitleStylePresets(): undefined {
-  return undefined;
+function mergeLocalPresetsIntoEmptySlots(
+  storedSlots: SubtitleStylePresetSlots,
+  localSlots: SubtitleStylePresetSlots
+): { slots: SubtitleStylePresetSlots; migrated: boolean } {
+  const merged = [...storedSlots] as SubtitleStylePresetSlots;
+  let migrated = false;
+  for (let index = 0; index < merged.length; index += 1) {
+    if (merged[index] === null && localSlots[index] !== null) {
+      merged[index] = localSlots[index];
+      migrated = true;
+    }
+  }
+  return { slots: merged, migrated };
 }
 
 function savedDate(value: string): string {
@@ -61,49 +71,88 @@ export function SubtitleStylePresetManager({
   disabled = false,
   onChange
 }: SubtitleStylePresetManagerProps) {
-  const storedValue = useSyncExternalStore(
-    subscribeToSubtitleStylePresets,
-    getStoredSubtitleStylePresets,
-    getServerSubtitleStylePresets
+  const [slots, setSlots] = useState<SubtitleStylePresetSlots>(
+    emptySubtitleStylePresetSlots
   );
-  const parsedStorage = useMemo(() => {
-    try {
-      return {
-        slots: parseSubtitleStylePresetSlots(storedValue ?? null),
-        error: ""
-      };
-    } catch {
-      return {
-        slots: emptySubtitleStylePresetSlots(),
-        error: "保存済み字幕設定を読み込めませんでした"
-      };
-    }
-  }, [storedValue]);
-  const slots = parsedStorage.slots;
-  const storageReady = storedValue !== undefined;
+  const [storageReady, setStorageReady] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [slotNameOverrides, setSlotNameOverrides] = useState<
     Partial<Record<number, string>>
   >({});
   const [notice, setNotice] = useState("");
   const [writeError, setWriteError] = useState("");
-  const storageError = parsedStorage.error || writeError;
+  const storageError = loadError || writeError;
 
-  function persist(nextSlots: SubtitleStylePresetSlots): boolean {
+  useEffect(() => {
+    let cancelled = false;
+    let localSlots = emptySubtitleStylePresetSlots();
     try {
-      window.localStorage.setItem(
-        SUBTITLE_STYLE_PRESET_STORAGE_KEY,
-        serializeSubtitleStylePresetSlots(nextSlots)
+      localSlots = parseSubtitleStylePresetSlots(
+        window.localStorage.getItem(SUBTITLE_STYLE_PRESET_STORAGE_KEY)
       );
-      window.dispatchEvent(new Event(SUBTITLE_STYLE_PRESET_CHANGE_EVENT));
+    } catch {
+      localSlots = emptySubtitleStylePresetSlots();
+    }
+
+    async function load() {
+      try {
+        const stored = await getSubtitleStylePresets();
+        const merged = mergeLocalPresetsIntoEmptySlots(
+          stored.slots,
+          localSlots
+        );
+        let nextSlots = merged.slots;
+        if (merged.migrated) {
+          const migrated = await saveSubtitleStylePresets(merged.slots);
+          nextSlots = migrated.slots;
+          if (!cancelled) {
+            setNotice("以前のブラウザ保存をAutoClipper本体へ移行しました");
+          }
+        }
+        if (!cancelled) {
+          setSlots(nextSlots);
+          storeLocalBackup(nextSlots);
+          setLoadError("");
+        }
+      } catch {
+        if (!cancelled) {
+          setSlots(localSlots);
+          setLoadError(
+            "AutoClipper本体の保存先を読み込めません。再起動後の保持を確認できません"
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setStorageReady(true);
+        }
+      }
+    }
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function persist(nextSlots: SubtitleStylePresetSlots): Promise<boolean> {
+    setIsSaving(true);
+    try {
+      const stored = await saveSubtitleStylePresets(nextSlots);
+      setSlots(stored.slots);
+      storeLocalBackup(stored.slots);
+      setLoadError("");
       setWriteError("");
       return true;
     } catch {
-      setWriteError("字幕設定をブラウザへ保存できませんでした");
+      setWriteError("字幕設定をAutoClipper本体へ保存できませんでした");
       return false;
+    } finally {
+      setIsSaving(false);
     }
   }
 
-  function saveSlot(index: number) {
+  async function saveSlot(index: number) {
     const name =
       slotNameOverrides[index]?.trim() ||
       slots[index]?.name ||
@@ -114,7 +163,7 @@ export function SubtitleStylePresetManager({
       savedAt: new Date().toISOString(),
       style: captureSubtitleStyle(settings)
     };
-    if (persist(nextSlots)) {
+    if (await persist(nextSlots)) {
       setSlotNameOverrides((current) => ({ ...current, [index]: name }));
       setNotice(`「${name}」を保存しました`);
     }
@@ -130,14 +179,14 @@ export function SubtitleStylePresetManager({
     setWriteError("");
   }
 
-  function deleteSlot(index: number) {
+  async function deleteSlot(index: number) {
     const preset = slots[index];
     if (!preset || !window.confirm(`「${preset.name}」を削除しますか？`)) {
       return;
     }
     const nextSlots = [...slots] as SubtitleStylePresetSlots;
     nextSlots[index] = null;
-    if (persist(nextSlots)) {
+    if (await persist(nextSlots)) {
       setSlotNameOverrides((current) => {
         const next = { ...current };
         delete next[index];
@@ -153,7 +202,7 @@ export function SubtitleStylePresetManager({
         <div>
           <h3 className="text-sm font-semibold text-neutral-950">保存した字幕設定</h3>
           <p className="mt-1 text-xs text-neutral-500">
-            このブラウザに通常・ショート両方のスタイルを保存
+            AutoClipper本体に保存。停止・再起動後も保持
           </p>
         </div>
         {notice ? (
@@ -188,7 +237,7 @@ export function SubtitleStylePresetManager({
               <input
                 aria-label={`保存枠 ${index + 1} の名前`}
                 className="min-h-9 w-full border border-neutral-300 px-2 text-sm"
-                disabled={disabled || !storageReady}
+                disabled={disabled || !storageReady || isSaving}
                 maxLength={40}
                 value={
                   slotNameOverrides[index] ??
@@ -206,7 +255,7 @@ export function SubtitleStylePresetManager({
             <div className="mt-3 grid grid-cols-2 gap-2">
               <button
                 className="min-h-9 border border-neutral-950 bg-neutral-950 px-2 text-xs font-semibold text-white disabled:border-neutral-300 disabled:bg-neutral-200 disabled:text-neutral-500"
-                disabled={disabled || !storageReady || !preset}
+                disabled={disabled || !storageReady || isSaving || !preset}
                 type="button"
                 onClick={() => loadSlot(index)}
               >
@@ -214,9 +263,9 @@ export function SubtitleStylePresetManager({
               </button>
               <button
                 className="min-h-9 border border-neutral-300 px-2 text-xs font-semibold text-neutral-800 disabled:text-neutral-400"
-                disabled={disabled || !storageReady}
+                disabled={disabled || !storageReady || isSaving}
                 type="button"
-                onClick={() => saveSlot(index)}
+                onClick={() => void saveSlot(index)}
               >
                 {preset ? "上書き保存" : "現在設定を保存"}
               </button>
@@ -224,9 +273,9 @@ export function SubtitleStylePresetManager({
             {preset ? (
               <button
                 className="mt-2 min-h-8 text-xs font-medium text-red-700 underline underline-offset-2 disabled:text-neutral-400"
-                disabled={disabled || !storageReady}
+                disabled={disabled || !storageReady || isSaving}
                 type="button"
-                onClick={() => deleteSlot(index)}
+                onClick={() => void deleteSlot(index)}
               >
                 この保存枠を削除
               </button>

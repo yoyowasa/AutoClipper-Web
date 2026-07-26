@@ -14,7 +14,7 @@ from app.jobs.queue import get_enqueue_job
 from app.jobs.runner import run_dummy_autoclipper_job
 from app.jobs.status import SUCCESS_STATUSES
 from app.main import app
-from app.models import ExportItem, Job, Video, utc_now
+from app.models import AppPreference, ExportItem, Job, Video, utc_now
 from app.storage.paths import StoragePaths, get_storage_paths
 
 
@@ -98,6 +98,79 @@ def test_upload_video_rejects_oversized_file_and_removes_partial_file(client: Te
     assert response.json()["detail"]["message"] == "upload exceeds maximum size of 4 bytes"
     storage = app.dependency_overrides[get_storage_paths]()
     assert list(storage.uploads.iterdir()) == []
+
+
+def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) -> None:
+    initial_response = client.get("/api/preferences/subtitle-style-presets")
+
+    assert initial_response.status_code == 200
+    assert initial_response.json() == {
+        "version": 1,
+        "slots": [None, None, None],
+    }
+
+    payload = {
+        "version": 1,
+        "slots": [
+            {
+                "name": "ホロライブ用",
+                "savedAt": "2026-07-26T01:02:03Z",
+                "style": {
+                    "shortSubtitleFontName": "Source Han Sans JP Heavy",
+                    "shortSubtitleFontSize": 76,
+                    "shortSubtitlePrimaryColor": "#FFF200",
+                    "normalSubtitleFontSize": 65,
+                    "normalSubtitleOutlineColor": "#000000",
+                },
+            },
+            None,
+            None,
+        ],
+    }
+
+    save_response = client.put(
+        "/api/preferences/subtitle-style-presets",
+        json=payload,
+    )
+
+    assert save_response.status_code == 200
+    saved = save_response.json()
+    assert saved["slots"][0]["name"] == "ホロライブ用"
+    assert saved["slots"][0]["style"]["shortSubtitleFontSize"] == 76
+
+    get_response = client.get("/api/preferences/subtitle-style-presets")
+
+    assert get_response.status_code == 200
+    assert get_response.json() == saved
+    with next(app.dependency_overrides[get_db]()) as db:
+        preference = db.get(AppPreference, "subtitle_style_presets")
+        assert preference is not None
+        assert preference.value_json["slots"][0]["name"] == "ホロライブ用"
+
+
+def test_subtitle_style_presets_reject_invalid_slot_payload(client: TestClient) -> None:
+    too_many_slots = client.put(
+        "/api/preferences/subtitle-style-presets",
+        json={"version": 1, "slots": [None, None, None, None]},
+    )
+    invalid_color = client.put(
+        "/api/preferences/subtitle-style-presets",
+        json={
+            "version": 1,
+            "slots": [
+                {
+                    "name": "invalid",
+                    "savedAt": "2026-07-26T01:02:03Z",
+                    "style": {"shortSubtitlePrimaryColor": "yellow"},
+                },
+                None,
+                None,
+            ],
+        },
+    )
+
+    assert too_many_slots.status_code == 422
+    assert invalid_color.status_code == 422
 
 
 def test_create_job_and_fetch_status(client: TestClient) -> None:

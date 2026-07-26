@@ -44,7 +44,7 @@ export type SubtitleStylePresetSlots = [
   SubtitleStylePreset | null
 ];
 
-type StoredSubtitleStylePresets = {
+export type SubtitleStylePresetDocument = {
   version: 1;
   slots: SubtitleStylePresetSlots;
 };
@@ -120,7 +120,7 @@ export function parseSubtitleStylePresetSlots(
   if (!storedValue) {
     return emptySubtitleStylePresetSlots();
   }
-  const payload = JSON.parse(storedValue) as Partial<StoredSubtitleStylePresets>;
+  const payload = JSON.parse(storedValue) as Partial<SubtitleStylePresetDocument>;
   if (payload.version !== 1 || !Array.isArray(payload.slots)) {
     return emptySubtitleStylePresetSlots();
   }
@@ -134,7 +134,7 @@ export function parseSubtitleStylePresetSlots(
 export function serializeSubtitleStylePresetSlots(
   slots: SubtitleStylePresetSlots
 ): string {
-  const payload: StoredSubtitleStylePresets = {
+  const payload: SubtitleStylePresetDocument = {
     version: 1,
     slots
   };
