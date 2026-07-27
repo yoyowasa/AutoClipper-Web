@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.subtitle_review import (
     apply_reviewed_clip_content,
@@ -107,6 +107,23 @@ def test_clip_title_and_hook_update_invalidates_confirmation_and_updates_selecti
         ],
     )
     review = confirm_review_clip(review, "short_1")
+    title_style = ClipTextStyle(
+        fontPreset="heavy",
+        fontSize=96,
+        primaryColor="#FFF200",
+        yPercent=12,
+    )
+    hook_style = ClipTextStyle(
+        fontPreset="serif",
+        fontSize=84,
+        primaryColor="#FF8FAB",
+        yPercent=24,
+    )
+    subtitle_style = ClipTextStyle(
+        fontPreset="mono",
+        fontSize=72,
+        yPercent=82,
+    )
 
     review = update_review_clip_content(
         review,
@@ -114,6 +131,9 @@ def test_clip_title_and_hook_update_invalidates_confirmation_and_updates_selecti
         title="魚は「耳石」で音を聞く？",
         hook_text="魚の耳には、本当に「石」が入ってるらしい",
         hook_duration_seconds=3.5,
+        title_style=title_style,
+        hook_style=hook_style,
+        subtitle_style=subtitle_style,
     )
     updated = apply_reviewed_clip_content(selection, review)
     short = updated.shorts[0]
@@ -126,6 +146,9 @@ def test_clip_title_and_hook_update_invalidates_confirmation_and_updates_selecti
     assert short.title_source == "manual_review"
     assert short.hook_text == "魚の耳には、本当に「石」が入ってるらしい"
     assert short.hook_duration_seconds == 3.5
+    assert short.title_style == title_style
+    assert short.hook_style == hook_style
+    assert short.subtitle_style == subtitle_style
     assert [(segment.start, segment.end) for segment in transcript] == [
         (segment.start, segment.end) for segment in apply_reviewed_text(transcript, review)
     ]
@@ -140,6 +163,27 @@ def test_normal_clip_rejects_hook_text() -> None:
             "normal_1",
             title="通常タイトル",
             hook_text="通常clipでは使わない",
+        )
+
+
+def test_normal_clip_accepts_subtitle_style_but_rejects_title_style() -> None:
+    _transcript, review = _review_fixture()
+    subtitle_style = ClipTextStyle(fontPreset="serif", fontSize=58, yPercent=90)
+
+    review = update_review_clip_content(
+        review,
+        "normal_1",
+        title="通常タイトル",
+        subtitle_style=subtitle_style,
+    )
+    assert review.clips[0].subtitle_style == subtitle_style
+
+    with pytest.raises(ValueError, match="only supported for short clips"):
+        update_review_clip_content(
+            review,
+            "normal_1",
+            title="通常タイトル",
+            title_style=ClipTextStyle(),
         )
 
 

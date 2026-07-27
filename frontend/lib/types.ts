@@ -228,6 +228,23 @@ export type SubtitleReviewSegment = {
   affectedClipIds: string[];
 };
 
+export type ClipTextFontPreset =
+  | "sans"
+  | "sans_bold"
+  | "heavy"
+  | "serif"
+  | "mono";
+
+export type ClipTextStyle = {
+  fontPreset: ClipTextFontPreset;
+  fontSize: number;
+  primaryColor: string;
+  outlineColor: string;
+  outlineWidth: number;
+  xPercent: number;
+  yPercent: number;
+};
+
 export type SubtitleReviewClip = {
   id: string;
   type: ExportType;
@@ -236,6 +253,9 @@ export type SubtitleReviewClip = {
   titleEdited: boolean;
   hookText: string;
   hookDurationSeconds: number;
+  titleStyle: ClipTextStyle | null;
+  hookStyle: ClipTextStyle | null;
+  subtitleStyle: ClipTextStyle | null;
   start: number;
   end: number;
   duration: number;

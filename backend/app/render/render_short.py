@@ -506,6 +506,21 @@ def _write_export_metadata(
                 "hook_text": candidate.hook_text,
                 "hook_duration_seconds": candidate.hook_duration_seconds,
                 "hook_rendered": hook_rendered,
+                "title_style": (
+                    candidate.title_style.model_dump(by_alias=True)
+                    if candidate.title_style
+                    else None
+                ),
+                "hook_style": (
+                    candidate.hook_style.model_dump(by_alias=True)
+                    if candidate.hook_style
+                    else None
+                ),
+                "subtitle_style": (
+                    candidate.subtitle_style.model_dump(by_alias=True)
+                    if candidate.subtitle_style
+                    else None
+                ),
                 "start": candidate.start,
                 "end": candidate.end,
                 "duration": candidate.duration,

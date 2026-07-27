@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.select_candidates import CandidateSelection
 from app.render.subtitles_ass import (
     SubtitleLayout,
@@ -139,7 +139,7 @@ def test_short_hook_precedes_title_without_overlapping_title_events() -> None:
 
     ass = build_ass_document(candidate, [], layout=SubtitleLayout.short())
 
-    assert "Dialogue: 2,0:00:00.00,0:00:03.00,Title,Hook" in ass
+    assert "Dialogue: 2,0:00:00.00,0:00:03.00,Hook,Hook" in ass
     assert "Dialogue: 1,0:00:03.00,0:00:10.00,Title,," in ass
     assert "Dialogue: 1,0:00:00.00,0:00:10.00,Title,," not in ass
 
@@ -156,7 +156,7 @@ def test_short_hook_can_render_when_overlay_title_is_disabled() -> None:
         top_title="",
     )
 
-    assert "Dialogue: 2,0:00:00.00,0:00:02.00,Title,Hook" in ass
+    assert "Dialogue: 2,0:00:00.00,0:00:02.00,Hook,Hook" in ass
     assert "Dialogue: 1," not in ass
 
 
@@ -197,6 +197,58 @@ def test_short_subtitle_style_can_be_overridden_from_settings() -> None:
     assert "Style: Title,Source Han Sans JP Heavy,92" in ass
     assert ",1,4,0,5,30,30,680,1" in ass
     assert ",1,4,0,8,30,30,120,1" in ass
+
+
+def test_clip_title_hook_and_subtitle_styles_are_independent() -> None:
+    candidate = make_candidate(
+        "short_1",
+        "short",
+        0.0,
+        10.0,
+        overlay_title="本編タイトル",
+    ).model_copy(
+        update={
+            "hook_text": "冒頭フック",
+            "hook_duration_seconds": 2.0,
+            "title_style": ClipTextStyle(
+                fontPreset="heavy",
+                fontSize=96,
+                primaryColor="#FFF200",
+                outlineColor="#000000",
+                outlineWidth=6,
+                xPercent=25,
+                yPercent=15,
+            ),
+            "hook_style": ClipTextStyle(
+                fontPreset="serif",
+                fontSize=84,
+                primaryColor="#FF8FAB",
+                outlineColor="#FFFFFF",
+                outlineWidth=3,
+                xPercent=75,
+                yPercent=25,
+            ),
+            "subtitle_style": ClipTextStyle(
+                fontPreset="mono",
+                fontSize=70,
+                primaryColor="#5EE7F7",
+                outlineColor="#000000",
+                outlineWidth=4,
+                xPercent=50,
+                yPercent=80,
+            ),
+        }
+    )
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="確認字幕")]
+
+    ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
+
+    assert "Style: Title,Source Han Sans JP Heavy,96,&H0000F2FF" in ass
+    assert "Style: Hook,Noto Serif CJK JP,84,&H00AB8FFF" in ass
+    assert "Style: Subtitle,Noto Sans Mono CJK JP,70,&H00F7E75E" in ass
+    assert r"{\an5\pos(270,288)}本編タイトル" in ass
+    assert r"{\an5\pos(810,480)}冒頭フック" in ass
+    assert r"{\an5\pos(540,1536)}確認字幕" in ass
 
 
 def test_short_and_normal_subtitle_styles_use_independent_fonts_and_colors() -> None:

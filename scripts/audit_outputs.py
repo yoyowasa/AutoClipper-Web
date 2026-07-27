@@ -67,6 +67,14 @@ ABRUPT_END_SUFFIXES = (
 )
 GENERIC_TITLE_PATTERN = re.compile(r"^(Normal\s+[Cc]lip|Short)\s+\d+$")
 EXPECTED_ASS_FONT = "Noto Sans CJK JP"
+JAPANESE_ASS_FONTS = frozenset(
+    {
+        "Noto Sans CJK JP",
+        "Noto Serif CJK JP",
+        "Noto Sans Mono CJK JP",
+        "Source Han Sans JP Heavy",
+    }
+)
 AUTOLOAD_SUBTITLE_SUFFIXES = (".ass", ".srt", ".vtt")
 
 
@@ -516,10 +524,18 @@ def analyze_ass_subtitles(path: Path | None, *, clip_type: str | None = None) ->
         density_reasons.append("too_many_chars_per_second")
     subtitle_style = styles.get("Subtitle")
     title_style = styles.get("Title")
+    hook_style = styles.get("Hook")
     font_supports_japanese = bool(
         subtitle_style
-        and subtitle_style.get("font_name") == EXPECTED_ASS_FONT
-        and (not title_style or title_style.get("font_name") == EXPECTED_ASS_FONT)
+        and subtitle_style.get("font_name") in JAPANESE_ASS_FONTS
+        and (
+            not title_style
+            or title_style.get("font_name") in JAPANESE_ASS_FONTS
+        )
+        and (
+            not hook_style
+            or hook_style.get("font_name") in JAPANESE_ASS_FONTS
+        )
     )
     vertical_gap = None
     vertical_overlap = False

@@ -5836,3 +5836,50 @@ pip check: pass
 - 別PCへの持ち出しやjob削除後の復元には、将来の編集用プロジェクトZIPが必要。
 - 保存済みexportが非常に多い環境では初回照合に時間がかかる可能性がある。
 - Task 85 branchはTask 84 branchを親にしている。Task 84 merge後にmainへ統合する。
+
+## 2026-07-28 Task 86 clip別タイトル・フック・字幕スタイル
+
+### 目的
+
+- タイトル、冒頭フック、字幕の書体・サイズ・色・縁取り・位置を、clipごとに個別設定できるようにする。
+- ショートと通常切り抜きで別の字幕スタイルを保存し、再アップロード再編集でも復元する。
+
+### 変更
+
+- 字幕確認画面へclip別の文字スタイル編集を追加。
+  - ショート: タイトル / フック / 字幕を個別設定。
+  - 通常切り抜き: 字幕を個別設定。
+  - 書体プリセット: 標準ゴシック / 太字ゴシック / 極太ゴシック / 明朝 / 等幅ゴシック。
+  - 文字サイズ、文字色、縁取り色、縁の太さ、横位置、縦位置を設定。
+- 9:16 / 16:9の配置プレビューへ選択中のスタイルを反映。
+- subtitle review、candidate、render metadataへclip別スタイルを保存。
+- ASSのTitle / Hook / Subtitleを別styleとして生成し、個別の位置を`\an5\pos(x,y)`で焼き込み。
+- スタイル未指定時は既存のjob設定と描画位置を維持。
+- auditの日本語対応フォント判定へ新プリセット4書体を追加。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `387 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU compose rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- browser実操作: pass。
+  - 5書体とTitle / Hook / Subtitleの個別タブを確認。
+  - UI保存後のAPI永続化と、再読込後の設定復元を確認。
+  - mobile `390x844`: 横overflow `0`、console error `0`。
+- Docker実レンダリング: pass。
+  - job: `job_701530dfaf214022a84faeb3333877a8`
+  - Title: 極太ゴシック、黄色、`46% / 14%`。
+  - Hook: 明朝、ピンク、`52% / 26%`。
+  - Subtitle: 等幅ゴシック、水色、`50% / 82%`。
+  - ASSの3style、色、サイズ、位置tagを確認。
+  - short: `1080x1920`、render failure `0`、sidecar risk `0`。
+  - auditの新書体誤警告を修正し、残警告は素材由来の`likely_abrupt_ending`のみ。
+
+### 未解決・制限
+
+- 通常切り抜きはタイトルを映像へ焼き込まないため、個別設定対象は字幕のみ。
+- 書体は同梱済み・Dockerへmount済みのフォントだけを選択可能。任意フォントファイルの追加UIは対象外。
+- `ruff check backend scripts`は未変更の`scripts/smoke_runtime.py:173`にある既知のF541で失敗する。今回変更したbackendとaudit対象のruffはpass。
+- Task 86 branchはTask 85 branchを親にしている。Task 85 merge後にmainへ統合する。

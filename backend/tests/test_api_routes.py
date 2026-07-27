@@ -249,6 +249,67 @@ def test_completed_mp4_upload_rejects_unknown_or_invalid_file(client: TestClient
     assert invalid.json()["detail"]["code"] == "reedit_mp4_required"
 
 
+def test_subtitle_review_clip_styles_are_saved_and_omission_preserves_them(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, rendered_bytes = _seed_reeditable_export()
+    reopened = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("finished.mp4", rendered_bytes, "video/mp4")},
+    )
+    assert reopened.status_code == 200
+    title_style = {
+        "fontPreset": "heavy",
+        "fontSize": 96,
+        "primaryColor": "#FFF200",
+        "outlineColor": "#000000",
+        "outlineWidth": 6,
+        "xPercent": 50,
+        "yPercent": 12,
+    }
+    subtitle_style = {
+        "fontPreset": "mono",
+        "fontSize": 72,
+        "primaryColor": "#FFFFFF",
+        "outlineColor": "#000000",
+        "outlineWidth": 4,
+        "xPercent": 50,
+        "yPercent": 84,
+    }
+
+    updated = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+        json={
+            "title": "スタイル変更",
+            "hookText": "冒頭フック",
+            "hookDurationSeconds": 3,
+            "titleStyle": title_style,
+            "hookStyle": None,
+            "subtitleStyle": subtitle_style,
+        },
+    )
+
+    assert updated.status_code == 200
+    clip = updated.json()["clips"][0]
+    assert clip["titleStyle"] == title_style
+    assert clip["hookStyle"] is None
+    assert clip["subtitleStyle"] == subtitle_style
+
+    legacy_update = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+        json={
+            "title": "旧クライアント互換",
+            "hookText": "冒頭フック",
+            "hookDurationSeconds": 3,
+        },
+    )
+
+    assert legacy_update.status_code == 200
+    legacy_clip = legacy_update.json()["clips"][0]
+    assert legacy_clip["titleStyle"] == title_style
+    assert legacy_clip["subtitleStyle"] == subtitle_style
+
+
 def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) -> None:
     initial_response = client.get("/api/preferences/subtitle-style-presets")
 

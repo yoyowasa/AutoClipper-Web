@@ -3,6 +3,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.candidates.merge_boundaries import ClipTextStyle
+
 
 JobStatus = Literal[
     "uploaded",
@@ -460,6 +462,9 @@ class SubtitleReviewClipContentUpdateRequest(BaseModel):
         le=8,
         alias="hookDurationSeconds",
     )
+    title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
+    hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
+    subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
 
     model_config = ConfigDict(populate_by_name=True)
 

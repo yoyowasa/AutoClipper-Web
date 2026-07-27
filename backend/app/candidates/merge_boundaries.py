@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
@@ -27,6 +27,27 @@ TitleSource = Literal[
     "existing",
     "manual_review",
 ]
+TextFontPreset = Literal["sans", "sans_bold", "heavy", "serif", "mono"]
+
+
+class ClipTextStyle(BaseModel):
+    font_preset: TextFontPreset = Field(default="sans_bold", alias="fontPreset")
+    font_size: int = Field(default=76, ge=20, le=220, alias="fontSize")
+    primary_color: str = Field(
+        default="#FFFFFF",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="primaryColor",
+    )
+    outline_color: str = Field(
+        default="#000000",
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="outlineColor",
+    )
+    outline_width: int = Field(default=5, ge=0, le=20, alias="outlineWidth")
+    x_percent: float = Field(default=50, ge=5, le=95, alias="xPercent")
+    y_percent: float = Field(default=85, ge=5, le=95, alias="yPercent")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class Candidate(BaseModel):
@@ -50,6 +71,9 @@ class Candidate(BaseModel):
     title_source: TitleSource | None = None
     hook_text: str | None = None
     hook_duration_seconds: float | None = Field(default=None, ge=1, le=8)
+    title_style: ClipTextStyle | None = None
+    hook_style: ClipTextStyle | None = None
+    subtitle_style: ClipTextStyle | None = None
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
     reject_reason: str | None = None

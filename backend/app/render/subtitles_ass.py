@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.select_candidates import CandidateSelection
 
 
@@ -30,6 +30,13 @@ DEFAULT_SUBTITLE_ALIGNMENT = 2
 DEFAULT_TITLE_ALIGNMENT = 8
 DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFFFFF"
 DEFAULT_SUBTITLE_OUTLINE_COLOR = "#000000"
+TEXT_FONT_PRESETS: dict[str, tuple[str, bool]] = {
+    "sans": ("Noto Sans CJK JP", False),
+    "sans_bold": ("Noto Sans CJK JP", True),
+    "heavy": ("Source Han Sans JP Heavy", True),
+    "serif": ("Noto Serif CJK JP", False),
+    "mono": ("Noto Sans Mono CJK JP", True),
+}
 PUNCTUATION_BREAKS = "。、！？!?"
 PHRASE_BREAKS = "、，, "
 SOFT_JA_BOUNDARIES = "でにはをがともやへ"
@@ -717,14 +724,72 @@ def _style_line(
     *,
     primary_color: str = DEFAULT_SUBTITLE_PRIMARY_COLOR,
     outline_color: str = DEFAULT_SUBTITLE_OUTLINE_COLOR,
+    outline: int | None = None,
+    shadow: int | None = None,
+    margin_x: int | None = None,
+    bold: bool = True,
 ) -> str:
     ass_primary_color = _ass_color(primary_color, DEFAULT_SUBTITLE_PRIMARY_COLOR)
     ass_outline_color = _ass_color(outline_color, DEFAULT_SUBTITLE_OUTLINE_COLOR)
+    resolved_outline = layout.outline if outline is None else outline
+    resolved_shadow = layout.shadow if shadow is None else shadow
+    resolved_margin_x = layout.margin_x if margin_x is None else margin_x
     return (
         f"Style: {name},{font_name},{font_size},{ass_primary_color},&H000000FF,"
         f"{ass_outline_color},&H80000000,"
-        f"1,0,0,0,100,100,0,0,1,{layout.outline},{layout.shadow},{alignment},"
-        f"{layout.margin_x},{layout.margin_x},{margin_v},1"
+        f"{1 if bold else 0},0,0,0,100,100,0,0,1,"
+        f"{resolved_outline},{resolved_shadow},{alignment},"
+        f"{resolved_margin_x},{resolved_margin_x},{margin_v},1"
+    )
+
+
+def _style_font(style: ClipTextStyle) -> tuple[str, bool]:
+    return TEXT_FONT_PRESETS[style.font_preset]
+
+
+def _style_position_tag(style: ClipTextStyle, layout: SubtitleLayout) -> str:
+    x = round(layout.width * style.x_percent / 100)
+    y = round(layout.height * style.y_percent / 100)
+    return rf"{{\an5\pos({x},{y})}}"
+
+
+def _clip_style_line(
+    name: str,
+    style: ClipTextStyle | None,
+    layout: SubtitleLayout,
+    *,
+    fallback_font_name: str,
+    fallback_font_size: int,
+    fallback_alignment: int,
+    fallback_margin_v: int,
+    fallback_primary_color: str = DEFAULT_SUBTITLE_PRIMARY_COLOR,
+    fallback_outline_color: str = DEFAULT_SUBTITLE_OUTLINE_COLOR,
+) -> str:
+    if style is None:
+        return _style_line(
+            name,
+            fallback_font_name,
+            fallback_font_size,
+            layout,
+            alignment=fallback_alignment,
+            margin_v=fallback_margin_v,
+            primary_color=fallback_primary_color,
+            outline_color=fallback_outline_color,
+        )
+
+    font_name, bold = _style_font(style)
+    return _style_line(
+        name,
+        font_name,
+        style.font_size,
+        layout,
+        alignment=5,
+        margin_v=0,
+        primary_color=style.primary_color,
+        outline_color=style.outline_color,
+        outline=style.outline_width,
+        margin_x=0,
+        bold=bold,
     )
 
 
@@ -762,23 +827,34 @@ def build_ass_document(
             "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
             "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding"
         ),
-        _style_line(
+        _clip_style_line(
             "Subtitle",
-            active_layout.font_name,
-            active_layout.font_size,
+            candidate.subtitle_style,
             active_layout,
-            alignment=active_layout.subtitle_alignment,
-            margin_v=active_layout.lower_margin,
-            primary_color=active_layout.primary_color,
-            outline_color=active_layout.outline_color,
+            fallback_font_name=active_layout.font_name,
+            fallback_font_size=active_layout.font_size,
+            fallback_alignment=active_layout.subtitle_alignment,
+            fallback_margin_v=active_layout.lower_margin,
+            fallback_primary_color=active_layout.primary_color,
+            fallback_outline_color=active_layout.outline_color,
         ),
-        _style_line(
+        _clip_style_line(
             "Title",
-            active_layout.title_font_name,
-            active_layout.title_font_size,
+            candidate.title_style,
             active_layout,
-            alignment=active_layout.title_alignment,
-            margin_v=active_layout.top_margin,
+            fallback_font_name=active_layout.title_font_name,
+            fallback_font_size=active_layout.title_font_size,
+            fallback_alignment=active_layout.title_alignment,
+            fallback_margin_v=active_layout.top_margin,
+        ),
+        _clip_style_line(
+            "Hook",
+            candidate.hook_style,
+            active_layout,
+            fallback_font_name=active_layout.title_font_name,
+            fallback_font_size=active_layout.title_font_size,
+            fallback_alignment=active_layout.title_alignment,
+            fallback_margin_v=active_layout.top_margin,
         ),
         "",
         "[Events]",
@@ -788,22 +864,39 @@ def build_ass_document(
     if include_title:
         title_start = hook_end if include_hook else 0.0
         if title_start < candidate.duration:
+            title_position = (
+                _style_position_tag(candidate.title_style, active_layout)
+                if candidate.title_style is not None
+                else ""
+            )
             lines.append(
                 "Dialogue: "
                 f"1,{format_ass_timestamp(title_start)},{format_ass_timestamp(candidate.duration)},"
                 f"Title,,0,0,0,,"
+                f"{title_position}"
                 f"{_escape_ass_text(split_subtitle_lines(title_text, max_chars_per_line=20, max_lines=2))}"
             )
 
     if include_hook:
+        hook_position = (
+            _style_position_tag(candidate.hook_style, active_layout)
+            if candidate.hook_style is not None
+            else ""
+        )
         lines.append(
             "Dialogue: "
             f"2,{format_ass_timestamp(0.0)},{format_ass_timestamp(hook_end)},"
-            f"Title,Hook,0,0,0,,"
+            f"Hook,Hook,0,0,0,,"
+            f"{hook_position}"
             f"{_escape_ass_text(split_subtitle_lines(hook_text, max_chars_per_line=20, max_lines=2))}"
         )
 
     for event in subtitle_events:
+        subtitle_position = (
+            _style_position_tag(candidate.subtitle_style, active_layout)
+            if candidate.subtitle_style is not None
+            else ""
+        )
         text = _escape_ass_text(
             split_subtitle_lines(
                 event.text,
@@ -814,7 +907,7 @@ def build_ass_document(
         lines.append(
             "Dialogue: "
             f"0,{format_ass_timestamp(event.start)},{format_ass_timestamp(event.end)},"
-            f"Subtitle,,0,0,0,,{text}"
+            f"Subtitle,,0,0,0,,{subtitle_position}{text}"
         )
 
     return "\n".join(lines) + "\n"
