@@ -1,5 +1,6 @@
 "use client";
 
+import { subtitleFontFamily } from "../lib/clipTextStyle";
 import type { ClipSettings } from "../lib/types";
 
 export type SubtitlePreviewMode = "short" | "normal";
@@ -23,19 +24,6 @@ const PREVIEW_DEFAULTS = {
     lowerMargin: 86
   }
 } as const;
-
-function previewFontFamily(fontName: string | undefined): string {
-  if (fontName === "Source Han Sans JP Heavy") {
-    return '"Source Han Sans JP Heavy", "Noto Sans CJK JP", "Yu Gothic", sans-serif';
-  }
-  if (fontName === "Noto Serif CJK JP") {
-    return '"Noto Serif CJK JP", "Yu Mincho", YuMincho, serif';
-  }
-  if (fontName === "Noto Sans Mono CJK JP") {
-    return '"Noto Sans Mono CJK JP", "MS Gothic", monospace';
-  }
-  return '"Noto Sans CJK JP", "Yu Gothic", Meiryo, sans-serif';
-}
 
 function alignmentLabel(alignment: number): string {
   if (alignment === 8) {
@@ -111,7 +99,7 @@ export function SubtitleStylePreview({ settings, mode }: SubtitleStylePreviewPro
               className="m-0 whitespace-pre-line font-extrabold tracking-normal"
               style={{
                 color: primaryColor,
-                fontFamily: previewFontFamily(fontName),
+                fontFamily: subtitleFontFamily(fontName),
                 fontSize: `clamp(12px, ${fontSizePercent}cqh, 38px)`,
                 lineHeight: 1.28,
                 textShadow: `0 2px 2px ${outlineColor}`,

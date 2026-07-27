@@ -5883,3 +5883,52 @@ pip check: pass
 - 書体は同梱済み・Dockerへmount済みのフォントだけを選択可能。任意フォントファイルの追加UIは対象外。
 - `ruff check backend scripts`は未変更の`scripts/smoke_runtime.py:173`にある既知のF541で失敗する。今回変更したbackendとaudit対象のruffはpass。
 - Task 86 branchはTask 85 branchを親にしている。Task 85 merge後にmainへ統合する。
+
+## 2026-07-28 Task 86 推奨字幕フォント分類
+
+### 目的
+
+- 通常字幕向けの太字ゴシックと、ツッコミ・オチ向けの短い強調書体を設定画面で分ける。
+- ブラウザプレビューとFFmpeg/libassの焼き込みで同じフォントを使う。
+
+### 変更
+
+- 通常字幕向けへ以下を追加。
+  - Noto Sans JP Black
+  - 源ノ角ゴシック Heavy
+  - M PLUS 1 ExtraBold
+  - M PLUS Rounded 1c ExtraBold
+- 特殊字幕向けへ以下を追加。
+  - 851チカラヅヨク
+  - Dela Gothic One
+  - コーポレート・ロゴ Bold
+- Upload画面とclip別文字スタイルの書体選択を以下の3グループへ分類。
+  - 通常字幕向け
+  - 特殊字幕向け（短い強調）
+  - 補助書体
+- 7書体を`frontend/public/fonts`へ同梱し、出典・ライセンス・SHA-256を記録。
+- ブラウザ用`@font-face`、ASSプリセット、auditの日本語フォント判定を追加。
+- backend / workerへフォントファイルだけをread-onlyで個別mount。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `388 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- Upload画面とclip別文字スタイル画面:
+  - 3グループと7書体を確認。
+  - 全書体のプレビュー`font-family`反映を確認。
+  - console error: `0`。
+- ブラウザ配信:
+  - 7フォントすべてHTTP `200`。
+- FFmpeg/libass burn-in smoke:
+  - 7書体すべて指定したフォントファイルへ解決。
+  - 代替フォント、missing glyph、render error: `0`。
+
+### 未解決・制限
+
+- ラノベPOP V2は公式BOOTHの無料ダウンロードにpixiv/BOOTHログインが必要。
+- 未取得の第三者配布ファイルは使用せず、公式ZIP取得・ライセンス確認・焼き込み検証後に追加する。
+- 今回は合成ASSによる実焼き込み確認まで。長尺実動画E2Eは再実行していない。

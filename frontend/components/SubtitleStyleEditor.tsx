@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { SUBTITLE_FONT_GROUPS } from "../lib/clipTextStyle";
 import type { ClipSettings } from "../lib/types";
 import {
   SubtitleStylePreview,
@@ -62,16 +63,6 @@ const STYLE_DEFAULTS = {
     alignment: 2
   }
 } as const;
-
-const SUBTITLE_FONT_OPTIONS = [
-  { value: "", label: "標準ゴシック（Noto Sans CJK JP）" },
-  {
-    value: "Source Han Sans JP Heavy",
-    label: "極太ゴシック（Source Han Sans JP Heavy）"
-  },
-  { value: "Noto Serif CJK JP", label: "明朝（Noto Serif CJK JP）" },
-  { value: "Noto Sans Mono CJK JP", label: "等幅ゴシック（Noto Sans Mono CJK JP）" }
-] as const;
 
 const COLOR_PRESETS = [
   { value: "#FFFFFF", label: "白" },
@@ -263,10 +254,15 @@ export function SubtitleStyleEditor({
               )
             }
           >
-            {SUBTITLE_FONT_OPTIONS.map((font) => (
-              <option key={font.value || "default"} value={font.value}>
-                {font.label}
-              </option>
+            <option value="">既定（Noto Sans CJK JP）</option>
+            {SUBTITLE_FONT_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((font) => (
+                  <option key={font.value} value={font.value}>
+                    {font.label}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>

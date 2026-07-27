@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import {
-  CLIP_TEXT_FONT_OPTIONS,
+  CLIP_TEXT_FONT_GROUPS,
   clipTextFontFamily,
   clipTextFontWeight,
   resolvedClipTextStyle,
@@ -157,10 +157,14 @@ export function ClipTextStyleEditor({
               })
             }
           >
-            {CLIP_TEXT_FONT_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
+            {CLIP_TEXT_FONT_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>

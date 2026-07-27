@@ -251,6 +251,37 @@ def test_clip_title_hook_and_subtitle_styles_are_independent() -> None:
     assert r"{\an5\pos(540,1536)}確認字幕" in ass
 
 
+def test_bundled_normal_and_emphasis_font_presets_map_to_ass_names() -> None:
+    expected_fonts = {
+        "noto_black": "Noto Sans JP Black",
+        "mplus_extrabold": "M PLUS 1 ExtraBold",
+        "mplus_rounded_extrabold": "Rounded Mplus 1c ExtraBold",
+        "chikara": "851CHIKARA-DZUYOKU-KANA-A",
+        "dela_gothic": "Dela Gothic One",
+        "corporate_logo": "Corporate-Logo-Bold-ver3",
+    }
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="確認字幕")]
+
+    for preset, font_name in expected_fonts.items():
+        candidate = make_candidate("short_1", "short", 0.0, 4.0).model_copy(
+            update={
+                "subtitle_style": ClipTextStyle(
+                    fontPreset=preset,
+                    fontSize=70,
+                    primaryColor="#FFFFFF",
+                    outlineColor="#000000",
+                    outlineWidth=4,
+                    xPercent=50,
+                    yPercent=80,
+                )
+            }
+        )
+
+        ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
+
+        assert f"Style: Subtitle,{font_name},70" in ass
+
+
 def test_short_and_normal_subtitle_styles_use_independent_fonts_and_colors() -> None:
     short_layout = SubtitleLayout.short(
         settings={

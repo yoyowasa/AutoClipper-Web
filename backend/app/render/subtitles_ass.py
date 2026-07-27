@@ -33,7 +33,13 @@ DEFAULT_SUBTITLE_OUTLINE_COLOR = "#000000"
 TEXT_FONT_PRESETS: dict[str, tuple[str, bool]] = {
     "sans": ("Noto Sans CJK JP", False),
     "sans_bold": ("Noto Sans CJK JP", True),
+    "noto_black": ("Noto Sans JP Black", False),
     "heavy": ("Source Han Sans JP Heavy", True),
+    "mplus_extrabold": ("M PLUS 1 ExtraBold", False),
+    "mplus_rounded_extrabold": ("Rounded Mplus 1c ExtraBold", False),
+    "chikara": ("851CHIKARA-DZUYOKU-KANA-A", False),
+    "dela_gothic": ("Dela Gothic One", False),
+    "corporate_logo": ("Corporate-Logo-Bold-ver3", True),
     "serif": ("Noto Serif CJK JP", False),
     "mono": ("Noto Sans Mono CJK JP", True),
 }

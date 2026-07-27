@@ -231,7 +231,13 @@ export type SubtitleReviewSegment = {
 export type ClipTextFontPreset =
   | "sans"
   | "sans_bold"
+  | "noto_black"
   | "heavy"
+  | "mplus_extrabold"
+  | "mplus_rounded_extrabold"
+  | "chikara"
+  | "dela_gothic"
+  | "corporate_logo"
   | "serif"
   | "mono";
 

@@ -70,9 +70,15 @@ EXPECTED_ASS_FONT = "Noto Sans CJK JP"
 JAPANESE_ASS_FONTS = frozenset(
     {
         "Noto Sans CJK JP",
+        "Noto Sans JP Black",
         "Noto Serif CJK JP",
         "Noto Sans Mono CJK JP",
         "Source Han Sans JP Heavy",
+        "M PLUS 1 ExtraBold",
+        "Rounded Mplus 1c ExtraBold",
+        "851CHIKARA-DZUYOKU-KANA-A",
+        "Dela Gothic One",
+        "Corporate-Logo-Bold-ver3",
     }
 )
 AUTOLOAD_SUBTITLE_SUFFIXES = (".ass", ".srt", ".vtt")
