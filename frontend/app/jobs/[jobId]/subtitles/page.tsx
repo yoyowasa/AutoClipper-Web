@@ -886,28 +886,30 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
-        {isEditable && review.renderRevision > 1 ? (
-          <div className="border border-violet-300 bg-violet-50 px-4 py-3 text-sm text-violet-950">
-            完成済みjobの再編集です。元の動画、選定範囲、字幕修正を引き継いでいます。
-            新しい書き出しが完了するまで、現在のMP4とZIPは保持されます。
-          </div>
-        ) : null}
-
         {error ? (
           <div className="border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
             {error}
           </div>
         ) : null}
-        {openedFromReupload ? (
-          <div className="border-l-4 border-emerald-600 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
-            完成MP4と元jobを照合しました。選択したclipのタイトル・フック映像・文字スタイル・字幕を変更できます。
-          </div>
-        ) : null}
 
-        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-14rem)] lg:min-h-[560px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_430px]">
+        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-10rem)] lg:min-h-[560px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_430px]">
           <aside className="flex min-h-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
             <div className="border-b border-neutral-200 px-4 py-4">
-              <p className="text-sm font-semibold">生成予定clip</p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold">生成予定clip</p>
+                <div className="flex flex-wrap justify-end gap-1">
+                  {isEditable && review.renderRevision > 1 ? (
+                    <span className="bg-violet-100 px-2 py-1 text-[10px] font-semibold text-violet-800">
+                      再編集
+                    </span>
+                  ) : null}
+                  {openedFromReupload ? (
+                    <span className="bg-emerald-100 px-2 py-1 text-[10px] font-semibold text-emerald-800">
+                      MP4照合済み
+                    </span>
+                  ) : null}
+                </div>
+              </div>
               <p className="mt-1 text-xs text-neutral-500">選ぶと動画と字幕が切り替わります</p>
               <div className="mt-3 h-2 overflow-hidden bg-neutral-100">
                 <div
@@ -978,6 +980,28 @@ export default function SubtitleReviewPage() {
                   </button>
                 );
               })}
+            </div>
+            <div className="border-t border-neutral-300 bg-neutral-50 p-3">
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="font-semibold">
+                  確認 {review.confirmedClipCount} / {review.totalClipCount}
+                </span>
+                <span className="text-neutral-500">修正 {review.editedSegmentCount}件</span>
+              </div>
+              <button
+                className="mt-2 min-h-10 w-full bg-emerald-700 px-3 py-2 text-xs font-semibold text-white disabled:bg-neutral-300"
+                disabled={
+                  !isEditable ||
+                  !allConfirmed ||
+                  dirtySegmentIds.size > 0 ||
+                  hasDirtyClipContent ||
+                  isFinalizing
+                }
+                type="button"
+                onClick={() => void startRendering()}
+              >
+                {isFinalizing ? "レンダリング開始中" : "字幕を確定してレンダリング"}
+              </button>
             </div>
           </aside>
 
@@ -1508,32 +1532,6 @@ export default function SubtitleReviewPage() {
           </section>
         </div>
 
-        <section className="border border-neutral-300 bg-white px-5 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold">
-                全clip確認済み {review.confirmedClipCount} / {review.totalClipCount}
-              </p>
-              <p className="mt-1 text-xs text-neutral-600">
-                通常・ショートをすべて確認後、字幕焼き込みとZIP作成を開始します。
-              </p>
-            </div>
-            <button
-              className="min-h-12 bg-emerald-700 px-6 text-sm font-semibold text-white disabled:bg-neutral-300"
-              disabled={
-                !isEditable ||
-                !allConfirmed ||
-                dirtySegmentIds.size > 0 ||
-                hasDirtyClipContent ||
-                isFinalizing
-              }
-              type="button"
-              onClick={() => void startRendering()}
-            >
-              {isFinalizing ? "レンダリングを開始しています" : "字幕を確定してレンダリング"}
-            </button>
-          </div>
-        </section>
       </section>
     </main>
   );
