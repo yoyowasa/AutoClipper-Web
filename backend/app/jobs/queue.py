@@ -9,6 +9,7 @@ from app.jobs.runner import (
     run_clip_plan_boundary_update,
     run_clip_plan_hook_scene_update,
     run_clip_plan_reselection,
+    run_subtitle_review_hook_scene_update,
     run_subtitle_review_render,
 )
 
@@ -16,6 +17,10 @@ JobEnqueue = Callable[[str], None]
 ClipPlanReselectionEnqueue = Callable[[str], None]
 ClipPlanBoundaryUpdateEnqueue = Callable[[str, str, float, float], None]
 ClipPlanHookSceneUpdateEnqueue = Callable[
+    [str, str, float | None, float | None],
+    None,
+]
+SubtitleReviewHookSceneUpdateEnqueue = Callable[
     [str, str, float | None, float | None],
     None,
 ]
@@ -80,6 +85,23 @@ def enqueue_clip_plan_hook_scene_update(
     )
 
 
+def enqueue_subtitle_review_hook_scene_update(
+    job_id: str,
+    clip_id: str,
+    start: float | None,
+    end: float | None,
+) -> None:
+    queue = get_queue()
+    queue.enqueue(
+        run_subtitle_review_hook_scene_update,
+        job_id,
+        clip_id,
+        start,
+        end,
+        job_timeout=3600,
+    )
+
+
 def get_enqueue_job() -> JobEnqueue:
     return enqueue_autoclipper_job
 
@@ -94,6 +116,10 @@ def get_enqueue_clip_plan_boundary_update() -> ClipPlanBoundaryUpdateEnqueue:
 
 def get_enqueue_clip_plan_hook_scene_update() -> ClipPlanHookSceneUpdateEnqueue:
     return enqueue_clip_plan_hook_scene_update
+
+
+def get_enqueue_subtitle_review_hook_scene_update() -> SubtitleReviewHookSceneUpdateEnqueue:
+    return enqueue_subtitle_review_hook_scene_update
 
 
 def get_enqueue_render_job() -> RenderEnqueue:

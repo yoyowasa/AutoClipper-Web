@@ -107,6 +107,7 @@ from app.jobs.subtitle_review import (
     subtitle_review_preview_path,
     subtitle_review_preview_url,
     subtitle_review_summary_path,
+    update_review_hook_scene,
     write_subtitle_review,
     write_subtitle_review_summary,
 )
@@ -2401,7 +2402,14 @@ def run_autoclipper_job(
                         "no_usable_output",
                         "Pipeline completed analysis but produced no usable clips.",
                     )
-                review_document = build_subtitle_review(job.id, selection, transcript_segments)
+                review_document = build_subtitle_review(
+                    job.id,
+                    selection,
+                    transcript_segments,
+                    short_max_duration=float(
+                        settings.get("shortMaxDuration", 75.0)
+                    ),
+                )
                 preview_total = len(review_document.clips)
                 _set_subtitle_review_preview_progress(
                     db,
@@ -2897,6 +2905,113 @@ def run_clip_plan_hook_scene_update(
                     "時間を確認して再試行してください"
                 ),
             )
+            raise
+
+    return visited_statuses
+
+
+def run_subtitle_review_hook_scene_update(
+    job_id: str,
+    clip_id: str,
+    start: float | None,
+    end: float | None,
+    session_factory: SessionFactory = SessionLocal,
+    paths: StoragePaths | None = None,
+    dependencies: AutoClipperPipelineDependencies | None = None,
+) -> list[str]:
+    storage_paths = paths or get_storage_paths()
+    deps = dependencies or AutoClipperPipelineDependencies()
+    visited_statuses: list[str] = []
+
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"job not found: {job_id}")
+        video = db.get(Video, job.video_id)
+        if video is None:
+            raise ValueError(f"video not found for job: {job_id}")
+
+        job_dir = storage_paths.job_outputs(job.id)
+        review_path = subtitle_review_output_path(job_dir)
+        summary_path = subtitle_review_summary_path(job_dir)
+        selected_path = job_dir / "selected_clips.json"
+        preview_path = subtitle_review_preview_path(job_dir, clip_id)
+        stored_payloads = {
+            path: path.read_bytes() if path.is_file() else None
+            for path in (review_path, summary_path, selected_path, preview_path)
+        }
+
+        try:
+            document = load_subtitle_review(review_path)
+            selection = CandidateSelection.model_validate(
+                _read_json_file(selected_path)
+            )
+            candidate = next(
+                (item for item in selection.shorts if item.id == clip_id),
+                None,
+            )
+            if candidate is None:
+                raise ValueError(f"selected short not found: {clip_id}")
+
+            next_document = document.model_copy(deep=True)
+            next_document.short_max_duration = float(
+                (job.settings_json or {}).get("shortMaxDuration", 75.0)
+            )
+            update_review_hook_scene(
+                next_document,
+                clip_id,
+                start=start,
+                end=end,
+            )
+
+            candidate_payload = candidate.model_dump(mode="python")
+            candidate_payload["hook_scene_start"] = start
+            candidate_payload["hook_scene_end"] = end
+            updated_candidate = Candidate.model_validate(candidate_payload)
+
+            _set_status(db, job, "preparing_subtitle_review")
+            job.current_step = "冒頭フック映像の確認動画を準備中"
+            job.updated_at = utc_now()
+            db.commit()
+            db.refresh(job)
+            visited_statuses.append("preparing_subtitle_review")
+
+            _render_candidate_review_preview(
+                deps.subtitle_review_preview_renderer,
+                storage_paths.resolve_stored_file(video.stored_path),
+                preview_path,
+                updated_candidate,
+            )
+            target_index = next(
+                index
+                for index, item in enumerate(selection.shorts)
+                if item.id == clip_id
+            )
+            selection.shorts[target_index] = updated_candidate
+            write_selected_clips(selection, selected_path)
+            write_subtitle_review(next_document, review_path)
+            write_subtitle_review_summary(next_document, summary_path)
+
+            _set_status(db, job, "awaiting_subtitle_review")
+            visited_statuses.append("awaiting_subtitle_review")
+        except Exception as exc:
+            for path, payload in stored_payloads.items():
+                if payload is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(payload)
+            job.status = "awaiting_subtitle_review"
+            job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
+            job.current_step = (
+                "冒頭フック映像の更新に失敗しました。"
+                "時間を確認して再試行してください"
+            )
+            job.error_code = "subtitle_review_hook_scene_update_failed"
+            job.error_message = str(exc)
+            job.updated_at = utc_now()
+            db.commit()
+            db.refresh(job)
             raise
 
     return visited_statuses

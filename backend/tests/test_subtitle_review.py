@@ -16,6 +16,7 @@ from app.jobs.subtitle_review import (
     subtitle_review_preview_path,
     subtitle_review_preview_url,
     update_review_clip_content,
+    update_review_hook_scene,
     update_review_segment,
     write_subtitle_review,
 )
@@ -152,6 +153,55 @@ def test_clip_title_and_hook_update_invalidates_confirmation_and_updates_selecti
     assert [(segment.start, segment.end) for segment in transcript] == [
         (segment.start, segment.end) for segment in apply_reviewed_text(transcript, review)
     ]
+
+
+def test_hook_scene_update_is_applied_to_rerendered_short() -> None:
+    _transcript, review = _review_fixture()
+    selection = CandidateSelection(
+        normalClips=[_candidate("normal_1", "normal", 0.0, 20.0)],
+        shorts=[_candidate("short_1", "short", 10.0, 30.0)],
+    )
+    review = confirm_review_clip(review, "short_1")
+
+    review = update_review_hook_scene(
+        review,
+        "short_1",
+        start=12.0,
+        end=14.0,
+    )
+    updated = apply_reviewed_clip_content(selection, review)
+
+    assert review.clips[1].confirmed is False
+    assert review.clips[1].hook_scene_start == 12.0
+    assert review.clips[1].hook_scene_end == 14.0
+    assert updated.shorts[0].hook_scene_start == 12.0
+    assert updated.shorts[0].hook_scene_end == 14.0
+
+    review = update_review_hook_scene(
+        review,
+        "short_1",
+        start=None,
+        end=None,
+    )
+    cleared = apply_reviewed_clip_content(selection, review)
+
+    assert review.clips[1].hook_scene_start is None
+    assert review.clips[1].hook_scene_end is None
+    assert cleared.shorts[0].hook_scene_start is None
+    assert cleared.shorts[0].hook_scene_end is None
+
+
+def test_hook_scene_update_respects_review_short_duration_limit() -> None:
+    _transcript, review = _review_fixture()
+    review.short_max_duration = 21.0
+
+    with pytest.raises(ValueError, match="short maximum duration"):
+        update_review_hook_scene(
+            review,
+            "short_1",
+            start=12.0,
+            end=14.0,
+        )
 
 
 def test_normal_clip_rejects_hook_text() -> None:

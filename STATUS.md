@@ -6003,13 +6003,18 @@ pip check: pass
   - 見せ場の元位置は本編側にも残す。
 - 見せ場区間の字幕を冒頭用に複製し、本編字幕を見せ場秒数ぶん後ろへ移動。
 - 字幕確認画面の再生位置、字幕クリック、完成時間を連結後の時間軸へ対応。
+- 完成MP4の再アップロード後も、対象ショートのフック映像を追加・変更・解除可能。
+  - 再編集画面へ同じ0.5〜3秒の範囲エディタを追加。
+  - 対象ショートの軽量プレビューだけをworkerで再生成。
+  - 保存済みタイトル、フック文字、文字スタイル、字幕、他clipは保持。
+  - フック映像変更後は対象clipだけ未確認へ戻す。
 - 最終metadataへhook scene範囲、複製有無、本編時間、完成時間を記録。
 
 ### 検証
 
 - backend ruff: pass。
-- hook scene関連tests: `115 passed`。
-- backend pytest: `393 passed, 1 skipped`。
+- 再アップロード・hook scene関連の対象tests: `52 passed`。
+- backend pytest: `395 passed, 1 skipped`。
 - frontend lint / typecheck / build: pass。
 - Docker compose rebuild: pass。
 - `scripts/smoke_runtime.py --skip-video`: pass。
@@ -6022,7 +6027,12 @@ pip check: pass
 - browser実表示: pass。
   - 既存のawaiting clip review jobでショート専用UIを確認。
   - 入力欄、1秒 / 2秒 / 3秒、完成予定時間、保存ボタンを確認。
-  - console error: `0`。
+  - 完成MP4を再アップロードし、対象ショートの再編集画面へ直接遷移。
+  - 再編集画面から1秒のフック映像を追加後、2秒へ変更。
+  - `設定済み`、複製場面`0:00.0 - 0:02.0`、完成予定`0:24.0`を確認。
+  - job: `job_701530dfaf214022a84faeb3333877a8`。
+  - review artifact: `hookSceneStart=0`、`hookSceneEnd=2`、既存タイトル保持、対象clip未確認化。
+  - 更新後の軽量preview: `24.000000`秒。
 
 ### 未解決・制限
 

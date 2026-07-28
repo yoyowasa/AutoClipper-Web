@@ -126,7 +126,7 @@ export function UploadDropzone({
                   : isUploading
                     ? "この画面を閉じずにお待ちください"
                     : purpose === "reedit"
-                      ? "元jobに保存されたタイトル・フック・字幕を使用します"
+                      ? "元jobに保存されたタイトル・フック映像・字幕を使用します"
                       : "選択内容を確認し、設定後に処理を開始してください"}
               </p>
             </div>

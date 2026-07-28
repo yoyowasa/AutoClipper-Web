@@ -2,10 +2,16 @@
 
 import { useMemo, useState } from "react";
 
-import type { ClipPlanClip } from "../lib/types";
+type HookSceneEditableClip = {
+  start: number;
+  end: number;
+  duration: number;
+  hookSceneStart: number | null;
+  hookSceneEnd: number | null;
+};
 
 type ClipHookSceneEditorProps = {
-  clip: ClipPlanClip;
+  clip: HookSceneEditableClip;
   disabled?: boolean;
   saving?: boolean;
   playheadSourceTime: number;

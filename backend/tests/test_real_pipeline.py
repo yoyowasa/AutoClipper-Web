@@ -20,6 +20,7 @@ from app.jobs.queue import (
     get_enqueue_clip_plan_reselection,
     get_enqueue_job,
     get_enqueue_render_job,
+    get_enqueue_subtitle_review_hook_scene_update,
 )
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import select_candidates
@@ -33,6 +34,7 @@ from app.jobs.runner import (
     run_clip_plan_boundary_update,
     run_clip_plan_hook_scene_update,
     run_clip_plan_reselection,
+    run_subtitle_review_hook_scene_update,
     run_subtitle_review_render,
 )
 from app.jobs.status import SUCCESS_STATUSES
@@ -1162,6 +1164,79 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
     )
     assert retitled.status_code == 200
     reopened_review = retitled.json()
+
+    hook_start = reopened_short["start"] + 1.0
+    hook_end = hook_start + 2.0
+    queued_hook_updates: list[
+        tuple[str, str, float | None, float | None]
+    ] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = (
+        lambda: lambda job_id, clip_id, start, end: queued_hook_updates.append(
+            (job_id, clip_id, start, end)
+        )
+    )
+    hook_update = client.patch(
+        (
+            f"/api/jobs/{created['jobId']}/subtitle-review/clips/"
+            f"{reopened_short['id']}/hook-scene"
+        ),
+        json={"start": hook_start, "end": hook_end},
+    )
+    assert hook_update.status_code == 202
+    assert queued_hook_updates == [
+        (created["jobId"], reopened_short["id"], hook_start, hook_end)
+    ]
+
+    hook_preview_calls: list[dict[str, Any]] = []
+
+    def fake_hook_preview(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **kwargs: Any,
+    ) -> Path:
+        hook_preview_calls.append(kwargs)
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"updated hook preview")
+        return Path(output_path)
+
+    hook_statuses = run_subtitle_review_hook_scene_update(
+        created["jobId"],
+        reopened_short["id"],
+        hook_start,
+        hook_end,
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=AutoClipperPipelineDependencies(
+            subtitle_review_preview_renderer=fake_hook_preview,
+        ),
+    )
+    assert hook_statuses == [
+        "preparing_subtitle_review",
+        "awaiting_subtitle_review",
+    ]
+    assert hook_preview_calls == [
+        {
+            "start": reopened_short["start"],
+            "duration": reopened_short["duration"],
+            "hook_start": hook_start,
+            "hook_duration": 2.0,
+        }
+    ]
+    reopened_review = client.get(
+        f"/api/jobs/{created['jobId']}/subtitle-review"
+    ).json()
+    updated_short = next(
+        clip
+        for clip in reopened_review["clips"]
+        if clip["id"] == reopened_short["id"]
+    )
+    assert updated_short["title"] == "完成後に変更したタイトル"
+    assert (updated_short["hookSceneStart"], updated_short["hookSceneEnd"]) == (
+        hook_start,
+        hook_end,
+    )
+    assert updated_short["confirmed"] is False
+
     for clip in reopened_review["clips"]:
         response = client.post(
             f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm"
@@ -1190,6 +1265,15 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
     assert len(rerendered_results["normalClips"]) == 1
     assert len(rerendered_results["shorts"]) == 1
     assert rerendered_results["shorts"][0]["title"] == "完成後に変更したタイトル"
+    rerendered_selection = json.loads(
+        (
+            storage.job_outputs(created["jobId"]) / "selected_clips.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert (
+        rerendered_selection["shorts"][0]["hook_scene_start"],
+        rerendered_selection["shorts"][0]["hook_scene_end"],
+    ) == (hook_start, hook_end)
     assert not (
         storage.temp
         / "rr"

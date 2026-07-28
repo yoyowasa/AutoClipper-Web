@@ -155,7 +155,7 @@ export default function ResultsPage() {
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <h2 className="text-base font-semibold text-sky-950">
-                      完成後のタイトル・フック・字幕を微調整
+                      完成後のタイトル・フック映像・字幕を微調整
                     </h2>
                     <p className="mt-1 max-w-3xl text-sm text-sky-800">
                       元動画、切り抜き範囲、文字起こしをそのまま使います。再アップロード、
@@ -168,7 +168,9 @@ export default function ResultsPage() {
                     type="button"
                     onClick={() => void reopenForEditing()}
                   >
-                    {isReopening ? "再編集画面を開いています" : "タイトル・フック・字幕を再編集"}
+                    {isReopening
+                      ? "再編集画面を開いています"
+                      : "タイトル・フック映像・字幕を再編集"}
                   </button>
                 </div>
               </section>

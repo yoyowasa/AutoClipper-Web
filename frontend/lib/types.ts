@@ -284,6 +284,7 @@ export type SubtitleReviewDocument = {
   renderRevision: number;
   reopenedAt: string | null;
   sourceVideoUrl: string;
+  shortMaxDuration: number;
   clips: SubtitleReviewClip[];
   segments: SubtitleReviewSegment[];
   confirmedClipCount: number;

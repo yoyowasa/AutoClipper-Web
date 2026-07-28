@@ -85,6 +85,7 @@ class SubtitleReviewDocument(BaseModel):
     render_revision: int = Field(default=1, ge=1, alias="renderRevision")
     reopened_at: str | None = Field(default=None, alias="reopenedAt")
     source_video_url: str = Field(alias="sourceVideoUrl")
+    short_max_duration: float = Field(default=75.0, gt=0, alias="shortMaxDuration")
     clips: list[SubtitleReviewClip] = Field(default_factory=list)
     segments: list[SubtitleReviewSegment] = Field(default_factory=list)
     confirmed_clip_count: int = Field(default=0, ge=0, alias="confirmedClipCount")
@@ -145,6 +146,8 @@ def build_subtitle_review(
     job_id: str,
     selection: CandidateSelection,
     transcript_segments: Sequence[TranscriptSegment],
+    *,
+    short_max_duration: float = 75.0,
 ) -> SubtitleReviewDocument:
     selected_candidates = [*selection.normal_clips, *selection.shorts]
     clip_segment_indices: dict[str, list[int]] = {}
@@ -205,6 +208,7 @@ def build_subtitle_review(
         SubtitleReviewDocument(
             jobId=job_id,
             sourceVideoUrl=f"/api/jobs/{job_id}/source-video",
+            shortMaxDuration=short_max_duration,
             clips=clips,
             segments=segments,
             createdAt=now,
@@ -315,6 +319,39 @@ def update_review_clip_content(
     return _refresh_counts(document)
 
 
+def update_review_hook_scene(
+    document: SubtitleReviewDocument,
+    clip_id: str,
+    *,
+    start: float | None,
+    end: float | None,
+) -> SubtitleReviewDocument:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+    if clip.type != "short":
+        raise ValueError("hook scene is only supported for short clips")
+    if (start is None) != (end is None):
+        raise ValueError("hook scene requires both start and end")
+    if start is not None and end is not None:
+        hook_duration = end - start
+        if not 0.5 <= hook_duration <= 3.0:
+            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        if start < clip.start - 0.001 or end > clip.end + 0.001:
+            raise ValueError("hook scene must stay within the selected clip")
+        if clip.duration + hook_duration > document.short_max_duration + 0.001:
+            raise ValueError(
+                "hook scene would exceed the configured short maximum duration"
+            )
+
+    if clip.hook_scene_start == start and clip.hook_scene_end == end:
+        return _refresh_counts(document)
+    clip.hook_scene_start = start
+    clip.hook_scene_end = end
+    clip.confirmed = False
+    return _refresh_counts(document)
+
+
 def confirm_review_clip(document: SubtitleReviewDocument, clip_id: str) -> SubtitleReviewDocument:
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
@@ -389,6 +426,8 @@ def apply_reviewed_clip_content(
         if candidate.type == "short":
             updates["hook_text"] = clip.hook_text or None
             updates["hook_duration_seconds"] = clip.hook_duration_seconds
+            updates["hook_scene_start"] = clip.hook_scene_start
+            updates["hook_scene_end"] = clip.hook_scene_end
             updates["title_style"] = clip.title_style
             updates["hook_style"] = clip.hook_style
         updates["subtitle_style"] = clip.subtitle_style
