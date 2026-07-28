@@ -5,7 +5,10 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
-import { ClipTextStyleEditor } from "../../../../components/ClipTextStyleEditor";
+import {
+  ClipTextStyleEditor,
+  ClipTextStylePreview
+} from "../../../../components/ClipTextStyleEditor";
 import {
   confirmSubtitleReviewClip,
   finalizeSubtitleReview,
@@ -147,6 +150,8 @@ export default function SubtitleReviewPage() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [openedFromReupload, setOpenedFromReupload] = useState(false);
+  const [selectedTextStyleTarget, setSelectedTextStyleTarget] =
+    useState<ClipTextTarget>("title");
 
   useEffect(() => {
     if (!jobId) {
@@ -162,10 +167,12 @@ export default function SubtitleReviewPage() {
         setReview(document);
         setOpenedFromReupload(search.get("source") === "reupload");
         const requestedClipId = search.get("clipId");
-        setSelectedClipId(
-          document.clips.some((clip) => clip.id === requestedClipId)
-            ? requestedClipId ?? ""
-            : document.clips[0]?.id ?? ""
+        const initialClip =
+          document.clips.find((clip) => clip.id === requestedClipId) ??
+          document.clips[0];
+        setSelectedClipId(initialClip?.id ?? "");
+        setSelectedTextStyleTarget(
+          initialClip?.type === "normal" ? "subtitle" : "title"
         );
         setDrafts(
           Object.fromEntries(document.segments.map((segment) => [segment.id, segment.text]))
@@ -372,6 +379,16 @@ export default function SubtitleReviewPage() {
   const activeSubtitleText = activeSegment
     ? (drafts[activeSegment.id] ?? activeSegment.text)
     : "";
+  const selectedClipTextStyles = {
+    title: selectedClipContentDraft?.titleStyle ?? null,
+    hook: selectedClipContentDraft?.hookStyle ?? null,
+    subtitle: selectedClipContentDraft?.subtitleStyle ?? null
+  };
+  const stylePreviewSubtitleText =
+    activeSubtitleText ||
+    (selectedSegments[0]
+      ? drafts[selectedSegments[0].id] ?? selectedSegments[0].text
+      : "");
   const previewSubtitleStyle =
     selectedClip && selectedClipContentDraft
       ? resolvedClipTextStyle(
@@ -458,6 +475,7 @@ export default function SubtitleReviewPage() {
     setIsPlayerReady(false);
     setVideoLoadSeconds(0);
     setSelectedClipId(clip.id);
+    setSelectedTextStyleTarget(clip.type === "short" ? "title" : "subtitle");
     setError(null);
   }
 
@@ -892,8 +910,9 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
-        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-2rem)] lg:min-h-[640px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(430px,calc(100vw-1170px),1000px)]">
-          <aside className="flex min-h-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
+        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(430px,calc(100vw-1170px),1000px)]">
+          <aside className="relative min-h-[420px] border-b border-neutral-300 lg:min-h-0 lg:border-r">
+            <div className="flex min-h-[420px] flex-col lg:absolute lg:inset-0 lg:min-h-0">
             <div className="border-b border-neutral-200 px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold">生成予定clip</p>
@@ -986,7 +1005,7 @@ export default function SubtitleReviewPage() {
                 );
               })}
             </div>
-            <div className="border-t border-neutral-300 bg-neutral-50 p-3">
+              <div className="border-t border-neutral-300 bg-neutral-50 p-3">
               <div className="flex items-center justify-between gap-2 text-xs">
                 <span className="font-semibold">
                   確認 {review.confirmedClipCount} / {review.totalClipCount}
@@ -1007,13 +1026,14 @@ export default function SubtitleReviewPage() {
               >
                 {isFinalizing ? "レンダリング開始中" : "字幕を確定してレンダリング"}
               </button>
+              </div>
             </div>
           </aside>
 
-          <section className="flex min-h-0 min-w-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
+          <section className="flex min-w-0 flex-col border-b border-neutral-300 lg:border-r">
             {selectedClip ? (
               <>
-                <div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto bg-neutral-100 p-3 sm:p-4">
+                <div className="flex items-start justify-center bg-neutral-100 p-3 sm:p-4">
                   <div
                     className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white"
                     ref={playerShellRef}
@@ -1231,9 +1251,43 @@ export default function SubtitleReviewPage() {
             ) : null}
           </section>
 
-          <section className="flex min-h-0 flex-col overflow-y-auto overscroll-contain">
+          <section className="relative min-h-[420px] border-b border-neutral-300 lg:min-h-0">
             {selectedClip ? (
-              <>
+              <div className="flex min-h-[420px] flex-col lg:absolute lg:inset-0 lg:min-h-0">
+                <div className="flex min-h-12 items-center justify-between border-b border-neutral-300 bg-neutral-50 px-4 py-3">
+                  <div>
+                    <h3 className="text-sm font-semibold">文字配置プレビュー</h3>
+                    <p className="mt-0.5 text-[11px] text-neutral-500">
+                      下段のタイトル・フック・字幕設定と連動
+                    </p>
+                  </div>
+                  <span className="bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-800">
+                    {selectedTextStyleTarget === "title"
+                      ? "タイトル"
+                      : selectedTextStyleTarget === "hook"
+                        ? "フック"
+                        : "字幕"}
+                  </span>
+                </div>
+                <div className="flex min-h-0 flex-1 items-center justify-center bg-neutral-100 p-3">
+                  <ClipTextStylePreview
+                    clipType={selectedClip.type}
+                    displayMode="workspace"
+                    selectedTarget={selectedTextStyleTarget}
+                    styles={selectedClipTextStyles}
+                    subtitleText={stylePreviewSubtitleText}
+                    titleText={selectedClipContentDraft?.title ?? ""}
+                    hookText={selectedClipContentDraft?.hookText ?? ""}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </section>
+
+          <section className="lg:col-span-3">
+            {selectedClip ? (
+              <div className="grid lg:grid-cols-[minmax(0,1.2fr)_minmax(430px,0.8fr)]">
+                <div className="min-w-0 border-b border-neutral-300 lg:border-b-0 lg:border-r">
                 <div className="border-b border-neutral-300 bg-neutral-50 px-4 py-4">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="text-base font-semibold">タイトル・フック</h3>
@@ -1320,19 +1374,13 @@ export default function SubtitleReviewPage() {
                     disabled={!isEditable}
                     hookText={selectedClipContentDraft?.hookText ?? ""}
                     key={selectedClip.id}
-                    styles={{
-                      title: selectedClipContentDraft?.titleStyle ?? null,
-                      hook: selectedClipContentDraft?.hookStyle ?? null,
-                      subtitle: selectedClipContentDraft?.subtitleStyle ?? null
-                    }}
-                    subtitleText={
-                      activeSubtitleText ||
-                      (selectedSegments[0]
-                        ? drafts[selectedSegments[0].id] ?? selectedSegments[0].text
-                        : "")
-                    }
+                    selectedTarget={selectedTextStyleTarget}
+                    showPreview={false}
+                    styles={selectedClipTextStyles}
+                    subtitleText={stylePreviewSubtitleText}
                     titleText={selectedClipContentDraft?.title ?? ""}
                     onChange={updateClipTextStyle}
+                    onSelectedTargetChange={setSelectedTextStyleTarget}
                   />
 
                   <button
@@ -1378,6 +1426,8 @@ export default function SubtitleReviewPage() {
                   </>
                 ) : null}
 
+                </div>
+                <div className="flex min-h-[640px] min-w-0 flex-col bg-white">
                 <div className="border-b border-neutral-300 bg-white px-4 py-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -1395,7 +1445,7 @@ export default function SubtitleReviewPage() {
                 </div>
 
                 <div
-                  className="relative max-h-[640px] min-h-0 flex-1 overflow-y-auto lg:max-h-none"
+                  className="relative max-h-[720px] min-h-0 flex-1 overflow-y-auto"
                   ref={subtitleListRef}
                 >
                   {selectedSegments.length > 0 ? (
@@ -1515,7 +1565,8 @@ export default function SubtitleReviewPage() {
                         : "このclipを確認済みにする"}
                   </button>
                 </div>
-              </>
+                </div>
+              </div>
             ) : null}
           </section>
         </div>
