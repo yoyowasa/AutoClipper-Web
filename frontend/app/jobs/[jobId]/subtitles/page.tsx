@@ -892,7 +892,7 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
-        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-10rem)] lg:min-h-[560px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_430px]">
+        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-2rem)] lg:min-h-[640px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_430px]">
           <aside className="flex min-h-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
             <div className="border-b border-neutral-200 px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -976,6 +976,11 @@ export default function SubtitleReviewPage() {
                       {clip.editedSegmentCount > 0
                         ? ` ・ 修正${clip.editedSegmentCount}件`
                         : ""}
+                      {clip.id === selectedClipId
+                        ? ` ・ 本編${formatTime(bodyDuration)} ・ 元動画${formatTime(
+                            clip.start
+                          )}-${formatTime(clip.end)}`
+                        : ""}
                     </span>
                   </button>
                 );
@@ -1008,31 +1013,6 @@ export default function SubtitleReviewPage() {
           <section className="flex min-h-0 min-w-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
             {selectedClip ? (
               <>
-                <div className="border-b border-neutral-300 px-4 py-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold uppercase text-sky-700">
-                        {clipLabel(selectedClip, review.clips)} ・ 選択clipのみ再生
-                      </p>
-                      <h2 className="mt-1 line-clamp-2 text-lg font-semibold">
-                        {selectedClipContentDraft?.title ?? selectedClip.title}
-                      </h2>
-                      <p className="mt-1 text-xs text-neutral-500">
-                        完成予定 {formatTime(clipDuration)} ・ 本編{" "}
-                        {formatTime(bodyDuration)} ・ 元動画{" "}
-                        {formatTime(selectedClip.start)} - {formatTime(selectedClip.end)}
-                      </p>
-                    </div>
-                    <button
-                      className="min-h-10 border border-neutral-300 bg-white px-3 text-sm font-medium"
-                      type="button"
-                      onClick={() => playFrom(selectedClip.start)}
-                    >
-                      先頭から再生
-                    </button>
-                  </div>
-                </div>
-
                 <div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto bg-neutral-100 p-3 sm:p-4">
                   <div
                     className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white"
@@ -1175,6 +1155,14 @@ export default function SubtitleReviewPage() {
                           onClick={togglePlayback}
                         >
                           {isPlaying ? "一時停止" : "再生"}
+                        </button>
+                        <button
+                          aria-label="clip先頭から再生"
+                          className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
+                          type="button"
+                          onClick={() => playFrom(selectedClip.start)}
+                        >
+                          先頭
                         </button>
                         <button
                           aria-label="5秒戻る"
