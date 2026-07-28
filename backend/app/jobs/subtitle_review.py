@@ -4,7 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle
@@ -46,6 +46,8 @@ class SubtitleReviewClip(BaseModel):
     title_edited: bool = Field(default=False, alias="titleEdited")
     hook_text: str = Field(default="", alias="hookText")
     hook_duration_seconds: float = Field(default=3.0, ge=1, le=8, alias="hookDurationSeconds")
+    hook_scene_start: float | None = Field(default=None, ge=0, alias="hookSceneStart")
+    hook_scene_end: float | None = Field(default=None, ge=0, alias="hookSceneEnd")
     title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
@@ -59,6 +61,22 @@ class SubtitleReviewClip(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    @model_validator(mode="after")
+    def validate_hook_scene(self) -> "SubtitleReviewClip":
+        hook_start = self.hook_scene_start
+        hook_end = self.hook_scene_end
+        if (hook_start is None) != (hook_end is None):
+            raise ValueError("hook scene requires both start and end")
+        if hook_start is None or hook_end is None:
+            return self
+        if self.type != "short":
+            raise ValueError("hook scene is only supported for short clips")
+        if not 0.5 <= hook_end - hook_start <= 3.0:
+            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        if hook_start < self.start - 0.001 or hook_end > self.end + 0.001:
+            raise ValueError("hook scene must stay within the selected clip")
+        return self
+
 
 class SubtitleReviewDocument(BaseModel):
     version: int = 1
@@ -67,6 +85,7 @@ class SubtitleReviewDocument(BaseModel):
     render_revision: int = Field(default=1, ge=1, alias="renderRevision")
     reopened_at: str | None = Field(default=None, alias="reopenedAt")
     source_video_url: str = Field(alias="sourceVideoUrl")
+    short_max_duration: float = Field(default=75.0, gt=0, alias="shortMaxDuration")
     clips: list[SubtitleReviewClip] = Field(default_factory=list)
     segments: list[SubtitleReviewSegment] = Field(default_factory=list)
     confirmed_clip_count: int = Field(default=0, ge=0, alias="confirmedClipCount")
@@ -127,6 +146,8 @@ def build_subtitle_review(
     job_id: str,
     selection: CandidateSelection,
     transcript_segments: Sequence[TranscriptSegment],
+    *,
+    short_max_duration: float = 75.0,
 ) -> SubtitleReviewDocument:
     selected_candidates = [*selection.normal_clips, *selection.shorts]
     clip_segment_indices: dict[str, list[int]] = {}
@@ -154,6 +175,8 @@ def build_subtitle_review(
                 originalTitle=_candidate_title(candidate, type_indices[candidate.type]),
                 hookText=candidate.hook_text or "",
                 hookDurationSeconds=candidate.hook_duration_seconds or 3.0,
+                hookSceneStart=candidate.hook_scene_start,
+                hookSceneEnd=candidate.hook_scene_end,
                 titleStyle=candidate.title_style,
                 hookStyle=candidate.hook_style,
                 subtitleStyle=candidate.subtitle_style,
@@ -185,6 +208,7 @@ def build_subtitle_review(
         SubtitleReviewDocument(
             jobId=job_id,
             sourceVideoUrl=f"/api/jobs/{job_id}/source-video",
+            shortMaxDuration=short_max_duration,
             clips=clips,
             segments=segments,
             createdAt=now,
@@ -295,6 +319,39 @@ def update_review_clip_content(
     return _refresh_counts(document)
 
 
+def update_review_hook_scene(
+    document: SubtitleReviewDocument,
+    clip_id: str,
+    *,
+    start: float | None,
+    end: float | None,
+) -> SubtitleReviewDocument:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+    if clip.type != "short":
+        raise ValueError("hook scene is only supported for short clips")
+    if (start is None) != (end is None):
+        raise ValueError("hook scene requires both start and end")
+    if start is not None and end is not None:
+        hook_duration = end - start
+        if not 0.5 <= hook_duration <= 3.0:
+            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        if start < clip.start - 0.001 or end > clip.end + 0.001:
+            raise ValueError("hook scene must stay within the selected clip")
+        if clip.duration + hook_duration > document.short_max_duration + 0.001:
+            raise ValueError(
+                "hook scene would exceed the configured short maximum duration"
+            )
+
+    if clip.hook_scene_start == start and clip.hook_scene_end == end:
+        return _refresh_counts(document)
+    clip.hook_scene_start = start
+    clip.hook_scene_end = end
+    clip.confirmed = False
+    return _refresh_counts(document)
+
+
 def confirm_review_clip(document: SubtitleReviewDocument, clip_id: str) -> SubtitleReviewDocument:
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
@@ -369,6 +426,8 @@ def apply_reviewed_clip_content(
         if candidate.type == "short":
             updates["hook_text"] = clip.hook_text or None
             updates["hook_duration_seconds"] = clip.hook_duration_seconds
+            updates["hook_scene_start"] = clip.hook_scene_start
+            updates["hook_scene_end"] = clip.hook_scene_end
             updates["title_style"] = clip.title_style
             updates["hook_style"] = clip.hook_style
         updates["subtitle_style"] = clip.subtitle_style
@@ -400,6 +459,11 @@ def write_subtitle_review_summary(
         "edited_segment_indices": [segment.index for segment in document.segments if segment.edited],
         "edited_title_clip_ids": [clip.id for clip in document.clips if clip.title_edited],
         "hook_clip_ids": [clip.id for clip in document.clips if clip.hook_text],
+        "hook_scene_clip_ids": [
+            clip.id
+            for clip in document.clips
+            if clip.hook_scene_start is not None and clip.hook_scene_end is not None
+        ],
         "timestamps_changed": False,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

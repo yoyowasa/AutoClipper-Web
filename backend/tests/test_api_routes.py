@@ -10,7 +10,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import Settings, get_settings
 from app.db import Base, get_db
-from app.jobs.queue import get_enqueue_job
+from app.jobs.queue import (
+    get_enqueue_job,
+    get_enqueue_subtitle_review_hook_scene_update,
+)
 from app.jobs.runner import run_dummy_autoclipper_job
 from app.jobs.status import SUCCESS_STATUSES
 from app.main import app
@@ -229,6 +232,26 @@ def test_completed_mp4_upload_reopens_matching_job_without_saving_copy(
     )
     assert repeated.status_code == 200
     assert client.get(f"/api/jobs/{job_id}/subtitle-review").json()["renderRevision"] == 2
+
+    queued_hook_updates: list[
+        tuple[str, str, float | None, float | None]
+    ] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = (
+        lambda: lambda queued_job_id, clip_id, start, end: queued_hook_updates.append(
+            (queued_job_id, clip_id, start, end)
+        )
+    )
+    hook_response = client.patch(
+        (
+            f"/api/jobs/{job_id}/subtitle-review/clips/"
+            f"{candidate_id}/hook-scene"
+        ),
+        json={"start": 2, "end": 4},
+    )
+
+    assert hook_response.status_code == 202
+    assert hook_response.json()["status"] == "preparing_subtitle_review"
+    assert queued_hook_updates == [(job_id, candidate_id, 2.0, 4.0)]
 
 
 def test_completed_mp4_upload_rejects_unknown_or_invalid_file(client: TestClient) -> None:

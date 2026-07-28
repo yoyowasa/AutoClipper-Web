@@ -17,11 +17,13 @@ from app.models import ExportItem, Job
 from app.render.crop_strategy import (
     CropLayout,
     CropStrategy,
+    SHORT_HEIGHT,
+    SHORT_WIDTH,
     build_center_crop_filter as _build_center_crop_filter,
     build_crop_filter,
     plan_short_crop,
 )
-from app.render.filters import loudnorm_filter
+from app.render.filters import ass_filter, loudnorm_filter
 from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center, detect_faces_for_clip
@@ -91,6 +93,115 @@ def _run_ffmpeg_command(command: list[str]) -> None:
     subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
+def _hook_scene_range(
+    start: float | None,
+    end: float | None,
+) -> tuple[float, float, float] | None:
+    if (start is None) != (end is None):
+        raise ValueError("hook scene requires both start and end")
+    if start is None or end is None:
+        return None
+    duration = end - start
+    if not 0.5 <= duration <= 3:
+        raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+    return start, end, duration
+
+
+def _labeled_crop_filter(
+    input_label: str,
+    output_label: str,
+    namespace: str,
+    *,
+    layout: CropStrategy,
+    source_width: int | None,
+    source_height: int | None,
+    face_center: tuple[float, float] | None,
+    speaker_center: tuple[float, float] | None,
+    person_center: tuple[float, float] | None,
+    subject_center: tuple[float, float] | None,
+) -> str:
+    if layout == "blur_background":
+        return (
+            f"[{input_label}]setpts=PTS-STARTPTS,"
+            f"split=2[{namespace}_bgsrc][{namespace}_fgsrc];"
+            f"[{namespace}_bgsrc]"
+            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
+            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT},gblur=sigma=24[{namespace}_bg];"
+            f"[{namespace}_fgsrc]"
+            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=decrease"
+            f"[{namespace}_fg];"
+            f"[{namespace}_bg][{namespace}_fg]"
+            f"overlay=(W-w)/2:(H-h)/2[{output_label}]"
+        )
+    crop_filter = build_crop_filter(
+        layout,
+        source_width=source_width,
+        source_height=source_height,
+        face_center=face_center,
+        speaker_center=speaker_center,
+        person_center=person_center,
+        subject_center=subject_center,
+    )
+    return (
+        f"[{input_label}]setpts=PTS-STARTPTS,{crop_filter}[{output_label}]"
+    )
+
+
+def _build_hook_prepend_filter(
+    *,
+    layout: CropStrategy,
+    subtitle_path: str | Path | None,
+    normalize_audio: bool,
+    source_width: int | None,
+    source_height: int | None,
+    face_center: tuple[float, float] | None,
+    speaker_center: tuple[float, float] | None,
+    person_center: tuple[float, float] | None,
+    subject_center: tuple[float, float] | None,
+) -> tuple[str, str, str]:
+    filters = [
+        _labeled_crop_filter(
+            "0:v:0",
+            "hook_v",
+            "hook",
+            layout=layout,
+            source_width=source_width,
+            source_height=source_height,
+            face_center=face_center,
+            speaker_center=speaker_center,
+            person_center=person_center,
+            subject_center=subject_center,
+        ),
+        _labeled_crop_filter(
+            "1:v:0",
+            "main_v",
+            "main",
+            layout=layout,
+            source_width=source_width,
+            source_height=source_height,
+            face_center=face_center,
+            speaker_center=speaker_center,
+            person_center=person_center,
+            subject_center=subject_center,
+        ),
+        "[0:a:0]aresample=48000,asetpts=PTS-STARTPTS[hook_a]",
+        "[1:a:0]aresample=48000,asetpts=PTS-STARTPTS[main_a]",
+        (
+            "[hook_v][hook_a][main_v][main_a]"
+            "concat=n=2:v=1:a=1[concat_v][concat_a]"
+        ),
+    ]
+    video_label = "concat_v"
+    if subtitle_path is not None:
+        filters.append(f"[concat_v]{ass_filter(subtitle_path)}[video_out]")
+        video_label = "video_out"
+    audio_label = "concat_a"
+    if normalize_audio:
+        filters.append(f"[concat_a]{loudnorm_filter()}[audio_out]")
+        audio_label = "audio_out"
+    return ";".join(filters), video_label, audio_label
+
+
 def build_render_short_command(
     input_path: str | Path,
     output_path: str | Path,
@@ -106,7 +217,58 @@ def build_render_short_command(
     speaker_center: tuple[float, float] | None = None,
     person_center: tuple[float, float] | None = None,
     subject_center: tuple[float, float] | None = None,
+    hook_scene_start: float | None = None,
+    hook_scene_end: float | None = None,
 ) -> list[str]:
+    hook_scene = _hook_scene_range(hook_scene_start, hook_scene_end)
+    if hook_scene is not None:
+        hook_start, _hook_end, hook_duration = hook_scene
+        filter_graph, video_label, audio_label = _build_hook_prepend_filter(
+            layout=layout,
+            subtitle_path=subtitle_path,
+            normalize_audio=normalize_audio,
+            source_width=source_width,
+            source_height=source_height,
+            face_center=face_center,
+            speaker_center=speaker_center,
+            person_center=person_center,
+            subject_center=subject_center,
+        )
+        return [
+            ffmpeg_bin,
+            "-y",
+            "-ss",
+            f"{hook_start:.3f}",
+            "-t",
+            f"{hook_duration:.3f}",
+            "-i",
+            str(input_path),
+            "-ss",
+            f"{start:.3f}",
+            "-t",
+            f"{_duration(start, end):.3f}",
+            "-i",
+            str(input_path),
+            "-filter_complex",
+            filter_graph,
+            "-map",
+            f"[{video_label}]",
+            "-map",
+            f"[{audio_label}]",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
     command = [
         ffmpeg_bin,
         "-y",
@@ -290,6 +452,8 @@ def render_short_clip(
     metadata_probe: MetadataProbe = probe_metadata,
     command_runner: ShortCommandRunner = _run_ffmpeg_command,
     dialogue_windows: Sequence[DialogueWindow] | None = None,
+    hook_scene_start: float | None = None,
+    hook_scene_end: float | None = None,
 ) -> ShortRenderResult:
     width, height = _source_dimensions(
         input_path,
@@ -369,6 +533,8 @@ def render_short_clip(
                 speaker_center=speaker_center if strategy == "speaker_tracking_crop" else None,
                 person_center=person_center if strategy == "person_tracking_crop" else None,
                 subject_center=subject_center if strategy == "subject_tracking_crop" else None,
+                hook_scene_start=hook_scene_start,
+                hook_scene_end=hook_scene_end,
             )
             command_runner(command)
             fallback_reason = crop_plan.fallback_reason
@@ -462,6 +628,14 @@ def _overlay_title_for_burn(candidate: Candidate, *, expected: bool, fallback_ti
     return (candidate.overlay_title or fallback_title).strip()
 
 
+def _candidate_hook_scene_duration(candidate: Candidate) -> float:
+    hook_scene = _hook_scene_range(
+        candidate.hook_scene_start,
+        candidate.hook_scene_end,
+    )
+    return 0.0 if hook_scene is None else hook_scene[2]
+
+
 def _write_export_metadata(
     path: Path,
     export_id: str,
@@ -490,6 +664,8 @@ def _write_export_metadata(
     overlay_title_rendered: bool,
     overlay_title_mode: str,
     hook_rendered: bool,
+    hook_scene_rendered: bool,
+    output_duration: float,
 ) -> Path:
     path.write_text(
         json.dumps(
@@ -506,6 +682,10 @@ def _write_export_metadata(
                 "hook_text": candidate.hook_text,
                 "hook_duration_seconds": candidate.hook_duration_seconds,
                 "hook_rendered": hook_rendered,
+                "hook_scene_start": candidate.hook_scene_start,
+                "hook_scene_end": candidate.hook_scene_end,
+                "hook_scene_duration": _candidate_hook_scene_duration(candidate),
+                "hook_scene_rendered": hook_scene_rendered,
                 "title_style": (
                     candidate.title_style.model_dump(by_alias=True)
                     if candidate.title_style
@@ -523,7 +703,8 @@ def _write_export_metadata(
                 ),
                 "start": candidate.start,
                 "end": candidate.end,
-                "duration": candidate.duration,
+                "duration": output_duration,
+                "body_duration": candidate.duration,
                 "original_start": candidate.original_start,
                 "original_end": candidate.original_end,
                 "refined_start": candidate.refined_start,
@@ -620,6 +801,9 @@ def render_selected_short_candidates(
     short_candidates = [candidate for candidate in selected_candidates if candidate.type == "short"]
     for index, candidate in enumerate(short_candidates, start=1):
         candidate = candidate_with_title(candidate, index=index, transcript_segments=transcript_segments)
+        hook_scene_duration = _candidate_hook_scene_duration(candidate)
+        output_duration = candidate.duration + hook_scene_duration
+        hook_scene_rendered = hook_scene_duration > 0
         overlay_expected = base_overlay_expected or (
             overlay_title_mode == "auto" and candidate.title_source == "manual_review"
         )
@@ -637,7 +821,7 @@ def render_selected_short_candidates(
                 and top_title
                 and (
                     not hook_rendered
-                    or (candidate.hook_duration_seconds or 3.0) < candidate.duration
+                    or (candidate.hook_duration_seconds or 3.0) < output_duration
                 )
             )
             if burn_subtitles:
@@ -651,18 +835,28 @@ def render_selected_short_candidates(
                     subtitle_settings=subtitle_settings,
                 )
 
+            render_kwargs: dict[str, Any] = {
+                "start": candidate.start,
+                "end": candidate.end,
+                "subtitle_path": subtitle_path,
+                "normalize_audio": normalize_audio,
+                "ffmpeg_bin": ffmpeg_bin,
+                "layout": layout,
+                "source_width": source_width,
+                "source_height": source_height,
+                "dialogue_windows": dialogue_windows_for_clip(
+                    candidate.start,
+                    candidate.end,
+                    transcript_segments,
+                ),
+            }
+            if hook_scene_rendered:
+                render_kwargs["hook_scene_start"] = candidate.hook_scene_start
+                render_kwargs["hook_scene_end"] = candidate.hook_scene_end
             render_result = renderer(
                 input_path,
                 output_path,
-                start=candidate.start,
-                end=candidate.end,
-                subtitle_path=subtitle_path,
-                normalize_audio=normalize_audio,
-                ffmpeg_bin=ffmpeg_bin,
-                layout=layout,
-                source_width=source_width,
-                source_height=source_height,
-                dialogue_windows=dialogue_windows_for_clip(candidate.start, candidate.end, transcript_segments),
+                **render_kwargs,
             )
             rendered_path = _rendered_path(render_result)
             _remove_autoload_sidecar(output_path, subtitle_path)
@@ -708,6 +902,8 @@ def render_selected_short_candidates(
                 overlay_title_rendered=overlay_rendered,
                 overlay_title_mode=overlay_title_mode,
                 hook_rendered=hook_rendered,
+                hook_scene_rendered=hook_scene_rendered,
+                output_duration=output_duration,
             )
 
             export = ExportItem(
@@ -717,7 +913,7 @@ def render_selected_short_candidates(
                 candidate_id=candidate.id,
                 type="short",
                 title=title,
-                duration=candidate.duration,
+                duration=output_duration,
                 score=_candidate_score(candidate),
                 video_path=str(rendered_path),
                 subtitle_path=str(subtitle_path) if subtitle_path is not None else None,

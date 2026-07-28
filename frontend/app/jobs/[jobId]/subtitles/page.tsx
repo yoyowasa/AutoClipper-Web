@@ -4,13 +4,16 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
 import { ClipTextStyleEditor } from "../../../../components/ClipTextStyleEditor";
 import {
   confirmSubtitleReviewClip,
   finalizeSubtitleReview,
+  getJobStatus,
   getSubtitleReview,
   toApiUrl,
   updateSubtitleReviewClipContent,
+  updateSubtitleReviewHookScene,
   updateSubtitleReviewSegment
 } from "../../../../lib/api";
 import {
@@ -128,6 +131,7 @@ export default function SubtitleReviewPage() {
   const [dirtySegmentIds, setDirtySegmentIds] = useState<Set<string>>(new Set());
   const [savingSegmentId, setSavingSegmentId] = useState<string | null>(null);
   const [savingClipContentId, setSavingClipContentId] = useState<string | null>(null);
+  const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
   const [confirmingClipId, setConfirmingClipId] = useState<string | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -182,11 +186,82 @@ export default function SubtitleReviewPage() {
     };
   }, [jobId]);
 
+  useEffect(() => {
+    if (!isUpdatingHookScene || !jobId) {
+      return;
+    }
+    let active = true;
+    const intervalId = window.setInterval(() => {
+      void getJobStatus(jobId)
+        .then(async (status) => {
+          if (!active) {
+            return;
+          }
+          if (status.status === "awaiting_subtitle_review") {
+            window.clearInterval(intervalId);
+            const document = await getSubtitleReview(jobId);
+            if (!active) {
+              return;
+            }
+            setReview(document);
+            setDrafts(
+              Object.fromEntries(
+                document.segments.map((segment) => [segment.id, segment.text])
+              )
+            );
+            setClipContentDrafts(
+              Object.fromEntries(
+                document.clips.map((clip) => [
+                  clip.id,
+                  contentDraftForClip(clip)
+                ])
+              )
+            );
+            setPreviewFallbackClipIds((current) => {
+              const next = new Set(current);
+              next.delete(selectedClipId);
+              return next;
+            });
+            setClipTime(0);
+            setIsPlayerReady(false);
+            setIsBuffering(true);
+            setIsUpdatingHookScene(false);
+            if (status.error) {
+              setError(status.error.message);
+            }
+          } else if (status.status === "failed") {
+            window.clearInterval(intervalId);
+            setIsUpdatingHookScene(false);
+            setError(
+              status.error?.message ?? "冒頭フック映像の更新に失敗しました"
+            );
+          }
+        })
+        .catch((caught) => {
+          if (!active) {
+            return;
+          }
+          window.clearInterval(intervalId);
+          setIsUpdatingHookScene(false);
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "冒頭フック映像の状態を取得できませんでした"
+          );
+        });
+    }, 1500);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [isUpdatingHookScene, jobId, selectedClipId]);
+
   const selectedClip = useMemo(
     () => review?.clips.find((clip) => clip.id === selectedClipId) ?? null,
     [review, selectedClipId]
   );
-  const isEditable = review?.state === "awaiting_review";
+  const isEditable =
+    review?.state === "awaiting_review" && !isUpdatingHookScene;
   const segmentsById = useMemo(
     () => new Map(review?.segments.map((segment) => [segment.id, segment]) ?? []),
     [review]
@@ -198,17 +273,29 @@ export default function SubtitleReviewPage() {
         .filter((segment): segment is SubtitleReviewSegment => Boolean(segment)) ?? [],
     [segmentsById, selectedClip]
   );
-  const clipDuration = selectedClip
+  const bodyDuration = selectedClip
     ? Math.max(0, selectedClip.end - selectedClip.start)
     : 0;
   const usesClipPreview = Boolean(
     selectedClip?.previewVideoUrl && !previewFallbackClipIds.has(selectedClip.id)
   );
+  const hookSceneDuration =
+    usesClipPreview &&
+    selectedClip?.hookSceneStart !== null &&
+    selectedClip?.hookSceneStart !== undefined &&
+    selectedClip.hookSceneEnd !== null &&
+    selectedClip.hookSceneEnd !== undefined
+      ? Math.max(0, selectedClip.hookSceneEnd - selectedClip.hookSceneStart)
+      : 0;
+  const clipDuration = bodyDuration + hookSceneDuration;
   const selectedVideoUrl = selectedClip
     ? usesClipPreview
       ? selectedClip.previewVideoUrl
       : review?.sourceVideoUrl
     : null;
+  const selectedPreviewVersion = selectedClip
+    ? `${selectedClip.hookSceneStart ?? "none"}-${selectedClip.hookSceneEnd ?? "none"}`
+    : "none";
   const selectedMediaStart = selectedClip
     ? usesClipPreview
       ? 0
@@ -261,7 +348,15 @@ export default function SubtitleReviewPage() {
         )
       : null;
   const absolutePlaybackTime = selectedClip
-    ? selectedClip.start + clipTime
+    ? hookSceneDuration > 0 &&
+      selectedClip.hookSceneStart !== null &&
+      selectedClip.hookSceneEnd !== null &&
+      clipTime < hookSceneDuration
+      ? Math.min(
+          selectedClip.hookSceneEnd,
+          selectedClip.hookSceneStart + clipTime
+        )
+      : selectedClip.start + Math.max(0, clipTime - hookSceneDuration)
     : 0;
   const activeSegment = useMemo(() => {
     if (!selectedClip) {
@@ -391,7 +486,8 @@ export default function SubtitleReviewPage() {
       selectedClip.start,
       Math.max(selectedClip.start, selectedClip.end - 0.05)
     );
-    const relativeTime = absoluteTime - selectedClip.start;
+    const relativeTime =
+      absoluteTime - selectedClip.start + hookSceneDuration;
     videoRef.current.currentTime = mediaTimeForClipTime(relativeTime);
     setClipTime(relativeTime);
     void videoRef.current.play();
@@ -628,6 +724,37 @@ export default function SubtitleReviewPage() {
     }
   }
 
+  async function saveHookScene(
+    start: number | null,
+    end: number | null
+  ) {
+    if (!selectedClip || selectedClip.type !== "short") {
+      return;
+    }
+    if (dirtySegmentIds.size > 0 || hasDirtyClipContent) {
+      setError(
+        "未保存のタイトル、フック文字、文字スタイル、または字幕を先に保存してください。"
+      );
+      return;
+    }
+    videoRef.current?.pause();
+    setError(null);
+    setIsUpdatingHookScene(true);
+    try {
+      await updateSubtitleReviewHookScene(jobId, selectedClip.id, {
+        start,
+        end
+      });
+    } catch (caught) {
+      setIsUpdatingHookScene(false);
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "冒頭フック映像を更新できませんでした"
+      );
+    }
+  }
+
   async function confirmSelectedClip() {
     if (!selectedClip || selectedClipHasDirtySegments || selectedClipHasDirtyContent) {
       setError("未保存のタイトル、フック、または字幕があります。先に保存してください。");
@@ -774,7 +901,7 @@ export default function SubtitleReviewPage() {
         ) : null}
         {openedFromReupload ? (
           <div className="border-l-4 border-emerald-600 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
-            完成MP4と元jobを照合しました。選択したclipのタイトル・フック・字幕を変更できます。
+            完成MP4と元jobを照合しました。選択したclipのタイトル・フック映像・文字スタイル・字幕を変更できます。
           </div>
         ) : null}
 
@@ -800,9 +927,10 @@ export default function SubtitleReviewPage() {
                 const contentDirty = isClipContentDirty(clip, clipContentDrafts);
                 return (
                   <button
-                    className={`block w-full border-b border-neutral-200 px-4 py-4 text-left ${
+                    className={`block w-full border-b border-neutral-200 px-4 py-4 text-left disabled:cursor-wait disabled:opacity-60 ${
                       clip.id === selectedClipId ? "bg-neutral-950 text-white" : "bg-white"
                     }`}
+                    disabled={isUpdatingHookScene}
                     key={clip.id}
                     type="button"
                     onClick={() => selectClip(clip)}
@@ -838,6 +966,12 @@ export default function SubtitleReviewPage() {
                       }`}
                     >
                       clip長 {formatTime(clip.duration)} ・ {clip.segmentIds.length}字幕
+                      {clip.hookSceneStart !== null &&
+                      clip.hookSceneEnd !== null
+                        ? ` ・ 冒頭複製${formatTime(
+                            clip.hookSceneEnd - clip.hookSceneStart
+                          )}`
+                        : ""}
                       {clip.editedSegmentCount > 0
                         ? ` ・ 修正${clip.editedSegmentCount}件`
                         : ""}
@@ -861,7 +995,8 @@ export default function SubtitleReviewPage() {
                         {selectedClipContentDraft?.title ?? selectedClip.title}
                       </h2>
                       <p className="mt-1 text-xs text-neutral-500">
-                        clip長 {formatTime(clipDuration)} ・ 元動画{" "}
+                        完成予定 {formatTime(clipDuration)} ・ 本編{" "}
+                        {formatTime(bodyDuration)} ・ 元動画{" "}
                         {formatTime(selectedClip.start)} - {formatTime(selectedClip.end)}
                       </p>
                     </div>
@@ -883,11 +1018,19 @@ export default function SubtitleReviewPage() {
                     <div className="relative" style={{ containerType: "inline-size" }}>
                       <video
                         className="aspect-video w-full cursor-pointer bg-black object-contain lg:max-h-[calc(100vh-30rem)] lg:min-h-[220px]"
-                        key={`${selectedClip.id}:${selectedVideoUrl ?? ""}`}
+                        key={`${selectedClip.id}:${selectedVideoUrl ?? ""}:${selectedPreviewVersion}`}
                         playsInline
                         preload="metadata"
                         ref={videoRef}
-                        src={selectedVideoUrl ? toApiUrl(selectedVideoUrl) : undefined}
+                        src={
+                          selectedVideoUrl
+                            ? `${toApiUrl(selectedVideoUrl)}${
+                                usesClipPreview
+                                  ? `?v=${encodeURIComponent(selectedPreviewVersion)}`
+                                  : ""
+                              }`
+                            : undefined
+                        }
                         onCanPlay={() => {
                           setIsBuffering(false);
                           setIsPlayerReady(true);
@@ -1199,6 +1342,31 @@ export default function SubtitleReviewPage() {
                   </button>
                 </div>
 
+                {selectedClip.type === "short" ? (
+                  <>
+                    {dirtySegmentIds.size > 0 || hasDirtyClipContent ? (
+                      <div className="border-b border-amber-300 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
+                        フック映像を変更する前に、未保存の文字設定と字幕を保存してください。
+                      </div>
+                    ) : null}
+                    <ClipHookSceneEditor
+                      clip={selectedClip}
+                      disabled={
+                        !isEditable ||
+                        dirtySegmentIds.size > 0 ||
+                        hasDirtyClipContent
+                      }
+                      key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
+                      playheadSourceTime={absolutePlaybackTime}
+                      saving={isUpdatingHookScene}
+                      shortMaxDuration={review.shortMaxDuration}
+                      onSave={(start, end) =>
+                        void saveHookScene(start, end)
+                      }
+                    />
+                  </>
+                ) : null}
+
                 <div className="border-b border-neutral-300 bg-white px-4 py-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -1225,7 +1393,9 @@ export default function SubtitleReviewPage() {
                       const isSaving = savingSegmentId === segment.id;
                       const isActive = activeSegmentId === segment.id;
                       const relativeStart = clamp(
-                        segment.start - selectedClip.start,
+                        segment.start -
+                          selectedClip.start +
+                          hookSceneDuration,
                         0,
                         clipDuration
                       );

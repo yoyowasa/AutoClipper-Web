@@ -160,6 +160,36 @@ def test_short_hook_can_render_when_overlay_title_is_disabled() -> None:
     assert "Dialogue: 1," not in ass
 
 
+def test_hook_scene_duplicates_subtitles_and_shifts_body_timeline() -> None:
+    candidate = make_candidate(
+        "short_1",
+        "short",
+        10.0,
+        20.0,
+        overlay_title="タイトル",
+    ).model_copy(
+        update={
+            "hook_scene_start": 14.0,
+            "hook_scene_end": 16.0,
+        }
+    )
+    segments = [
+        TranscriptSegment(start=10.0, end=12.0, text="本編冒頭"),
+        TranscriptSegment(start=14.0, end=16.0, text="見せ場"),
+    ]
+
+    ass = build_ass_document(
+        candidate,
+        segments,
+        layout=SubtitleLayout.short(),
+    )
+
+    assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle,,0,0,0,,見せ場" in ass
+    assert "Dialogue: 0,0:00:02.00,0:00:04.00,Subtitle,,0,0,0,,本編冒頭" in ass
+    assert "Dialogue: 0,0:00:06.00,0:00:08.00,Subtitle,,0,0,0,,見せ場" in ass
+    assert "Dialogue: 1,0:00:00.00,0:00:12.00,Title,," in ass
+
+
 def test_short_subtitle_style_defaults_remain_stable() -> None:
     candidate = make_candidate("short_1", "short", 0.0, 4.0, overlay_title="Top title")
     segments = [TranscriptSegment(start=0.0, end=4.0, text="short subtitle")]

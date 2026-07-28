@@ -3,6 +3,7 @@ import type {
   ClipPlanActionResponse,
   ClipPlanBoundaryUpdateRequest,
   ClipPlanDocument,
+  ClipPlanHookSceneUpdateRequest,
   ClipPlanReselectionRequest,
   ClipPlanTranscriptSegment,
   ClipSettings,
@@ -238,6 +239,24 @@ export async function updateClipPlanBoundary(
   return parseJsonResponse<ClipPlanActionResponse>(response);
 }
 
+export async function updateClipPlanHookScene(
+  jobId: string,
+  clipId: string,
+  hookScene: ClipPlanHookSceneUpdateRequest
+): Promise<ClipPlanActionResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/clip-plan/clips/${clipId}/hook-scene`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(hookScene)
+    }
+  );
+  return parseJsonResponse<ClipPlanActionResponse>(response);
+}
+
 export async function getClipPlanTranscriptSegments(
   jobId: string,
   clipId: string,
@@ -325,6 +344,24 @@ export async function updateSubtitleReviewClipContent(
     }
   );
   return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function updateSubtitleReviewHookScene(
+  jobId: string,
+  clipId: string,
+  hookScene: ClipPlanHookSceneUpdateRequest
+): Promise<ClipPlanActionResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/hook-scene`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(hookScene)
+    }
+  );
+  return parseJsonResponse<ClipPlanActionResponse>(response);
 }
 
 export async function confirmSubtitleReviewClip(

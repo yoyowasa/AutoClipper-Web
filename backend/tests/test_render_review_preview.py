@@ -25,6 +25,34 @@ def test_review_preview_command_builds_small_browser_ready_mp4(tmp_path: Path) -
     assert command[-1] == str(output_path)
 
 
+def test_review_preview_command_prepends_hook_scene() -> None:
+    command = render_review_preview.build_review_preview_command(
+        "source.mp4",
+        "preview.mp4",
+        start=60.0,
+        duration=15.0,
+        hook_start=68.0,
+        hook_duration=2.0,
+    )
+
+    seek_values = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "-ss"
+    ]
+    duration_values = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "-t"
+    ]
+    filter_graph = command[command.index("-filter_complex") + 1]
+
+    assert seek_values == ["68.000000", "60.000000"]
+    assert duration_values == ["2.000000", "15.000000"]
+    assert "concat=n=2:v=1:a=1[video][audio]" in filter_graph
+    assert command.count("-i") == 2
+
+
 def test_review_preview_render_replaces_target_atomically(
     tmp_path: Path,
     monkeypatch,

@@ -547,6 +547,23 @@ class ClipPlanBoundaryUpdateRequest(BaseModel):
         return self
 
 
+class ClipPlanHookSceneUpdateRequest(BaseModel):
+    start: float | None = Field(default=None, ge=0)
+    end: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ClipPlanHookSceneUpdateRequest":
+        if (self.start is None) != (self.end is None):
+            raise ValueError("hook scene requires both start and end")
+        if self.start is None or self.end is None:
+            return self
+        if self.end <= self.start:
+            raise ValueError("hook scene end must be greater than start")
+        if not 0.5 <= self.end - self.start <= 3:
+            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        return self
+
+
 class ClipPlanActionResponse(BaseModel):
     job_id: str = Field(alias="jobId")
     status: JobStatus

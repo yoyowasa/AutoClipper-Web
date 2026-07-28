@@ -26,6 +26,7 @@ from app.render.crop_strategy import (
 )
 from app.render.render_short import (
     ShortRenderResult,
+    build_render_short_command,
     render_selected_short_candidates,
     render_short_clip,
 )
@@ -204,6 +205,35 @@ def reliable_person_detection() -> PersonDetection:
         detection_count=3,
         box=(0.61, 0.26, 0.83, 0.78),
     )
+
+
+def test_short_render_command_prepends_hook_scene_before_body() -> None:
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=60.0,
+        end=75.0,
+        layout="center_crop",
+        hook_scene_start=68.0,
+        hook_scene_end=70.0,
+    )
+
+    seek_values = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "-ss"
+    ]
+    duration_values = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "-t"
+    ]
+    filter_graph = command[command.index("-filter_complex") + 1]
+
+    assert seek_values == ["68.000", "60.000"]
+    assert duration_values == ["2.000", "15.000"]
+    assert "[hook_v][hook_a][main_v][main_a]concat=n=2:v=1:a=1" in filter_graph
+    assert command.count("-i") == 2
 
 
 def reliable_speaker_detection() -> SpeakerDetection:
@@ -840,7 +870,12 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
         return ShortRenderResult(path=Path(output_path), strategy="center_crop")
 
     candidates = [
-        make_short("cand_short_1", 0.0, 45.0, "First short", 93.0),
+        make_short("cand_short_1", 0.0, 45.0, "First short", 93.0).model_copy(
+            update={
+                "hook_scene_start": 5.0,
+                "hook_scene_end": 7.0,
+            }
+        ),
         make_short("cand_short_fail", 50.0, 95.0, "Broken short", 90.0),
         make_short("cand_short_2", 100.0, 145.0, "Second short", 84.0),
         Candidate(
@@ -886,6 +921,8 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert all(call["subtitle_path"] is not None for call in renderer_calls)
     assert all(call["layout"] == "auto" for call in renderer_calls)
     assert all(call["source_width"] == 1920 for call in renderer_calls)
+    assert renderer_calls[0]["hook_scene_start"] == 5.0
+    assert renderer_calls[0]["hook_scene_end"] == 7.0
 
     shorts_dir = storage.outputs / created["jobId"] / "shorts"
     subtitle_dir = storage.outputs / created["jobId"] / "subtitles" / "shorts"
@@ -898,6 +935,12 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert short_metadata["title"] == "First short"
     assert short_metadata["overlay_title"] == "First short overlay"
     assert short_metadata["title_source"] == "existing"
+    assert short_metadata["duration"] == 47.0
+    assert short_metadata["body_duration"] == 45.0
+    assert short_metadata["hook_scene_start"] == 5.0
+    assert short_metadata["hook_scene_end"] == 7.0
+    assert short_metadata["hook_scene_duration"] == 2.0
+    assert short_metadata["hook_scene_rendered"] is True
     assert "original_start" in short_metadata
     assert "refined_start" in short_metadata
     assert "boundary_refined" in short_metadata
@@ -916,6 +959,7 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert "speaker_region_box" in short_metadata
     assert renderer_calls[0]["dialogue_windows"]
     assert isinstance(renderer_calls[0]["dialogue_windows"][0], DialogueWindow)
+    assert result.exports[0].duration == 47.0
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200
