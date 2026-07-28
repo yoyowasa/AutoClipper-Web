@@ -20,13 +20,26 @@ import type { ClipTextStyle, ExportType } from "../lib/types";
 type ClipTextStyles = Record<ClipTextTarget, ClipTextStyle | null>;
 
 type ClipTextStyleEditorProps = {
+  activeTarget?: ClipTextTarget;
   clipType: ExportType;
   disabled?: boolean;
+  hidePreview?: boolean;
+  layout?: "stacked" | "wide";
   styles: ClipTextStyles;
   titleText: string;
   hookText: string;
   subtitleText: string;
+  onActiveTargetChange?: (target: ClipTextTarget) => void;
   onChange: (target: ClipTextTarget, style: ClipTextStyle | null) => void;
+};
+
+type ClipTextStylePreviewProps = {
+  clipType: ExportType;
+  hookText: string;
+  styles: ClipTextStyles;
+  subtitleText: string;
+  target: ClipTextTarget;
+  titleText: string;
 };
 
 const TARGET_LABELS: Record<ClipTextTarget, string> = {
@@ -110,20 +123,104 @@ function sampleText(
   return subtitleText.trim() || "字幕の位置と見た目を確認";
 }
 
+export function ClipTextStylePreview({
+  clipType,
+  hookText,
+  styles,
+  subtitleText,
+  target,
+  titleText
+}: ClipTextStylePreviewProps) {
+  const availableTargets: ClipTextTarget[] =
+    clipType === "short" ? ["title", "hook", "subtitle"] : ["subtitle"];
+  const resolvedTarget = availableTargets.includes(target) ? target : availableTargets[0];
+  const style = resolvedClipTextStyle(styles[resolvedTarget], resolvedTarget, clipType);
+  const verticalPresets = verticalPositionPresets(clipType);
+  const selectedVerticalPreset = matchingPositionPreset(
+    verticalPresets,
+    style.yPercent
+  );
+  const previewText = sampleText(
+    resolvedTarget,
+    titleText,
+    hookText,
+    subtitleText
+  );
+  const outputWidthPercent = clipType === "short" ? 10.8 : 19.2;
+  const previewFontSizePercent = style.fontSize / outputWidthPercent;
+  const previewOutlinePercent = style.outlineWidth / outputWidthPercent;
+
+  return (
+    <div
+      aria-label={`${TARGET_LABELS[resolvedTarget]}配置プレビュー`}
+      className={`relative w-full overflow-hidden border border-neutral-400 bg-[#25343A] ${
+        clipType === "short" ? "aspect-[9/16]" : "aspect-video"
+      }`}
+      style={{ containerType: "inline-size" }}
+    >
+      <div className="absolute inset-y-0 right-0 w-[36%] bg-[#82959C]" />
+      <div className="absolute bottom-0 left-0 h-[18%] w-full bg-[#111A1E]" />
+      {verticalPresets.map((preset) => {
+        const selected = selectedVerticalPreset?.id === preset.id;
+        return (
+          <div
+            aria-hidden="true"
+            className={`absolute left-0 w-full border-t ${
+              selected ? "border-sky-300" : "border-white/10"
+            }`}
+            key={preset.id}
+            style={{ top: `${preset.percent}%` }}
+          >
+            {selected ? (
+              <span className="absolute left-1 top-0 bg-sky-700/90 px-1 py-0.5 text-[8px] font-semibold text-white">
+                {preset.label}
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+      <p
+        className="absolute m-0 max-w-[90%] whitespace-pre-line text-center leading-[1.2]"
+        style={{
+          color: style.primaryColor,
+          fontFamily: clipTextFontFamily(style.fontPreset),
+          fontSize: `clamp(4px, ${previewFontSizePercent}cqw, 52px)`,
+          fontWeight: clipTextFontWeight(style.fontPreset),
+          left: `${style.xPercent}%`,
+          top: `${style.yPercent}%`,
+          transform: "translate(-50%, -50%)",
+          WebkitTextStroke: `clamp(0px, ${previewOutlinePercent}cqw, 4px) ${style.outlineColor}`,
+          textShadow: `0 2px 2px ${style.outlineColor}`
+        }}
+      >
+        {previewText}
+      </p>
+    </div>
+  );
+}
+
 export function ClipTextStyleEditor({
+  activeTarget,
   clipType,
   disabled = false,
+  hidePreview = false,
+  layout = "stacked",
   styles,
   titleText,
   hookText,
   subtitleText,
+  onActiveTargetChange,
   onChange
 }: ClipTextStyleEditorProps) {
-  const [target, setTarget] = useState<ClipTextTarget>(
+  const [internalTarget, setInternalTarget] = useState<ClipTextTarget>(
     clipType === "short" ? "title" : "subtitle"
   );
   const availableTargets: ClipTextTarget[] =
     clipType === "short" ? ["title", "hook", "subtitle"] : ["subtitle"];
+  const requestedTarget = activeTarget ?? internalTarget;
+  const target = availableTargets.includes(requestedTarget)
+    ? requestedTarget
+    : availableTargets[0];
   const storedStyle = styles[target];
   const style = resolvedClipTextStyle(storedStyle, target, clipType);
   const verticalPresets = verticalPositionPresets(clipType);
@@ -140,13 +237,16 @@ export function ClipTextStyleEditor({
     style.xPercent,
     style.yPercent
   );
-  const previewText = sampleText(target, titleText, hookText, subtitleText);
-  const outputWidthPercent = clipType === "short" ? 10.8 : 19.2;
-  const previewFontSizePercent = style.fontSize / outputWidthPercent;
-  const previewOutlinePercent = style.outlineWidth / outputWidthPercent;
 
   function updateStyle(patch: Partial<ClipTextStyle>) {
     onChange(target, { ...style, ...patch });
+  }
+
+  function selectTarget(nextTarget: ClipTextTarget) {
+    if (activeTarget === undefined) {
+      setInternalTarget(nextTarget);
+    }
+    onActiveTargetChange?.(nextTarget);
   }
 
   function applyUsagePreset(preset: UsagePreset) {
@@ -158,7 +258,11 @@ export function ClipTextStyleEditor({
   }
 
   return (
-    <section className="mt-4 border-t border-neutral-300 pt-4">
+    <section
+      className={
+        layout === "wide" ? "min-w-0" : "mt-4 border-t border-neutral-300 pt-4"
+      }
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h4 className="text-sm font-semibold text-neutral-950">文字スタイル</h4>
@@ -220,7 +324,7 @@ export function ClipTextStyleEditor({
             disabled={disabled}
             key={item}
             type="button"
-            onClick={() => setTarget(item)}
+            onClick={() => selectTarget(item)}
           >
             {TARGET_LABELS[item]}
           </button>
@@ -269,53 +373,24 @@ export function ClipTextStyleEditor({
         </p>
       </div>
 
-      <div className="mt-3 flex justify-center bg-neutral-100 p-3">
-        <div
-          aria-label={`${TARGET_LABELS[target]}配置プレビュー`}
-          className={`relative w-full max-w-[230px] overflow-hidden border border-neutral-400 bg-[#25343A] ${
-            clipType === "short" ? "aspect-[9/16]" : "aspect-video max-w-md"
-          }`}
-          style={{ containerType: "inline-size" }}
-        >
-          <div className="absolute inset-y-0 right-0 w-[36%] bg-[#82959C]" />
-          <div className="absolute bottom-0 left-0 h-[18%] w-full bg-[#111A1E]" />
-          {verticalPresets.map((preset) => {
-            const selected = selectedVerticalPreset?.id === preset.id;
-            return (
-              <div
-                aria-hidden="true"
-                className={`absolute left-0 w-full border-t ${
-                  selected ? "border-sky-300" : "border-white/10"
-                }`}
-                key={preset.id}
-                style={{ top: `${preset.percent}%` }}
-              >
-                {selected ? (
-                  <span className="absolute left-1 top-0 bg-sky-700/90 px-1 py-0.5 text-[8px] font-semibold text-white">
-                    {preset.label}
-                  </span>
-                ) : null}
-              </div>
-            );
-          })}
-          <p
-            className="absolute m-0 max-w-[90%] whitespace-pre-line text-center leading-[1.2]"
-            style={{
-              color: style.primaryColor,
-              fontFamily: clipTextFontFamily(style.fontPreset),
-              fontSize: `clamp(4px, ${previewFontSizePercent}cqw, 52px)`,
-              fontWeight: clipTextFontWeight(style.fontPreset),
-              left: `${style.xPercent}%`,
-              top: `${style.yPercent}%`,
-              transform: "translate(-50%, -50%)",
-              WebkitTextStroke: `clamp(0px, ${previewOutlinePercent}cqw, 4px) ${style.outlineColor}`,
-              textShadow: `0 2px 2px ${style.outlineColor}`
-            }}
+      {!hidePreview ? (
+        <div className="mt-3 flex justify-center bg-neutral-100 p-3">
+          <div
+            className={
+              clipType === "short" ? "w-full max-w-[230px]" : "w-full max-w-md"
+            }
           >
-            {previewText}
-          </p>
+            <ClipTextStylePreview
+              clipType={clipType}
+              hookText={hookText}
+              styles={styles}
+              subtitleText={subtitleText}
+              target={target}
+              titleText={titleText}
+            />
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {clipType === "short" ? (
         <fieldset className="mt-4">

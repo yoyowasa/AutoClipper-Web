@@ -5,7 +5,10 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
-import { ClipTextStyleEditor } from "../../../../components/ClipTextStyleEditor";
+import {
+  ClipTextStyleEditor,
+  ClipTextStylePreview
+} from "../../../../components/ClipTextStyleEditor";
 import {
   confirmSubtitleReviewClip,
   finalizeSubtitleReview,
@@ -65,6 +68,8 @@ type ClipContentDraft = {
   hookStyle: ClipTextStyle | null;
   subtitleStyle: ClipTextStyle | null;
 };
+
+type ReviewSettingsTab = "content" | "style" | "subtitles" | "hook";
 
 function contentDraftForClip(clip: SubtitleReviewClip): ClipContentDraft {
   return {
@@ -145,6 +150,9 @@ export default function SubtitleReviewPage() {
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [settingsTab, setSettingsTab] =
+    useState<ReviewSettingsTab>("subtitles");
+  const [styleTarget, setStyleTarget] = useState<ClipTextTarget>("title");
   const [error, setError] = useState<string | null>(null);
   const [openedFromReupload, setOpenedFromReupload] = useState(false);
 
@@ -260,6 +268,8 @@ export default function SubtitleReviewPage() {
     () => review?.clips.find((clip) => clip.id === selectedClipId) ?? null,
     [review, selectedClipId]
   );
+  const activeStyleTarget: ClipTextTarget =
+    selectedClip?.type === "normal" ? "subtitle" : styleTarget;
   const isEditable =
     review?.state === "awaiting_review" && !isUpdatingHookScene;
   const segmentsById = useMemo(
@@ -458,6 +468,10 @@ export default function SubtitleReviewPage() {
     setIsPlayerReady(false);
     setVideoLoadSeconds(0);
     setSelectedClipId(clip.id);
+    setStyleTarget(clip.type === "short" ? "title" : "subtitle");
+    if (clip.type !== "short" && settingsTab === "hook") {
+      setSettingsTab("subtitles");
+    }
     setError(null);
   }
 
@@ -904,7 +918,7 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
-        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-14rem)] lg:min-h-[560px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_430px]">
+        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-10rem)] lg:min-h-[650px] lg:grid-cols-[230px_minmax(0,1fr)_390px] lg:grid-rows-[minmax(480px,1fr)_170px] xl:grid-cols-[260px_minmax(0,1fr)_430px]">
           <aside className="flex min-h-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
             <div className="border-b border-neutral-200 px-4 py-4">
               <p className="text-sm font-semibold">生成予定clip</p>
@@ -984,31 +998,6 @@ export default function SubtitleReviewPage() {
           <section className="flex min-h-0 min-w-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
             {selectedClip ? (
               <>
-                <div className="border-b border-neutral-300 px-4 py-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold uppercase text-sky-700">
-                        {clipLabel(selectedClip, review.clips)} ・ 選択clipのみ再生
-                      </p>
-                      <h2 className="mt-1 line-clamp-2 text-lg font-semibold">
-                        {selectedClipContentDraft?.title ?? selectedClip.title}
-                      </h2>
-                      <p className="mt-1 text-xs text-neutral-500">
-                        完成予定 {formatTime(clipDuration)} ・ 本編{" "}
-                        {formatTime(bodyDuration)} ・ 元動画{" "}
-                        {formatTime(selectedClip.start)} - {formatTime(selectedClip.end)}
-                      </p>
-                    </div>
-                    <button
-                      className="min-h-10 border border-neutral-300 bg-white px-3 text-sm font-medium"
-                      type="button"
-                      onClick={() => playFrom(selectedClip.start)}
-                    >
-                      先頭から再生
-                    </button>
-                  </div>
-                </div>
-
                 <div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto bg-neutral-100 p-3 sm:p-4">
                   <div
                     className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white"
@@ -1219,12 +1208,205 @@ export default function SubtitleReviewPage() {
             ) : null}
           </section>
 
-          <section className="flex min-h-0 flex-col overflow-y-auto overscroll-contain">
+          <aside className="flex min-h-0 flex-col border-b border-neutral-300 lg:border-b-0">
             {selectedClip ? (
               <>
+                <div className="border-b border-neutral-300 px-4 py-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold uppercase text-sky-700">
+                        {clipLabel(selectedClip, review.clips)} ・ 選択clipのみ再生
+                      </p>
+                      <h2 className="mt-1 line-clamp-2 text-base font-semibold">
+                        {selectedClipContentDraft?.title ?? selectedClip.title}
+                      </h2>
+                      <p className="mt-1 text-[11px] text-neutral-500">
+                        完成予定 {formatTime(clipDuration)} ・ 本編{" "}
+                        {formatTime(bodyDuration)}
+                      </p>
+                    </div>
+                    {selectedClipHasDirtyContent ? (
+                      <span className="shrink-0 bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800">
+                        未保存
+                      </span>
+                    ) : selectedClip.confirmed ? (
+                      <span className="shrink-0 bg-emerald-100 px-2 py-1 text-[11px] font-semibold text-emerald-800">
+                        確認済み
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="mt-1 text-[11px] text-neutral-500">
+                    元動画 {formatTime(selectedClip.start)} -{" "}
+                    {formatTime(selectedClip.end)}
+                  </p>
+                  <button
+                    className="mt-2 min-h-9 w-full border border-neutral-300 bg-white px-3 text-xs font-semibold"
+                    type="button"
+                    onClick={() => playFrom(selectedClip.start)}
+                  >
+                    先頭から再生
+                  </button>
+                </div>
+
+                <div className="flex min-h-0 flex-1 flex-col bg-neutral-50 px-4 py-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-semibold">文字プレビュー</h3>
+                      <p className="mt-0.5 text-[10px] text-neutral-500">
+                        設定変更をすぐ反映
+                      </p>
+                    </div>
+                    <div
+                      aria-label="文字プレビューの対象"
+                      className="flex border border-neutral-300 bg-white p-0.5"
+                      role="group"
+                    >
+                      {(selectedClip.type === "short"
+                        ? (["title", "hook", "subtitle"] as ClipTextTarget[])
+                        : (["subtitle"] as ClipTextTarget[])
+                      ).map((target) => (
+                        <button
+                          aria-pressed={activeStyleTarget === target}
+                          className={`min-h-7 px-2 text-[10px] font-semibold ${
+                            activeStyleTarget === target
+                              ? "bg-neutral-950 text-white"
+                              : "text-neutral-600"
+                          }`}
+                          key={target}
+                          type="button"
+                          onClick={() => {
+                            setStyleTarget(target);
+                            setSettingsTab("style");
+                          }}
+                        >
+                          {target === "title"
+                            ? "タイトル"
+                            : target === "hook"
+                              ? "フック"
+                              : "字幕"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-3 flex min-h-0 flex-1 items-start justify-center overflow-y-auto">
+                    <div
+                      className={
+                        selectedClip.type === "short"
+                          ? "w-full max-w-[190px]"
+                          : "w-full max-w-[330px]"
+                      }
+                    >
+                      <ClipTextStylePreview
+                        clipType={selectedClip.type}
+                        hookText={selectedClipContentDraft?.hookText ?? ""}
+                        styles={{
+                          title: selectedClipContentDraft?.titleStyle ?? null,
+                          hook: selectedClipContentDraft?.hookStyle ?? null,
+                          subtitle: selectedClipContentDraft?.subtitleStyle ?? null
+                        }}
+                        subtitleText={
+                          activeSubtitleText ||
+                          (selectedSegments[0]
+                            ? drafts[selectedSegments[0].id] ??
+                              selectedSegments[0].text
+                            : "")
+                        }
+                        target={activeStyleTarget}
+                        titleText={selectedClipContentDraft?.title ?? ""}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </aside>
+
+          <section className="flex min-h-0 flex-col overflow-hidden border-t border-neutral-300 lg:col-span-3 lg:row-start-2">
+            {selectedClip ? (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-300 bg-neutral-50 px-3 py-2">
+                  <div
+                    aria-label="設定項目"
+                    className="flex flex-wrap border border-neutral-300 bg-white p-0.5"
+                    role="tablist"
+                  >
+                    {(
+                      [
+                        ["subtitles", `字幕 ${selectedSegments.length}件`],
+                        ["content", "タイトル・フック"],
+                        ["style", "文字スタイル"],
+                        ...(selectedClip.type === "short"
+                          ? ([["hook", "フック映像"]] as Array<
+                              [ReviewSettingsTab, string]
+                            >)
+                          : [])
+                      ] as Array<[ReviewSettingsTab, string]>
+                    ).map(([tab, label]) => (
+                      <button
+                        aria-selected={settingsTab === tab}
+                        className={`min-h-8 px-3 text-xs font-semibold ${
+                          settingsTab === tab
+                            ? "bg-neutral-950 text-white"
+                            : "text-neutral-600"
+                        }`}
+                        key={tab}
+                        role="tab"
+                        type="button"
+                        onClick={() => {
+                          setSettingsTab(tab);
+                          if (tab === "subtitles") {
+                            setStyleTarget("subtitle");
+                          } else if (
+                            tab === "content" &&
+                            selectedClip.type === "short"
+                          ) {
+                            setStyleTarget("title");
+                          }
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-end gap-3">
+                    <p className="max-w-md text-right text-[11px] text-neutral-600">
+                      {selectedClip.confirmed
+                        ? "確認済み。編集すると未確認へ戻ります。"
+                        : selectedClipHasDirtySegments ||
+                            selectedClipHasDirtyContent
+                          ? "未保存の変更があります。"
+                          : "動画と字幕を確認したら完了にします。"}
+                    </p>
+                    <button
+                      className="min-h-9 bg-sky-700 px-4 text-xs font-semibold text-white disabled:bg-neutral-300"
+                      disabled={
+                        selectedClip.confirmed ||
+                        !isEditable ||
+                        selectedClipHasDirtySegments ||
+                        selectedClipHasDirtyContent ||
+                        confirmingClipId === selectedClip.id
+                      }
+                      type="button"
+                      onClick={() => void confirmSelectedClip()}
+                    >
+                      {confirmingClipId === selectedClip.id
+                        ? "確認中"
+                        : selectedClip.confirmed
+                          ? "確認済み"
+                          : "このclipを確認済みにする"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                {settingsTab === "content" || settingsTab === "style" ? (
                 <div className="border-b border-neutral-300 bg-neutral-50 px-4 py-4">
                   <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-base font-semibold">タイトル・フック</h3>
+                    <h3 className="text-base font-semibold">
+                      {settingsTab === "content"
+                        ? "タイトル・フック"
+                        : "文字スタイル"}
+                    </h3>
                     {selectedClipHasDirtyContent ? (
                       <span className="bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800">
                         未保存
@@ -1236,6 +1418,8 @@ export default function SubtitleReviewPage() {
                     ) : null}
                   </div>
 
+                  {settingsTab === "content" ? (
+                    <>
                   <label className="mt-3 block text-xs font-semibold text-neutral-700">
                     表示タイトル
                     <input
@@ -1244,6 +1428,7 @@ export default function SubtitleReviewPage() {
                       maxLength={80}
                       type="text"
                       value={selectedClipContentDraft?.title ?? ""}
+                      onFocus={() => setStyleTarget("title")}
                       onChange={(event) =>
                         updateClipContentDraft(selectedClip.id, {
                           title: event.target.value
@@ -1265,6 +1450,7 @@ export default function SubtitleReviewPage() {
                           maxLength={120}
                           placeholder="空欄ならフックを表示しません"
                           value={selectedClipContentDraft?.hookText ?? ""}
+                          onFocus={() => setStyleTarget("hook")}
                           onChange={(event) =>
                             updateClipContentDraft(selectedClip.id, {
                               hookText: event.target.value
@@ -1302,12 +1488,18 @@ export default function SubtitleReviewPage() {
                       ) : null}
                     </>
                   ) : null}
+                    </>
+                  ) : null}
 
-                  <ClipTextStyleEditor
+                  {settingsTab === "style" ? (
+                    <ClipTextStyleEditor
+                    activeTarget={activeStyleTarget}
                     clipType={selectedClip.type}
                     disabled={!isEditable}
+                    hidePreview
                     hookText={selectedClipContentDraft?.hookText ?? ""}
                     key={selectedClip.id}
+                    layout="wide"
                     styles={{
                       title: selectedClipContentDraft?.titleStyle ?? null,
                       hook: selectedClipContentDraft?.hookStyle ?? null,
@@ -1320,8 +1512,10 @@ export default function SubtitleReviewPage() {
                         : "")
                     }
                     titleText={selectedClipContentDraft?.title ?? ""}
+                    onActiveTargetChange={setStyleTarget}
                     onChange={updateClipTextStyle}
                   />
+                  ) : null}
 
                   <button
                     className="mt-3 min-h-10 w-full bg-neutral-950 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
@@ -1340,8 +1534,9 @@ export default function SubtitleReviewPage() {
                       : "内容・文字スタイルを保存"}
                   </button>
                 </div>
+                ) : null}
 
-                {selectedClip.type === "short" ? (
+                {settingsTab === "hook" && selectedClip.type === "short" ? (
                   <>
                     {dirtySegmentIds.size > 0 || hasDirtyClipContent ? (
                       <div className="border-b border-amber-300 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
@@ -1366,6 +1561,8 @@ export default function SubtitleReviewPage() {
                   </>
                 ) : null}
 
+                {settingsTab === "subtitles" ? (
+                  <>
                 <div className="border-b border-neutral-300 bg-white px-4 py-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -1451,6 +1648,7 @@ export default function SubtitleReviewPage() {
                             }`}
                             disabled={!isEditable}
                             value={drafts[segment.id] ?? segment.text}
+                            onFocus={() => setStyleTarget("subtitle")}
                             onChange={(event) => updateDraft(segment.id, event.target.value)}
                           />
                           <div className="mt-2 flex items-center justify-between gap-3">
@@ -1475,33 +1673,8 @@ export default function SubtitleReviewPage() {
                     </div>
                   )}
                 </div>
-
-                <div className="border-t border-neutral-300 bg-neutral-50 p-4">
-                  <p className="mb-3 text-xs text-neutral-600">
-                    {selectedClip.confirmed
-                      ? "このclipは確認済みです。字幕を再編集すると未確認へ戻ります。"
-                      : selectedClipHasDirtySegments || selectedClipHasDirtyContent
-                        ? "未保存のタイトル、フック、または字幕があります。保存後に確認済みにできます。"
-                        : "このclipの動画と字幕を確認したら完了にします。"}
-                  </p>
-                  <button
-                    className="min-h-11 w-full bg-sky-700 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
-                    disabled={
-                      selectedClip.confirmed ||
-                      !isEditable ||
-                      selectedClipHasDirtySegments ||
-                      selectedClipHasDirtyContent ||
-                      confirmingClipId === selectedClip.id
-                    }
-                    type="button"
-                    onClick={() => void confirmSelectedClip()}
-                  >
-                    {confirmingClipId === selectedClip.id
-                      ? "確認中"
-                      : selectedClip.confirmed
-                        ? "このclipは確認済み"
-                        : "このclipを確認済みにする"}
-                  </button>
+                  </>
+                ) : null}
                 </div>
               </>
             ) : null}
