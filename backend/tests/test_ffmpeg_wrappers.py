@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from app.audio.extract import build_extract_audio_command, extract_mono_wav
+from app.audio.extract import AudioExtractionError, build_extract_audio_command, extract_mono_wav
 from app.render.filters import ass_filter
 from app.render.render_normal import build_render_normal_command, render_normal_clip
 from app.render.render_short import (
@@ -43,9 +43,10 @@ def test_parse_ffprobe_output() -> None:
                     "codec_type": "video",
                     "width": 1920,
                     "height": 1080,
+                    "duration": "12.300",
                     "avg_frame_rate": "30000/1001",
                 },
-                {"codec_type": "audio"},
+                {"codec_type": "audio", "duration": "12.320"},
             ],
         }
     )
@@ -53,11 +54,14 @@ def test_parse_ffprobe_output() -> None:
     metadata = parse_ffprobe_output(output)
 
     assert metadata == VideoMetadata(
-        duration=12.345,
+        duration=12.3,
         width=1920,
         height=1080,
         fps=pytest.approx(29.97002997),
         has_audio=True,
+        video_stream_duration=12.3,
+        audio_stream_duration=12.32,
+        container_duration=12.345,
     )
 
 
@@ -76,6 +80,28 @@ def test_build_extract_audio_command() -> None:
         "pcm_s16le",
         "audio.wav",
     ]
+
+
+def test_extract_audio_reports_corrupt_media_without_raw_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "partial.wav"
+    output_path.write_bytes(b"partial")
+
+    def fail_run(*_args: object, **_kwargs: object) -> None:
+        raise subprocess.CalledProcessError(
+            234,
+            ["ffmpeg", "-i", "secret-local-path.mp4"],
+            stderr="Error submitting packet to decoder: Invalid data found when processing input",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fail_run)
+
+    with pytest.raises(AudioExtractionError, match="破損または不完全"):
+        extract_mono_wav("input.mp4", output_path)
+
+    assert not output_path.exists()
 
 
 def test_build_render_normal_command_with_subtitles_and_loudnorm() -> None:

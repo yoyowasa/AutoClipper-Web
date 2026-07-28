@@ -6072,3 +6072,49 @@ pip check: pass
 ### 未解決・制限
 
 - モバイルでは操作幅を確保するため縦配置を維持する。
+
+## 2026-07-28 Task 89 破損動画の事前検出とエラー表示改善
+
+### 目的
+
+- 破損または不完全なMP4で、FFmpegコマンドだけが表示される`audio_extraction_failed`を改善する。
+- 復元不能な入力を重い文字起こし処理へ進めず、再ダウンロードが必要だと明確に表示する。
+
+### 原因
+
+- 対象ファイル: `vid_c408efea441b4fb69d90f5086fb08c11.mp4`。
+- ffprobe実測:
+  - 映像stream: `1301.466667`秒（`21:41`）。
+  - 音声stream / container: `3832.075442`秒（`1:03:52`）。
+- AACは約`13:22`以降に破損packetがあり、FFmpegが誤ったchannel構成を検出して停止した。
+- 破損packetを除外しても映像・音声を約`21:40`までしか救済できず、元の約64分は復元不能。
+
+### 変更
+
+- ffprobe結果へ映像stream、音声stream、containerそれぞれの長さを保存。
+- 映像・音声の差が`30秒`超かつ短い側の`10%`超なら、音声抽出前に
+  `media_stream_duration_mismatch`で停止。
+- エラーへ映像・音声の実時間と再ダウンロード手順を日本語で表示。
+- FFmpeg音声decode失敗時も、生のコマンドやローカルパスではなく、
+  破損・再変換・再アップロードの案内を表示。
+- 音声抽出に失敗した部分WAVを削除。
+- Job画面で対象error codeを日本語見出しへ変換。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `397 passed, 1 skipped`。
+- frontend build / typecheck / lint: pass。
+- Docker compose rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- 対象ファイルをDocker内で再判定: pass。
+  - `media_stream_duration_mismatch`。
+  - 表示: `映像 21:41 / 音声 1:03:52`。
+- 同じuploadから再試行Jobを作成: pass。
+  - job: `job_3c5236e840674418be57f4b152ef000c`。
+  - 音声抽出へ進まず、再ダウンロード案内付きで停止。
+
+### 未解決・制限
+
+- 欠落した映像・破損したAACはAutoClipper内では復元しない。
+- 対象動画を最後まで処理するには、元アーカイブを正常なMP4として再ダウンロードし直す必要がある。

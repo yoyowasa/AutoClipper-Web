@@ -1,6 +1,11 @@
 import type { JobStatusResponse } from "../lib/types";
 import { StatusBadge } from "./StatusBadge";
 
+const errorLabels: Record<string, string> = {
+  media_stream_duration_mismatch: "動画ファイルが不完全です",
+  audio_extraction_failed: "動画の音声を読み込めません",
+};
+
 export function JobProgress({ job }: { job: JobStatusResponse }) {
   const detailNumber = (key: string) => {
     const value = job.details[key];
@@ -41,7 +46,7 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
             <p className="text-sm font-medium text-neutral-700">{currentStep}</p>
             {job.error ? (
               <div className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
-                <p className="font-medium">{job.error.code}</p>
+                <p className="font-medium">{errorLabels[job.error.code] ?? job.error.code}</p>
                 <p className="mt-1">{job.error.message}</p>
               </div>
             ) : null}

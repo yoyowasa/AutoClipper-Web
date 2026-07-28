@@ -1770,6 +1770,49 @@ def test_real_pipeline_marks_failed_for_missing_audio_without_unhandled_exceptio
     assert not (storage.temp / created["jobId"]).exists()
 
 
+def test_real_pipeline_rejects_mismatched_media_stream_durations_before_audio_extraction(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post("/api/jobs", json={"videoId": upload["videoId"], "settings": {}}).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fail_if_audio_extracted(_input_path: str | Path, _output_path: str | Path) -> Path:
+        raise AssertionError("mismatched streams must fail before audio extraction")
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=1301.47,
+            width=1920,
+            height=1080,
+            fps=60.0,
+            has_audio=True,
+            video_stream_duration=1301.47,
+            audio_stream_duration=3832.08,
+            container_duration=3832.08,
+        ),
+        extract_audio=fail_if_audio_extracted,
+    )
+
+    visited_statuses = run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    payload = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert visited_statuses == ["probing"]
+    assert payload["status"] == "failed"
+    assert payload["error"]["code"] == "media_stream_duration_mismatch"
+    assert "映像 21:41 / 音声 1:03:52" in payload["error"]["message"]
+    assert "再ダウンロード" in payload["error"]["message"]
+    assert not (storage.temp / created["jobId"]).exists()
+
+
 def test_real_pipeline_fails_silent_audio_before_transcription_and_candidates(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",

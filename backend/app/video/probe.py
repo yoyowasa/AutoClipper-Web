@@ -12,6 +12,9 @@ class VideoMetadata:
     height: int | None
     fps: float | None
     has_audio: bool
+    video_stream_duration: float | None = None
+    audio_stream_duration: float | None = None
+    container_duration: float | None = None
 
 
 def build_ffprobe_command(input_path: str | Path, ffprobe_bin: str = "ffprobe") -> list[str]:
@@ -67,10 +70,15 @@ def parse_ffprobe_output(output: str) -> VideoMetadata:
         (stream for stream in streams if stream.get("codec_type") == "video"),
         {},
     )
-    has_audio = any(stream.get("codec_type") == "audio" for stream in streams)
-    duration = _parse_float(video_stream.get("duration"))
-    if duration is None:
-        duration = _parse_float(payload.get("format", {}).get("duration"))
+    audio_stream = next(
+        (stream for stream in streams if stream.get("codec_type") == "audio"),
+        {},
+    )
+    has_audio = bool(audio_stream)
+    video_stream_duration = _parse_float(video_stream.get("duration"))
+    audio_stream_duration = _parse_float(audio_stream.get("duration"))
+    container_duration = _parse_float(payload.get("format", {}).get("duration"))
+    duration = video_stream_duration if video_stream_duration is not None else container_duration
 
     fps = _parse_fps(video_stream.get("avg_frame_rate"))
     if fps is None:
@@ -82,6 +90,9 @@ def parse_ffprobe_output(output: str) -> VideoMetadata:
         height=_parse_int(video_stream.get("height")),
         fps=fps,
         has_audio=has_audio,
+        video_stream_duration=video_stream_duration,
+        audio_stream_duration=audio_stream_duration,
+        container_duration=container_duration,
     )
 
 
