@@ -83,6 +83,7 @@ export function SubtitleStylePresetManager({
   const [notice, setNotice] = useState("");
   const [writeError, setWriteError] = useState("");
   const storageError = loadError || writeError;
+  const savedSlotCount = slots.filter((slot) => slot !== null).length;
 
   useEffect(() => {
     let cancelled = false;
@@ -197,28 +198,25 @@ export function SubtitleStylePresetManager({
   }
 
   return (
-    <div className="mt-5 border-y border-neutral-200 py-4">
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold text-neutral-950">保存した字幕設定</h3>
-          <p className="mt-1 text-xs text-neutral-500">
-            AutoClipper本体に保存。停止・再起動後も保持
-          </p>
-        </div>
-        {notice ? (
-          <p aria-live="polite" className="text-xs font-medium text-emerald-700">
-            {notice}
-          </p>
-        ) : null}
-      </div>
-
+    <details className="mt-4 border-y border-neutral-200 bg-neutral-50">
+      <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3 px-3 py-3 text-sm">
+        <span className="font-semibold text-neutral-950">
+          保存した字幕設定
+          <span className="ml-2 font-normal text-neutral-500">
+            {savedSlotCount} / {slots.length} 保存済み
+          </span>
+        </span>
+        <span className="text-xs text-neutral-500">
+          {notice || "開いて呼び出し・保存"}
+        </span>
+      </summary>
       {storageError ? (
-        <p className="mt-3 border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
+        <p className="border-t border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800">
           {storageError}
         </p>
       ) : null}
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+      <div className="grid gap-3 border-t border-neutral-200 bg-white p-3 lg:grid-cols-3">
         {slots.map((preset, index) => (
           <section
             className="border border-neutral-300 bg-white p-3"
@@ -283,6 +281,6 @@ export function SubtitleStylePresetManager({
           </section>
         ))}
       </div>
-    </div>
+    </details>
   );
 }
