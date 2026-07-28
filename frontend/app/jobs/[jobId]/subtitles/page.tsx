@@ -808,8 +808,8 @@ export default function SubtitleReviewPage() {
   return (
     <main className="min-h-screen bg-[#f7f7f4] px-3 py-4 text-neutral-950 sm:px-5">
       <section className="mx-auto flex w-full max-w-[1600px] flex-col gap-4">
-        <header className="flex flex-wrap items-end justify-between gap-4 border-b border-neutral-300 pb-4">
-          <div>
+        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 border-b border-neutral-300 pb-4 xl:grid-cols-[minmax(260px,0.75fr)_minmax(600px,1.75fr)_auto]">
+          <div className="col-start-1 row-start-1 min-w-0">
             <p className="text-sm font-medium uppercase text-neutral-500">AutoClipper</p>
             <h1 className="mt-1 text-3xl font-semibold">clip別 字幕確認</h1>
             <p className="mt-1 text-sm text-neutral-600">
@@ -818,66 +818,65 @@ export default function SubtitleReviewPage() {
               {review.editedSegmentCount}件
             </p>
           </div>
+          <div className="col-span-2 row-start-2 grid min-w-0 gap-2 sm:grid-cols-3 xl:col-span-1 xl:col-start-2 xl:row-start-1">
+            <div className="flex min-w-0 items-center justify-between gap-2 border-l-4 border-emerald-500 bg-emerald-50 px-3 py-2">
+              <p className="text-xs font-semibold text-emerald-800">1. 自動処理</p>
+              <p className="text-xs font-semibold">完了</p>
+            </div>
+            <div
+              className={`flex min-w-0 items-center justify-between gap-2 border-l-4 px-3 py-2 ${
+                isEditable
+                  ? "border-sky-600 bg-sky-50"
+                  : "border-emerald-500 bg-emerald-50"
+              }`}
+            >
+              <p
+                className={`text-xs font-semibold ${
+                  isEditable ? "text-sky-800" : "text-emerald-800"
+                }`}
+              >
+                2. clip別 字幕確認
+              </p>
+              <p className="text-right text-xs font-semibold">
+                {isEditable ? "現在の工程" : "完了"}
+              </p>
+            </div>
+            <div
+              className={`flex min-w-0 items-center justify-between gap-2 border-l-4 px-3 py-2 ${
+                review.state === "completed"
+                  ? "border-emerald-500 bg-emerald-50"
+                  : isEditable
+                    ? "border-neutral-300 bg-white"
+                    : "border-sky-600 bg-sky-50"
+              }`}
+            >
+              <p
+                className={`text-xs font-semibold ${
+                  review.state === "completed"
+                    ? "text-emerald-800"
+                    : isEditable
+                      ? "text-neutral-500"
+                      : "text-sky-800"
+                }`}
+              >
+                3. 字幕焼き込み・書き出し
+              </p>
+              <p className="text-right text-xs font-semibold">
+                {review.state === "completed"
+                  ? "完了"
+                  : isEditable
+                    ? "全clip確認後に開始"
+                    : "処理中"}
+              </p>
+            </div>
+          </div>
           <Link
-            className="inline-flex min-h-10 items-center border border-neutral-300 bg-white px-4 text-sm font-medium"
+            className="col-start-2 row-start-1 inline-flex min-h-10 items-center border border-neutral-300 bg-white px-4 text-sm font-medium xl:col-start-3"
             href={`/jobs/${jobId}`}
           >
             処理状況へ戻る
           </Link>
         </header>
-
-        <div className="grid gap-2 sm:grid-cols-3">
-          <div className="border-l-4 border-emerald-500 bg-emerald-50 px-4 py-3">
-            <p className="text-xs font-semibold text-emerald-800">1. 自動処理</p>
-            <p className="mt-1 text-sm font-semibold">完了</p>
-          </div>
-          <div
-            className={`border-l-4 px-4 py-3 ${
-              isEditable
-                ? "border-sky-600 bg-sky-50"
-                : "border-emerald-500 bg-emerald-50"
-            }`}
-          >
-            <p
-              className={`text-xs font-semibold ${
-                isEditable ? "text-sky-800" : "text-emerald-800"
-              }`}
-            >
-              2. clip別 字幕確認
-            </p>
-            <p className="mt-1 text-sm font-semibold">
-              {isEditable ? "現在の工程" : "完了"}
-            </p>
-          </div>
-          <div
-            className={`border-l-4 px-4 py-3 ${
-              review.state === "completed"
-                ? "border-emerald-500 bg-emerald-50"
-                : isEditable
-                  ? "border-neutral-300 bg-white"
-                  : "border-sky-600 bg-sky-50"
-            }`}
-          >
-            <p
-              className={`text-xs font-semibold ${
-                review.state === "completed"
-                  ? "text-emerald-800"
-                  : isEditable
-                    ? "text-neutral-500"
-                    : "text-sky-800"
-              }`}
-            >
-              3. 字幕焼き込み・書き出し
-            </p>
-            <p className="mt-1 text-sm font-semibold">
-              {review.state === "completed"
-                ? "完了"
-                : isEditable
-                  ? "全clip確認後に開始"
-                  : "処理中"}
-            </p>
-          </div>
-        </div>
 
         {!isEditable ? (
           <div className="border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
