@@ -1220,7 +1220,7 @@ export default function SubtitleReviewPage() {
             ) : null}
           </section>
 
-          <section className="flex min-h-0 flex-col">
+          <section className="flex min-h-0 flex-col overflow-y-auto overscroll-contain">
             {selectedClip ? (
               <>
                 <div className="border-b border-neutral-300 bg-neutral-50 px-4 py-4">
