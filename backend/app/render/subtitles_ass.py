@@ -26,6 +26,10 @@ DEFAULT_SHORT_SUBTITLE_SHADOW = 2
 DEFAULT_SHORT_MARGIN_X = 86
 DEFAULT_SHORT_LOWER_MARGIN = 250
 DEFAULT_SHORT_TOP_MARGIN = 150
+DEFAULT_SHORT_TITLE_X_PERCENT = 50.0
+DEFAULT_SHORT_TITLE_Y_PERCENT = 12.5
+DEFAULT_SHORT_HOOK_X_PERCENT = 50.0
+DEFAULT_SHORT_HOOK_Y_PERCENT = 18.75
 DEFAULT_SUBTITLE_ALIGNMENT = 2
 DEFAULT_TITLE_ALIGNMENT = 8
 DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFFFFF"
@@ -70,6 +74,8 @@ class SubtitleRenderSettings:
     short_top_margin: int | None = None
     short_subtitle_alignment: int | None = None
     short_title_alignment: int | None = None
+    short_subtitle_x_percent: float | None = None
+    short_subtitle_y_percent: float | None = None
     short_primary_color: str | None = None
     short_outline_color: str | None = None
     normal_font_name: str | None = None
@@ -82,6 +88,8 @@ class SubtitleRenderSettings:
     normal_top_margin: int | None = None
     normal_subtitle_alignment: int | None = None
     normal_title_alignment: int | None = None
+    normal_subtitle_x_percent: float | None = None
+    normal_subtitle_y_percent: float | None = None
     normal_primary_color: str | None = None
     normal_outline_color: str | None = None
 
@@ -115,6 +123,8 @@ class SubtitleLayout:
     min_subtitle_duration: float
     max_subtitle_duration: float
     min_gap_between_subtitles: float
+    subtitle_x_percent: float | None = None
+    subtitle_y_percent: float | None = None
 
     @classmethod
     def short(cls, settings: SubtitleRenderSettings | dict[str, Any] | None = None) -> "SubtitleLayout":
@@ -145,6 +155,8 @@ class SubtitleLayout:
             ),
             subtitle_alignment=parsed_settings.short_subtitle_alignment or DEFAULT_SUBTITLE_ALIGNMENT,
             title_alignment=parsed_settings.short_title_alignment or DEFAULT_TITLE_ALIGNMENT,
+            subtitle_x_percent=parsed_settings.short_subtitle_x_percent,
+            subtitle_y_percent=parsed_settings.short_subtitle_y_percent,
             primary_color=parsed_settings.short_primary_color or parsed_settings.subtitle_primary_color,
             outline_color=parsed_settings.short_outline_color or parsed_settings.subtitle_outline_color,
             max_chars_per_line=parsed_settings.max_chars_per_line_short,
@@ -191,6 +203,8 @@ class SubtitleLayout:
             ),
             subtitle_alignment=parsed_settings.normal_subtitle_alignment or DEFAULT_SUBTITLE_ALIGNMENT,
             title_alignment=parsed_settings.normal_title_alignment or DEFAULT_TITLE_ALIGNMENT,
+            subtitle_x_percent=parsed_settings.normal_subtitle_x_percent,
+            subtitle_y_percent=parsed_settings.normal_subtitle_y_percent,
             primary_color=parsed_settings.normal_primary_color or parsed_settings.subtitle_primary_color,
             outline_color=parsed_settings.normal_outline_color or parsed_settings.subtitle_outline_color,
             max_chars_per_line=parsed_settings.max_chars_per_line_normal,
@@ -225,6 +239,23 @@ def _coerce_optional_int(value: Any, *, minimum: int, maximum: int) -> int | Non
     try:
         parsed = int(value)
     except (TypeError, ValueError):
+        return None
+    return max(minimum, min(maximum, parsed))
+
+
+def _coerce_optional_float(
+    value: Any,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(parsed) or math.isinf(parsed):
         return None
     return max(minimum, min(maximum, parsed))
 
@@ -318,6 +349,8 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
         "shortTitleTopMargin": "short_top_margin",
         "shortSubtitleAlignment": "short_subtitle_alignment",
         "shortTitleAlignment": "short_title_alignment",
+        "shortSubtitleXPercent": "short_subtitle_x_percent",
+        "shortSubtitleYPercent": "short_subtitle_y_percent",
         "shortSubtitlePrimaryColor": "short_primary_color",
         "shortSubtitleOutlineColor": "short_outline_color",
         "normalSubtitleFontName": "normal_font_name",
@@ -330,6 +363,8 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
         "normalTitleTopMargin": "normal_top_margin",
         "normalSubtitleAlignment": "normal_subtitle_alignment",
         "normalTitleAlignment": "normal_title_alignment",
+        "normalSubtitleXPercent": "normal_subtitle_x_percent",
+        "normalSubtitleYPercent": "normal_subtitle_y_percent",
         "normalSubtitlePrimaryColor": "normal_primary_color",
         "normalSubtitleOutlineColor": "normal_outline_color",
     }
@@ -429,6 +464,16 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
             minimum=1,
             maximum=9,
         ),
+        short_subtitle_x_percent=_coerce_optional_float(
+            normalized.get("short_subtitle_x_percent"),
+            minimum=5,
+            maximum=95,
+        ),
+        short_subtitle_y_percent=_coerce_optional_float(
+            normalized.get("short_subtitle_y_percent"),
+            minimum=5,
+            maximum=95,
+        ),
         short_primary_color=_coerce_optional_hex_color(normalized.get("short_primary_color")),
         short_outline_color=_coerce_optional_hex_color(normalized.get("short_outline_color")),
         normal_font_name=_coerce_optional_str(normalized.get("normal_font_name")),
@@ -476,6 +521,16 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
             _first_value(normalized, "normal_title_alignment", "title_alignment"),
             minimum=1,
             maximum=9,
+        ),
+        normal_subtitle_x_percent=_coerce_optional_float(
+            normalized.get("normal_subtitle_x_percent"),
+            minimum=5,
+            maximum=95,
+        ),
+        normal_subtitle_y_percent=_coerce_optional_float(
+            normalized.get("normal_subtitle_y_percent"),
+            minimum=5,
+            maximum=95,
         ),
         normal_primary_color=_coerce_optional_hex_color(normalized.get("normal_primary_color")),
         normal_outline_color=_coerce_optional_hex_color(normalized.get("normal_outline_color")),
@@ -753,10 +808,33 @@ def _style_font(style: ClipTextStyle) -> tuple[str, bool]:
     return TEXT_FONT_PRESETS[style.font_preset]
 
 
-def _style_position_tag(style: ClipTextStyle, layout: SubtitleLayout) -> str:
-    x = round(layout.width * style.x_percent / 100)
-    y = round(layout.height * style.y_percent / 100)
+def _position_tag(
+    x_percent: float,
+    y_percent: float,
+    layout: SubtitleLayout,
+) -> str:
+    x = round(layout.width * x_percent / 100)
+    y = round(layout.height * y_percent / 100)
     return rf"{{\an5\pos({x},{y})}}"
+
+
+def _style_position_tag(style: ClipTextStyle, layout: SubtitleLayout) -> str:
+    return _position_tag(style.x_percent, style.y_percent, layout)
+
+
+def _subtitle_position_tag(
+    style: ClipTextStyle | None,
+    layout: SubtitleLayout,
+) -> str:
+    if style is not None:
+        return _style_position_tag(style, layout)
+    if layout.subtitle_x_percent is None or layout.subtitle_y_percent is None:
+        return ""
+    return _position_tag(
+        layout.subtitle_x_percent,
+        layout.subtitle_y_percent,
+        layout,
+    )
 
 
 def _clip_style_line(
@@ -873,7 +951,15 @@ def build_ass_document(
             title_position = (
                 _style_position_tag(candidate.title_style, active_layout)
                 if candidate.title_style is not None
-                else ""
+                else (
+                    _position_tag(
+                        DEFAULT_SHORT_TITLE_X_PERCENT,
+                        DEFAULT_SHORT_TITLE_Y_PERCENT,
+                        active_layout,
+                    )
+                    if active_layout.subtitle_y_percent is not None
+                    else ""
+                )
             )
             lines.append(
                 "Dialogue: "
@@ -887,7 +973,15 @@ def build_ass_document(
         hook_position = (
             _style_position_tag(candidate.hook_style, active_layout)
             if candidate.hook_style is not None
-            else ""
+            else (
+                _position_tag(
+                    DEFAULT_SHORT_HOOK_X_PERCENT,
+                    DEFAULT_SHORT_HOOK_Y_PERCENT,
+                    active_layout,
+                )
+                if active_layout.subtitle_y_percent is not None
+                else ""
+            )
         )
         lines.append(
             "Dialogue: "
@@ -898,10 +992,9 @@ def build_ass_document(
         )
 
     for event in subtitle_events:
-        subtitle_position = (
-            _style_position_tag(candidate.subtitle_style, active_layout)
-            if candidate.subtitle_style is not None
-            else ""
+        subtitle_position = _subtitle_position_tag(
+            candidate.subtitle_style,
+            active_layout,
         )
         text = _escape_ass_text(
             split_subtitle_lines(

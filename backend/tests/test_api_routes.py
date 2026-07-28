@@ -328,8 +328,12 @@ def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) ->
                 "style": {
                     "shortSubtitleFontName": "Source Han Sans JP Heavy",
                     "shortSubtitleFontSize": 76,
+                    "shortSubtitleXPercent": 50,
+                    "shortSubtitleYPercent": 68.75,
                     "shortSubtitlePrimaryColor": "#FFF200",
                     "normalSubtitleFontSize": 65,
+                    "normalSubtitleXPercent": 50,
+                    "normalSubtitleYPercent": 84,
                     "normalSubtitleOutlineColor": "#000000",
                 },
             },
@@ -347,6 +351,7 @@ def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) ->
     saved = save_response.json()
     assert saved["slots"][0]["name"] == "ホロライブ用"
     assert saved["slots"][0]["style"]["shortSubtitleFontSize"] == 76
+    assert saved["slots"][0]["style"]["shortSubtitleYPercent"] == 68.75
 
     get_response = client.get("/api/preferences/subtitle-style-presets")
 
@@ -612,9 +617,13 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "shortSubtitleOutline": 4,
                 "shortSubtitleLowerMargin": 680,
                 "shortSubtitleAlignment": 5,
+                "shortSubtitleXPercent": 40,
+                "shortSubtitleYPercent": 57.3,
                 "normalSubtitleFontSize": 60,
                 "normalSubtitleOutline": 4,
                 "normalSubtitleLowerMargin": 110,
+                "normalSubtitleXPercent": 50,
+                "normalSubtitleYPercent": 84,
                 "selectionPolicy": "strict_quality",
                 "crossTypeOverlapDedupe": True,
                 "useOpenAIScoring": True,
@@ -663,9 +672,13 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["shortSubtitleOutline"] == 4
         assert job.settings_json["shortSubtitleLowerMargin"] == 680
         assert job.settings_json["shortSubtitleAlignment"] == 5
+        assert job.settings_json["shortSubtitleXPercent"] == 40.0
+        assert job.settings_json["shortSubtitleYPercent"] == 57.3
         assert job.settings_json["normalSubtitleFontSize"] == 60
         assert job.settings_json["normalSubtitleOutline"] == 4
         assert job.settings_json["normalSubtitleLowerMargin"] == 110
+        assert job.settings_json["normalSubtitleXPercent"] == 50.0
+        assert job.settings_json["normalSubtitleYPercent"] == 84.0
         assert job.settings_json["selectionPolicy"] == "strict_quality"
         assert job.settings_json["crossTypeOverlapDedupe"] is True
         assert job.settings_json["useOpenAIScoring"] is True
@@ -833,8 +846,12 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert "subtitleOutline" in properties
     assert "shortSubtitleFontSize" in properties
     assert "shortSubtitleLowerMargin" in properties
+    assert "shortSubtitleXPercent" in properties
+    assert "shortSubtitleYPercent" in properties
     assert "normalSubtitleFontSize" in properties
     assert "normalSubtitleLowerMargin" in properties
+    assert "normalSubtitleXPercent" in properties
+    assert "normalSubtitleYPercent" in properties
 
 
 def test_job_creation_rejects_unsupported_transcription_profile(client: TestClient) -> None:

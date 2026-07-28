@@ -1,6 +1,12 @@
 "use client";
 
 import { subtitleFontFamily } from "../lib/clipTextStyle";
+import {
+  legacySubtitleYPercent,
+  matchingPositionPreset,
+  positionPixels,
+  verticalPositionPresets
+} from "../lib/textPositionPresets";
 import type { ClipSettings } from "../lib/types";
 
 export type SubtitlePreviewMode = "short" | "normal";
@@ -15,25 +21,19 @@ const PREVIEW_DEFAULTS = {
     height: 1920,
     fontSize: 76,
     outline: 5,
-    lowerMargin: 250
+    lowerMargin: 250,
+    xPercent: 50,
+    yPercent: 68.75
   },
   normal: {
     height: 1080,
     fontSize: 65,
     outline: 4,
-    lowerMargin: 86
+    lowerMargin: 86,
+    xPercent: 50,
+    yPercent: 84
   }
 } as const;
-
-function alignmentLabel(alignment: number): string {
-  if (alignment === 8) {
-    return "上";
-  }
-  if (alignment === 5) {
-    return "中央";
-  }
-  return "下";
-}
 
 export function SubtitleStylePreview({ settings, mode }: SubtitleStylePreviewProps) {
   const defaults = PREVIEW_DEFAULTS[mode];
@@ -69,11 +69,25 @@ export function SubtitleStylePreview({ settings, mode }: SubtitleStylePreviewPro
       : settings.normalSubtitleOutlineColor) ??
     settings.subtitleOutlineColor ??
     "#000000";
-  const lowerMarginPercent = Math.min(42, Math.max(0, (lowerMargin / defaults.height) * 100));
+  const xPercent =
+    (isShort
+      ? settings.shortSubtitleXPercent
+      : settings.normalSubtitleXPercent) ?? defaults.xPercent;
+  const yPercent =
+    (isShort
+      ? settings.shortSubtitleYPercent
+      : settings.normalSubtitleYPercent) ??
+    legacySubtitleYPercent({
+      mode,
+      alignment,
+      lowerMargin,
+      fontSize
+    });
+  const verticalPresets = verticalPositionPresets(mode);
+  const selectedPosition = matchingPositionPreset(verticalPresets, yPercent);
+  const position = positionPixels(mode, xPercent, yPercent);
   const fontSizePercent = Math.min(12, Math.max(3.2, (fontSize / defaults.height) * 100));
   const strokeWidth = Math.min(4, Math.max(0, outline * 0.22));
-  const verticalPosition =
-    alignment === 8 ? "flex-start" : alignment === 5 ? "center" : "flex-end";
 
   return (
     <div className="mt-4 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_220px]">
@@ -87,28 +101,41 @@ export function SubtitleStylePreview({ settings, mode }: SubtitleStylePreviewPro
           <div className="absolute inset-y-0 right-0 w-[38%] bg-[#8fa3a8]" />
           <div className="absolute left-[9%] top-[12%] h-[38%] w-[42%] border border-white/25 bg-[#42565d]" />
           <div className="absolute bottom-0 left-0 h-[18%] w-full bg-[#172126]" />
-          <div
-            className="absolute inset-0 flex flex-col items-center px-[7%] py-[7%] text-center"
+          {verticalPresets.map((preset) => {
+            const selected = selectedPosition?.id === preset.id;
+            return (
+              <div
+                aria-hidden="true"
+                className={`absolute left-0 w-full border-t ${
+                  selected ? "border-sky-300" : "border-white/10"
+                }`}
+                key={preset.id}
+                style={{ top: `${preset.percent}%` }}
+              >
+                {selected ? (
+                  <span className="absolute left-1 top-0 bg-sky-700/90 px-1 py-0.5 text-[8px] font-semibold text-white">
+                    {preset.label}
+                  </span>
+                ) : null}
+              </div>
+            );
+          })}
+          <p
+            className="absolute m-0 max-w-[88%] whitespace-pre-line text-center font-extrabold tracking-normal"
             style={{
-              justifyContent: verticalPosition,
-              paddingBottom: alignment === 2 ? `${Math.max(7, lowerMarginPercent)}%` : undefined,
-              paddingTop: alignment === 8 ? `${Math.max(7, lowerMarginPercent)}%` : undefined
+              color: primaryColor,
+              fontFamily: subtitleFontFamily(fontName),
+              fontSize: `clamp(12px, ${fontSizePercent}cqh, 38px)`,
+              left: `${xPercent}%`,
+              lineHeight: 1.28,
+              textShadow: `0 2px 2px ${outlineColor}`,
+              top: `${yPercent}%`,
+              transform: "translate(-50%, -50%)",
+              WebkitTextStroke: `${strokeWidth}px ${outlineColor}`
             }}
           >
-            <p
-              className="m-0 whitespace-pre-line font-extrabold tracking-normal"
-              style={{
-                color: primaryColor,
-                fontFamily: subtitleFontFamily(fontName),
-                fontSize: `clamp(12px, ${fontSizePercent}cqh, 38px)`,
-                lineHeight: 1.28,
-                textShadow: `0 2px 2px ${outlineColor}`,
-                WebkitTextStroke: `${strokeWidth}px ${outlineColor}`
-              }}
-            >
-              {"この瞬間が一番おもしろい！\n切り抜き字幕のプレビュー"}
-            </p>
-          </div>
+            {"この瞬間が一番おもしろい！\n切り抜き字幕のプレビュー"}
+          </p>
         </div>
       </div>
 
@@ -121,10 +148,13 @@ export function SubtitleStylePreview({ settings, mode }: SubtitleStylePreviewPro
         <dd className="m-0 font-medium text-neutral-950">{fontSize}</dd>
         <dt className="text-neutral-500">縁取り</dt>
         <dd className="m-0 font-medium text-neutral-950">{outline}</dd>
-        <dt className="text-neutral-500">端の余白</dt>
-        <dd className="m-0 font-medium text-neutral-950">{lowerMargin}</dd>
         <dt className="text-neutral-500">位置</dt>
-        <dd className="m-0 font-medium text-neutral-950">{alignmentLabel(alignment)}</dd>
+        <dd className="m-0 text-right font-medium text-neutral-950">
+          {selectedPosition?.label ?? "微調整"}
+          <span className="block text-xs font-normal text-neutral-500">
+            X {position.x} / Y {position.y}
+          </span>
+        </dd>
         <dt className="text-neutral-500">文字色</dt>
         <dd className="m-0 flex items-center gap-2 font-mono text-xs font-medium text-neutral-950">
           <span

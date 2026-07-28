@@ -128,7 +128,7 @@ const SHORT_DEFAULTS: Record<ClipTextTarget, ClipTextStyle> = {
     outlineColor: "#000000",
     outlineWidth: 5,
     xPercent: 50,
-    yPercent: 10
+    yPercent: 12.5
   },
   hook: {
     fontPreset: "sans_bold",
@@ -137,7 +137,7 @@ const SHORT_DEFAULTS: Record<ClipTextTarget, ClipTextStyle> = {
     outlineColor: "#000000",
     outlineWidth: 5,
     xPercent: 50,
-    yPercent: 10
+    yPercent: 18.75
   },
   subtitle: {
     fontPreset: "sans_bold",
@@ -146,7 +146,7 @@ const SHORT_DEFAULTS: Record<ClipTextTarget, ClipTextStyle> = {
     outlineColor: "#000000",
     outlineWidth: 5,
     xPercent: 50,
-    yPercent: 87
+    yPercent: 68.75
   }
 };
 
@@ -157,7 +157,7 @@ const NORMAL_SUBTITLE_DEFAULT: ClipTextStyle = {
   outlineColor: "#000000",
   outlineWidth: 4,
   xPercent: 50,
-  yPercent: 92
+  yPercent: 84
 };
 
 export function defaultClipTextStyle(

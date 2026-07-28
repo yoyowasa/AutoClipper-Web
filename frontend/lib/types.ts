@@ -86,6 +86,8 @@ export type ClipSettings = {
   shortSubtitleOutline?: number;
   shortSubtitleLowerMargin?: number;
   shortSubtitleAlignment?: number;
+  shortSubtitleXPercent?: number;
+  shortSubtitleYPercent?: number;
   shortSubtitlePrimaryColor?: string;
   shortSubtitleOutlineColor?: string;
   normalSubtitleFontName?: string;
@@ -93,6 +95,8 @@ export type ClipSettings = {
   normalSubtitleOutline?: number;
   normalSubtitleLowerMargin?: number;
   normalSubtitleAlignment?: number;
+  normalSubtitleXPercent?: number;
+  normalSubtitleYPercent?: number;
   normalSubtitlePrimaryColor?: string;
   normalSubtitleOutlineColor?: string;
   shortLayout: "auto" | "center_crop" | "blur_background";

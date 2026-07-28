@@ -251,6 +251,59 @@ def test_clip_title_hook_and_subtitle_styles_are_independent() -> None:
     assert r"{\an5\pos(540,1536)}確認字幕" in ass
 
 
+def test_job_subtitle_position_percent_is_used_without_clip_override() -> None:
+    candidate = make_candidate(
+        "short_1",
+        "short",
+        0.0,
+        4.0,
+        overlay_title="タイトル",
+    ).model_copy(
+        update={
+            "hook_text": "フック",
+            "hook_duration_seconds": 1.0,
+        }
+    )
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="会話字幕")]
+    layout = SubtitleLayout.short(
+        settings={
+            "shortSubtitleXPercent": 40,
+            "shortSubtitleYPercent": 68.75,
+        }
+    )
+
+    ass = build_ass_document(candidate, segments, layout=layout)
+
+    assert layout.subtitle_x_percent == 40
+    assert layout.subtitle_y_percent == 68.75
+    assert r"{\an5\pos(540,240)}タイトル" in ass
+    assert r"{\an5\pos(540,360)}フック" in ass
+    assert r"{\an5\pos(432,1320)}会話字幕" in ass
+
+
+def test_clip_subtitle_position_takes_priority_over_job_position() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 4.0).model_copy(
+        update={
+            "subtitle_style": ClipTextStyle(
+                xPercent=60,
+                yPercent=57.3,
+            )
+        }
+    )
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="ツッコミ")]
+    layout = SubtitleLayout.short(
+        settings={
+            "shortSubtitleXPercent": 40,
+            "shortSubtitleYPercent": 68.75,
+        }
+    )
+
+    ass = build_ass_document(candidate, segments, layout=layout)
+
+    assert r"{\an5\pos(648,1100)}ツッコミ" in ass
+    assert r"{\an5\pos(432,1320)}" not in ass
+
+
 def test_bundled_normal_and_emphasis_font_presets_map_to_ass_names() -> None:
     expected_fonts = {
         "noto_black": "Noto Sans JP Black",
