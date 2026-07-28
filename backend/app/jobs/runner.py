@@ -137,6 +137,7 @@ SessionFactory = Callable[[], Session]
 ProbeMetadata = Callable[[str | Path], VideoMetadata]
 ExtractAudio = Callable[[str | Path, str | Path], Path]
 TranscribeAudio = Callable[[str | Path], list[TranscriptSegment]]
+TranscriptionEngineFactory = Callable[..., FasterWhisperTranscriptionEngine]
 DetectScenes = Callable[[str | Path], list[SceneSegment]]
 DetectSilence = Callable[[str | Path, float | None], list[SilenceSegment]]
 ComputeAudioFeatures = Callable[[str | Path, float, Sequence[SilenceSegment]], AudioFeatures]
@@ -152,6 +153,9 @@ MAX_AV_STREAM_DURATION_DRIFT_RATIO = 0.1
 MIN_TRANSCRIPT_TEXT_LENGTH = 20
 MIN_TRANSCRIPT_SPEECH_SECONDS = 3.0
 MIN_AVERAGE_TRANSCRIPT_CONFIDENCE = 0.25
+MIN_REPEATED_SEGMENT_COUNT = 5
+MIN_REPEATED_SEGMENT_RATIO = 0.6
+MIN_REPEATED_SEGMENT_TEXT_LENGTH = 6
 LOW_INFORMATION_WORDS = {
     "ah",
     "hmm",
@@ -179,6 +183,7 @@ class AutoClipperPipelineDependencies:
     probe_metadata: ProbeMetadata = probe_metadata
     extract_audio: ExtractAudio = extract_mono_wav
     transcribe_audio: TranscribeAudio | None = None
+    transcription_engine_factory: TranscriptionEngineFactory = FasterWhisperTranscriptionEngine
     detect_scenes: DetectScenes = default_detect_scenes
     detect_silence: DetectSilence | None = None
     compute_audio_features: ComputeAudioFeatures = compute_audio_features
@@ -705,6 +710,39 @@ def _transcript_has_repeated_low_information_text(text: str) -> bool:
     return word in LOW_INFORMATION_WORDS and count / len(words) >= 0.8
 
 
+def _normalized_segment_text(text: str) -> str:
+    return re.sub(r"[\W_]+", "", text.casefold(), flags=re.UNICODE)
+
+
+def _repeated_segment_diagnostics(segments: Sequence[TranscriptSegment]) -> dict[str, Any]:
+    normalized_texts = [
+        normalized
+        for segment in segments
+        if (normalized := _normalized_segment_text(segment.text))
+    ]
+    if not normalized_texts:
+        return {
+            "dominant_segment_count": 0,
+            "dominant_segment_ratio": 0.0,
+            "unique_segment_text_ratio": 0.0,
+            "repeated_segment_text": False,
+        }
+
+    counts = Counter(normalized_texts)
+    dominant_text, dominant_count = counts.most_common(1)[0]
+    dominant_ratio = dominant_count / len(normalized_texts)
+    return {
+        "dominant_segment_count": dominant_count,
+        "dominant_segment_ratio": round(dominant_ratio, 6),
+        "unique_segment_text_ratio": round(len(counts) / len(normalized_texts), 6),
+        "repeated_segment_text": (
+            len(dominant_text) >= MIN_REPEATED_SEGMENT_TEXT_LENGTH
+            and dominant_count >= MIN_REPEATED_SEGMENT_COUNT
+            and dominant_ratio >= MIN_REPEATED_SEGMENT_RATIO
+        ),
+    }
+
+
 def _transcript_diagnostics(segments: Sequence[TranscriptSegment]) -> dict[str, Any]:
     text = _transcript_text(segments)
     average_confidence = _average_transcript_confidence(segments)
@@ -712,13 +750,14 @@ def _transcript_diagnostics(segments: Sequence[TranscriptSegment]) -> dict[str, 
         "segment_count": len(segments),
         "total_text_length": len(text),
         "total_speech_duration": round(_transcript_speech_duration(segments), 6),
+        **_repeated_segment_diagnostics(segments),
     }
     if average_confidence is not None:
         details["average_confidence"] = round(average_confidence, 6)
     return details
 
 
-def _raise_if_transcript_unusable(segments: Sequence[TranscriptSegment]) -> None:
+def _transcript_unusable_reasons(segments: Sequence[TranscriptSegment]) -> list[str]:
     details = _transcript_diagnostics(segments)
     text = _transcript_text(segments)
     average_confidence = _average_transcript_confidence(segments)
@@ -734,16 +773,101 @@ def _raise_if_transcript_unusable(segments: Sequence[TranscriptSegment]) -> None
         reasons.append("average_confidence_too_low")
     if _transcript_has_repeated_low_information_text(text):
         reasons.append("repeated_low_information_text")
+    if details["repeated_segment_text"]:
+        reasons.append("repeated_segment_text")
+    return reasons
+
+
+def _transcript_quality_diagnostics(segments: Sequence[TranscriptSegment]) -> dict[str, Any]:
+    details = _transcript_diagnostics(segments)
+    details["reasons"] = _transcript_unusable_reasons(segments)
+    return details
+
+
+def _raise_if_transcript_unusable(segments: Sequence[TranscriptSegment]) -> None:
+    details = _transcript_quality_diagnostics(segments)
+    reasons = details["reasons"]
 
     if not reasons:
         return
 
-    details["reasons"] = reasons
     raise PipelineExpectedError(
         "transcript_unusable",
-        "Transcription did not produce usable speech text.",
+        (
+            "音声から信頼できる字幕を生成できませんでした。"
+            "日本語固定またはGPU推奨設定で再試行してください。"
+        ),
         details=details,
     )
+
+
+def _should_retry_transcription_with_small(
+    *,
+    model: str,
+    language: str,
+    diagnostics: dict[str, Any],
+    reasons: Sequence[str],
+) -> bool:
+    return bool(
+        reasons
+        and model == "turbo"
+        and language == "ja"
+        and diagnostics.get("actual_device") == "cuda"
+    )
+
+
+def _transcribe_with_faster_whisper(
+    factory: TranscriptionEngineFactory,
+    audio_path: Path,
+    *,
+    model: str,
+    language: str,
+    device: str,
+    compute_type: str,
+) -> tuple[list[TranscriptSegment], dict[str, Any]]:
+    engine = factory(
+        model_size=model,
+        device=device,
+        compute_type=compute_type,
+        language=None if language == "auto" else language,
+    )
+    segments = engine.transcribe(audio_path)
+    return segments, dict(engine.diagnostics)
+
+
+def _fallback_transcription_diagnostics(
+    *,
+    primary: dict[str, Any],
+    primary_quality: dict[str, Any],
+    fallback: dict[str, Any],
+    fallback_quality: dict[str, Any],
+) -> dict[str, Any]:
+    primary_load_seconds = float(primary.get("model_load_seconds") or 0.0)
+    primary_transcription_seconds = float(primary.get("transcription_seconds") or 0.0)
+    fallback_load_seconds = float(fallback.get("model_load_seconds") or 0.0)
+    fallback_transcription_seconds = float(fallback.get("transcription_seconds") or 0.0)
+    peak_values = [
+        int(value)
+        for value in (primary.get("peak_vram_mb"), fallback.get("peak_vram_mb"))
+        if isinstance(value, (int, float))
+    ]
+    return {
+        **fallback,
+        "requested_model": primary.get("model"),
+        "actual_model": fallback.get("model"),
+        "model_load_seconds": round(primary_load_seconds + fallback_load_seconds, 3),
+        "transcription_seconds": round(
+            primary_transcription_seconds + fallback_transcription_seconds,
+            3,
+        ),
+        "peak_vram_mb": max(peak_values) if peak_values else None,
+        "quality_fallback_used": True,
+        "quality_fallback_reason": "primary_transcript_unusable",
+        "primary_transcription": primary,
+        "primary_transcript_quality": primary_quality,
+        "fallback_transcription": fallback,
+        "fallback_transcript_quality": fallback_quality,
+    }
 
 
 def _safe_visual_quality(
@@ -2079,14 +2203,14 @@ def run_autoclipper_job(
                             "actual_compute_type": "injected",
                         }
                     else:
-                        engine = FasterWhisperTranscriptionEngine(
-                            model_size=configured_transcription_model,
+                        transcript_segments, transcription_diagnostics = _transcribe_with_faster_whisper(
+                            deps.transcription_engine_factory,
+                            audio_path,
+                            model=configured_transcription_model,
+                            language=configured_transcription_language,
                             device=configured_transcription_device,
                             compute_type=configured_transcription_compute_type,
-                            language=None if configured_transcription_language == "auto" else configured_transcription_language,
                         )
-                        transcript_segments = engine.transcribe(audio_path)
-                        transcription_diagnostics = engine.diagnostics
                 except TranscriptionRuntimeError as exc:
                     transcription_diagnostics = {
                         **(transcription_diagnostics or {}),
@@ -2103,6 +2227,67 @@ def run_autoclipper_job(
                         "transcription_failed",
                         f"Could not transcribe audio: {exc}",
                     ) from exc
+
+                primary_quality = _transcript_quality_diagnostics(transcript_segments)
+                if (
+                    transcribe_audio is None
+                    and transcription_diagnostics is not None
+                    and _should_retry_transcription_with_small(
+                        model=configured_transcription_model,
+                        language=configured_transcription_language,
+                        diagnostics=transcription_diagnostics,
+                        reasons=primary_quality["reasons"],
+                    )
+                ):
+                    primary_transcript_path = write_transcript_segments(
+                        transcript_segments,
+                        job_dir / "primary_raw_transcript_segments.json",
+                    )
+                    metadata_files.append(primary_transcript_path)
+                    job.current_step = "文字起こし品質が低いため small + ja で再試行中"
+                    job.updated_at = utc_now()
+                    db.commit()
+                    db.refresh(job)
+                    primary_diagnostics = dict(transcription_diagnostics)
+                    try:
+                        fallback_segments, fallback_diagnostics = _transcribe_with_faster_whisper(
+                            deps.transcription_engine_factory,
+                            audio_path,
+                            model="small",
+                            language="ja",
+                            device=configured_transcription_device,
+                            compute_type=configured_transcription_compute_type,
+                        )
+                    except TranscriptionRuntimeError as exc:
+                        raise PipelineExpectedError(
+                            "transcription_quality_fallback_failed",
+                            "高精度モデルによる文字起こしの再試行に失敗しました。",
+                            details={
+                                "primary_transcript_quality": primary_quality,
+                                "fallback_error_code": exc.code,
+                                **exc.details,
+                            },
+                        ) from exc
+                    except Exception as exc:
+                        raise PipelineExpectedError(
+                            "transcription_quality_fallback_failed",
+                            "高精度モデルによる文字起こしの再試行に失敗しました。",
+                            details={
+                                "primary_transcript_quality": primary_quality,
+                                "fallback_error_type": type(exc).__name__,
+                            },
+                        ) from exc
+
+                    fallback_quality = _transcript_quality_diagnostics(fallback_segments)
+                    transcript_segments = fallback_segments
+                    transcription_model = "small"
+                    transcription_language = "ja"
+                    transcription_diagnostics = _fallback_transcription_diagnostics(
+                        primary=primary_diagnostics,
+                        primary_quality=primary_quality,
+                        fallback=fallback_diagnostics,
+                        fallback_quality=fallback_quality,
+                    )
             raw_transcript_path = write_transcript_segments(transcript_segments, raw_transcript_output_path(job_dir))
             metadata_files.append(raw_transcript_path)
             postprocess_result = postprocess_transcript_segments(transcript_segments, settings)
