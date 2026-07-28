@@ -3,6 +3,7 @@ import type {
   ClipPlanActionResponse,
   ClipPlanBoundaryUpdateRequest,
   ClipPlanDocument,
+  ClipPlanHookSceneUpdateRequest,
   ClipPlanReselectionRequest,
   ClipPlanTranscriptSegment,
   ClipSettings,
@@ -233,6 +234,24 @@ export async function updateClipPlanBoundary(
         "Content-Type": "application/json"
       },
       body: JSON.stringify(boundary)
+    }
+  );
+  return parseJsonResponse<ClipPlanActionResponse>(response);
+}
+
+export async function updateClipPlanHookScene(
+  jobId: string,
+  clipId: string,
+  hookScene: ClipPlanHookSceneUpdateRequest
+): Promise<ClipPlanActionResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/clip-plan/clips/${clipId}/hook-scene`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(hookScene)
     }
   );
   return parseJsonResponse<ClipPlanActionResponse>(response);

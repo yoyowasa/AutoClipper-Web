@@ -83,6 +83,8 @@ class Candidate(BaseModel):
     title_source: TitleSource | None = None
     hook_text: str | None = None
     hook_duration_seconds: float | None = Field(default=None, ge=1, le=8)
+    hook_scene_start: float | None = Field(default=None, ge=0)
+    hook_scene_end: float | None = Field(default=None, ge=0)
     title_style: ClipTextStyle | None = None
     hook_style: ClipTextStyle | None = None
     subtitle_style: ClipTextStyle | None = None
@@ -118,6 +120,19 @@ class Candidate(BaseModel):
             raise ValueError("end must be greater than start")
         if round(self.end - self.start, 6) != round(self.duration, 6):
             raise ValueError("duration must equal end - start")
+        hook_start = self.hook_scene_start
+        hook_end = self.hook_scene_end
+        if (hook_start is None) != (hook_end is None):
+            raise ValueError("hook scene requires both start and end")
+        if hook_start is not None and hook_end is not None:
+            if self.type != "short":
+                raise ValueError("hook scene is only supported for short clips")
+            if hook_end <= hook_start:
+                raise ValueError("hook scene end must be greater than start")
+            if not 0.5 <= hook_end - hook_start <= 3.0:
+                raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+            if hook_start < self.start - 0.001 or hook_end > self.end + 0.001:
+                raise ValueError("hook scene must stay within the selected clip")
         return self
 
 

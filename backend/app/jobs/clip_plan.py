@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
@@ -43,12 +43,40 @@ class ClipPlanClip(BaseModel):
         alias="recommendedEnd",
     )
     manually_adjusted: bool = Field(default=False, alias="manuallyAdjusted")
+    hook_scene_start: float | None = Field(
+        default=None,
+        ge=0,
+        alias="hookSceneStart",
+    )
+    hook_scene_end: float | None = Field(
+        default=None,
+        ge=0,
+        alias="hookSceneEnd",
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
+    @model_validator(mode="after")
+    def validate_hook_scene(self) -> "ClipPlanClip":
+        hook_start = self.hook_scene_start
+        hook_end = self.hook_scene_end
+        if (hook_start is None) != (hook_end is None):
+            raise ValueError("hook scene requires both start and end")
+        if hook_start is None or hook_end is None:
+            return self
+        if self.type != "short":
+            raise ValueError("hook scene is only supported for short clips")
+        if hook_end <= hook_start:
+            raise ValueError("hook scene end must be greater than start")
+        if not 0.5 <= hook_end - hook_start <= 3.0:
+            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        if hook_start < self.start - 0.001 or hook_end > self.end + 0.001:
+            raise ValueError("hook scene must stay within the selected clip")
+        return self
+
 
 class ClipPlanDocument(BaseModel):
-    version: int = 2
+    version: int = 3
     job_id: str = Field(alias="jobId")
     state: ClipPlanState = "preparing"
     revision: int = Field(default=1, ge=1)
@@ -114,6 +142,8 @@ def build_clip_plan(
                 boundaryRefined=candidate.boundary_refined,
                 recommendedStart=candidate.start,
                 recommendedEnd=candidate.end,
+                hookSceneStart=candidate.hook_scene_start,
+                hookSceneEnd=candidate.hook_scene_end,
             )
         )
     now = _utc_iso()
@@ -179,6 +209,36 @@ def update_clip_plan_boundary(
         abs(clip.start - clip.recommended_start) < 0.001
         and abs(clip.end - clip.recommended_end) < 0.001
     )
+    document.updated_at = _utc_iso()
+    return document
+
+
+def update_clip_plan_hook_scene(
+    document: ClipPlanDocument,
+    clip_id: str,
+    *,
+    start: float | None,
+    end: float | None,
+) -> ClipPlanDocument:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+    if clip.type != "short":
+        raise ValueError("hook scene is only supported for short clips")
+    if (start is None) != (end is None):
+        raise ValueError("hook scene requires both start and end")
+    if start is not None and end is not None:
+        if end <= start:
+            raise ValueError("hook scene end must be greater than start")
+        if not 0.5 <= end - start <= 3.0:
+            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        if start < clip.start - 0.001 or end > clip.end + 0.001:
+            raise ValueError("hook scene must stay within the selected clip")
+        clip.hook_scene_start = round(float(start), 3)
+        clip.hook_scene_end = round(float(end), 3)
+    else:
+        clip.hook_scene_start = None
+        clip.hook_scene_end = None
     document.updated_at = _utc_iso()
     return document
 

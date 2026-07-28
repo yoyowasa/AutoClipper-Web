@@ -198,12 +198,21 @@ export default function SubtitleReviewPage() {
         .filter((segment): segment is SubtitleReviewSegment => Boolean(segment)) ?? [],
     [segmentsById, selectedClip]
   );
-  const clipDuration = selectedClip
+  const bodyDuration = selectedClip
     ? Math.max(0, selectedClip.end - selectedClip.start)
     : 0;
   const usesClipPreview = Boolean(
     selectedClip?.previewVideoUrl && !previewFallbackClipIds.has(selectedClip.id)
   );
+  const hookSceneDuration =
+    usesClipPreview &&
+    selectedClip?.hookSceneStart !== null &&
+    selectedClip?.hookSceneStart !== undefined &&
+    selectedClip.hookSceneEnd !== null &&
+    selectedClip.hookSceneEnd !== undefined
+      ? Math.max(0, selectedClip.hookSceneEnd - selectedClip.hookSceneStart)
+      : 0;
+  const clipDuration = bodyDuration + hookSceneDuration;
   const selectedVideoUrl = selectedClip
     ? usesClipPreview
       ? selectedClip.previewVideoUrl
@@ -261,7 +270,15 @@ export default function SubtitleReviewPage() {
         )
       : null;
   const absolutePlaybackTime = selectedClip
-    ? selectedClip.start + clipTime
+    ? hookSceneDuration > 0 &&
+      selectedClip.hookSceneStart !== null &&
+      selectedClip.hookSceneEnd !== null &&
+      clipTime < hookSceneDuration
+      ? Math.min(
+          selectedClip.hookSceneEnd,
+          selectedClip.hookSceneStart + clipTime
+        )
+      : selectedClip.start + Math.max(0, clipTime - hookSceneDuration)
     : 0;
   const activeSegment = useMemo(() => {
     if (!selectedClip) {
@@ -391,7 +408,8 @@ export default function SubtitleReviewPage() {
       selectedClip.start,
       Math.max(selectedClip.start, selectedClip.end - 0.05)
     );
-    const relativeTime = absoluteTime - selectedClip.start;
+    const relativeTime =
+      absoluteTime - selectedClip.start + hookSceneDuration;
     videoRef.current.currentTime = mediaTimeForClipTime(relativeTime);
     setClipTime(relativeTime);
     void videoRef.current.play();
@@ -838,6 +856,12 @@ export default function SubtitleReviewPage() {
                       }`}
                     >
                       clip長 {formatTime(clip.duration)} ・ {clip.segmentIds.length}字幕
+                      {clip.hookSceneStart !== null &&
+                      clip.hookSceneEnd !== null
+                        ? ` ・ 冒頭複製${formatTime(
+                            clip.hookSceneEnd - clip.hookSceneStart
+                          )}`
+                        : ""}
                       {clip.editedSegmentCount > 0
                         ? ` ・ 修正${clip.editedSegmentCount}件`
                         : ""}
@@ -861,7 +885,8 @@ export default function SubtitleReviewPage() {
                         {selectedClipContentDraft?.title ?? selectedClip.title}
                       </h2>
                       <p className="mt-1 text-xs text-neutral-500">
-                        clip長 {formatTime(clipDuration)} ・ 元動画{" "}
+                        完成予定 {formatTime(clipDuration)} ・ 本編{" "}
+                        {formatTime(bodyDuration)} ・ 元動画{" "}
                         {formatTime(selectedClip.start)} - {formatTime(selectedClip.end)}
                       </p>
                     </div>
@@ -1225,7 +1250,9 @@ export default function SubtitleReviewPage() {
                       const isSaving = savingSegmentId === segment.id;
                       const isActive = activeSegmentId === segment.id;
                       const relativeStart = clamp(
-                        segment.start - selectedClip.start,
+                        segment.start -
+                          selectedClip.start +
+                          hookSceneDuration,
                         0,
                         clipDuration
                       );

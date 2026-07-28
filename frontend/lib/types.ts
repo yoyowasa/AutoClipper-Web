@@ -263,6 +263,8 @@ export type SubtitleReviewClip = {
   titleEdited: boolean;
   hookText: string;
   hookDurationSeconds: number;
+  hookSceneStart: number | null;
+  hookSceneEnd: number | null;
   titleStyle: ClipTextStyle | null;
   hookStyle: ClipTextStyle | null;
   subtitleStyle: ClipTextStyle | null;
@@ -313,6 +315,8 @@ export type ClipPlanClip = {
   recommendedStart: number | null;
   recommendedEnd: number | null;
   manuallyAdjusted: boolean;
+  hookSceneStart: number | null;
+  hookSceneEnd: number | null;
 };
 
 export type ClipPlanDocument = {
@@ -348,6 +352,11 @@ export type ClipPlanActionResponse = {
 export type ClipPlanBoundaryUpdateRequest = {
   start: number;
   end: number;
+};
+
+export type ClipPlanHookSceneUpdateRequest = {
+  start: number | null;
+  end: number | null;
 };
 
 export type ClipPlanTranscriptSegment = {

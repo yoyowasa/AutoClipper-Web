@@ -767,6 +767,51 @@ def subtitle_events_for_candidate(
     )
 
 
+def _hook_scene_duration(candidate: Candidate) -> float:
+    if candidate.hook_scene_start is None or candidate.hook_scene_end is None:
+        return 0.0
+    return candidate.hook_scene_end - candidate.hook_scene_start
+
+
+def _subtitle_events_with_hook_scene(
+    transcript_segments: Sequence[TranscriptSegment],
+    candidate: Candidate,
+    layout: SubtitleLayout,
+) -> tuple[list[SubtitleEvent], float]:
+    hook_duration = _hook_scene_duration(candidate)
+    body_events = subtitle_events_for_candidate(
+        transcript_segments,
+        candidate,
+        layout,
+    )
+    if hook_duration <= 0:
+        return body_events, candidate.duration
+
+    hook_candidate = candidate.model_copy(
+        update={
+            "start": candidate.hook_scene_start,
+            "end": candidate.hook_scene_end,
+            "duration": hook_duration,
+            "hook_scene_start": None,
+            "hook_scene_end": None,
+        }
+    )
+    hook_events = subtitle_events_for_candidate(
+        transcript_segments,
+        hook_candidate,
+        layout,
+    )
+    shifted_body_events = [
+        SubtitleEvent(
+            start=round(event.start + hook_duration, 3),
+            end=round(event.end + hook_duration, 3),
+            text=event.text,
+        )
+        for event in body_events
+    ]
+    return [*hook_events, *shifted_body_events], candidate.duration + hook_duration
+
+
 def _ass_color(color: str, default: str) -> str:
     normalized = _coerce_hex_color(color, default)
     red = normalized[1:3]
@@ -886,13 +931,17 @@ def build_ass_document(
     active_layout = layout or (
         SubtitleLayout.short() if candidate.type == "short" else SubtitleLayout.normal()
     )
-    subtitle_events = subtitle_events_for_candidate(transcript_segments, candidate, active_layout)
+    subtitle_events, output_duration = _subtitle_events_with_hook_scene(
+        transcript_segments,
+        candidate,
+        active_layout,
+    )
     title_text = _normalize_text(top_title if top_title is not None else (candidate.overlay_title or ""))
     include_title = candidate.type == "short" and bool(title_text)
     hook_text = _normalize_text(candidate.hook_text or "")
     include_hook = candidate.type == "short" and bool(hook_text)
     hook_end = min(
-        candidate.duration,
+        output_duration,
         candidate.hook_duration_seconds or 3.0,
     )
 
@@ -947,7 +996,7 @@ def build_ass_document(
 
     if include_title:
         title_start = hook_end if include_hook else 0.0
-        if title_start < candidate.duration:
+        if title_start < output_duration:
             title_position = (
                 _style_position_tag(candidate.title_style, active_layout)
                 if candidate.title_style is not None
@@ -963,7 +1012,7 @@ def build_ass_document(
             )
             lines.append(
                 "Dialogue: "
-                f"1,{format_ass_timestamp(title_start)},{format_ass_timestamp(candidate.duration)},"
+                f"1,{format_ass_timestamp(title_start)},{format_ass_timestamp(output_duration)},"
                 f"Title,,0,0,0,,"
                 f"{title_position}"
                 f"{_escape_ass_text(split_subtitle_lines(title_text, max_chars_per_line=20, max_lines=2))}"

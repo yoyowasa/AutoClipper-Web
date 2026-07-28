@@ -4,7 +4,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle
@@ -46,6 +46,8 @@ class SubtitleReviewClip(BaseModel):
     title_edited: bool = Field(default=False, alias="titleEdited")
     hook_text: str = Field(default="", alias="hookText")
     hook_duration_seconds: float = Field(default=3.0, ge=1, le=8, alias="hookDurationSeconds")
+    hook_scene_start: float | None = Field(default=None, ge=0, alias="hookSceneStart")
+    hook_scene_end: float | None = Field(default=None, ge=0, alias="hookSceneEnd")
     title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
@@ -58,6 +60,22 @@ class SubtitleReviewClip(BaseModel):
     edited_segment_count: int = Field(default=0, ge=0, alias="editedSegmentCount")
 
     model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="after")
+    def validate_hook_scene(self) -> "SubtitleReviewClip":
+        hook_start = self.hook_scene_start
+        hook_end = self.hook_scene_end
+        if (hook_start is None) != (hook_end is None):
+            raise ValueError("hook scene requires both start and end")
+        if hook_start is None or hook_end is None:
+            return self
+        if self.type != "short":
+            raise ValueError("hook scene is only supported for short clips")
+        if not 0.5 <= hook_end - hook_start <= 3.0:
+            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        if hook_start < self.start - 0.001 or hook_end > self.end + 0.001:
+            raise ValueError("hook scene must stay within the selected clip")
+        return self
 
 
 class SubtitleReviewDocument(BaseModel):
@@ -154,6 +172,8 @@ def build_subtitle_review(
                 originalTitle=_candidate_title(candidate, type_indices[candidate.type]),
                 hookText=candidate.hook_text or "",
                 hookDurationSeconds=candidate.hook_duration_seconds or 3.0,
+                hookSceneStart=candidate.hook_scene_start,
+                hookSceneEnd=candidate.hook_scene_end,
                 titleStyle=candidate.title_style,
                 hookStyle=candidate.hook_style,
                 subtitleStyle=candidate.subtitle_style,
@@ -400,6 +420,11 @@ def write_subtitle_review_summary(
         "edited_segment_indices": [segment.index for segment in document.segments if segment.edited],
         "edited_title_clip_ids": [clip.id for clip in document.clips if clip.title_edited],
         "hook_clip_ids": [clip.id for clip in document.clips if clip.hook_text],
+        "hook_scene_clip_ids": [
+            clip.id
+            for clip in document.clips
+            if clip.hook_scene_start is not None and clip.hook_scene_end is not None
+        ],
         "timestamps_changed": False,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

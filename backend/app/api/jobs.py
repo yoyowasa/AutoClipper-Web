@@ -29,10 +29,12 @@ from app.jobs.reedit_upload import (
 )
 from app.jobs.queue import (
     ClipPlanBoundaryUpdateEnqueue,
+    ClipPlanHookSceneUpdateEnqueue,
     ClipPlanReselectionEnqueue,
     JobEnqueue,
     RenderEnqueue,
     get_enqueue_clip_plan_boundary_update,
+    get_enqueue_clip_plan_hook_scene_update,
     get_enqueue_clip_plan_reselection,
     get_enqueue_job,
     get_enqueue_render_job,
@@ -59,6 +61,7 @@ from app.models import utc_now
 from app.schemas import (
     ClipPlanActionResponse,
     ClipPlanBoundaryUpdateRequest,
+    ClipPlanHookSceneUpdateRequest,
     ClipPlanReselectionRequest,
     CompletedVideoReeditResponse,
     JobAuditSummary,
@@ -759,7 +762,11 @@ def update_clip_plan_clip_boundary(
             status_code=status.HTTP_409_CONFLICT,
             detail="clip plan is not awaiting boundary adjustment",
         )
-    if not any(clip.id == clip_id for clip in document.clips):
+    planned_clip = next(
+        (clip for clip in document.clips if clip.id == clip_id),
+        None,
+    )
+    if planned_clip is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="clip plan item not found",
@@ -780,6 +787,18 @@ def update_clip_plan_clip_boundary(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="clip end exceeds source video duration",
+        )
+    if (
+        planned_clip.hook_scene_start is not None
+        and planned_clip.hook_scene_end is not None
+        and (
+            request.start > planned_clip.hook_scene_start + 0.001
+            or request.end < planned_clip.hook_scene_end - 0.001
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="clip boundary must continue to contain the hook scene",
         )
 
     job.status = "preparing_clip_review"
@@ -818,6 +837,110 @@ def update_clip_plan_clip_boundary(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="could not queue clip plan boundary adjustment",
+        ) from exc
+
+    return ClipPlanActionResponse(jobId=job.id, status=job.status)
+
+
+@router.patch(
+    "/{job_id}/clip-plan/clips/{clip_id}/hook-scene",
+    response_model=ClipPlanActionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def update_clip_plan_hook_scene(
+    job_id: str,
+    clip_id: str,
+    request: ClipPlanHookSceneUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_hook_scene_update: ClipPlanHookSceneUpdateEnqueue = Depends(
+        get_enqueue_clip_plan_hook_scene_update
+    ),
+) -> ClipPlanActionResponse:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_clip_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clip plan is not awaiting hook scene adjustment",
+        )
+    document = _get_clip_plan_or_404(job_id, paths)
+    if document.state != "awaiting_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clip plan is not awaiting hook scene adjustment",
+        )
+    planned_clip = next(
+        (clip for clip in document.clips if clip.id == clip_id),
+        None,
+    )
+    if planned_clip is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clip plan item not found",
+        )
+    if planned_clip.type != "short":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="hook scene is only supported for short clips",
+        )
+    if request.start is not None and request.end is not None:
+        if (
+            request.start < planned_clip.start - 0.001
+            or request.end > planned_clip.end + 0.001
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="hook scene must stay within the selected clip",
+            )
+        short_max_duration = float(
+            (job.settings_json or {}).get("shortMaxDuration", 75.0)
+        )
+        if (
+            planned_clip.duration + request.end - request.start
+            > short_max_duration + 0.001
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "hook scene would exceed the configured short maximum duration"
+                ),
+            )
+
+    job.status = "preparing_clip_review"
+    job.progress = PROGRESS_MAP["preparing_clip_review"]
+    job.current_step = "冒頭フック映像の確認動画を準備中"
+    job.error_code = None
+    job.error_message = None
+    job.updated_at = utc_now()
+    document.state = "preparing"
+    write_clip_plan(
+        document,
+        clip_plan_output_path(paths.job_outputs(job_id)),
+    )
+    db.commit()
+    db.refresh(job)
+
+    try:
+        enqueue_hook_scene_update(
+            job.id,
+            clip_id,
+            request.start,
+            request.end,
+        )
+    except Exception as exc:
+        job.status = "awaiting_clip_review"
+        job.progress = PROGRESS_MAP["awaiting_clip_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
+        job.updated_at = utc_now()
+        document.state = "awaiting_review"
+        write_clip_plan(
+            document,
+            clip_plan_output_path(paths.job_outputs(job_id)),
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="could not queue hook scene adjustment",
         ) from exc
 
     return ClipPlanActionResponse(jobId=job.id, status=job.status)

@@ -8,6 +8,7 @@ import {
   ClipBoundaryEditor,
   type ClipBoundaryDraft
 } from "../../../../components/ClipBoundaryEditor";
+import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
 import { ClipSelectionEditor } from "../../../../components/ClipSelectionEditor";
 import {
   approveClipPlan,
@@ -16,7 +17,8 @@ import {
   getJobStatus,
   reselectClipPlan,
   toApiUrl,
-  updateClipPlanBoundary
+  updateClipPlanBoundary,
+  updateClipPlanHookScene
 } from "../../../../lib/api";
 import type {
   ClipPlanClip,
@@ -78,7 +80,9 @@ export default function ClipPlanReviewPage() {
   const [job, setJob] = useState<JobStatusResponse | null>(null);
   const [isReselecting, setIsReselecting] = useState(false);
   const [isAdjusting, setIsAdjusting] = useState(false);
+  const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
+  const [previewPlayheadSourceTime, setPreviewPlayheadSourceTime] = useState(0);
   const [boundaryDraft, setBoundaryDraft] = useState<ClipBoundaryDraft | null>(
     null
   );
@@ -95,13 +99,20 @@ export default function ClipPlanReviewPage() {
     const document = await getClipPlan(jobId);
     setPlan(document);
     setDraftSettings(document.settings);
-    setSelectedClipId((current) =>
-      document.clips.some((clip) => clip.id === current)
-        ? current
-        : (document.clips[0]?.id ?? "")
+    const nextSelectedClipId = document.clips.some(
+      (clip) => clip.id === selectedClipId
+    )
+      ? selectedClipId
+      : (document.clips[0]?.id ?? "");
+    setSelectedClipId(nextSelectedClipId);
+    const nextSelectedClip = document.clips.find(
+      (clip) => clip.id === nextSelectedClipId
+    );
+    setPreviewPlayheadSourceTime(
+      nextSelectedClip?.hookSceneStart ?? nextSelectedClip?.start ?? 0
     );
     return document;
-  }, [jobId]);
+  }, [jobId, selectedClipId]);
 
   useEffect(() => {
     if (!jobId) {
@@ -116,6 +127,9 @@ export default function ClipPlanReviewPage() {
         setPlan(document);
         setDraftSettings(document.settings);
         setSelectedClipId(document.clips[0]?.id ?? "");
+        setPreviewPlayheadSourceTime(
+          document.clips[0]?.hookSceneStart ?? document.clips[0]?.start ?? 0
+        );
         setJob(status);
       })
       .catch((caught) => {
@@ -133,7 +147,7 @@ export default function ClipPlanReviewPage() {
   }, [jobId]);
 
   useEffect(() => {
-    if ((!isReselecting && !isAdjusting) || !jobId) {
+    if ((!isReselecting && !isAdjusting && !isUpdatingHookScene) || !jobId) {
       return;
     }
     let active = true;
@@ -149,6 +163,7 @@ export default function ClipPlanReviewPage() {
             await loadPlan();
             setIsReselecting(false);
             setIsAdjusting(false);
+            setIsUpdatingHookScene(false);
             if (status.error) {
               setError(status.error.message);
             }
@@ -156,9 +171,12 @@ export default function ClipPlanReviewPage() {
             window.clearInterval(intervalId);
             setIsReselecting(false);
             setIsAdjusting(false);
+            setIsUpdatingHookScene(false);
             setError(
               status.error?.message ??
-                (isAdjusting
+                (isUpdatingHookScene
+                  ? "冒頭フック映像の更新に失敗しました"
+                  : isAdjusting
                   ? "切り抜き範囲の更新に失敗しました"
                   : "再選定に失敗しました")
             );
@@ -169,6 +187,7 @@ export default function ClipPlanReviewPage() {
             window.clearInterval(intervalId);
             setIsReselecting(false);
             setIsAdjusting(false);
+            setIsUpdatingHookScene(false);
             setError(
               caught instanceof Error ? caught.message : "再選定の状態を取得できませんでした"
             );
@@ -179,7 +198,13 @@ export default function ClipPlanReviewPage() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [isAdjusting, isReselecting, jobId, loadPlan]);
+  }, [
+    isAdjusting,
+    isReselecting,
+    isUpdatingHookScene,
+    jobId,
+    loadPlan
+  ]);
 
   const handleBoundaryDraftChange = useCallback(
     (draft: ClipBoundaryDraft | null) => {
@@ -252,6 +277,7 @@ export default function ClipPlanReviewPage() {
   const controlsDisabled =
     isReselecting ||
     isAdjusting ||
+    isUpdatingHookScene ||
     isApproving ||
     plan?.state !== "awaiting_review";
 
@@ -280,6 +306,66 @@ export default function ClipPlanReviewPage() {
           : "切り抜き範囲を更新できませんでした"
       );
     }
+  }
+
+  async function handleHookSceneUpdate(
+    start: number | null,
+    end: number | null
+  ) {
+    if (!selectedClip) {
+      return;
+    }
+    setError(null);
+    setIsUpdatingHookScene(true);
+    try {
+      await updateClipPlanHookScene(jobId, selectedClip.id, { start, end });
+      setJob((current) =>
+        current
+          ? {
+              ...current,
+              status: "preparing_clip_review",
+              currentStep: "冒頭フック映像の確認動画を準備中"
+            }
+          : current
+      );
+    } catch (caught) {
+      setIsUpdatingHookScene(false);
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "冒頭フック映像を更新できませんでした"
+      );
+    }
+  }
+
+  function handlePreviewTimeUpdate(
+    event: React.SyntheticEvent<HTMLVideoElement>
+  ) {
+    if (!selectedClip) {
+      return;
+    }
+    const previewTime = event.currentTarget.currentTime;
+    const hookStart = selectedClip.hookSceneStart;
+    const hookEnd = selectedClip.hookSceneEnd;
+    if (hookStart !== null && hookEnd !== null) {
+      const hookDuration = hookEnd - hookStart;
+      if (previewTime < hookDuration) {
+        setPreviewPlayheadSourceTime(
+          Math.min(hookEnd, hookStart + previewTime)
+        );
+        return;
+      }
+      setPreviewPlayheadSourceTime(
+        Math.min(
+          selectedClip.end,
+          selectedClip.start + previewTime - hookDuration
+        )
+      );
+      return;
+    }
+    setPreviewPlayheadSourceTime(
+      Math.min(selectedClip.end, selectedClip.start + previewTime)
+    );
   }
 
   async function handleReselect() {
@@ -396,7 +482,12 @@ export default function ClipPlanReviewPage() {
                   }`}
                   key={clip.id}
                   type="button"
-                  onClick={() => setSelectedClipId(clip.id)}
+                  onClick={() => {
+                    setSelectedClipId(clip.id);
+                    setPreviewPlayheadSourceTime(
+                      clip.hookSceneStart ?? clip.start
+                    );
+                  }}
                 >
                   <span
                     className={`text-xs font-semibold ${
@@ -459,15 +550,35 @@ export default function ClipPlanReviewPage() {
                 }
               />
 
+              {selectedClip.type === "short" ? (
+                <ClipHookSceneEditor
+                  clip={selectedClip}
+                  disabled={controlsDisabled}
+                  key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
+                  playheadSourceTime={
+                    previewPlayheadSourceTime >= selectedClip.start &&
+                    previewPlayheadSourceTime <= selectedClip.end
+                      ? previewPlayheadSourceTime
+                      : (selectedClip.hookSceneStart ?? selectedClip.start)
+                  }
+                  saving={isUpdatingHookScene}
+                  shortMaxDuration={plan.settings.shortMaxDuration}
+                  onSave={(start, end) =>
+                    void handleHookSceneUpdate(start, end)
+                  }
+                />
+              ) : null}
+
               <div className="bg-neutral-950 p-4">
                 <div className="mx-auto aspect-video w-full max-w-[1100px] bg-black">
                   {selectedClip.previewVideoUrl ? (
                     <video
                       className="h-full w-full object-contain"
                       controls
-                      key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}-${plan.updatedAt}`}
+                      key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}-${plan.updatedAt}`}
                       preload="metadata"
                       src={`${toApiUrl(selectedClip.previewVideoUrl)}?v=${encodeURIComponent(plan.updatedAt)}`}
+                      onTimeUpdate={handlePreviewTimeUpdate}
                     />
                   ) : (
                     <div className="flex h-full items-center justify-center text-sm text-neutral-300">
