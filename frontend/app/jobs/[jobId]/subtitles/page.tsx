@@ -807,7 +807,7 @@ export default function SubtitleReviewPage() {
 
   return (
     <main className="min-h-screen bg-[#f7f7f4] px-3 py-4 text-neutral-950 sm:px-5">
-      <section className="mx-auto flex w-full max-w-[1600px] flex-col gap-4">
+      <section className="mx-auto flex w-full flex-col gap-4">
         <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 border-b border-neutral-300 pb-4 xl:grid-cols-[minmax(260px,0.75fr)_minmax(600px,1.75fr)_auto]">
           <div className="col-start-1 row-start-1 min-w-0">
             <p className="text-sm font-medium uppercase text-neutral-500">AutoClipper</p>
@@ -892,7 +892,7 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
-        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-2rem)] lg:min-h-[640px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_430px]">
+        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-2rem)] lg:min-h-[640px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(430px,calc(100vw-1170px),1000px)]">
           <aside className="flex min-h-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
             <div className="border-b border-neutral-200 px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
