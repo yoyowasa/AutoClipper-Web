@@ -5614,6 +5614,8 @@ pip check: pass
 
 ### 検証
 
+- backend ruff: pass。
+- backend pytest: `399 passed, 1 skipped`。
 - frontend lint / typecheck / build: pass。
 - Docker frontend rebuild: pass。
 - browser表示確認: pass。
@@ -6176,3 +6178,43 @@ pip check: pass
 - 自動再試行はGPU上の`turbo + ja`に限定する。
 - `small + ja`でも品質gateを満たさない動画は`transcript_unusable`で停止する。
 - `turbo`が正常な動画では従来どおり再試行せず、その結果を使用する。
+
+## 2026-07-29 Task 91 再編集画面の文字スタイル操作改善
+
+### 目的
+
+- 完成MP4から開いた再編集画面でも、タイトル・フック・字幕の文字サイズなどを
+  clipごとに再設定できるようにする。
+
+### 原因
+
+- 文字サイズ、書体、縁取りの入力自体は実装済みだった。
+- 再編集画面の右ペインが固定高かつスクロール不可で、入力欄が大きな配置プレビューの
+  下へ隠れていた。
+
+### 変更
+
+- 右ペイン全体を縦スクロール可能にした。
+- タイトル・フック・字幕の切替直後に、書体・文字サイズ・縁の太さを表示するよう
+  配置を変更した。
+- 既定値を表示中でも変更可能であることを`既定値から編集`と明示した。
+- 個別設定中は、上部から`既定値に戻す`を実行できるようにした。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- Docker frontend rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- 完成済みjobの再編集画面をEdge headlessで確認: pass。
+  - job: `job_83df9af6a79f4741a23b926af57f3262`。
+  - タイトル`88 -> 96`で個別設定へ切替。
+  - フック`88`、字幕`76`を個別タブで表示。
+  - 変更後に保存ボタンが有効化。
+  - ユーザー画像と同じ`1600x708`でも、タイトル文字サイズ入力を初期表示内で確認。
+  - 右ペインは`overflow-y:auto`で全設定・字幕一覧まで移動可能。
+- 実jobの値は保存せず、再読込で元へ戻した。
+
+### 未解決・制限
+
+- 実レンダリング結果は変更していない。文字スタイルの保存・ASS反映経路は既存実装を
+  使用する。

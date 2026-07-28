@@ -168,15 +168,42 @@ export function ClipTextStyleEditor({
             選択中のclipだけに反映します
           </p>
         </div>
-        <span
-          className={`px-2 py-1 text-[11px] font-semibold ${
-            storedStyle
-              ? "bg-sky-100 text-sky-800"
-              : "bg-neutral-200 text-neutral-600"
-          }`}
-        >
-          {storedStyle ? "個別設定" : "既定値"}
-        </span>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <label className="flex min-h-9 items-center gap-2 border border-sky-300 bg-sky-50 px-2 text-[11px] font-semibold text-sky-950">
+            サイズ
+            <input
+              aria-label={`${TARGET_LABELS[target]}文字サイズ`}
+              className="h-7 w-16 border border-neutral-300 bg-white px-2 text-sm font-normal tabular-nums"
+              disabled={disabled}
+              max={220}
+              min={20}
+              type="number"
+              value={style.fontSize}
+              onChange={(event) =>
+                updateStyle({ fontSize: Number(event.target.value) })
+              }
+            />
+          </label>
+          <span
+            className={`px-2 py-1 text-[11px] font-semibold ${
+              storedStyle
+                ? "bg-sky-100 text-sky-800"
+                : "bg-neutral-200 text-neutral-600"
+            }`}
+          >
+            {storedStyle ? "個別設定" : "既定値から編集"}
+          </span>
+          {storedStyle ? (
+            <button
+              className="min-h-8 border border-neutral-300 bg-white px-2 text-[11px] font-semibold text-neutral-700 disabled:text-neutral-400"
+              disabled={disabled}
+              type="button"
+              onClick={() => onChange(target, null)}
+            >
+              既定値に戻す
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div
@@ -200,6 +227,48 @@ export function ClipTextStyleEditor({
             {TARGET_LABELS[item]}
           </button>
         ))}
+      </div>
+
+      <div className="mt-3 grid gap-3 border border-sky-200 bg-sky-50 p-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700 sm:col-span-2">
+          {TARGET_LABELS[target]}の書体
+          <select
+            className="min-h-10 border border-neutral-300 bg-white px-3 text-sm font-normal"
+            disabled={disabled}
+            value={style.fontPreset}
+            onChange={(event) =>
+              updateStyle({
+                fontPreset: event.target.value as ClipTextStyle["fontPreset"]
+              })
+            }
+          >
+            {CLIP_TEXT_FONT_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700">
+          縁の太さ
+          <input
+            className="h-10 border border-neutral-300 bg-white px-3 text-sm font-normal"
+            disabled={disabled}
+            max={20}
+            min={0}
+            type="number"
+            value={style.outlineWidth}
+            onChange={(event) => updateStyle({ outlineWidth: Number(event.target.value) })}
+          />
+        </label>
+        <p className="text-[11px] leading-5 text-sky-900 sm:col-span-2">
+          数値を変えると、選択中のclip専用設定として保存できます。
+        </p>
       </div>
 
       <div className="mt-3 flex justify-center bg-neutral-100 p-3">
@@ -344,56 +413,6 @@ export function ClipTextStyleEditor({
       </div>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700 sm:col-span-2">
-          書体
-          <select
-            className="min-h-10 border border-neutral-300 bg-white px-3 text-sm font-normal"
-            disabled={disabled}
-            value={style.fontPreset}
-            onChange={(event) =>
-              updateStyle({
-                fontPreset: event.target.value as ClipTextStyle["fontPreset"]
-              })
-            }
-          >
-            {CLIP_TEXT_FONT_GROUPS.map((group) => (
-              <optgroup key={group.label} label={group.label}>
-                {group.options.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
-        </label>
-
-        <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700">
-          文字サイズ
-          <input
-            className="h-10 border border-neutral-300 px-3 text-sm font-normal"
-            disabled={disabled}
-            max={220}
-            min={20}
-            type="number"
-            value={style.fontSize}
-            onChange={(event) => updateStyle({ fontSize: Number(event.target.value) })}
-          />
-        </label>
-
-        <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700">
-          縁の太さ
-          <input
-            className="h-10 border border-neutral-300 px-3 text-sm font-normal"
-            disabled={disabled}
-            max={20}
-            min={0}
-            type="number"
-            value={style.outlineWidth}
-            onChange={(event) => updateStyle({ outlineWidth: Number(event.target.value) })}
-          />
-        </label>
-
         <fieldset>
           <legend className="text-xs font-semibold text-neutral-700">文字色</legend>
           <div className="mt-1 flex min-h-10 items-center gap-1.5">
