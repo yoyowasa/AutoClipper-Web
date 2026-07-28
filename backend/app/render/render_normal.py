@@ -166,6 +166,11 @@ def _write_export_metadata(
                 "boundary_refined": candidate.boundary_refined,
                 "boundary_refinement_reason": candidate.boundary_refinement_reason,
                 "boundary_expansion_seconds": candidate.boundary_expansion_seconds,
+                "subtitle_style": (
+                    candidate.subtitle_style.model_dump(by_alias=True)
+                    if candidate.subtitle_style
+                    else None
+                ),
                 "score": _candidate_score(candidate),
                 "video_path": str(video_path),
                 "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,

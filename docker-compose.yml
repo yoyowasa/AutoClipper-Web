@@ -17,6 +17,12 @@ services:
     volumes:
       - ./storage:/app/storage
       - ./frontend/public/fonts/SourceHanSansJP-Heavy.otf:/app/fonts/SourceHanSansJP-Heavy.otf:ro
+      - ./frontend/public/fonts/NotoSansJP-Black.ttf:/app/fonts/NotoSansJP-Black.ttf:ro
+      - ./frontend/public/fonts/MPLUS1-ExtraBold.ttf:/app/fonts/MPLUS1-ExtraBold.ttf:ro
+      - ./frontend/public/fonts/MPLUSRounded1c-ExtraBold.ttf:/app/fonts/MPLUSRounded1c-ExtraBold.ttf:ro
+      - ./frontend/public/fonts/851CHIKARA-DZUYOKU-kanaA.ttf:/app/fonts/851CHIKARA-DZUYOKU-kanaA.ttf:ro
+      - ./frontend/public/fonts/DelaGothicOne-Regular.ttf:/app/fonts/DelaGothicOne-Regular.ttf:ro
+      - ./frontend/public/fonts/Corporate-Logo-Bold-ver3.otf:/app/fonts/Corporate-Logo-Bold-ver3.otf:ro
     depends_on:
       - redis
     healthcheck:
@@ -42,6 +48,12 @@ services:
     volumes:
       - ./storage:/app/storage
       - ./frontend/public/fonts/SourceHanSansJP-Heavy.otf:/app/fonts/SourceHanSansJP-Heavy.otf:ro
+      - ./frontend/public/fonts/NotoSansJP-Black.ttf:/app/fonts/NotoSansJP-Black.ttf:ro
+      - ./frontend/public/fonts/MPLUS1-ExtraBold.ttf:/app/fonts/MPLUS1-ExtraBold.ttf:ro
+      - ./frontend/public/fonts/MPLUSRounded1c-ExtraBold.ttf:/app/fonts/MPLUSRounded1c-ExtraBold.ttf:ro
+      - ./frontend/public/fonts/851CHIKARA-DZUYOKU-kanaA.ttf:/app/fonts/851CHIKARA-DZUYOKU-kanaA.ttf:ro
+      - ./frontend/public/fonts/DelaGothicOne-Regular.ttf:/app/fonts/DelaGothicOne-Regular.ttf:ro
+      - ./frontend/public/fonts/Corporate-Logo-Bold-ver3.otf:/app/fonts/Corporate-Logo-Bold-ver3.otf:ro
     depends_on:
       - redis
 

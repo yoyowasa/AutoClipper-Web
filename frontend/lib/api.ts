@@ -1,4 +1,5 @@
 import type {
+  ClipTextStyle,
   ClipPlanActionResponse,
   ClipPlanBoundaryUpdateRequest,
   ClipPlanDocument,
@@ -308,6 +309,9 @@ export async function updateSubtitleReviewClipContent(
     title: string;
     hookText: string;
     hookDurationSeconds: number;
+    titleStyle: ClipTextStyle | null;
+    hookStyle: ClipTextStyle | null;
+    subtitleStyle: ClipTextStyle | null;
   }
 ): Promise<SubtitleReviewDocument> {
   const response = await fetch(

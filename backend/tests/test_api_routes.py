@@ -249,6 +249,67 @@ def test_completed_mp4_upload_rejects_unknown_or_invalid_file(client: TestClient
     assert invalid.json()["detail"]["code"] == "reedit_mp4_required"
 
 
+def test_subtitle_review_clip_styles_are_saved_and_omission_preserves_them(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, rendered_bytes = _seed_reeditable_export()
+    reopened = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("finished.mp4", rendered_bytes, "video/mp4")},
+    )
+    assert reopened.status_code == 200
+    title_style = {
+        "fontPreset": "heavy",
+        "fontSize": 96,
+        "primaryColor": "#FFF200",
+        "outlineColor": "#000000",
+        "outlineWidth": 6,
+        "xPercent": 50,
+        "yPercent": 12,
+    }
+    subtitle_style = {
+        "fontPreset": "mono",
+        "fontSize": 72,
+        "primaryColor": "#FFFFFF",
+        "outlineColor": "#000000",
+        "outlineWidth": 4,
+        "xPercent": 50,
+        "yPercent": 84,
+    }
+
+    updated = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+        json={
+            "title": "スタイル変更",
+            "hookText": "冒頭フック",
+            "hookDurationSeconds": 3,
+            "titleStyle": title_style,
+            "hookStyle": None,
+            "subtitleStyle": subtitle_style,
+        },
+    )
+
+    assert updated.status_code == 200
+    clip = updated.json()["clips"][0]
+    assert clip["titleStyle"] == title_style
+    assert clip["hookStyle"] is None
+    assert clip["subtitleStyle"] == subtitle_style
+
+    legacy_update = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+        json={
+            "title": "旧クライアント互換",
+            "hookText": "冒頭フック",
+            "hookDurationSeconds": 3,
+        },
+    )
+
+    assert legacy_update.status_code == 200
+    legacy_clip = legacy_update.json()["clips"][0]
+    assert legacy_clip["titleStyle"] == title_style
+    assert legacy_clip["subtitleStyle"] == subtitle_style
+
+
 def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) -> None:
     initial_response = client.get("/api/preferences/subtitle-style-presets")
 
@@ -267,8 +328,12 @@ def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) ->
                 "style": {
                     "shortSubtitleFontName": "Source Han Sans JP Heavy",
                     "shortSubtitleFontSize": 76,
+                    "shortSubtitleXPercent": 50,
+                    "shortSubtitleYPercent": 68.75,
                     "shortSubtitlePrimaryColor": "#FFF200",
                     "normalSubtitleFontSize": 65,
+                    "normalSubtitleXPercent": 50,
+                    "normalSubtitleYPercent": 84,
                     "normalSubtitleOutlineColor": "#000000",
                 },
             },
@@ -286,6 +351,7 @@ def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) ->
     saved = save_response.json()
     assert saved["slots"][0]["name"] == "ホロライブ用"
     assert saved["slots"][0]["style"]["shortSubtitleFontSize"] == 76
+    assert saved["slots"][0]["style"]["shortSubtitleYPercent"] == 68.75
 
     get_response = client.get("/api/preferences/subtitle-style-presets")
 
@@ -551,9 +617,13 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "shortSubtitleOutline": 4,
                 "shortSubtitleLowerMargin": 680,
                 "shortSubtitleAlignment": 5,
+                "shortSubtitleXPercent": 40,
+                "shortSubtitleYPercent": 57.3,
                 "normalSubtitleFontSize": 60,
                 "normalSubtitleOutline": 4,
                 "normalSubtitleLowerMargin": 110,
+                "normalSubtitleXPercent": 50,
+                "normalSubtitleYPercent": 84,
                 "selectionPolicy": "strict_quality",
                 "crossTypeOverlapDedupe": True,
                 "useOpenAIScoring": True,
@@ -602,9 +672,13 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["shortSubtitleOutline"] == 4
         assert job.settings_json["shortSubtitleLowerMargin"] == 680
         assert job.settings_json["shortSubtitleAlignment"] == 5
+        assert job.settings_json["shortSubtitleXPercent"] == 40.0
+        assert job.settings_json["shortSubtitleYPercent"] == 57.3
         assert job.settings_json["normalSubtitleFontSize"] == 60
         assert job.settings_json["normalSubtitleOutline"] == 4
         assert job.settings_json["normalSubtitleLowerMargin"] == 110
+        assert job.settings_json["normalSubtitleXPercent"] == 50.0
+        assert job.settings_json["normalSubtitleYPercent"] == 84.0
         assert job.settings_json["selectionPolicy"] == "strict_quality"
         assert job.settings_json["crossTypeOverlapDedupe"] is True
         assert job.settings_json["useOpenAIScoring"] is True
@@ -772,8 +846,12 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert "subtitleOutline" in properties
     assert "shortSubtitleFontSize" in properties
     assert "shortSubtitleLowerMargin" in properties
+    assert "shortSubtitleXPercent" in properties
+    assert "shortSubtitleYPercent" in properties
     assert "normalSubtitleFontSize" in properties
     assert "normalSubtitleLowerMargin" in properties
+    assert "normalSubtitleXPercent" in properties
+    assert "normalSubtitleYPercent" in properties
 
 
 def test_job_creation_rejects_unsupported_transcription_profile(client: TestClient) -> None:

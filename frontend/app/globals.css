@@ -10,6 +10,54 @@
   font-weight: 900;
 }
 
+@font-face {
+  font-family: "Noto Sans JP Black";
+  src: url("/fonts/NotoSansJP-Black.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 900;
+}
+
+@font-face {
+  font-family: "M PLUS 1 ExtraBold";
+  src: url("/fonts/MPLUS1-ExtraBold.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 800;
+}
+
+@font-face {
+  font-family: "Rounded Mplus 1c ExtraBold";
+  src: url("/fonts/MPLUSRounded1c-ExtraBold.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 800;
+}
+
+@font-face {
+  font-family: "851CHIKARA-DZUYOKU-KANA-A";
+  src: url("/fonts/851CHIKARA-DZUYOKU-kanaA.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+@font-face {
+  font-family: "Dela Gothic One";
+  src: url("/fonts/DelaGothicOne-Regular.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Corporate-Logo-Bold-ver3";
+  src: url("/fonts/Corporate-Logo-Bold-ver3.otf") format("opentype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
 :root {
   color-scheme: light;
 }

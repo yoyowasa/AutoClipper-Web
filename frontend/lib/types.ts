@@ -86,6 +86,8 @@ export type ClipSettings = {
   shortSubtitleOutline?: number;
   shortSubtitleLowerMargin?: number;
   shortSubtitleAlignment?: number;
+  shortSubtitleXPercent?: number;
+  shortSubtitleYPercent?: number;
   shortSubtitlePrimaryColor?: string;
   shortSubtitleOutlineColor?: string;
   normalSubtitleFontName?: string;
@@ -93,6 +95,8 @@ export type ClipSettings = {
   normalSubtitleOutline?: number;
   normalSubtitleLowerMargin?: number;
   normalSubtitleAlignment?: number;
+  normalSubtitleXPercent?: number;
+  normalSubtitleYPercent?: number;
   normalSubtitlePrimaryColor?: string;
   normalSubtitleOutlineColor?: string;
   shortLayout: "auto" | "center_crop" | "blur_background";
@@ -228,6 +232,29 @@ export type SubtitleReviewSegment = {
   affectedClipIds: string[];
 };
 
+export type ClipTextFontPreset =
+  | "sans"
+  | "sans_bold"
+  | "noto_black"
+  | "heavy"
+  | "mplus_extrabold"
+  | "mplus_rounded_extrabold"
+  | "chikara"
+  | "dela_gothic"
+  | "corporate_logo"
+  | "serif"
+  | "mono";
+
+export type ClipTextStyle = {
+  fontPreset: ClipTextFontPreset;
+  fontSize: number;
+  primaryColor: string;
+  outlineColor: string;
+  outlineWidth: number;
+  xPercent: number;
+  yPercent: number;
+};
+
 export type SubtitleReviewClip = {
   id: string;
   type: ExportType;
@@ -236,6 +263,9 @@ export type SubtitleReviewClip = {
   titleEdited: boolean;
   hookText: string;
   hookDurationSeconds: number;
+  titleStyle: ClipTextStyle | null;
+  hookStyle: ClipTextStyle | null;
+  subtitleStyle: ClipTextStyle | null;
   start: number;
   end: number;
   duration: number;

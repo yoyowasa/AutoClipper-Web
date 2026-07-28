@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { ClipTextStyleEditor } from "../../../../components/ClipTextStyleEditor";
 import {
   confirmSubtitleReviewClip,
   finalizeSubtitleReview,
@@ -12,7 +13,14 @@ import {
   updateSubtitleReviewClipContent,
   updateSubtitleReviewSegment
 } from "../../../../lib/api";
+import {
+  clipTextFontFamily,
+  clipTextFontWeight,
+  resolvedClipTextStyle,
+  type ClipTextTarget
+} from "../../../../lib/clipTextStyle";
 import type {
+  ClipTextStyle,
   SubtitleReviewClip,
   SubtitleReviewDocument,
   SubtitleReviewSegment
@@ -50,14 +58,41 @@ type ClipContentDraft = {
   title: string;
   hookText: string;
   hookDurationSeconds: number;
+  titleStyle: ClipTextStyle | null;
+  hookStyle: ClipTextStyle | null;
+  subtitleStyle: ClipTextStyle | null;
 };
 
 function contentDraftForClip(clip: SubtitleReviewClip): ClipContentDraft {
   return {
     title: clip.title,
     hookText: clip.hookText,
-    hookDurationSeconds: clip.hookDurationSeconds
+    hookDurationSeconds: clip.hookDurationSeconds,
+    titleStyle: clip.titleStyle,
+    hookStyle: clip.hookStyle,
+    subtitleStyle: clip.subtitleStyle
   };
+}
+
+function stylesEqual(
+  left: ClipTextStyle | null,
+  right: ClipTextStyle | null
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    left.fontPreset === right.fontPreset &&
+    left.fontSize === right.fontSize &&
+    left.primaryColor === right.primaryColor &&
+    left.outlineColor === right.outlineColor &&
+    left.outlineWidth === right.outlineWidth &&
+    left.xPercent === right.xPercent &&
+    left.yPercent === right.yPercent
+  );
 }
 
 function isClipContentDirty(
@@ -69,7 +104,10 @@ function isClipContentDirty(
     draft &&
       (draft.title !== clip.title ||
         draft.hookText !== clip.hookText ||
-        draft.hookDurationSeconds !== clip.hookDurationSeconds)
+        draft.hookDurationSeconds !== clip.hookDurationSeconds ||
+        !stylesEqual(draft.titleStyle, clip.titleStyle) ||
+        !stylesEqual(draft.hookStyle, clip.hookStyle) ||
+        !stylesEqual(draft.subtitleStyle, clip.subtitleStyle))
   );
 }
 
@@ -210,21 +248,43 @@ export default function SubtitleReviewPage() {
         ? selectedClipContentDraft?.hookText.trim()
         : selectedClipContentDraft?.title.trim()
       : "";
+  const previewOverlayTarget: ClipTextTarget =
+    previewOverlayKind === "フック" ? "hook" : "title";
+  const previewOverlayStyle =
+    selectedClip && selectedClipContentDraft
+      ? resolvedClipTextStyle(
+          previewOverlayTarget === "hook"
+            ? selectedClipContentDraft.hookStyle
+            : selectedClipContentDraft.titleStyle,
+          previewOverlayTarget,
+          selectedClip.type
+        )
+      : null;
   const absolutePlaybackTime = selectedClip
     ? selectedClip.start + clipTime
     : 0;
-  const activeSegmentId = useMemo(() => {
+  const activeSegment = useMemo(() => {
     if (!selectedClip) {
       return null;
     }
-    return (
-      selectedSegments.find(
-        (segment) =>
-          absolutePlaybackTime >= Math.max(segment.start, selectedClip.start) &&
-          absolutePlaybackTime < Math.min(segment.end, selectedClip.end)
-      )?.id ?? null
+    return selectedSegments.find(
+      (segment) =>
+        absolutePlaybackTime >= Math.max(segment.start, selectedClip.start) &&
+        absolutePlaybackTime < Math.min(segment.end, selectedClip.end)
     );
   }, [absolutePlaybackTime, selectedClip, selectedSegments]);
+  const activeSegmentId = activeSegment?.id ?? null;
+  const activeSubtitleText = activeSegment
+    ? (drafts[activeSegment.id] ?? activeSegment.text)
+    : "";
+  const previewSubtitleStyle =
+    selectedClip && selectedClipContentDraft
+      ? resolvedClipTextStyle(
+          selectedClipContentDraft.subtitleStyle,
+          "subtitle",
+          selectedClip.type
+        )
+      : null;
 
   useEffect(() => {
     const video = videoRef.current;
@@ -486,6 +546,24 @@ export default function SubtitleReviewPage() {
     });
   }
 
+  function updateClipTextStyle(
+    target: ClipTextTarget,
+    style: ClipTextStyle | null
+  ) {
+    if (!selectedClip) {
+      return;
+    }
+    if (target === "title") {
+      updateClipContentDraft(selectedClip.id, { titleStyle: style });
+      return;
+    }
+    if (target === "hook") {
+      updateClipContentDraft(selectedClip.id, { hookStyle: style });
+      return;
+    }
+    updateClipContentDraft(selectedClip.id, { subtitleStyle: style });
+  }
+
   async function saveClipContent() {
     if (!selectedClip || !selectedClipContentDraft) {
       return;
@@ -506,7 +584,12 @@ export default function SubtitleReviewPage() {
         title,
         hookText:
           selectedClip.type === "short" ? selectedClipContentDraft.hookText.trim() : "",
-        hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds
+        hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
+        titleStyle:
+          selectedClip.type === "short" ? selectedClipContentDraft.titleStyle : null,
+        hookStyle:
+          selectedClip.type === "short" ? selectedClipContentDraft.hookStyle : null,
+        subtitleStyle: selectedClipContentDraft.subtitleStyle
       });
       setReview(updated);
       const updatedClip = updated.clips.find((clip) => clip.id === selectedClip.id);
@@ -797,7 +880,7 @@ export default function SubtitleReviewPage() {
                     className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white"
                     ref={playerShellRef}
                   >
-                    <div className="relative">
+                    <div className="relative" style={{ containerType: "inline-size" }}>
                       <video
                         className="aspect-video w-full cursor-pointer bg-black object-contain lg:max-h-[calc(100vh-30rem)] lg:min-h-[220px]"
                         key={`${selectedClip.id}:${selectedVideoUrl ?? ""}`}
@@ -824,15 +907,61 @@ export default function SubtitleReviewPage() {
                         onTimeUpdate={handleVideoTimeUpdate}
                         onWaiting={() => setIsBuffering(true)}
                       />
-                      {previewOverlayText ? (
-                        <div className="pointer-events-none absolute inset-x-4 top-4 z-10 flex justify-center">
-                          <div className="max-w-[86%] bg-black/75 px-4 py-3 text-center text-base font-bold leading-snug text-white sm:text-xl">
-                            <span className="mb-1 block text-[10px] font-semibold text-sky-200">
-                              {previewOverlayKind}
-                            </span>
-                            {previewOverlayText}
-                          </div>
-                        </div>
+                      {previewOverlayText && previewOverlayStyle ? (
+                        <p
+                          className="pointer-events-none absolute z-10 m-0 max-w-[90%] whitespace-pre-line text-center leading-[1.2]"
+                          style={{
+                            color: previewOverlayStyle.primaryColor,
+                            fontFamily: clipTextFontFamily(
+                              previewOverlayStyle.fontPreset
+                            ),
+                            fontSize: `clamp(14px, ${
+                              previewOverlayStyle.fontSize /
+                              (selectedClip.type === "short" ? 10.8 : 19.2)
+                            }cqw, 60px)`,
+                            fontWeight: clipTextFontWeight(
+                              previewOverlayStyle.fontPreset
+                            ),
+                            left: `${previewOverlayStyle.xPercent}%`,
+                            top: `${previewOverlayStyle.yPercent}%`,
+                            transform: "translate(-50%, -50%)",
+                            WebkitTextStroke: `${Math.min(
+                              4,
+                              previewOverlayStyle.outlineWidth * 0.3
+                            )}px ${previewOverlayStyle.outlineColor}`,
+                            textShadow: `0 2px 2px ${previewOverlayStyle.outlineColor}`
+                          }}
+                        >
+                          {previewOverlayText}
+                        </p>
+                      ) : null}
+                      {activeSubtitleText && previewSubtitleStyle ? (
+                        <p
+                          className="pointer-events-none absolute z-10 m-0 max-w-[90%] whitespace-pre-line text-center leading-[1.25]"
+                          style={{
+                            color: previewSubtitleStyle.primaryColor,
+                            fontFamily: clipTextFontFamily(
+                              previewSubtitleStyle.fontPreset
+                            ),
+                            fontSize: `clamp(13px, ${
+                              previewSubtitleStyle.fontSize /
+                              (selectedClip.type === "short" ? 10.8 : 19.2)
+                            }cqw, 54px)`,
+                            fontWeight: clipTextFontWeight(
+                              previewSubtitleStyle.fontPreset
+                            ),
+                            left: `${previewSubtitleStyle.xPercent}%`,
+                            top: `${previewSubtitleStyle.yPercent}%`,
+                            transform: "translate(-50%, -50%)",
+                            WebkitTextStroke: `${Math.min(
+                              4,
+                              previewSubtitleStyle.outlineWidth * 0.3
+                            )}px ${previewSubtitleStyle.outlineColor}`,
+                            textShadow: `0 2px 2px ${previewSubtitleStyle.outlineColor}`
+                          }}
+                        >
+                          {activeSubtitleText}
+                        </p>
                       ) : null}
                       {!isPlayerReady || isBuffering ? (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/60 px-5 text-center text-sm font-semibold">
@@ -1032,6 +1161,26 @@ export default function SubtitleReviewPage() {
                     </>
                   ) : null}
 
+                  <ClipTextStyleEditor
+                    clipType={selectedClip.type}
+                    disabled={!isEditable}
+                    hookText={selectedClipContentDraft?.hookText ?? ""}
+                    key={selectedClip.id}
+                    styles={{
+                      title: selectedClipContentDraft?.titleStyle ?? null,
+                      hook: selectedClipContentDraft?.hookStyle ?? null,
+                      subtitle: selectedClipContentDraft?.subtitleStyle ?? null
+                    }}
+                    subtitleText={
+                      activeSubtitleText ||
+                      (selectedSegments[0]
+                        ? drafts[selectedSegments[0].id] ?? selectedSegments[0].text
+                        : "")
+                    }
+                    titleText={selectedClipContentDraft?.title ?? ""}
+                    onChange={updateClipTextStyle}
+                  />
+
                   <button
                     className="mt-3 min-h-10 w-full bg-neutral-950 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
                     disabled={
@@ -1046,7 +1195,7 @@ export default function SubtitleReviewPage() {
                   >
                     {savingClipContentId === selectedClip.id
                       ? "保存中"
-                      : "タイトル・フックを保存"}
+                      : "内容・文字スタイルを保存"}
                   </button>
                 </div>
 

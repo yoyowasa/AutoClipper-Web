@@ -1017,12 +1017,20 @@ def update_subtitle_review_clip_content(
         )
     document = _get_subtitle_review_or_404(job_id, paths)
     try:
+        style_updates: dict[str, object] = {}
+        if "title_style" in request.model_fields_set:
+            style_updates["title_style"] = request.title_style
+        if "hook_style" in request.model_fields_set:
+            style_updates["hook_style"] = request.hook_style
+        if "subtitle_style" in request.model_fields_set:
+            style_updates["subtitle_style"] = request.subtitle_style
         document = update_review_clip_content(
             document,
             clip_id,
             title=request.title,
             hook_text=request.hook_text,
             hook_duration_seconds=request.hook_duration_seconds,
+            **style_updates,
         )
     except KeyError as exc:
         raise HTTPException(

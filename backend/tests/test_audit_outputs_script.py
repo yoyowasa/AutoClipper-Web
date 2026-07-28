@@ -375,6 +375,36 @@ def test_audit_detects_ass_title_layout_and_japanese_font(tmp_path: Path) -> Non
     assert subtitle["title_subtitle_vertical_gap"] and subtitle["title_subtitle_vertical_gap"] > 0
 
 
+def test_audit_accepts_configurable_japanese_ass_fonts(tmp_path: Path) -> None:
+    path = tmp_path / "short_custom_fonts.ass"
+    path.write_text(
+        "[Script Info]\n"
+        "PlayResY: 1920\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Subtitle,M PLUS 1 ExtraBold,68,&H00FFFFFF,&H000000FF,&H00000000,"
+        "&H80000000,1,0,0,0,100,100,0,0,1,4,2,5,0,0,0,1\n"
+        "Style: Title,851CHIKARA-DZUYOKU-KANA-A,92,&H00FFFFFF,&H000000FF,&H00000000,"
+        "&H80000000,1,0,0,0,100,100,0,0,1,6,2,5,0,0,0,1\n"
+        "Style: Hook,Corporate-Logo-Bold-ver3,76,&H00FFFFFF,&H000000FF,&H00000000,"
+        "&H80000000,0,0,0,0,100,100,0,0,1,4,2,5,0,0,0,1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 1,0:00:02.00,0:00:10.00,Title,,0,0,0,,日本語タイトル\n"
+        "Dialogue: 2,0:00:00.00,0:00:02.00,Hook,,0,0,0,,日本語フック\n"
+        "Dialogue: 0,0:00:01.00,0:00:03.00,Subtitle,,0,0,0,,読みやすい字幕\n",
+        encoding="utf-8",
+    )
+
+    subtitle = audit_outputs.analyze_ass_subtitles(path, clip_type="short")
+
+    assert subtitle["font_supports_japanese"] is True
+
+
 def test_audit_warns_when_overlay_title_has_no_ass_title_event(tmp_path: Path) -> None:
     output_dir = write_audit_job(tmp_path, "job_audit")
     short_metadata = json.loads((output_dir / "shorts" / "short_01.json").read_text(encoding="utf-8"))

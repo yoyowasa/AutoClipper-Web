@@ -7,7 +7,7 @@ from typing import Literal, Sequence
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.select_candidates import CandidateSelection
 
 
@@ -15,6 +15,7 @@ SUBTITLE_REVIEW_FILENAME = "subtitle_review.json"
 SUBTITLE_REVIEW_SUMMARY_FILENAME = "subtitle_review_summary.json"
 REVIEWED_TRANSCRIPT_FILENAME = "reviewed_transcript_segments.json"
 SUBTITLE_REVIEW_PREVIEW_DIRNAME = "subtitle_review_previews"
+_STYLE_UNSET = object()
 
 SubtitleReviewState = Literal["awaiting_review", "render_queued", "rendering", "completed"]
 
@@ -45,6 +46,9 @@ class SubtitleReviewClip(BaseModel):
     title_edited: bool = Field(default=False, alias="titleEdited")
     hook_text: str = Field(default="", alias="hookText")
     hook_duration_seconds: float = Field(default=3.0, ge=1, le=8, alias="hookDurationSeconds")
+    title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
+    hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
+    subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
     start: float = Field(ge=0)
     end: float = Field(ge=0)
     duration: float = Field(ge=0)
@@ -150,6 +154,9 @@ def build_subtitle_review(
                 originalTitle=_candidate_title(candidate, type_indices[candidate.type]),
                 hookText=candidate.hook_text or "",
                 hookDurationSeconds=candidate.hook_duration_seconds or 3.0,
+                titleStyle=candidate.title_style,
+                hookStyle=candidate.hook_style,
+                subtitleStyle=candidate.subtitle_style,
                 start=candidate.start,
                 end=candidate.end,
                 duration=candidate.duration,
@@ -230,6 +237,9 @@ def update_review_clip_content(
     title: str,
     hook_text: str = "",
     hook_duration_seconds: float = 3.0,
+    title_style: ClipTextStyle | None | object = _STYLE_UNSET,
+    hook_style: ClipTextStyle | None | object = _STYLE_UNSET,
+    subtitle_style: ClipTextStyle | None | object = _STYLE_UNSET,
 ) -> SubtitleReviewDocument:
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
@@ -247,11 +257,25 @@ def update_review_clip_content(
         raise ValueError("hook duration must be between 1 and 8 seconds")
     if clip.type != "short" and normalized_hook:
         raise ValueError("hook text is only supported for short clips")
+    if clip.type != "short" and (
+        (title_style is not _STYLE_UNSET and title_style is not None)
+        or (hook_style is not _STYLE_UNSET and hook_style is not None)
+    ):
+        raise ValueError("title and hook styles are only supported for short clips")
+
+    next_title_style = clip.title_style if title_style is _STYLE_UNSET else title_style
+    next_hook_style = clip.hook_style if hook_style is _STYLE_UNSET else hook_style
+    next_subtitle_style = (
+        clip.subtitle_style if subtitle_style is _STYLE_UNSET else subtitle_style
+    )
 
     changed = (
         clip.title != normalized_title
         or clip.hook_text != normalized_hook
         or clip.hook_duration_seconds != hook_duration_seconds
+        or clip.title_style != next_title_style
+        or clip.hook_style != next_hook_style
+        or clip.subtitle_style != next_subtitle_style
     )
     if not changed:
         return _refresh_counts(document)
@@ -262,6 +286,11 @@ def update_review_clip_content(
     clip.title_edited = normalized_title != original_title
     clip.hook_text = normalized_hook if clip.type == "short" else ""
     clip.hook_duration_seconds = round(hook_duration_seconds, 3)
+    clip.title_style = next_title_style if isinstance(next_title_style, ClipTextStyle) else None
+    clip.hook_style = next_hook_style if isinstance(next_hook_style, ClipTextStyle) else None
+    clip.subtitle_style = (
+        next_subtitle_style if isinstance(next_subtitle_style, ClipTextStyle) else None
+    )
     clip.confirmed = False
     return _refresh_counts(document)
 
@@ -340,6 +369,9 @@ def apply_reviewed_clip_content(
         if candidate.type == "short":
             updates["hook_text"] = clip.hook_text or None
             updates["hook_duration_seconds"] = clip.hook_duration_seconds
+            updates["title_style"] = clip.title_style
+            updates["hook_style"] = clip.hook_style
+        updates["subtitle_style"] = clip.subtitle_style
         return candidate.model_copy(update=updates)
 
     return selection.model_copy(

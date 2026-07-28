@@ -16,6 +16,8 @@ export const SUBTITLE_STYLE_KEYS = [
   "shortSubtitleOutline",
   "shortSubtitleLowerMargin",
   "shortSubtitleAlignment",
+  "shortSubtitleXPercent",
+  "shortSubtitleYPercent",
   "shortSubtitlePrimaryColor",
   "shortSubtitleOutlineColor",
   "normalSubtitleFontName",
@@ -23,6 +25,8 @@ export const SUBTITLE_STYLE_KEYS = [
   "normalSubtitleOutline",
   "normalSubtitleLowerMargin",
   "normalSubtitleAlignment",
+  "normalSubtitleXPercent",
+  "normalSubtitleYPercent",
   "normalSubtitlePrimaryColor",
   "normalSubtitleOutlineColor"
 ] as const satisfies readonly (keyof ClipSettings)[];

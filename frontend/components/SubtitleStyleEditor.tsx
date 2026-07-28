@@ -2,6 +2,14 @@
 
 import { useState } from "react";
 
+import { SUBTITLE_FONT_GROUPS } from "../lib/clipTextStyle";
+import {
+  HORIZONTAL_POSITION_PRESETS,
+  legacySubtitleYPercent,
+  matchingPositionPreset,
+  positionPixels,
+  verticalPositionPresets
+} from "../lib/textPositionPresets";
 import type { ClipSettings } from "../lib/types";
 import {
   SubtitleStylePreview,
@@ -21,6 +29,8 @@ type StyleField =
   | "outline"
   | "lowerMargin"
   | "alignment"
+  | "xPercent"
+  | "yPercent"
   | "primaryColor"
   | "outlineColor";
 
@@ -34,6 +44,8 @@ const STYLE_KEYS: Record<
     outline: "shortSubtitleOutline",
     lowerMargin: "shortSubtitleLowerMargin",
     alignment: "shortSubtitleAlignment",
+    xPercent: "shortSubtitleXPercent",
+    yPercent: "shortSubtitleYPercent",
     primaryColor: "shortSubtitlePrimaryColor",
     outlineColor: "shortSubtitleOutlineColor"
   },
@@ -43,6 +55,8 @@ const STYLE_KEYS: Record<
     outline: "normalSubtitleOutline",
     lowerMargin: "normalSubtitleLowerMargin",
     alignment: "normalSubtitleAlignment",
+    xPercent: "normalSubtitleXPercent",
+    yPercent: "normalSubtitleYPercent",
     primaryColor: "normalSubtitlePrimaryColor",
     outlineColor: "normalSubtitleOutlineColor"
   }
@@ -53,25 +67,19 @@ const STYLE_DEFAULTS = {
     fontSize: 76,
     outline: 5,
     lowerMargin: 250,
-    alignment: 2
+    alignment: 2,
+    xPercent: 50,
+    yPercent: 68.75
   },
   normal: {
     fontSize: 65,
     outline: 4,
     lowerMargin: 86,
-    alignment: 2
+    alignment: 2,
+    xPercent: 50,
+    yPercent: 84
   }
 } as const;
-
-const SUBTITLE_FONT_OPTIONS = [
-  { value: "", label: "標準ゴシック（Noto Sans CJK JP）" },
-  {
-    value: "Source Han Sans JP Heavy",
-    label: "極太ゴシック（Source Han Sans JP Heavy）"
-  },
-  { value: "Noto Serif CJK JP", label: "明朝（Noto Serif CJK JP）" },
-  { value: "Noto Sans Mono CJK JP", label: "等幅ゴシック（Noto Sans Mono CJK JP）" }
-] as const;
 
 const COLOR_PRESETS = [
   { value: "#FFFFFF", label: "白" },
@@ -111,6 +119,8 @@ function resetStyle(settings: ClipSettings, mode: SubtitlePreviewMode): ClipSett
     [keys.outline]: undefined,
     [keys.lowerMargin]: undefined,
     [keys.alignment]: undefined,
+    [keys.xPercent]: STYLE_DEFAULTS[mode].xPercent,
+    [keys.yPercent]: STYLE_DEFAULTS[mode].yPercent,
     [keys.primaryColor]: undefined,
     [keys.outlineColor]: undefined
   };
@@ -191,6 +201,30 @@ export function SubtitleStyleEditor({
     (styleValue(settings, mode, "outlineColor") as string | undefined) ??
     settings.subtitleOutlineColor ??
     "#000000";
+  const xPercent =
+    (styleValue(settings, mode, "xPercent") as number | undefined) ??
+    defaults.xPercent;
+  const explicitYPercent = styleValue(settings, mode, "yPercent") as
+    | number
+    | undefined;
+  const yPercent =
+    explicitYPercent ??
+    legacySubtitleYPercent({
+      mode,
+      alignment: alignment ?? defaults.alignment,
+      lowerMargin: lowerMargin ?? defaults.lowerMargin,
+      fontSize: fontSize ?? defaults.fontSize
+    });
+  const verticalPresets = verticalPositionPresets(mode);
+  const selectedHorizontalPreset = matchingPositionPreset(
+    HORIZONTAL_POSITION_PRESETS,
+    xPercent
+  );
+  const selectedVerticalPreset = matchingPositionPreset(
+    verticalPresets,
+    yPercent
+  );
+  const position = positionPixels(mode, xPercent, yPercent);
 
   return (
     <section className="border-t border-neutral-200 pt-5 md:col-span-2">
@@ -263,10 +297,15 @@ export function SubtitleStyleEditor({
               )
             }
           >
-            {SUBTITLE_FONT_OPTIONS.map((font) => (
-              <option key={font.value || "default"} value={font.value}>
-                {font.label}
-              </option>
+            <option value="">既定（Noto Sans CJK JP）</option>
+            {SUBTITLE_FONT_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.options.map((font) => (
+                  <option key={font.value} value={font.value}>
+                    {font.label}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
         </label>
@@ -337,53 +376,158 @@ export function SubtitleStyleEditor({
           }
         />
 
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-neutral-700">表示位置</span>
-          <select
-            className="min-h-10 border border-neutral-300 bg-white px-3 text-sm"
-            disabled={disabled}
-            value={(alignment ?? "").toString()}
-            onChange={(event) =>
-              onChange(
-                withStyleValue(
-                  settings,
-                  mode,
-                  "alignment",
-                  event.target.value === "" ? undefined : Number(event.target.value)
-                )
-              )
-            }
-          >
-            <option value="">標準（下）</option>
-            <option value="2">下</option>
-            <option value="5">中央</option>
-            <option value="8">上</option>
-          </select>
-        </label>
+        <fieldset className="sm:col-span-2 lg:col-span-4">
+          <legend className="text-sm font-medium text-neutral-700">
+            縦位置
+            <span className="ml-2 text-xs font-normal text-neutral-500">
+              Y {position.y}px
+            </span>
+          </legend>
+          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+            {verticalPresets.map((preset) => {
+              const selected = selectedVerticalPreset?.id === preset.id;
+              return (
+                <button
+                  aria-pressed={selected}
+                  className={`min-h-12 border px-2 py-1.5 text-left ${
+                    selected
+                      ? "border-sky-700 bg-sky-50 text-sky-950"
+                      : "border-neutral-300 bg-white text-neutral-700"
+                  }`}
+                  disabled={disabled}
+                  key={preset.id}
+                  type="button"
+                  onClick={() =>
+                    onChange(
+                      withStyleValue(
+                        settings,
+                        mode,
+                        "yPercent",
+                        preset.percent
+                      )
+                    )
+                  }
+                >
+                  <span className="block text-[11px] font-semibold">
+                    {preset.label}
+                  </span>
+                  <span className="block text-[9px] text-neutral-500">
+                    {preset.purpose}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
 
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-neutral-700">画面端からの余白</span>
-          <input
-            className="min-h-10 border border-neutral-300 px-3 text-sm"
-            disabled={disabled || alignment === 5}
-            max={mode === "short" ? 1600 : 900}
-            min={0}
-            placeholder={`既定 ${defaults.lowerMargin}`}
-            step={10}
-            type="number"
-            value={lowerMargin ?? ""}
-            onChange={(event) =>
-              onChange(
-                withStyleValue(
-                  settings,
-                  mode,
-                  "lowerMargin",
-                  event.target.value === "" ? undefined : Number(event.target.value)
-                )
-              )
-            }
-          />
-        </label>
+        <fieldset className="sm:col-span-2 lg:col-span-4">
+          <legend className="text-sm font-medium text-neutral-700">
+            横位置
+            <span className="ml-2 text-xs font-normal text-neutral-500">
+              X {position.x}px
+            </span>
+          </legend>
+          <div className="mt-2 grid grid-cols-5 gap-1.5">
+            {HORIZONTAL_POSITION_PRESETS.map((preset) => {
+              const selected = selectedHorizontalPreset?.id === preset.id;
+              return (
+                <button
+                  aria-pressed={selected}
+                  className={`min-h-10 border px-1 text-xs font-semibold ${
+                    selected
+                      ? "border-sky-700 bg-sky-50 text-sky-950"
+                      : "border-neutral-300 bg-white text-neutral-700"
+                  }`}
+                  disabled={disabled}
+                  key={preset.id}
+                  title={preset.purpose}
+                  type="button"
+                  onClick={() =>
+                    onChange(
+                      withStyleValue(
+                        settings,
+                        mode,
+                        "xPercent",
+                        preset.percent
+                      )
+                    )
+                  }
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        <details className="border border-neutral-300 bg-neutral-50 sm:col-span-2 lg:col-span-4">
+          <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-neutral-700">
+            位置を1%単位で微調整
+          </summary>
+          <div className="grid gap-4 border-t border-neutral-300 p-3 sm:grid-cols-2">
+            <label className="flex flex-col gap-2">
+              <span className="flex justify-between text-sm font-medium text-neutral-700">
+                横位置
+                <span className="text-xs font-normal tabular-nums">
+                  {xPercent}% / X {position.x}px
+                </span>
+              </span>
+              <input
+                className="h-7 accent-sky-600"
+                disabled={disabled}
+                max={95}
+                min={5}
+                step={1}
+                type="range"
+                value={xPercent}
+                onChange={(event) =>
+                  onChange(
+                    withStyleValue(
+                      settings,
+                      mode,
+                      "xPercent",
+                      Number(event.target.value)
+                    )
+                  )
+                }
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="flex justify-between text-sm font-medium text-neutral-700">
+                縦位置
+                <span className="text-xs font-normal tabular-nums">
+                  {yPercent.toFixed(1)}% / Y {position.y}px
+                </span>
+              </span>
+              <input
+                className="h-7 accent-sky-600"
+                disabled={disabled}
+                max={95}
+                min={5}
+                step={1}
+                type="range"
+                value={yPercent}
+                onChange={(event) =>
+                  onChange(
+                    withStyleValue(
+                      settings,
+                      mode,
+                      "yPercent",
+                      Number(event.target.value)
+                    )
+                  )
+                }
+              />
+            </label>
+            {explicitYPercent === undefined ? (
+              <p className="m-0 text-xs text-neutral-500 sm:col-span-2">
+                保存済みの「上・中央・下＋余白」を現在の座標へ換算して表示しています。
+                操作すると新しい座標方式へ切り替わります。
+              </p>
+            ) : null}
+          </div>
+        </details>
       </div>
     </section>
   );

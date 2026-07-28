@@ -5836,3 +5836,148 @@ pip check: pass
 - 別PCへの持ち出しやjob削除後の復元には、将来の編集用プロジェクトZIPが必要。
 - 保存済みexportが非常に多い環境では初回照合に時間がかかる可能性がある。
 - Task 85 branchはTask 84 branchを親にしている。Task 84 merge後にmainへ統合する。
+
+## 2026-07-28 Task 86 clip別タイトル・フック・字幕スタイル
+
+### 目的
+
+- タイトル、冒頭フック、字幕の書体・サイズ・色・縁取り・位置を、clipごとに個別設定できるようにする。
+- ショートと通常切り抜きで別の字幕スタイルを保存し、再アップロード再編集でも復元する。
+
+### 変更
+
+- 字幕確認画面へclip別の文字スタイル編集を追加。
+  - ショート: タイトル / フック / 字幕を個別設定。
+  - 通常切り抜き: 字幕を個別設定。
+  - 書体プリセット: 標準ゴシック / 太字ゴシック / 極太ゴシック / 明朝 / 等幅ゴシック。
+  - 文字サイズ、文字色、縁取り色、縁の太さ、横位置、縦位置を設定。
+- 9:16 / 16:9の配置プレビューへ選択中のスタイルを反映。
+- subtitle review、candidate、render metadataへclip別スタイルを保存。
+- ASSのTitle / Hook / Subtitleを別styleとして生成し、個別の位置を`\an5\pos(x,y)`で焼き込み。
+- スタイル未指定時は既存のjob設定と描画位置を維持。
+- auditの日本語対応フォント判定へ新プリセット4書体を追加。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `387 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU compose rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- browser実操作: pass。
+  - 5書体とTitle / Hook / Subtitleの個別タブを確認。
+  - UI保存後のAPI永続化と、再読込後の設定復元を確認。
+  - mobile `390x844`: 横overflow `0`、console error `0`。
+- Docker実レンダリング: pass。
+  - job: `job_701530dfaf214022a84faeb3333877a8`
+  - Title: 極太ゴシック、黄色、`46% / 14%`。
+  - Hook: 明朝、ピンク、`52% / 26%`。
+  - Subtitle: 等幅ゴシック、水色、`50% / 82%`。
+  - ASSの3style、色、サイズ、位置tagを確認。
+  - short: `1080x1920`、render failure `0`、sidecar risk `0`。
+  - auditの新書体誤警告を修正し、残警告は素材由来の`likely_abrupt_ending`のみ。
+
+### 未解決・制限
+
+- 通常切り抜きはタイトルを映像へ焼き込まないため、個別設定対象は字幕のみ。
+- 書体は同梱済み・Dockerへmount済みのフォントだけを選択可能。任意フォントファイルの追加UIは対象外。
+- `ruff check backend scripts`は未変更の`scripts/smoke_runtime.py:173`にある既知のF541で失敗する。今回変更したbackendとaudit対象のruffはpass。
+- Task 86 branchはTask 85 branchを親にしている。Task 85 merge後にmainへ統合する。
+
+## 2026-07-28 Task 86 推奨字幕フォント分類
+
+### 目的
+
+- 通常字幕向けの太字ゴシックと、ツッコミ・オチ向けの短い強調書体を設定画面で分ける。
+- ブラウザプレビューとFFmpeg/libassの焼き込みで同じフォントを使う。
+
+### 変更
+
+- 通常字幕向けへ以下を追加。
+  - Noto Sans JP Black
+  - 源ノ角ゴシック Heavy
+  - M PLUS 1 ExtraBold
+  - M PLUS Rounded 1c ExtraBold
+- 特殊字幕向けへ以下を追加。
+  - 851チカラヅヨク
+  - Dela Gothic One
+  - コーポレート・ロゴ Bold
+- Upload画面とclip別文字スタイルの書体選択を以下の3グループへ分類。
+  - 通常字幕向け
+  - 特殊字幕向け（短い強調）
+  - 補助書体
+- 7書体を`frontend/public/fonts`へ同梱し、出典・ライセンス・SHA-256を記録。
+- ブラウザ用`@font-face`、ASSプリセット、auditの日本語フォント判定を追加。
+- backend / workerへフォントファイルだけをread-onlyで個別mount。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `388 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- Upload画面とclip別文字スタイル画面:
+  - 3グループと7書体を確認。
+  - 全書体のプレビュー`font-family`反映を確認。
+  - console error: `0`。
+- ブラウザ配信:
+  - 7フォントすべてHTTP `200`。
+- FFmpeg/libass burn-in smoke:
+  - 7書体すべて指定したフォントファイルへ解決。
+  - 代替フォント、missing glyph、render error: `0`。
+
+### 未解決・制限
+
+- ラノベPOP V2は公式BOOTHの無料ダウンロードにpixiv/BOOTHログインが必要。
+- 未取得の第三者配布ファイルは使用せず、公式ZIP取得・ライセンス確認・焼き込み検証後に追加する。
+- 今回は合成ASSによる実焼き込み確認まで。長尺実動画E2Eは再実行していない。
+
+## 2026-07-28 Task 86 文字位置プリセット
+
+### 目的
+
+- 1080x1920の文字位置を数値だけでなく、用途と画面上の場所から選べるようにする。
+- ショートと通常切り抜きで別の位置を保持し、必要な場合だけ1%単位で微調整する。
+
+### 変更
+
+- Upload画面とclip別文字スタイル画面へ以下を追加。
+  - 縦位置7段階。
+  - 横位置5段階。
+  - タイトル / フック / 会話字幕 / 強調キーワード / ツッコミ用の用途プリセット。
+  - 実出力のX/Yピクセル表示とガイド線。
+  - 1%単位の調整を折りたたみの「位置を微調整」へ分離。
+- ショートの初期位置を以下へ設定。
+  - タイトル: Y=240。
+  - フック: Y=360。
+  - 会話字幕: Y=1320。
+  - ツッコミ: Y=1100。
+- 通常切り抜きは16:9用の7段階位置を独立保持。
+- JobSettingsと字幕設定プリセットへshort / normal別のX/Y位置を保存。
+- ASS生成時は指定座標を`\an5\pos(x,y)`へ変換。
+- 旧jobにX/Y設定がない場合は、従来のalignment / margin設定を維持・換算する。
+
+### 検証
+
+- backend ruff: pass。
+- backend pytest: `390 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- ASS生成テスト:
+  - short会話字幕: `432,1320`。
+  - shortタイトル: `540,240`。
+  - shortフック: `540,360`。
+  - clip別設定がjob全体設定を上書きすることを確認。
+- Docker compose: backend / frontend / worker / redis起動、backend healthy。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- browser実操作:
+  - Upload画面で縦7段階・横5段階・用途プリセットを確認。
+  - short / normal切替後も位置設定が独立。
+  - 字幕確認画面でもclip別位置設定を確認。
+  - mobile `390x844`: 横overflowなし。
+  - console error: `0`。
+
+### 未解決・制限
+
+- 新しい位置プリセットを指定した実動画の再レンダリングは未実施。ASS座標生成と既存runtime経路までは確認済み。
+- 任意座標の直接数値入力は追加せず、プリセットと1%スライダーで調整する。
