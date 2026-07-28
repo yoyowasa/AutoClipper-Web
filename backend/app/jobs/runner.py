@@ -146,6 +146,8 @@ MIN_AUDIO_VOLUME_PEAK = 0.005
 MAX_AUDIO_SILENCE_RATIO = 0.98
 MIN_AUDIO_SPEECH_SECONDS = 1.0
 MIN_AUDIO_SPEECH_DENSITY = 0.02
+MAX_AV_STREAM_DURATION_DRIFT_SECONDS = 30.0
+MAX_AV_STREAM_DURATION_DRIFT_RATIO = 0.1
 
 MIN_TRANSCRIPT_TEXT_LENGTH = 20
 MIN_TRANSCRIPT_SPEECH_SECONDS = 3.0
@@ -544,11 +546,49 @@ def _write_json(path: Path, payload: Any) -> Path:
 def _metadata_to_jsonable(metadata: VideoMetadata) -> dict[str, Any]:
     return {
         "duration": metadata.duration,
+        "video_stream_duration": metadata.video_stream_duration,
+        "audio_stream_duration": metadata.audio_stream_duration,
+        "container_duration": metadata.container_duration,
         "width": metadata.width,
         "height": metadata.height,
         "fps": metadata.fps,
         "has_audio": metadata.has_audio,
     }
+
+
+def _format_media_duration(seconds: float) -> str:
+    total_seconds = max(0, round(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def _raise_if_stream_durations_mismatch(metadata: VideoMetadata) -> None:
+    video_duration = metadata.video_stream_duration
+    audio_duration = metadata.audio_stream_duration
+    if not video_duration or not audio_duration:
+        return
+
+    difference = abs(video_duration - audio_duration)
+    relative_difference = difference / max(1.0, min(video_duration, audio_duration))
+    if (
+        difference <= MAX_AV_STREAM_DURATION_DRIFT_SECONDS
+        or relative_difference <= MAX_AV_STREAM_DURATION_DRIFT_RATIO
+    ):
+        return
+
+    raise PipelineExpectedError(
+        "media_stream_duration_mismatch",
+        (
+            "動画ファイルの映像と音声の長さが一致しません"
+            f"（映像 {_format_media_duration(video_duration)} / "
+            f"音声 {_format_media_duration(audio_duration)}）。"
+            "ファイルが破損または不完全にダウンロードされています。"
+            "元動画を再ダウンロードして、再アップロードしてください。"
+        ),
+    )
 
 
 def _update_video_metadata(db: Session, video: Video, metadata: VideoMetadata) -> None:
@@ -1964,6 +2004,12 @@ def run_autoclipper_job(
             _update_video_metadata(db, video, metadata)
             metadata_files.append(_write_json(job_dir / "video_metadata.json", _metadata_to_jsonable(metadata)))
             duration = float(metadata.duration or 0.0)
+            if not metadata.has_audio:
+                raise PipelineExpectedError(
+                    "missing_audio",
+                    "Video has no audio track. AutoClipper needs audio for transcription.",
+                )
+            _raise_if_stream_durations_mismatch(metadata)
             try:
                 validate_manual_ranges_for_duration(
                     settings,
@@ -1974,11 +2020,6 @@ def run_autoclipper_job(
                     "manual_clip_range_invalid",
                     f"Manual clip time range is invalid: {exc}",
                 ) from exc
-            if not metadata.has_audio:
-                raise PipelineExpectedError(
-                    "missing_audio",
-                    "Video has no audio track. AutoClipper needs audio for transcription.",
-                )
 
             _set_status(db, job, "extracting_audio")
             visited_statuses.append("extracting_audio")
