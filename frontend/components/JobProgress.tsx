@@ -4,6 +4,8 @@ import { StatusBadge } from "./StatusBadge";
 const errorLabels: Record<string, string> = {
   media_stream_duration_mismatch: "動画ファイルが不完全です",
   audio_extraction_failed: "動画の音声を読み込めません",
+  transcript_unusable: "文字起こし結果を利用できません",
+  transcription_quality_fallback_failed: "文字起こしの再試行に失敗しました",
 };
 
 export function JobProgress({ job }: { job: JobStatusResponse }) {

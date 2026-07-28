@@ -1969,6 +1969,223 @@ def test_real_pipeline_fails_unusable_transcript_before_candidates(client: TestC
     assert not (storage.temp / created["jobId"]).exists()
 
 
+def test_real_pipeline_retries_repeated_turbo_transcript_with_small_on_cuda(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 180,
+                "shortMinDuration": 20,
+                "shortMaxDuration": 75,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+                "useOpenAIScoring": False,
+                "subtitleCorrectionMode": "off",
+                "whisperModelSize": "turbo",
+                "transcriptionLanguage": "ja",
+                "transcriptionDevice": "cuda",
+                "transcriptionComputeType": "float16",
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    engine_calls: list[dict[str, Any]] = []
+
+    class FakeEngine:
+        def __init__(self, **kwargs: Any) -> None:
+            self.options = kwargs
+
+        @property
+        def diagnostics(self) -> dict[str, Any]:
+            return {
+                "requested_device": self.options["device"],
+                "actual_device": "cuda",
+                "requested_compute_type": self.options["compute_type"],
+                "actual_compute_type": "float16",
+                "model": self.options["model_size"],
+                "language": self.options["language"],
+                "gpu_name": "Fake GPU",
+                "gpu_memory_total_mb": 16384,
+                "model_load_seconds": 1.0,
+                "transcription_seconds": 2.0,
+                "peak_vram_mb": (
+                    4800 if self.options["model_size"] == "turbo" else 6100
+                ),
+                "fallback_used": False,
+                "fallback_reason": None,
+            }
+
+        def transcribe(self, _path: str | Path) -> list[TranscriptSegment]:
+            engine_calls.append(self.options)
+            if self.options["model_size"] == "turbo":
+                return [
+                    TranscriptSegment(
+                        start=float(index * 10),
+                        end=float(index * 10 + 8),
+                        text="ご視聴ありがとうございました",
+                        confidence=0.9,
+                    )
+                    for index in range(6)
+                ]
+            return fake_transcript()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).write_bytes(b"rendered")
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=240.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcription_engine_factory=FakeEngine,
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
+        detect_silence=lambda _path, _duration: [
+            SilenceSegment(start=30.0, end=35.0, duration=5.0),
+            SilenceSegment(start=80.0, end=85.0, duration=5.0),
+            SilenceSegment(start=140.0, end=145.0, duration=5.0),
+        ],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        normal_renderer=fake_render,
+        short_renderer=fake_render,
+    )
+
+    visited_statuses = run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    assert visited_statuses == SUCCESS_STATUSES[1:]
+    assert [call["model_size"] for call in engine_calls] == ["turbo", "small"]
+    job_dir = storage.outputs / created["jobId"]
+    primary = json.loads(
+        (job_dir / "primary_raw_transcript_segments.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert len(primary) == 6
+    assert {segment["text"] for segment in primary} == {
+        "ご視聴ありがとうございました"
+    }
+    transcript_summary = json.loads(
+        (job_dir / "transcript_summary.json").read_text(encoding="utf-8")
+    )
+    assert transcript_summary["transcription_model"] == "small"
+    runtime = transcript_summary["transcription_runtime"]
+    assert runtime["requested_model"] == "turbo"
+    assert runtime["actual_model"] == "small"
+    assert runtime["fallback_used"] is False
+    assert runtime["fallback_reason"] is None
+    assert runtime["quality_fallback_used"] is True
+    assert runtime["quality_fallback_reason"] == "primary_transcript_unusable"
+    assert runtime["primary_transcript_quality"]["reasons"] == [
+        "repeated_segment_text"
+    ]
+    assert runtime["fallback_transcript_quality"]["reasons"] == []
+    assert runtime["transcription_seconds"] == 4.0
+    assert runtime["peak_vram_mb"] == 6100
+
+
+def test_real_pipeline_rejects_repeated_japanese_transcript_without_cuda_fallback(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=120.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=lambda _path: [
+            TranscriptSegment(
+                start=float(index * 10),
+                end=float(index * 10 + 8),
+                text="ご視聴ありがとうございました",
+                confidence=0.9,
+            )
+            for index in range(6)
+        ],
+        detect_scenes=lambda _path: [],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+    )
+
+    run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    payload = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert payload["status"] == "failed"
+    assert payload["error"]["code"] == "transcript_unusable"
+    assert "repeated_segment_text" in payload["error"]["message"]
+    assert '"dominant_segment_count": 6' in payload["error"]["message"]
+    assert '"dominant_segment_ratio": 1.0' in payload["error"]["message"]
+    assert not (
+        storage.outputs
+        / created["jobId"]
+        / "primary_raw_transcript_segments.json"
+    ).exists()
+
+
 def test_real_pipeline_marks_failed_when_no_candidates_found(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",

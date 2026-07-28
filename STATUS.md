@@ -6118,3 +6118,61 @@ pip check: pass
 
 - 欠落した映像・破損したAACはAutoClipper内では復元しない。
 - 対象動画を最後まで処理するには、元アーカイブを正常なMP4として再ダウンロードし直す必要がある。
+
+## 2026-07-28 Task 90 文字起こし品質検出とGPU自動再試行
+
+### 目的
+
+- 正常な動画でWhisperが同じ日本語を反復生成した場合、候補生成へ進む前に検出する。
+- GPU推奨profileの`turbo + ja`だけを対象に、APIを使わず`small + ja`で1回再試行する。
+
+### 原因
+
+- job `job_b22bc8ea75d84308a28a286172b964e2`はCPUの`base + auto`で実行され、
+  平均confidence `0.240124`の多言語誤認識となった。
+- GPU profileへ戻したjob `job_390164f55f9d4f169545c98522b69b40`では、
+  `turbo + ja`が21 segment中の大半を`ご視聴ありがとうございました`として反復生成した。
+- 現行gateは英語の低情報語反復と平均confidenceだけを確認し、
+  日本語の同一segment反復を検出していなかった。
+- 同じ音声の120秒sampleは`small + ja + cuda + float16`で正常な日本語会話を生成した。
+
+### 変更
+
+- 正規化した同一segmentが`5件以上`かつ全体の`60%以上`を占める場合、
+  `repeated_segment_text`として利用不能判定する。
+- `turbo + ja`がCUDA上で品質gateに失敗した場合だけ、
+  `small + ja`で1回再文字起こしする。
+- 失敗したprimary transcriptを`primary_raw_transcript_segments.json`へ保持する。
+- summaryへprimary / quality fallbackそれぞれのruntime・品質診断、実使用model、
+  `quality_fallback_used`と理由を記録する。
+- CPU、注入transcriber、`small`以外の任意modelでは自動再試行しない。
+- Job画面へ文字起こし品質エラーの日本語見出しを追加する。
+
+### 検証
+
+- 対象pipeline tests: `18 passed`。
+- backend ruff: pass。
+- backend pytest: `399 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker GPU Compose rebuild: image build / 4サービス起動pass。
+  - 最初の短いtimeoutで一時的にcontainer名競合が出たが、
+    Compose再作成は完了し4サービスhealthy。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- GPU preflight: pass。
+  - GPU: `NVIDIA GeForce RTX 5070 Ti`。
+  - `actual_device=cuda`、`actual_compute_type=float16`、fallback `false`。
+- 61分実動画の再実行: pass。
+  - job: `job_d62794128f7e4075a8cd74324cd8752e`。
+  - primary `turbo + ja`を`repeated_segment_text`でreject。
+  - fallback `small + ja + cuda + float16`を採用。
+  - segment: `2968`、平均confidence: `0.736416`。
+  - total transcription: `249.431`秒。
+  - fallback後の品質reason: `0`。
+  - 選定: normal `0`、short `2`。`awaiting_clip_review`まで完走。
+  - OpenAI字幕校正・AI採点: OFF。API料金なし。
+
+### 未解決・制限
+
+- 自動再試行はGPU上の`turbo + ja`に限定する。
+- `small + ja`でも品質gateを満たさない動画は`transcript_unusable`で停止する。
+- `turbo`が正常な動画では従来どおり再試行せず、その結果を使用する。
