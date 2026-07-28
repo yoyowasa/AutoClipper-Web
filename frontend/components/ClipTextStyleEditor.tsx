@@ -141,11 +141,9 @@ export function ClipTextStyleEditor({
     style.yPercent
   );
   const previewText = sampleText(target, titleText, hookText, subtitleText);
-  const previewFontSize = Math.min(
-    clipType === "short" ? 11 : 9,
-    Math.max(3, style.fontSize / (clipType === "short" ? 19.2 : 10.8))
-  );
-  const previewOutline = Math.min(4, Math.max(0, style.outlineWidth * 0.28));
+  const outputWidthPercent = clipType === "short" ? 10.8 : 19.2;
+  const previewFontSizePercent = style.fontSize / outputWidthPercent;
+  const previewOutlinePercent = style.outlineWidth / outputWidthPercent;
 
   function updateStyle(patch: Partial<ClipTextStyle>) {
     onChange(target, { ...style, ...patch });
@@ -277,6 +275,7 @@ export function ClipTextStyleEditor({
           className={`relative w-full max-w-[230px] overflow-hidden border border-neutral-400 bg-[#25343A] ${
             clipType === "short" ? "aspect-[9/16]" : "aspect-video max-w-md"
           }`}
+          style={{ containerType: "inline-size" }}
         >
           <div className="absolute inset-y-0 right-0 w-[36%] bg-[#82959C]" />
           <div className="absolute bottom-0 left-0 h-[18%] w-full bg-[#111A1E]" />
@@ -304,12 +303,12 @@ export function ClipTextStyleEditor({
             style={{
               color: style.primaryColor,
               fontFamily: clipTextFontFamily(style.fontPreset),
-              fontSize: `clamp(11px, ${previewFontSize}cqh, 36px)`,
+              fontSize: `clamp(4px, ${previewFontSizePercent}cqw, 52px)`,
               fontWeight: clipTextFontWeight(style.fontPreset),
               left: `${style.xPercent}%`,
               top: `${style.yPercent}%`,
               transform: "translate(-50%, -50%)",
-              WebkitTextStroke: `${previewOutline}px ${style.outlineColor}`,
+              WebkitTextStroke: `clamp(0px, ${previewOutlinePercent}cqw, 4px) ${style.outlineColor}`,
               textShadow: `0 2px 2px ${style.outlineColor}`
             }}
           >
