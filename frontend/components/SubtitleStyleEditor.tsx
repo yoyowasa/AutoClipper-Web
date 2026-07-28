@@ -229,11 +229,11 @@ export function SubtitleStyleEditor({
   return (
     <section className="border-t border-neutral-200 pt-5 md:col-span-2">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+        <div className="flex flex-wrap items-center gap-3">
           <h2 className="text-base font-semibold text-neutral-950">字幕スタイル</h2>
           <div
             aria-label="字幕スタイルの対象"
-            className="mt-3 inline-flex border border-neutral-300 bg-neutral-100 p-1"
+            className="inline-flex border border-neutral-300 bg-neutral-100 p-1"
             role="group"
           >
             <button
@@ -276,9 +276,12 @@ export function SubtitleStyleEditor({
         onChange={onChange}
       />
 
-      <SubtitleStylePreview mode={mode} settings={settings} />
+      <div className="mt-4 grid items-start gap-5 md:grid-cols-[260px_minmax(0,1fr)] lg:grid-cols-[300px_minmax(0,1fr)]">
+        <div className="md:sticky md:top-4">
+          <SubtitleStylePreview compact mode={mode} settings={settings} />
+        </div>
 
-      <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-2 sm:col-span-2">
           <span className="text-sm font-medium text-neutral-700">字幕フォント</span>
           <select
@@ -376,7 +379,7 @@ export function SubtitleStyleEditor({
           }
         />
 
-        <fieldset className="sm:col-span-2 lg:col-span-4">
+        <fieldset className="sm:col-span-2">
           <legend className="text-sm font-medium text-neutral-700">
             縦位置
             <span className="ml-2 text-xs font-normal text-neutral-500">
@@ -420,7 +423,7 @@ export function SubtitleStyleEditor({
           </div>
         </fieldset>
 
-        <fieldset className="sm:col-span-2 lg:col-span-4">
+        <fieldset className="sm:col-span-2">
           <legend className="text-sm font-medium text-neutral-700">
             横位置
             <span className="ml-2 text-xs font-normal text-neutral-500">
@@ -460,7 +463,7 @@ export function SubtitleStyleEditor({
           </div>
         </fieldset>
 
-        <details className="border border-neutral-300 bg-neutral-50 sm:col-span-2 lg:col-span-4">
+        <details className="border border-neutral-300 bg-neutral-50 sm:col-span-2">
           <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-neutral-700">
             位置を1%単位で微調整
           </summary>
@@ -528,6 +531,7 @@ export function SubtitleStyleEditor({
             ) : null}
           </div>
         </details>
+        </div>
       </div>
     </section>
   );

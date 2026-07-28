@@ -14,6 +14,7 @@ export type SubtitlePreviewMode = "short" | "normal";
 type SubtitleStylePreviewProps = {
   settings: ClipSettings;
   mode: SubtitlePreviewMode;
+  compact?: boolean;
 };
 
 const PREVIEW_DEFAULTS = {
@@ -35,7 +36,11 @@ const PREVIEW_DEFAULTS = {
   }
 } as const;
 
-export function SubtitleStylePreview({ settings, mode }: SubtitleStylePreviewProps) {
+export function SubtitleStylePreview({
+  settings,
+  mode,
+  compact = false
+}: SubtitleStylePreviewProps) {
   const defaults = PREVIEW_DEFAULTS[mode];
   const isShort = mode === "short";
   const fontName =
@@ -90,11 +95,23 @@ export function SubtitleStylePreview({ settings, mode }: SubtitleStylePreviewPro
   const strokeWidth = Math.min(4, Math.max(0, outline * 0.22));
 
   return (
-    <div className="mt-4 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_220px]">
+    <div
+      className={
+        compact
+          ? "grid items-start gap-3"
+          : "mt-4 grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_220px]"
+      }
+    >
       <div className="flex min-w-0 flex-col items-center">
         <div
           className={`relative w-full overflow-hidden border border-neutral-400 bg-[#27343a] ${
-            mode === "short" ? "max-w-[250px] aspect-[9/16]" : "max-w-[560px] aspect-video"
+            mode === "short"
+              ? compact
+                ? "max-w-[210px] aspect-[9/16]"
+                : "max-w-[250px] aspect-[9/16]"
+              : compact
+                ? "max-w-[300px] aspect-video"
+                : "max-w-[560px] aspect-video"
           }`}
           style={{ containerType: "size" }}
         >
@@ -139,41 +156,82 @@ export function SubtitleStylePreview({ settings, mode }: SubtitleStylePreviewPro
         </div>
       </div>
 
-      <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-3 border-l border-neutral-200 pl-4 text-sm">
-        <dt className="text-neutral-500">表示</dt>
-        <dd className="m-0 font-medium text-neutral-950">
-          {mode === "short" ? "9:16" : "16:9"}
-        </dd>
-        <dt className="text-neutral-500">文字サイズ</dt>
-        <dd className="m-0 font-medium text-neutral-950">{fontSize}</dd>
-        <dt className="text-neutral-500">縁取り</dt>
-        <dd className="m-0 font-medium text-neutral-950">{outline}</dd>
-        <dt className="text-neutral-500">位置</dt>
-        <dd className="m-0 text-right font-medium text-neutral-950">
-          {selectedPosition?.label ?? "微調整"}
-          <span className="block text-xs font-normal text-neutral-500">
-            X {position.x} / Y {position.y}
-          </span>
-        </dd>
-        <dt className="text-neutral-500">文字色</dt>
-        <dd className="m-0 flex items-center gap-2 font-mono text-xs font-medium text-neutral-950">
-          <span
-            aria-hidden="true"
-            className="h-4 w-4 border border-neutral-400"
-            style={{ backgroundColor: primaryColor }}
-          />
-          {primaryColor}
-        </dd>
-        <dt className="text-neutral-500">縁色</dt>
-        <dd className="m-0 flex items-center gap-2 font-mono text-xs font-medium text-neutral-950">
-          <span
-            aria-hidden="true"
-            className="h-4 w-4 border border-neutral-400"
-            style={{ backgroundColor: outlineColor }}
-          />
-          {outlineColor}
-        </dd>
-      </dl>
+      {compact ? (
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 border-t border-neutral-200 pt-3 text-xs">
+          <div>
+            <dt className="text-neutral-500">表示</dt>
+            <dd className="m-0 mt-0.5 font-semibold text-neutral-950">
+              {mode === "short" ? "9:16" : "16:9"}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-neutral-500">文字</dt>
+            <dd className="m-0 mt-0.5 font-semibold text-neutral-950">
+              {fontSize}px / 縁 {outline}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-neutral-500">位置</dt>
+            <dd className="m-0 mt-0.5 font-semibold text-neutral-950">
+              {selectedPosition?.label ?? "微調整"}
+              <span className="block font-normal text-neutral-500">
+                X {position.x} / Y {position.y}
+              </span>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-neutral-500">配色</dt>
+            <dd className="m-0 mt-1 flex items-center gap-2 font-mono text-[10px] text-neutral-700">
+              <span
+                aria-label={`文字色 ${primaryColor}`}
+                className="h-4 w-4 border border-neutral-400"
+                style={{ backgroundColor: primaryColor }}
+              />
+              <span
+                aria-label={`縁取り色 ${outlineColor}`}
+                className="h-4 w-4 border border-neutral-400"
+                style={{ backgroundColor: outlineColor }}
+              />
+            </dd>
+          </div>
+        </dl>
+      ) : (
+        <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-3 border-l border-neutral-200 pl-4 text-sm">
+          <dt className="text-neutral-500">表示</dt>
+          <dd className="m-0 font-medium text-neutral-950">
+            {mode === "short" ? "9:16" : "16:9"}
+          </dd>
+          <dt className="text-neutral-500">文字サイズ</dt>
+          <dd className="m-0 font-medium text-neutral-950">{fontSize}</dd>
+          <dt className="text-neutral-500">縁取り</dt>
+          <dd className="m-0 font-medium text-neutral-950">{outline}</dd>
+          <dt className="text-neutral-500">位置</dt>
+          <dd className="m-0 text-right font-medium text-neutral-950">
+            {selectedPosition?.label ?? "微調整"}
+            <span className="block text-xs font-normal text-neutral-500">
+              X {position.x} / Y {position.y}
+            </span>
+          </dd>
+          <dt className="text-neutral-500">文字色</dt>
+          <dd className="m-0 flex items-center gap-2 font-mono text-xs font-medium text-neutral-950">
+            <span
+              aria-hidden="true"
+              className="h-4 w-4 border border-neutral-400"
+              style={{ backgroundColor: primaryColor }}
+            />
+            {primaryColor}
+          </dd>
+          <dt className="text-neutral-500">縁色</dt>
+          <dd className="m-0 flex items-center gap-2 font-mono text-xs font-medium text-neutral-950">
+            <span
+              aria-hidden="true"
+              className="h-4 w-4 border border-neutral-400"
+              style={{ backgroundColor: outlineColor }}
+            />
+            {outlineColor}
+          </dd>
+        </dl>
+      )}
     </div>
   );
 }
