@@ -511,6 +511,24 @@ export default function SubtitleReviewPage() {
     void videoRef.current.play();
   }
 
+  function seekToSubtitle(start: number) {
+    const video = videoRef.current;
+    if (!video || !selectedClip) {
+      return;
+    }
+    const absoluteTime = clamp(
+      start,
+      selectedClip.start,
+      Math.max(selectedClip.start, selectedClip.end - 0.05)
+    );
+    const relativeTime =
+      absoluteTime - selectedClip.start + hookSceneDuration;
+    video.pause();
+    video.currentTime = mediaTimeForClipTime(relativeTime);
+    setClipTime(relativeTime);
+    setIsPlaying(false);
+  }
+
   function togglePlayback() {
     const video = videoRef.current;
     if (!video || !selectedClip) {
@@ -1145,19 +1163,35 @@ export default function SubtitleReviewPage() {
                         </button>
                         <button
                           aria-label="5秒戻る"
-                          className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
+                          className="min-h-10 border border-neutral-600 px-2 text-sm font-medium"
                           type="button"
                           onClick={() => skipBy(-5)}
                         >
-                          5秒戻る
+                          -5秒
+                        </button>
+                        <button
+                          aria-label="1秒戻る"
+                          className="min-h-10 border border-neutral-600 px-2 text-sm font-medium"
+                          type="button"
+                          onClick={() => skipBy(-1)}
+                        >
+                          -1秒
+                        </button>
+                        <button
+                          aria-label="1秒進む"
+                          className="min-h-10 border border-neutral-600 px-2 text-sm font-medium"
+                          type="button"
+                          onClick={() => skipBy(1)}
+                        >
+                          +1秒
                         </button>
                         <button
                           aria-label="5秒進む"
-                          className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
+                          className="min-h-10 border border-neutral-600 px-2 text-sm font-medium"
                           type="button"
                           onClick={() => skipBy(5)}
                         >
-                          5秒進む
+                          +5秒
                         </button>
                         <span className="min-w-32 text-sm font-medium tabular-nums">
                           {formatTime(clipTime)} / {formatTime(clipDuration)}
@@ -1444,9 +1478,9 @@ export default function SubtitleReviewPage() {
                                 isActive ? "text-sky-800" : "text-sky-700"
                               }`}
                               type="button"
-                              onClick={() => playFrom(segment.start)}
+                              onClick={() => seekToSubtitle(segment.start)}
                             >
-                              {formatTime(relativeStart)} から再生
+                              {formatTime(relativeStart)} へ移動
                             </button>
                             <div className="flex flex-wrap justify-end gap-1 text-[11px]">
                               {isActive ? (
