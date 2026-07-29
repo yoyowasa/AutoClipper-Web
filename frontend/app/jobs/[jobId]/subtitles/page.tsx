@@ -5,7 +5,10 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
-import { ClipTextStyleEditor } from "../../../../components/ClipTextStyleEditor";
+import {
+  ClipTextStyleEditor,
+  ClipTextStylePreview
+} from "../../../../components/ClipTextStyleEditor";
 import {
   confirmSubtitleReviewClip,
   finalizeSubtitleReview,
@@ -147,6 +150,8 @@ export default function SubtitleReviewPage() {
   const [playbackRate, setPlaybackRate] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [openedFromReupload, setOpenedFromReupload] = useState(false);
+  const [selectedTextStyleTarget, setSelectedTextStyleTarget] =
+    useState<ClipTextTarget>("title");
 
   useEffect(() => {
     if (!jobId) {
@@ -162,10 +167,12 @@ export default function SubtitleReviewPage() {
         setReview(document);
         setOpenedFromReupload(search.get("source") === "reupload");
         const requestedClipId = search.get("clipId");
-        setSelectedClipId(
-          document.clips.some((clip) => clip.id === requestedClipId)
-            ? requestedClipId ?? ""
-            : document.clips[0]?.id ?? ""
+        const initialClip =
+          document.clips.find((clip) => clip.id === requestedClipId) ??
+          document.clips[0];
+        setSelectedClipId(initialClip?.id ?? "");
+        setSelectedTextStyleTarget(
+          initialClip?.type === "normal" ? "subtitle" : "title"
         );
         setDrafts(
           Object.fromEntries(document.segments.map((segment) => [segment.id, segment.text]))
@@ -372,6 +379,16 @@ export default function SubtitleReviewPage() {
   const activeSubtitleText = activeSegment
     ? (drafts[activeSegment.id] ?? activeSegment.text)
     : "";
+  const selectedClipTextStyles = {
+    title: selectedClipContentDraft?.titleStyle ?? null,
+    hook: selectedClipContentDraft?.hookStyle ?? null,
+    subtitle: selectedClipContentDraft?.subtitleStyle ?? null
+  };
+  const stylePreviewSubtitleText =
+    activeSubtitleText ||
+    (selectedSegments[0]
+      ? drafts[selectedSegments[0].id] ?? selectedSegments[0].text
+      : "");
   const previewSubtitleStyle =
     selectedClip && selectedClipContentDraft
       ? resolvedClipTextStyle(
@@ -458,6 +475,7 @@ export default function SubtitleReviewPage() {
     setIsPlayerReady(false);
     setVideoLoadSeconds(0);
     setSelectedClipId(clip.id);
+    setSelectedTextStyleTarget(clip.type === "short" ? "title" : "subtitle");
     setError(null);
   }
 
@@ -491,6 +509,24 @@ export default function SubtitleReviewPage() {
     videoRef.current.currentTime = mediaTimeForClipTime(relativeTime);
     setClipTime(relativeTime);
     void videoRef.current.play();
+  }
+
+  function seekToSubtitle(start: number) {
+    const video = videoRef.current;
+    if (!video || !selectedClip) {
+      return;
+    }
+    const absoluteTime = clamp(
+      start,
+      selectedClip.start,
+      Math.max(selectedClip.start, selectedClip.end - 0.05)
+    );
+    const relativeTime =
+      absoluteTime - selectedClip.start + hookSceneDuration;
+    video.pause();
+    video.currentTime = mediaTimeForClipTime(relativeTime);
+    setClipTime(relativeTime);
+    setIsPlaying(false);
   }
 
   function togglePlayback() {
@@ -806,72 +842,31 @@ export default function SubtitleReviewPage() {
     review.totalClipCount > 0 && review.confirmedClipCount === review.totalClipCount;
 
   return (
-    <main className="min-h-screen bg-[#f7f7f4] px-3 py-4 text-neutral-950 sm:px-5">
-      <section className="mx-auto flex w-full max-w-[1600px] flex-col gap-4">
-        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-3 border-b border-neutral-300 pb-4 xl:grid-cols-[minmax(260px,0.75fr)_minmax(600px,1.75fr)_auto]">
-          <div className="col-start-1 row-start-1 min-w-0">
-            <p className="text-sm font-medium uppercase text-neutral-500">AutoClipper</p>
-            <h1 className="mt-1 text-3xl font-semibold">clip別 字幕確認</h1>
-            <p className="mt-1 text-sm text-neutral-600">
-              左でclipを選び、動画を見ながら右側の字幕だけを確認します。確認済み{" "}
-              {review.confirmedClipCount} / {review.totalClipCount} ・ 修正{" "}
-              {review.editedSegmentCount}件
-            </p>
-          </div>
-          <div className="col-span-2 row-start-2 grid min-w-0 gap-2 sm:grid-cols-3 xl:col-span-1 xl:col-start-2 xl:row-start-1">
-            <div className="flex min-w-0 items-center justify-between gap-2 border-l-4 border-emerald-500 bg-emerald-50 px-3 py-2">
-              <p className="text-xs font-semibold text-emerald-800">1. 自動処理</p>
-              <p className="text-xs font-semibold">完了</p>
-            </div>
-            <div
-              className={`flex min-w-0 items-center justify-between gap-2 border-l-4 px-3 py-2 ${
-                isEditable
-                  ? "border-sky-600 bg-sky-50"
-                  : "border-emerald-500 bg-emerald-50"
-              }`}
-            >
-              <p
-                className={`text-xs font-semibold ${
-                  isEditable ? "text-sky-800" : "text-emerald-800"
-                }`}
-              >
-                2. clip別 字幕確認
-              </p>
-              <p className="text-right text-xs font-semibold">
-                {isEditable ? "現在の工程" : "完了"}
-              </p>
-            </div>
-            <div
-              className={`flex min-w-0 items-center justify-between gap-2 border-l-4 px-3 py-2 ${
-                review.state === "completed"
-                  ? "border-emerald-500 bg-emerald-50"
-                  : isEditable
-                    ? "border-neutral-300 bg-white"
-                    : "border-sky-600 bg-sky-50"
-              }`}
-            >
-              <p
-                className={`text-xs font-semibold ${
-                  review.state === "completed"
-                    ? "text-emerald-800"
-                    : isEditable
-                      ? "text-neutral-500"
-                      : "text-sky-800"
-                }`}
-              >
-                3. 字幕焼き込み・書き出し
-              </p>
-              <p className="text-right text-xs font-semibold">
-                {review.state === "completed"
-                  ? "完了"
-                  : isEditable
-                    ? "全clip確認後に開始"
-                    : "処理中"}
-              </p>
-            </div>
-          </div>
+    <main className="min-h-screen bg-[#f7f7f4] px-3 py-2 text-neutral-950 sm:px-5">
+      <section className="mx-auto flex w-full flex-col gap-2">
+        <header className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-2 border-b border-neutral-300 py-1">
+          <h1 className="text-lg font-semibold sm:text-xl">clip別 字幕確認</h1>
+          <p className="text-xs text-neutral-600">
+            確認 {review.confirmedClipCount} / {review.totalClipCount} ・ 修正{" "}
+            {review.editedSegmentCount}件
+          </p>
+          <span
+            className={`px-2 py-1 text-[11px] font-semibold ${
+              review.state === "completed"
+                ? "bg-emerald-100 text-emerald-800"
+                : isEditable
+                  ? "bg-sky-100 text-sky-800"
+                  : "bg-amber-100 text-amber-800"
+            }`}
+          >
+            {review.state === "completed"
+              ? "完了"
+              : isEditable
+                ? "字幕確認中"
+                : "書き出し中"}
+          </span>
           <Link
-            className="col-start-2 row-start-1 inline-flex min-h-10 items-center border border-neutral-300 bg-white px-4 text-sm font-medium xl:col-start-3"
+            className="ml-auto inline-flex min-h-9 items-center border border-neutral-300 bg-white px-3 text-xs font-medium sm:text-sm"
             href={`/jobs/${jobId}`}
           >
             処理状況へ戻る
@@ -886,28 +881,31 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
-        {isEditable && review.renderRevision > 1 ? (
-          <div className="border border-violet-300 bg-violet-50 px-4 py-3 text-sm text-violet-950">
-            完成済みjobの再編集です。元の動画、選定範囲、字幕修正を引き継いでいます。
-            新しい書き出しが完了するまで、現在のMP4とZIPは保持されます。
-          </div>
-        ) : null}
-
         {error ? (
           <div className="border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
             {error}
           </div>
         ) : null}
-        {openedFromReupload ? (
-          <div className="border-l-4 border-emerald-600 bg-emerald-50 px-4 py-3 text-sm text-emerald-950">
-            完成MP4と元jobを照合しました。選択したclipのタイトル・フック映像・文字スタイル・字幕を変更できます。
-          </div>
-        ) : null}
 
-        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:h-[calc(100vh-14rem)] lg:min-h-[560px] lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_430px]">
-          <aside className="flex min-h-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
+        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(430px,calc(100vw-1170px),1000px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(220px,15vw,290px)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
+          <aside className="relative min-h-[420px] border-b border-neutral-300 lg:min-h-0 lg:border-r">
+            <div className="flex min-h-[420px] flex-col lg:absolute lg:inset-0 lg:min-h-0">
             <div className="border-b border-neutral-200 px-4 py-4">
-              <p className="text-sm font-semibold">生成予定clip</p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold">生成予定clip</p>
+                <div className="flex flex-wrap justify-end gap-1">
+                  {isEditable && review.renderRevision > 1 ? (
+                    <span className="bg-violet-100 px-2 py-1 text-[10px] font-semibold text-violet-800">
+                      再編集
+                    </span>
+                  ) : null}
+                  {openedFromReupload ? (
+                    <span className="bg-emerald-100 px-2 py-1 text-[10px] font-semibold text-emerald-800">
+                      MP4照合済み
+                    </span>
+                  ) : null}
+                </div>
+              </div>
               <p className="mt-1 text-xs text-neutral-500">選ぶと動画と字幕が切り替わります</p>
               <div className="mt-3 h-2 overflow-hidden bg-neutral-100">
                 <div
@@ -974,42 +972,45 @@ export default function SubtitleReviewPage() {
                       {clip.editedSegmentCount > 0
                         ? ` ・ 修正${clip.editedSegmentCount}件`
                         : ""}
+                      {clip.id === selectedClipId
+                        ? ` ・ 本編${formatTime(bodyDuration)} ・ 元動画${formatTime(
+                            clip.start
+                          )}-${formatTime(clip.end)}`
+                        : ""}
                     </span>
                   </button>
                 );
               })}
             </div>
+              <div className="border-t border-neutral-300 bg-neutral-50 p-3">
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span className="font-semibold">
+                  確認 {review.confirmedClipCount} / {review.totalClipCount}
+                </span>
+                <span className="text-neutral-500">修正 {review.editedSegmentCount}件</span>
+              </div>
+              <button
+                className="mt-2 min-h-10 w-full bg-emerald-700 px-3 py-2 text-xs font-semibold text-white disabled:bg-neutral-300"
+                disabled={
+                  !isEditable ||
+                  !allConfirmed ||
+                  dirtySegmentIds.size > 0 ||
+                  hasDirtyClipContent ||
+                  isFinalizing
+                }
+                type="button"
+                onClick={() => void startRendering()}
+              >
+                {isFinalizing ? "レンダリング開始中" : "字幕を確定してレンダリング"}
+              </button>
+              </div>
+            </div>
           </aside>
 
-          <section className="flex min-h-0 min-w-0 flex-col border-b border-neutral-300 lg:border-b-0 lg:border-r">
+          <section className="flex min-w-0 flex-col border-b border-neutral-300 lg:border-r">
             {selectedClip ? (
               <>
-                <div className="border-b border-neutral-300 px-4 py-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-xs font-semibold uppercase text-sky-700">
-                        {clipLabel(selectedClip, review.clips)} ・ 選択clipのみ再生
-                      </p>
-                      <h2 className="mt-1 line-clamp-2 text-lg font-semibold">
-                        {selectedClipContentDraft?.title ?? selectedClip.title}
-                      </h2>
-                      <p className="mt-1 text-xs text-neutral-500">
-                        完成予定 {formatTime(clipDuration)} ・ 本編{" "}
-                        {formatTime(bodyDuration)} ・ 元動画{" "}
-                        {formatTime(selectedClip.start)} - {formatTime(selectedClip.end)}
-                      </p>
-                    </div>
-                    <button
-                      className="min-h-10 border border-neutral-300 bg-white px-3 text-sm font-medium"
-                      type="button"
-                      onClick={() => playFrom(selectedClip.start)}
-                    >
-                      先頭から再生
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto bg-neutral-100 p-3 sm:p-4">
+                <div className="flex items-start justify-center bg-neutral-100 p-3 sm:p-4">
                   <div
                     className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white"
                     ref={playerShellRef}
@@ -1153,20 +1154,44 @@ export default function SubtitleReviewPage() {
                           {isPlaying ? "一時停止" : "再生"}
                         </button>
                         <button
-                          aria-label="5秒戻る"
+                          aria-label="clip先頭から再生"
                           className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
+                          type="button"
+                          onClick={() => playFrom(selectedClip.start)}
+                        >
+                          先頭
+                        </button>
+                        <button
+                          aria-label="5秒戻る"
+                          className="min-h-10 border border-neutral-600 px-2 text-sm font-medium"
                           type="button"
                           onClick={() => skipBy(-5)}
                         >
-                          5秒戻る
+                          -5秒
+                        </button>
+                        <button
+                          aria-label="1秒戻る"
+                          className="min-h-10 border border-neutral-600 px-2 text-sm font-medium"
+                          type="button"
+                          onClick={() => skipBy(-1)}
+                        >
+                          -1秒
+                        </button>
+                        <button
+                          aria-label="1秒進む"
+                          className="min-h-10 border border-neutral-600 px-2 text-sm font-medium"
+                          type="button"
+                          onClick={() => skipBy(1)}
+                        >
+                          +1秒
                         </button>
                         <button
                           aria-label="5秒進む"
-                          className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
+                          className="min-h-10 border border-neutral-600 px-2 text-sm font-medium"
                           type="button"
                           onClick={() => skipBy(5)}
                         >
-                          5秒進む
+                          +5秒
                         </button>
                         <span className="min-w-32 text-sm font-medium tabular-nums">
                           {formatTime(clipTime)} / {formatTime(clipDuration)}
@@ -1219,153 +1244,190 @@ export default function SubtitleReviewPage() {
             ) : null}
           </section>
 
-          <section className="flex min-h-0 flex-col overflow-y-auto overscroll-contain">
+          <section className="relative min-h-[420px] border-b border-neutral-300 lg:min-h-0 lg:border-r 2xl:border-r">
             {selectedClip ? (
-              <>
-                <div className="border-b border-neutral-300 bg-neutral-50 px-4 py-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-base font-semibold">タイトル・フック</h3>
-                    {selectedClipHasDirtyContent ? (
-                      <span className="bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800">
-                        未保存
-                      </span>
-                    ) : selectedClip.titleEdited || selectedClip.hookText ? (
-                      <span className="bg-emerald-100 px-2 py-1 text-[11px] font-semibold text-emerald-800">
-                        保存済み
-                      </span>
-                    ) : null}
+              <div className="flex min-h-[420px] flex-col lg:absolute lg:inset-0 lg:min-h-0">
+                <div className="flex min-h-12 items-center justify-between border-b border-neutral-300 bg-neutral-50 px-4 py-3">
+                  <div>
+                    <h3 className="text-sm font-semibold">文字配置プレビュー</h3>
+                    <p className="mt-0.5 text-[11px] text-neutral-500">
+                      下段のタイトル・フック・字幕設定と連動
+                    </p>
                   </div>
+                  <span className="bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-800">
+                    {selectedTextStyleTarget === "title"
+                      ? "タイトル"
+                      : selectedTextStyleTarget === "hook"
+                        ? "フック"
+                        : "字幕"}
+                  </span>
+                </div>
+                <div className="flex min-h-0 flex-1 items-center justify-center bg-neutral-100 p-3">
+                  <ClipTextStylePreview
+                    clipType={selectedClip.type}
+                    displayMode="workspace"
+                    selectedTarget={selectedTextStyleTarget}
+                    styles={selectedClipTextStyles}
+                    subtitleText={stylePreviewSubtitleText}
+                    titleText={selectedClipContentDraft?.title ?? ""}
+                    hookText={selectedClipContentDraft?.hookText ?? ""}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </section>
 
-                  <label className="mt-3 block text-xs font-semibold text-neutral-700">
-                    表示タイトル
-                    <input
-                      className="mt-1 min-h-10 w-full border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-sky-600"
-                      disabled={!isEditable}
-                      maxLength={80}
-                      type="text"
-                      value={selectedClipContentDraft?.title ?? ""}
-                      onChange={(event) =>
-                        updateClipContentDraft(selectedClip.id, {
-                          title: event.target.value
-                        })
-                      }
-                    />
-                  </label>
-                  <p className="mt-1 text-right text-[11px] text-neutral-500">
-                    {selectedClipContentDraft?.title.length ?? 0} / 80
-                  </p>
+          <section className="contents">
+            {selectedClip ? (
+              <div className="contents">
+                <div className="grid min-w-0 bg-white lg:col-span-3 2xl:col-span-4 2xl:col-start-1 2xl:row-start-2 2xl:h-full 2xl:min-h-0 2xl:grid-cols-4 2xl:overflow-hidden">
+                  <div className="min-w-0 border-b border-neutral-300 bg-neutral-50 p-3 2xl:h-full 2xl:min-h-0 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-semibold">タイトル・フック</h3>
+                      {selectedClipHasDirtyContent ? (
+                        <span className="bg-amber-100 px-2 py-1 text-[11px] font-semibold text-amber-800">
+                          未保存
+                        </span>
+                      ) : selectedClip.titleEdited || selectedClip.hookText ? (
+                        <span className="bg-emerald-100 px-2 py-1 text-[11px] font-semibold text-emerald-800">
+                          保存済み
+                        </span>
+                      ) : null}
+                    </div>
 
-                  {selectedClip.type === "short" ? (
-                    <>
-                      <label className="mt-2 block text-xs font-semibold text-neutral-700">
-                        冒頭フック
-                        <textarea
-                          className="mt-1 min-h-16 w-full resize-y border border-neutral-300 bg-white px-3 py-2 text-sm leading-5 outline-none focus:border-sky-600"
-                          disabled={!isEditable}
-                          maxLength={120}
-                          placeholder="空欄ならフックを表示しません"
-                          value={selectedClipContentDraft?.hookText ?? ""}
-                          onChange={(event) =>
-                            updateClipContentDraft(selectedClip.id, {
-                              hookText: event.target.value
-                            })
-                          }
-                        />
-                      </label>
-                      <div className="mt-2 flex items-end justify-between gap-3">
-                        <label className="block text-xs font-semibold text-neutral-700">
-                          表示秒数
-                          <input
-                            className="mt-1 h-10 w-24 border border-neutral-300 bg-white px-3 text-sm tabular-nums outline-none focus:border-sky-600"
+                    <label className="mt-2 block text-xs font-semibold text-neutral-700">
+                      表示タイトル
+                      <input
+                        className="mt-1 min-h-9 w-full border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-sky-600"
+                        disabled={!isEditable}
+                        maxLength={80}
+                        type="text"
+                        value={selectedClipContentDraft?.title ?? ""}
+                        onChange={(event) =>
+                          updateClipContentDraft(selectedClip.id, {
+                            title: event.target.value
+                          })
+                        }
+                      />
+                    </label>
+                    <p className="mt-1 text-right text-[10px] text-neutral-500">
+                      {selectedClipContentDraft?.title.length ?? 0} / 80
+                    </p>
+
+                    {selectedClip.type === "short" ? (
+                      <>
+                        <label className="mt-2 block text-xs font-semibold text-neutral-700">
+                          冒頭フック
+                          <textarea
+                            className="mt-1 min-h-14 w-full resize-y border border-neutral-300 bg-white px-2 py-2 text-sm leading-5 outline-none focus:border-sky-600"
                             disabled={!isEditable}
-                            max={8}
-                            min={1}
-                            step={0.5}
-                            type="number"
-                            aria-invalid={!selectedHookDurationIsValid}
-                            value={selectedClipContentDraft?.hookDurationSeconds ?? 3}
+                            maxLength={120}
+                            placeholder="空欄なら表示しません"
+                            value={selectedClipContentDraft?.hookText ?? ""}
                             onChange={(event) =>
                               updateClipContentDraft(selectedClip.id, {
-                                hookDurationSeconds: Number(event.target.value)
+                                hookText: event.target.value
                               })
                             }
                           />
                         </label>
-                        <p className="text-[11px] text-neutral-500">
-                          {selectedClipContentDraft?.hookText.length ?? 0} / 120
-                        </p>
-                      </div>
-                      {!selectedHookDurationIsValid ? (
-                        <p className="mt-1 text-xs font-semibold text-red-700">
-                          1〜8秒で入力してください。
-                        </p>
-                      ) : null}
-                    </>
-                  ) : null}
+                        <div className="mt-2 flex items-end justify-between gap-3">
+                          <label className="block text-xs font-semibold text-neutral-700">
+                            表示秒数
+                            <input
+                              aria-invalid={!selectedHookDurationIsValid}
+                              className="mt-1 h-9 w-20 border border-neutral-300 bg-white px-2 text-sm tabular-nums outline-none focus:border-sky-600"
+                              disabled={!isEditable}
+                              max={8}
+                              min={1}
+                              step={0.5}
+                              type="number"
+                              value={selectedClipContentDraft?.hookDurationSeconds ?? 3}
+                              onChange={(event) =>
+                                updateClipContentDraft(selectedClip.id, {
+                                  hookDurationSeconds: Number(event.target.value)
+                                })
+                              }
+                            />
+                          </label>
+                          <p className="text-[10px] text-neutral-500">
+                            {selectedClipContentDraft?.hookText.length ?? 0} / 120
+                          </p>
+                        </div>
+                        {!selectedHookDurationIsValid ? (
+                          <p className="mt-1 text-xs font-semibold text-red-700">
+                            1〜8秒で入力してください。
+                          </p>
+                        ) : null}
+                      </>
+                    ) : null}
+
+                    <button
+                      className="mt-3 min-h-9 w-full bg-neutral-950 px-3 text-xs font-semibold text-white disabled:bg-neutral-300"
+                      disabled={
+                        !isEditable ||
+                        !selectedClipHasDirtyContent ||
+                        !selectedClipContentDraft?.title.trim() ||
+                        !selectedHookDurationIsValid ||
+                        savingClipContentId === selectedClip.id
+                      }
+                      type="button"
+                      onClick={() => void saveClipContent()}
+                    >
+                      {savingClipContentId === selectedClip.id
+                        ? "保存中"
+                        : "内容・文字スタイルを保存"}
+                    </button>
+
+                    {selectedClip.type === "short" ? (
+                      <>
+                        {dirtySegmentIds.size > 0 || hasDirtyClipContent ? (
+                          <p className="mt-2 border border-amber-300 bg-amber-50 px-2 py-2 text-[11px] font-medium text-amber-900">
+                            フック映像の変更前に、文字設定と字幕を保存してください。
+                          </p>
+                        ) : null}
+                        <details className="mt-2 border border-neutral-300 bg-white">
+                          <summary className="cursor-pointer px-3 py-2 text-xs font-semibold">
+                            フック映像設定
+                          </summary>
+                          <div className="border-t border-neutral-300">
+                            <ClipHookSceneEditor
+                              clip={selectedClip}
+                              disabled={
+                                !isEditable ||
+                                dirtySegmentIds.size > 0 ||
+                                hasDirtyClipContent
+                              }
+                              key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
+                              playheadSourceTime={absolutePlaybackTime}
+                              saving={isUpdatingHookScene}
+                              shortMaxDuration={review.shortMaxDuration}
+                              onSave={(start, end) =>
+                                void saveHookScene(start, end)
+                              }
+                            />
+                          </div>
+                        </details>
+                      </>
+                    ) : null}
+                  </div>
 
                   <ClipTextStyleEditor
                     clipType={selectedClip.type}
                     disabled={!isEditable}
                     hookText={selectedClipContentDraft?.hookText ?? ""}
                     key={selectedClip.id}
-                    styles={{
-                      title: selectedClipContentDraft?.titleStyle ?? null,
-                      hook: selectedClipContentDraft?.hookStyle ?? null,
-                      subtitle: selectedClipContentDraft?.subtitleStyle ?? null
-                    }}
-                    subtitleText={
-                      activeSubtitleText ||
-                      (selectedSegments[0]
-                        ? drafts[selectedSegments[0].id] ?? selectedSegments[0].text
-                        : "")
-                    }
+                    layout="workspace"
+                    selectedTarget={selectedTextStyleTarget}
+                    showPreview={false}
+                    styles={selectedClipTextStyles}
+                    subtitleText={stylePreviewSubtitleText}
                     titleText={selectedClipContentDraft?.title ?? ""}
                     onChange={updateClipTextStyle}
+                    onSelectedTargetChange={setSelectedTextStyleTarget}
                   />
-
-                  <button
-                    className="mt-3 min-h-10 w-full bg-neutral-950 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
-                    disabled={
-                      !isEditable ||
-                      !selectedClipHasDirtyContent ||
-                      !selectedClipContentDraft?.title.trim() ||
-                      !selectedHookDurationIsValid ||
-                      savingClipContentId === selectedClip.id
-                    }
-                    type="button"
-                    onClick={() => void saveClipContent()}
-                  >
-                    {savingClipContentId === selectedClip.id
-                      ? "保存中"
-                      : "内容・文字スタイルを保存"}
-                  </button>
                 </div>
-
-                {selectedClip.type === "short" ? (
-                  <>
-                    {dirtySegmentIds.size > 0 || hasDirtyClipContent ? (
-                      <div className="border-b border-amber-300 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-900">
-                        フック映像を変更する前に、未保存の文字設定と字幕を保存してください。
-                      </div>
-                    ) : null}
-                    <ClipHookSceneEditor
-                      clip={selectedClip}
-                      disabled={
-                        !isEditable ||
-                        dirtySegmentIds.size > 0 ||
-                        hasDirtyClipContent
-                      }
-                      key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
-                      playheadSourceTime={absolutePlaybackTime}
-                      saving={isUpdatingHookScene}
-                      shortMaxDuration={review.shortMaxDuration}
-                      onSave={(start, end) =>
-                        void saveHookScene(start, end)
-                      }
-                    />
-                  </>
-                ) : null}
-
+                <div className="flex min-h-[640px] min-w-0 flex-col bg-white lg:col-span-3 2xl:col-span-1 2xl:col-start-4 2xl:row-start-1 2xl:min-h-0">
                 <div className="border-b border-neutral-300 bg-white px-4 py-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -1383,7 +1445,7 @@ export default function SubtitleReviewPage() {
                 </div>
 
                 <div
-                  className="relative max-h-[640px] min-h-0 flex-1 overflow-y-auto lg:max-h-none"
+                  className="relative min-h-0 flex-1 overflow-y-auto"
                   ref={subtitleListRef}
                 >
                   {selectedSegments.length > 0 ? (
@@ -1416,9 +1478,9 @@ export default function SubtitleReviewPage() {
                                 isActive ? "text-sky-800" : "text-sky-700"
                               }`}
                               type="button"
-                              onClick={() => playFrom(segment.start)}
+                              onClick={() => seekToSubtitle(segment.start)}
                             >
-                              {formatTime(relativeStart)} から再生
+                              {formatTime(relativeStart)} へ移動
                             </button>
                             <div className="flex flex-wrap justify-end gap-1 text-[11px]">
                               {isActive ? (
@@ -1503,37 +1565,12 @@ export default function SubtitleReviewPage() {
                         : "このclipを確認済みにする"}
                   </button>
                 </div>
-              </>
+                </div>
+              </div>
             ) : null}
           </section>
         </div>
 
-        <section className="border border-neutral-300 bg-white px-5 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold">
-                全clip確認済み {review.confirmedClipCount} / {review.totalClipCount}
-              </p>
-              <p className="mt-1 text-xs text-neutral-600">
-                通常・ショートをすべて確認後、字幕焼き込みとZIP作成を開始します。
-              </p>
-            </div>
-            <button
-              className="min-h-12 bg-emerald-700 px-6 text-sm font-semibold text-white disabled:bg-neutral-300"
-              disabled={
-                !isEditable ||
-                !allConfirmed ||
-                dirtySegmentIds.size > 0 ||
-                hasDirtyClipContent ||
-                isFinalizing
-              }
-              type="button"
-              onClick={() => void startRendering()}
-            >
-              {isFinalizing ? "レンダリングを開始しています" : "字幕を確定してレンダリング"}
-            </button>
-          </div>
-        </section>
       </section>
     </main>
   );

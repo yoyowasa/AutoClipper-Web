@@ -60,6 +60,10 @@ function formatTime(value: number): string {
   return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
 function HookTimeInput({
   disabled,
   label,
@@ -115,45 +119,76 @@ export function ClipHookSceneEditor({
   shortMaxDuration,
   onSave
 }: ClipHookSceneEditorProps) {
+  const clipDuration = Math.max(0, clip.end - clip.start);
+  const initialStart = Math.max(
+    0,
+    (clip.hookSceneStart ?? clip.start) - clip.start
+  );
+  const initialEnd = Math.max(
+    0,
+    (clip.hookSceneEnd ?? Math.min(clip.end, clip.start + 2)) - clip.start
+  );
   const [startParts, setStartParts] = useState(() =>
-    splitTime(clip.hookSceneStart ?? clip.start)
+    splitTime(initialStart)
   );
   const [endParts, setEndParts] = useState(() =>
-    splitTime(clip.hookSceneEnd ?? Math.min(clip.end, clip.start + 2))
+    splitTime(initialEnd)
   );
   const start = combineTime(startParts);
   const end = combineTime(endParts);
+  const sourceStart = start === null ? null : clip.start + start;
+  const sourceEnd = end === null ? null : clip.start + end;
+  const playheadClipTime = clamp(
+    playheadSourceTime - clip.start,
+    0,
+    clipDuration
+  );
   const hasSavedHook =
     clip.hookSceneStart !== null && clip.hookSceneEnd !== null;
   const duration = start !== null && end !== null ? end - start : null;
+  const projectedDuration =
+    duration !== null && duration > 0 ? clip.duration + duration : null;
+  const clipAlreadyExceedsMaximum =
+    clip.duration > shortMaxDuration + 0.001;
   const validation = useMemo(() => {
     if (start === null || end === null) {
       return "分と秒を正しく入力してください";
     }
-    if (start < clip.start - 0.001 || end > clip.end + 0.001) {
-      return "選択したショートの範囲内で指定してください";
+    if (start < -0.001 || end > clipDuration + 0.001) {
+      return `clip内 0:00.0〜${formatTime(clipDuration)}で指定してください`;
     }
     if (duration === null || duration < 0.5 || duration > 3) {
       return "冒頭へ複製する場面は0.5〜3秒にしてください";
     }
-    if (clip.duration + duration > shortMaxDuration + 0.001) {
+    if (
+      !clipAlreadyExceedsMaximum &&
+      clip.duration + duration > shortMaxDuration + 0.001
+    ) {
       return `完成尺が上限 ${formatTime(shortMaxDuration)} を超えます`;
     }
     return null;
-  }, [clip.duration, clip.end, clip.start, duration, end, shortMaxDuration, start]);
+  }, [
+    clip.duration,
+    clipAlreadyExceedsMaximum,
+    clipDuration,
+    duration,
+    end,
+    shortMaxDuration,
+    start
+  ]);
   const changed =
-    start !== null &&
-    end !== null &&
+    sourceStart !== null &&
+    sourceEnd !== null &&
     (!hasSavedHook ||
-      Math.abs(start - (clip.hookSceneStart ?? 0)) >= 0.0005 ||
-      Math.abs(end - (clip.hookSceneEnd ?? 0)) >= 0.0005);
+      Math.abs(sourceStart - (clip.hookSceneStart ?? 0)) >= 0.0005 ||
+      Math.abs(sourceEnd - (clip.hookSceneEnd ?? 0)) >= 0.0005);
 
   function setRange(rangeStart: number, length: number) {
     const boundedStart = Math.min(
-      Math.max(rangeStart, clip.start),
-      Math.max(clip.start, clip.end - length)
+      Math.max(rangeStart, 0),
+      Math.max(0, clipDuration - length)
     );
-    const boundedEnd = Math.min(clip.end, boundedStart + length);
+    const boundedEnd = Math.min(clipDuration, boundedStart + length);
     setStartParts(splitTime(boundedStart));
     setEndParts(splitTime(boundedEnd));
   }
@@ -166,7 +201,7 @@ export function ClipHookSceneEditor({
             冒頭へ見せ場を複製
           </h3>
           <p className="mt-1 text-xs leading-5 text-neutral-600">
-            指定場面をショートの先頭へ追加します。元の場面は本編にも残ります。
+            時間はメイン動画・字幕と同じくclip先頭を0:00とします。元動画時刻も併記します。
           </p>
         </div>
         <span className="border border-amber-300 bg-white px-2 py-1 text-xs font-semibold text-amber-900">
@@ -175,8 +210,13 @@ export function ClipHookSceneEditor({
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <span className="text-xs text-neutral-700">
-          現在位置: {formatTime(playheadSourceTime)}
+        <span className="text-xs leading-5 text-neutral-700">
+          <span className="font-semibold">
+            現在位置（clip内）: {formatTime(playheadClipTime)}
+          </span>
+          <span className="ml-2 text-neutral-500">
+            元動画: {formatTime(playheadSourceTime)}
+          </span>
         </span>
         {HOOK_LENGTHS.map((seconds) => (
           <button
@@ -184,7 +224,7 @@ export function ClipHookSceneEditor({
             disabled={disabled}
             key={seconds}
             type="button"
-            onClick={() => setRange(playheadSourceTime, seconds)}
+            onClick={() => setRange(playheadClipTime, seconds)}
           >
             ここから{seconds}秒
           </button>
@@ -194,13 +234,13 @@ export function ClipHookSceneEditor({
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <HookTimeInput
           disabled={disabled}
-          label="場面の開始"
+          label="clip内の開始"
           parts={startParts}
           onChange={setStartParts}
         />
         <HookTimeInput
           disabled={disabled}
-          label="場面の終了"
+          label="clip内の終了"
           parts={endParts}
           onChange={setEndParts}
         />
@@ -209,14 +249,16 @@ export function ClipHookSceneEditor({
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-amber-200 pt-3">
         <div className="text-xs leading-5 text-neutral-700">
           <p>
-            複製場面: {start === null ? "--" : formatTime(start)} -{" "}
+            clip内: {start === null ? "--" : formatTime(start)} -{" "}
             {end === null ? "--" : formatTime(end)}
+          </p>
+          <p className="text-neutral-500">
+            元動画: {sourceStart === null ? "--" : formatTime(sourceStart)} -{" "}
+            {sourceEnd === null ? "--" : formatTime(sourceEnd)}
           </p>
           <p className="font-semibold text-neutral-950">
             完成予定:{" "}
-            {duration !== null && duration > 0
-              ? formatTime(clip.duration + duration)
-              : "--"}
+            {projectedDuration === null ? "--" : formatTime(projectedDuration)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -235,8 +277,8 @@ export function ClipHookSceneEditor({
             disabled={disabled || !changed || validation !== null}
             type="button"
             onClick={() => {
-              if (start !== null && end !== null && !validation) {
-                onSave(start, end);
+              if (sourceStart !== null && sourceEnd !== null && !validation) {
+                onSave(sourceStart, sourceEnd);
               }
             }}
           >
@@ -247,9 +289,17 @@ export function ClipHookSceneEditor({
       {validation ? (
         <p className="mt-2 text-xs font-medium text-red-700">{validation}</p>
       ) : (
-        <p className="mt-2 text-xs text-neutral-500">
-          対象ショートの軽量プレビューだけを作り直します。OpenAI APIは使いません。
-        </p>
+        <>
+          {clipAlreadyExceedsMaximum && projectedDuration !== null ? (
+            <p className="mt-2 text-xs font-medium text-amber-800">
+              元のclipが上限 {formatTime(shortMaxDuration)} を超えています。
+              追加後 {formatTime(projectedDuration)} で保存します。
+            </p>
+          ) : null}
+          <p className="mt-2 text-xs text-neutral-500">
+            対象ショートの軽量プレビューだけを作り直します。OpenAI APIは使いません。
+          </p>
+        </>
       )}
     </section>
   );

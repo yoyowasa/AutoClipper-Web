@@ -204,6 +204,21 @@ def test_hook_scene_update_respects_review_short_duration_limit() -> None:
         )
 
 
+def test_hook_scene_update_allows_clip_already_over_duration_limit() -> None:
+    _transcript, review = _review_fixture()
+    review.short_max_duration = 19.0
+
+    updated = update_review_hook_scene(
+        review,
+        "short_1",
+        start=12.0,
+        end=14.0,
+    )
+
+    assert updated.clips[1].hook_scene_start == 12.0
+    assert updated.clips[1].hook_scene_end == 14.0
+
+
 def test_normal_clip_rejects_hook_text() -> None:
     _transcript, review = _review_fixture()
 

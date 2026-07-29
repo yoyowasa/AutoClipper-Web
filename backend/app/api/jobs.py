@@ -22,6 +22,7 @@ from app.jobs.clip_plan import (
     mark_clip_plan_approved,
     write_clip_plan,
 )
+from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.jobs.reedit_upload import (
     UploadSizeLimitExceeded,
     fingerprint_stream,
@@ -902,9 +903,10 @@ def update_clip_plan_hook_scene(
         short_max_duration = float(
             (job.settings_json or {}).get("shortMaxDuration", 75.0)
         )
-        if (
-            planned_clip.duration + request.end - request.start
-            > short_max_duration + 0.001
+        if hook_scene_newly_exceeds_short_limit(
+            clip_duration=planned_clip.duration,
+            hook_duration=request.end - request.start,
+            short_max_duration=short_max_duration,
         ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
