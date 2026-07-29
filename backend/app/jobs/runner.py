@@ -91,6 +91,7 @@ from app.jobs.clip_plan import (
     update_clip_plan_hook_scene,
     write_clip_plan,
 )
+from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.jobs.summaries import write_generation_summaries
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
 from app.jobs.subtitle_review import (
@@ -3057,7 +3058,11 @@ def run_clip_plan_hook_scene_update(
                 short_max_duration = float(
                     (job.settings_json or {}).get("shortMaxDuration", 75.0)
                 )
-                if candidate.duration + hook_duration > short_max_duration + 0.001:
+                if hook_scene_newly_exceeds_short_limit(
+                    clip_duration=candidate.duration,
+                    hook_duration=hook_duration,
+                    short_max_duration=short_max_duration,
+                ):
                     raise ValueError(
                         "hook scene would exceed the configured short maximum duration"
                     )

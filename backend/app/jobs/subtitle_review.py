@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.select_candidates import CandidateSelection
+from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 
 
 SUBTITLE_REVIEW_FILENAME = "subtitle_review.json"
@@ -339,7 +340,11 @@ def update_review_hook_scene(
             raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
         if start < clip.start - 0.001 or end > clip.end + 0.001:
             raise ValueError("hook scene must stay within the selected clip")
-        if clip.duration + hook_duration > document.short_max_duration + 0.001:
+        if hook_scene_newly_exceeds_short_limit(
+            clip_duration=clip.duration,
+            hook_duration=hook_duration,
+            short_max_duration=document.short_max_duration,
+        ):
             raise ValueError(
                 "hook scene would exceed the configured short maximum duration"
             )

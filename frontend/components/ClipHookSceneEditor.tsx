@@ -146,6 +146,10 @@ export function ClipHookSceneEditor({
   const hasSavedHook =
     clip.hookSceneStart !== null && clip.hookSceneEnd !== null;
   const duration = start !== null && end !== null ? end - start : null;
+  const projectedDuration =
+    duration !== null && duration > 0 ? clip.duration + duration : null;
+  const clipAlreadyExceedsMaximum =
+    clip.duration > shortMaxDuration + 0.001;
   const validation = useMemo(() => {
     if (start === null || end === null) {
       return "分と秒を正しく入力してください";
@@ -156,11 +160,22 @@ export function ClipHookSceneEditor({
     if (duration === null || duration < 0.5 || duration > 3) {
       return "冒頭へ複製する場面は0.5〜3秒にしてください";
     }
-    if (clip.duration + duration > shortMaxDuration + 0.001) {
+    if (
+      !clipAlreadyExceedsMaximum &&
+      clip.duration + duration > shortMaxDuration + 0.001
+    ) {
       return `完成尺が上限 ${formatTime(shortMaxDuration)} を超えます`;
     }
     return null;
-  }, [clip.duration, clipDuration, duration, end, shortMaxDuration, start]);
+  }, [
+    clip.duration,
+    clipAlreadyExceedsMaximum,
+    clipDuration,
+    duration,
+    end,
+    shortMaxDuration,
+    start
+  ]);
   const changed =
     sourceStart !== null &&
     sourceEnd !== null &&
@@ -243,9 +258,7 @@ export function ClipHookSceneEditor({
           </p>
           <p className="font-semibold text-neutral-950">
             完成予定:{" "}
-            {duration !== null && duration > 0
-              ? formatTime(clip.duration + duration)
-              : "--"}
+            {projectedDuration === null ? "--" : formatTime(projectedDuration)}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -276,9 +289,17 @@ export function ClipHookSceneEditor({
       {validation ? (
         <p className="mt-2 text-xs font-medium text-red-700">{validation}</p>
       ) : (
-        <p className="mt-2 text-xs text-neutral-500">
-          対象ショートの軽量プレビューだけを作り直します。OpenAI APIは使いません。
-        </p>
+        <>
+          {clipAlreadyExceedsMaximum && projectedDuration !== null ? (
+            <p className="mt-2 text-xs font-medium text-amber-800">
+              元のclipが上限 {formatTime(shortMaxDuration)} を超えています。
+              追加後 {formatTime(projectedDuration)} で保存します。
+            </p>
+          ) : null}
+          <p className="mt-2 text-xs text-neutral-500">
+            対象ショートの軽量プレビューだけを作り直します。OpenAI APIは使いません。
+          </p>
+        </>
       )}
     </section>
   );
