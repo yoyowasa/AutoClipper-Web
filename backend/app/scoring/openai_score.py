@@ -28,7 +28,9 @@ SYSTEM_PROMPT = (
     "Judge whether each candidate matches the supplied content preference and works as a standalone clip. "
     "Normal clips should contain a focused, complete topic. Shorts should contain a strong hook, reaction, "
     "punchline, or concise useful point. Reject generic greetings, endings, and promotional filler when the "
-    "preference asks for their exclusion. Return only the requested structured JSON. Do not ask for video files."
+    "preference asks for their exclusion. When heatmap_features are present, their value is a relative 0-to-1 "
+    "popularity signal within this video, not a view count. Use it only as supporting evidence and never as the "
+    "sole reason to select a clip. Return only the requested structured JSON. Do not ask for video files."
 )
 
 
@@ -169,6 +171,14 @@ def build_score_input_payload(
         "audio_features": _model_dump_or_none(audio_features),
         "visual_features": _model_dump_or_none(visual_features),
     }
+    if candidate.heatmap_value is not None:
+        payload["heatmap_features"] = {
+            "value": candidate.heatmap_value,
+            "overlap_seconds": candidate.heatmap_overlap_seconds,
+            "score_bonus": candidate.heatmap_score,
+            "value_semantics": "relative_in_video_0_to_1_not_view_count",
+            "supporting_signal_only": True,
+        }
     if isinstance(selection_preference, CandidateClipPreference):
         payload["selection_preference"] = selection_preference.to_payload()
     elif isinstance(selection_preference, dict):
@@ -188,7 +198,16 @@ def candidate_score_cache_key(
         visual_features,
         selection_preference,
     )
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    cache_payload = {
+        "system_prompt": SYSTEM_PROMPT,
+        "input": payload,
+    }
+    encoded = json.dumps(
+        cache_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return sha256(encoded.encode("utf-8")).hexdigest()
 
 

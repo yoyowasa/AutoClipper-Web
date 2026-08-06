@@ -95,6 +95,9 @@ def _candidate_summary_item(candidate: Candidate) -> dict[str, Any]:
         "boundary_refined": candidate.boundary_refined,
         "boundary_refinement_reason": candidate.boundary_refinement_reason,
         "boundary_expansion_seconds": _round(candidate.boundary_expansion_seconds),
+        "heatmap_value": _round(candidate.heatmap_value),
+        "heatmap_overlap_seconds": _round(candidate.heatmap_overlap_seconds),
+        "heatmap_score": _round(candidate.heatmap_score),
         "rule_score": _round(candidate.rule_score),
         "final_score": _round(_score(candidate)),
         "hard_gate_passed": candidate.hard_gate_passed,
@@ -192,6 +195,11 @@ def build_candidate_summary(
     )
     final_scores = [float(score) for candidate in candidates if (score := _score(candidate)) is not None]
     final_score_stats = _stats(final_scores)
+    heatmap_values = [
+        float(candidate.heatmap_value)
+        for candidate in candidates
+        if candidate.heatmap_value is not None
+    ]
     rejection_counter: Counter[str] = Counter()
     rejected_ids_by_reason: dict[str, list[str]] = {}
     if selection is not None:
@@ -229,6 +237,8 @@ def build_candidate_summary(
         "min_rule_score": rule_score_stats["min"],
         "max_rule_score": rule_score_stats["max"],
         "avg_rule_score": rule_score_stats["avg"],
+        "heatmap_annotated_count": len(heatmap_values),
+        "avg_heatmap_value": _stats(heatmap_values)["avg"],
         "min_final_score": final_score_stats["min"],
         "max_final_score": final_score_stats["max"],
         "avg_final_score": final_score_stats["avg"],

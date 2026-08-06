@@ -6,6 +6,7 @@ from app.audio.transcript_postprocess import (
     postprocess_transcript_segments,
     postprocess_transcript_text,
     raw_transcript_output_path,
+    repair_known_transcript_artifact_text,
     transcript_postprocess_summary_path,
     write_transcript_postprocess_summary,
 )
@@ -25,6 +26,24 @@ def test_postprocess_text_applies_default_dictionary() -> None:
 
     assert text == "OpenAIとChatGPTを使います"
     assert summary["replacement_counts"] == {"オープンエーアイ": 1, "チャットGPT": 1}
+
+
+def test_postprocess_text_corrects_known_multilingual_asr_error() -> None:
+    text, summary = postprocess_transcript_text(
+        "能面の話で、農منをつけて、その農منにしとったっちゃん"
+    )
+
+    assert text == "能面の話で、能面をつけて、その能面にしとったっちゃん"
+    assert summary["replacement_counts"] == {"農من": 2}
+
+
+def test_known_artifact_repair_is_idempotent_and_does_not_apply_custom_rules() -> None:
+    original = "NewsPicks公式でその農منを見た"
+
+    repaired = repair_known_transcript_artifact_text(original)
+
+    assert repaired == "NewsPicks公式でその能面を見た"
+    assert repair_known_transcript_artifact_text(repaired) == repaired
 
 
 def test_postprocess_text_applies_custom_replacements_after_defaults() -> None:

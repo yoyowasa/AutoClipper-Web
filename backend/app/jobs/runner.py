@@ -57,6 +57,7 @@ from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.boundary_refinement import refine_selected_candidates
 from app.candidates.generate_normal_candidates import generate_normal_candidates_with_summary
 from app.candidates.generate_short_candidates import generate_short_candidates_with_summary
+from app.candidates.generate_heatmap_candidates import generate_heatmap_candidates_with_summary
 from app.candidates.manual_ranges import (
     MANUAL_SELECTION_REASON,
     automatic_selection_settings,
@@ -80,6 +81,7 @@ from app.candidates.select_candidates import (
     write_selected_clips,
 )
 from app.candidates.title_fallback import titled_candidates
+from app.config import get_settings
 from app.db import SessionLocal
 from app.ids import make_id
 from app.jobs.clip_plan import (
@@ -118,6 +120,7 @@ from app.render.render_review_preview import render_review_preview
 from app.render.render_short import ShortRenderBatchResult, render_selected_short_candidates, render_short_clip
 from app.scoring.openai_score import OpenAICandidateScorer, score_candidate_batch
 from app.scoring.clip_preferences import build_clip_selection_preferences
+from app.scoring.heatmap import annotate_candidates_with_heatmap
 from app.scoring.quality_gate import evaluate_hard_gate
 from app.scoring.rule_score import score_candidates
 from app.storage.paths import StoragePaths, get_storage_paths
@@ -129,6 +132,7 @@ from app.video.black_screen import (
     visual_quality_output_path,
     write_visual_quality,
 )
+from app.video.heatmap import HeatmapSegment, load_heatmap_for_video
 from app.video.probe import VideoMetadata, probe_metadata
 from app.video.scene_detect import SceneSegment, scene_output_path, scene_segments_from_boundaries, write_scene_segments
 from app.video.scene_detect import detect_scenes as default_detect_scenes
@@ -356,6 +360,64 @@ def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
+
+
+def _has_automatic_clip_output(settings: dict[str, Any]) -> bool:
+    normal_automatic = _int_setting(settings, "normalClipCount", 2) > 0 and not settings.get(
+        "normalClipTimeRanges"
+    )
+    short_automatic = _int_setting(settings, "shortCount", 3) > 0 and not settings.get(
+        "shortClipTimeRanges"
+    )
+    return normal_automatic or short_automatic
+
+
+def _heatmap_summary_for_selection_mode(
+    summary: dict[str, object],
+    segments: Sequence[HeatmapSegment],
+    settings: dict[str, Any],
+    *,
+    video_duration: float,
+) -> tuple[dict[str, object], bool]:
+    requested = _bool_setting(settings, "heatmapIntervalMode", False)
+    automatic_output = _has_automatic_clip_output(settings)
+    positive_segments = sum(1 for segment in segments if segment.value > 0)
+    usable_positive_segments = sum(
+        1
+        for segment in segments
+        if segment.value > 0
+        and min(float(segment.end_time), video_duration)
+        > max(float(segment.start_time), 0.0)
+    )
+    available = usable_positive_segments > 0
+    interval_mode_applied = requested and automatic_output and available
+    selection_behavior = (
+        "heatmap_intervals"
+        if interval_mode_applied
+        else "manual_ranges"
+        if requested and not automatic_output
+        else "supporting_score"
+    )
+    updated = {
+        **summary,
+        "interval_mode_requested": requested,
+        "interval_mode_applied": interval_mode_applied,
+        "automatic_output_requested": automatic_output,
+        "positive_segment_count": positive_segments,
+        "usable_positive_segment_count": usable_positive_segments,
+        "selection_behavior": selection_behavior,
+    }
+    should_fail = requested and automatic_output and not available
+    if should_fail:
+        updated["interval_mode_unavailable_reason"] = (
+            summary.get("fallback_reason")
+            or (
+                "heatmap_has_no_positive_segments_in_video"
+                if positive_segments > 0
+                else "heatmap_has_no_positive_segments"
+            )
+        )
+    return updated, should_fail
 
 
 def _int_setting(settings: dict[str, Any], key: str, default: int) -> int:
@@ -1365,6 +1427,7 @@ def _selection_with_refined_boundaries(
     scene_segments: Sequence[SceneSegment],
     settings: dict[str, Any],
     timeline_duration: float,
+    heatmap_segments: Sequence[HeatmapSegment] = (),
 ) -> tuple[CandidateSelection, list[Candidate]]:
     def refine_unlocked(candidates: Sequence[Candidate]) -> list[Candidate]:
         unlocked = [
@@ -1380,6 +1443,8 @@ def _selection_with_refined_boundaries(
             settings=settings,
             timeline_duration=timeline_duration,
         )
+        if heatmap_segments:
+            refined = annotate_candidates_with_heatmap(refined, heatmap_segments)
         replacements = {candidate.id: candidate for candidate in refined}
         return [replacements.get(candidate.id, candidate) for candidate in candidates]
 
@@ -2042,6 +2107,7 @@ def run_autoclipper_job(
     transcript_segments: list[TranscriptSegment] = []
     silence_segments: list[SilenceSegment] = []
     audio_features: AudioFeatures | None = None
+    heatmap_segments: list[HeatmapSegment] = []
     normal_candidates: list[Candidate] = []
     short_candidates: list[Candidate] = []
     candidate_generation_summary: dict[str, Any] | None = None
@@ -2126,6 +2192,31 @@ def run_autoclipper_job(
             _update_video_metadata(db, video, metadata)
             metadata_files.append(_write_json(job_dir / "video_metadata.json", _metadata_to_jsonable(metadata)))
             duration = float(metadata.duration or 0.0)
+            heatmap_result = load_heatmap_for_video(
+                input_path,
+                original_filename=video.original_filename,
+                actual_duration=duration,
+                max_sidecar_size_bytes=get_settings().max_heatmap_sidecar_size_bytes,
+            )
+            heatmap_segments = heatmap_result.segments
+            heatmap_summary, heatmap_mode_unavailable = _heatmap_summary_for_selection_mode(
+                heatmap_result.summary,
+                heatmap_segments,
+                settings,
+                video_duration=duration,
+            )
+            metadata_files.append(
+                _write_json(
+                    job_dir / "heatmap_validation_summary.json",
+                    heatmap_summary,
+                )
+            )
+            if heatmap_mode_unavailable:
+                raise PipelineExpectedError(
+                    "heatmap_interval_mode_unavailable",
+                    "JSON区間モードには有効な人気区間JSONが必要です。",
+                    details=heatmap_summary,
+                )
             if not metadata.has_audio:
                 raise PipelineExpectedError(
                     "missing_audio",
@@ -2456,6 +2547,7 @@ def run_autoclipper_job(
                 manual_normal=bool(normal_manual_ranges),
                 manual_short=bool(short_manual_ranges),
             )
+            heatmap_interval_mode = _bool_setting(settings, "heatmapIntervalMode", False)
             try:
                 normal_generation_result = (
                     build_manual_candidates(
@@ -2464,6 +2556,16 @@ def run_autoclipper_job(
                         transcript_segments,
                     )
                     if normal_manual_ranges
+                    else generate_heatmap_candidates_with_summary(
+                        "normal",
+                        heatmap_segments=heatmap_segments,
+                        transcript_segments=transcript_segments,
+                        video_duration=duration,
+                        requested_count=_int_setting(settings, "normalClipCount", 2),
+                        settings=settings,
+                        heartbeat=candidate_generation_heartbeat,
+                    )
+                    if heatmap_interval_mode
                     else generate_normal_candidates_with_summary(
                         transcript_segments,
                         scene_segments,
@@ -2472,7 +2574,10 @@ def run_autoclipper_job(
                         heartbeat=candidate_generation_heartbeat,
                     )
                 )
-                normal_candidates = normal_generation_result.candidates
+                normal_candidates = annotate_candidates_with_heatmap(
+                    normal_generation_result.candidates,
+                    heatmap_segments,
+                )
                 short_generation_result = (
                     build_manual_candidates(
                         "short",
@@ -2480,6 +2585,16 @@ def run_autoclipper_job(
                         transcript_segments,
                     )
                     if short_manual_ranges
+                    else generate_heatmap_candidates_with_summary(
+                        "short",
+                        heatmap_segments=heatmap_segments,
+                        transcript_segments=transcript_segments,
+                        video_duration=duration,
+                        requested_count=_int_setting(settings, "shortCount", 3),
+                        settings=settings,
+                        heartbeat=candidate_generation_heartbeat,
+                    )
+                    if heatmap_interval_mode
                     else generate_short_candidates_with_summary(
                         transcript_segments,
                         scene_segments,
@@ -2488,7 +2603,10 @@ def run_autoclipper_job(
                         heartbeat=candidate_generation_heartbeat,
                     )
                 )
-                short_candidates = short_generation_result.candidates
+                short_candidates = annotate_candidates_with_heatmap(
+                    short_generation_result.candidates,
+                    heatmap_segments,
+                )
                 candidate_generation_summary = merge_candidate_generation_summaries(
                     [normal_generation_result.summary, short_generation_result.summary],
                     video_duration=duration,
@@ -2508,6 +2626,31 @@ def run_autoclipper_job(
                     "candidate_generation_failed",
                     f"Could not generate clip candidates: {exc}",
                 ) from exc
+            if heatmap_interval_mode:
+                missing_candidate_types = [
+                    candidate_type
+                    for candidate_type, requested_count, manual_ranges, candidates in (
+                        (
+                            "normal",
+                            _int_setting(settings, "normalClipCount", 2),
+                            normal_manual_ranges,
+                            normal_candidates,
+                        ),
+                        (
+                            "short",
+                            _int_setting(settings, "shortCount", 3),
+                            short_manual_ranges,
+                            short_candidates,
+                        ),
+                    )
+                    if requested_count > 0 and not manual_ranges and not candidates
+                ]
+                if missing_candidate_types:
+                    raise PipelineExpectedError(
+                        "heatmap_interval_mode_no_candidates",
+                        "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。",
+                        details={"candidateTypes": missing_candidate_types},
+                    )
             all_candidates = [*normal_candidates, *short_candidates]
             metadata_files.extend(
                 [
@@ -2518,8 +2661,16 @@ def run_autoclipper_job(
             )
             if not all_candidates:
                 raise PipelineExpectedError(
-                    "no_candidates_found",
-                    "No clip candidates were found for the selected settings.",
+                    (
+                        "heatmap_interval_mode_no_candidates"
+                        if heatmap_interval_mode
+                        else "no_candidates_found"
+                    ),
+                    (
+                        "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。"
+                        if heatmap_interval_mode
+                        else "No clip candidates were found for the selected settings."
+                    ),
                 )
 
             manual_candidates = [
@@ -2585,6 +2736,7 @@ def run_autoclipper_job(
                 scene_segments=scene_segments,
                 settings=settings,
                 timeline_duration=duration,
+                heatmap_segments=heatmap_segments,
             )
             selection, scored_candidates = _selection_with_fallback_titles(
                 selection,
@@ -3279,6 +3431,7 @@ def run_clip_plan_reselection(
             job_dir / "candidate_summary.json",
             job_dir / "rejection_summary.json",
             job_dir / "selected_clips_summary.json",
+            job_dir / "heatmap_validation_summary.json",
         ]
         previous_artifacts = {
             path: path.read_bytes() if path.is_file() else None
@@ -3305,6 +3458,28 @@ def run_clip_plan_reselection(
             visual_quality = VisualQuality.model_validate(
                 _read_json_file(job_dir / "visual_quality.json")
             )
+            heatmap_result = load_heatmap_for_video(
+                input_path,
+                original_filename=video.original_filename,
+                actual_duration=float(video.duration or visual_quality.duration),
+                max_sidecar_size_bytes=get_settings().max_heatmap_sidecar_size_bytes,
+            )
+            heatmap_summary, heatmap_mode_unavailable = _heatmap_summary_for_selection_mode(
+                heatmap_result.summary,
+                heatmap_result.segments,
+                settings,
+                video_duration=float(video.duration or visual_quality.duration),
+            )
+            _write_json(
+                job_dir / "heatmap_validation_summary.json",
+                heatmap_summary,
+            )
+            if heatmap_mode_unavailable:
+                raise PipelineExpectedError(
+                    "heatmap_interval_mode_unavailable",
+                    "JSON区間モードには有効な人気区間JSONが必要です。",
+                    details=heatmap_summary,
+                )
             base_candidates = _read_model_list(
                 job_dir / "candidates.json",
                 Candidate,
@@ -3347,6 +3522,14 @@ def run_clip_plan_reselection(
                     for candidate in base_candidates
                     if candidate.type == "short"
                 ]
+            )
+            normal_candidates = annotate_candidates_with_heatmap(
+                normal_candidates,
+                heatmap_result.segments,
+            )
+            short_candidates = annotate_candidates_with_heatmap(
+                short_candidates,
+                heatmap_result.segments,
             )
             manual_candidates = [
                 *(normal_candidates if normal_manual_ranges else []),
@@ -3405,6 +3588,7 @@ def run_clip_plan_reselection(
                 scene_segments=scene_segments,
                 settings=settings,
                 timeline_duration=float(video.duration or visual_quality.duration),
+                heatmap_segments=heatmap_result.segments,
             )
             selection, scored_candidates = _selection_with_fallback_titles(
                 selection,

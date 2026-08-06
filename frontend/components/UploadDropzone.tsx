@@ -14,6 +14,7 @@ function formatFileSize(size: number): string {
 type UploadDropzoneProps = {
   file: File | null;
   accept?: string;
+  compact?: boolean;
   disabled?: boolean;
   purpose?: "new" | "reedit";
   uploadProgress?: number;
@@ -24,6 +25,7 @@ type UploadDropzoneProps = {
 export function UploadDropzone({
   file,
   accept = "video/*",
+  compact = false,
   disabled = false,
   purpose = "new",
   uploadProgress = 0,
@@ -58,7 +60,9 @@ export function UploadDropzone({
   return (
     <section
       aria-live="polite"
-      className={`flex min-h-64 flex-col items-center justify-center rounded-md border-2 p-6 text-center transition-colors ${panelStyle}`}
+      className={`flex flex-col items-center justify-center text-center transition-colors ${
+        compact ? "min-h-52 border p-4" : "min-h-64 rounded-md border-2 p-6"
+      } ${panelStyle}`}
       onDragOver={(event) => {
         event.preventDefault();
         if (!disabled) {
@@ -84,14 +88,18 @@ export function UploadDropzone({
       />
 
       {file ? (
-        <div className="flex w-full max-w-3xl flex-col gap-5">
-          <div className="flex flex-col items-center gap-4 sm:flex-row sm:text-left">
+        <div className={`flex w-full max-w-3xl flex-col ${compact ? "gap-3" : "gap-5"}`}>
+          <div
+            className={`flex flex-col items-center sm:flex-row sm:text-left ${
+              compact ? "gap-3" : "gap-4"
+            }`}
+          >
             <div
-              className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-full text-xl font-bold text-white ${
-                isUploading ? "bg-sky-600" : "bg-emerald-600"
-              }`}
+              className={`flex shrink-0 items-center justify-center font-bold text-white ${
+                compact ? "h-11 w-11 text-xs" : "h-16 w-16 rounded-full text-xl"
+              } ${isUploading ? "bg-sky-600" : "bg-emerald-600"}`}
             >
-              {isUploading ? `${boundedProgress}%` : "✓"}
+              {isUploading ? `${boundedProgress}%` : "MP4"}
             </div>
             <div className="min-w-0 flex-1">
               <p
@@ -105,7 +113,11 @@ export function UploadDropzone({
                     ? "アップロード中"
                     : "選択完了"}
               </p>
-              <h2 className="mt-1 text-2xl font-semibold text-neutral-950">
+              <h2
+                className={`mt-1 font-semibold text-neutral-950 ${
+                  compact ? "text-sm" : "text-2xl"
+                }`}
+              >
                 {isUploaded
                   ? purpose === "reedit"
                     ? "元の編集データを確認しました"
@@ -118,7 +130,7 @@ export function UploadDropzone({
                       ? "再編集する完成MP4を選択しました"
                       : "動画を選択しました"}
               </h2>
-              <p className="mt-1 text-sm text-neutral-600">
+              <p className={`mt-1 text-neutral-600 ${compact ? "text-xs" : "text-sm"}`}>
                 {isUploaded
                   ? purpose === "reedit"
                     ? "元jobの編集画面を開いています"
@@ -133,15 +145,23 @@ export function UploadDropzone({
           </div>
 
           <div
-            className={`border-y py-4 text-left ${
+            className={`border-y text-left ${compact ? "py-2" : "py-4"} ${
               isUploading ? "border-sky-300" : "border-emerald-300"
             }`}
           >
             <p className="text-xs font-semibold text-neutral-500">選択した動画</p>
-            <p className="mt-1 break-all text-base font-semibold text-neutral-950">
+            <p
+              className={`mt-1 break-all font-semibold text-neutral-950 ${
+                compact ? "text-xs" : "text-base"
+              }`}
+            >
               {file.name}
             </p>
-            <p className="mt-1 text-sm font-medium text-neutral-600">
+            <p
+              className={`mt-1 font-medium text-neutral-600 ${
+                compact ? "text-xs" : "text-sm"
+              }`}
+            >
               {formatFileSize(file.size)}
             </p>
           </div>
@@ -173,7 +193,9 @@ export function UploadDropzone({
               <button
                 type="button"
                 disabled={disabled}
-                className="min-h-10 bg-neutral-950 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300"
+                className={`bg-neutral-950 px-4 font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300 ${
+                  compact ? "min-h-9 text-xs" : "min-h-10 text-sm"
+                }`}
                 onClick={() => inputRef.current?.click()}
               >
                 別の動画を選ぶ
@@ -181,7 +203,9 @@ export function UploadDropzone({
               <button
                 type="button"
                 disabled={disabled}
-                className="min-h-10 border border-neutral-400 bg-white px-4 text-sm font-medium text-neutral-800 disabled:cursor-not-allowed disabled:text-neutral-400"
+                className={`border border-neutral-400 bg-white px-4 font-medium text-neutral-800 disabled:cursor-not-allowed disabled:text-neutral-400 ${
+                  compact ? "min-h-9 text-xs" : "min-h-10 text-sm"
+                }`}
                 onClick={clearFile}
               >
                 選択を解除
@@ -190,15 +214,19 @@ export function UploadDropzone({
           ) : null}
         </div>
       ) : (
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex h-14 w-14 items-center justify-center rounded-md border border-neutral-300 bg-white text-xl">
+        <div className={`flex flex-col items-center ${compact ? "gap-3" : "gap-4"}`}>
+          <div
+            className={`flex items-center justify-center border border-neutral-300 bg-white ${
+              compact ? "h-11 w-11 text-sm font-bold" : "h-14 w-14 rounded-md text-xl"
+            }`}
+          >
             MP4
           </div>
           <div className="flex max-w-md flex-col gap-1">
-            <h2 className="text-xl font-semibold text-neutral-950">
+            <h2 className={`font-semibold text-neutral-950 ${compact ? "text-base" : "text-xl"}`}>
               {purpose === "reedit" ? "完成MP4を選択" : "動画を選択"}
             </h2>
-            <p className="text-sm text-neutral-600">
+            <p className={compact ? "text-xs text-neutral-600" : "text-sm text-neutral-600"}>
               {purpose === "reedit"
                 ? "AutoClipperで書き出したMP4を選ぶか、ここへドロップしてください"
                 : "動画ファイルを選ぶか、ここへドロップしてください"}
@@ -207,7 +235,9 @@ export function UploadDropzone({
           <button
             type="button"
             disabled={disabled}
-            className="min-h-10 bg-neutral-950 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300"
+            className={`bg-neutral-950 px-4 font-semibold text-white disabled:cursor-not-allowed disabled:bg-neutral-300 ${
+              compact ? "min-h-9 text-xs" : "min-h-10 text-sm"
+            }`}
             onClick={() => inputRef.current?.click()}
           >
             {purpose === "reedit" ? "完成MP4を選ぶ" : "動画ファイルを選ぶ"}

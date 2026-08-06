@@ -1,5 +1,6 @@
 from collections.abc import Generator
 from datetime import timedelta
+import hashlib
 import json
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from app.jobs.status import SUCCESS_STATUSES
 from app.main import app
 from app.models import AppPreference, ExportItem, Job, Video, utc_now
 from app.storage.paths import StoragePaths, get_storage_paths
+from app.video.heatmap import heatmap_sidecar_path
 
 
 @pytest.fixture()
@@ -76,6 +78,210 @@ def test_upload_video_creates_video_record(client: TestClient) -> None:
         assert video.original_filename == "sample.mp4"
         assert Path(video.stored_path).is_file()
     assert Path(video.stored_path).read_bytes() == b"fake video bytes"
+
+
+def _heatmap_upload_payload(
+    media: bytes,
+    *,
+    filename: str = "sample.mp4",
+    available: bool = True,
+) -> bytes:
+    return json.dumps(
+        {
+            "schema_version": 1,
+            "source": {
+                "name": "youtube_most_replayed",
+                "video_id": "BaW_jenozKc",
+                "fetched_at": "2026-08-02T03:30:00Z",
+                "extractor": "yt-dlp",
+                "extractor_version": "2026.07.04",
+            },
+            "media": {
+                "filename": filename,
+                "sha256": hashlib.sha256(media).hexdigest(),
+                "size_bytes": len(media),
+            },
+            "duration_seconds": 120.0,
+            "heatmap_available": available,
+            "heatmap": (
+                [{"start_time": 10.0, "end_time": 15.0, "value": 0.8}]
+                if available
+                else []
+            ),
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def test_upload_video_accepts_and_stores_valid_heatmap_sidecar(client: TestClient) -> None:
+    media = b"video with heatmap"
+    response = client.post(
+        "/api/videos/upload",
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": (
+                "sample.mp4.heatmap.json",
+                _heatmap_upload_payload(media),
+                "application/json",
+            ),
+        },
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        video = db.get(Video, response.json()["videoId"])
+        assert video is not None
+        stored_sidecar = heatmap_sidecar_path(Path(video.stored_path))
+    payload = json.loads(stored_sidecar.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == 1
+    assert payload["media"]["filename"] == "sample.mp4"
+    assert payload["heatmap"][0]["value"] == 0.8
+
+
+def test_upload_video_accepts_unavailable_heatmap_for_existing_fallback(
+    client: TestClient,
+) -> None:
+    media = b"video without heatmap data"
+    response = client.post(
+        "/api/videos/upload",
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": (
+                "sample.mp4.heatmap.json",
+                _heatmap_upload_payload(media, available=False),
+                "application/json",
+            ),
+        },
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        video = db.get(Video, response.json()["videoId"])
+        assert video is not None
+        payload = json.loads(
+            heatmap_sidecar_path(Path(video.stored_path)).read_text(encoding="utf-8")
+        )
+    assert payload["heatmap_available"] is False
+    assert payload["heatmap"] == []
+
+
+def test_create_job_requires_available_heatmap_for_interval_mode(client: TestClient) -> None:
+    media = b"video for interval mode"
+    without_sidecar = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", media, "video/mp4")},
+    ).json()
+    missing_response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": without_sidecar["videoId"],
+            "settings": {"heatmapIntervalMode": True},
+        },
+    )
+
+    unavailable_upload = client.post(
+        "/api/videos/upload",
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": (
+                "sample.mp4.heatmap.json",
+                _heatmap_upload_payload(media, available=False),
+                "application/json",
+            ),
+        },
+    ).json()
+    unavailable_response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": unavailable_upload["videoId"],
+            "settings": {"heatmapIntervalMode": True},
+        },
+    )
+
+    assert missing_response.status_code == 422
+    assert missing_response.json()["detail"] == {
+        "code": "heatmap_interval_mode_requires_data",
+        "message": "JSON区間モードには有効な人気区間JSONが必要です。",
+        "reason": "heatmap_sidecar_not_provided",
+    }
+    assert unavailable_response.status_code == 422
+    assert unavailable_response.json()["detail"]["reason"] == "heatmap_unavailable"
+
+
+def test_create_job_persists_enabled_heatmap_interval_mode(client: TestClient) -> None:
+    media = b"video with enabled interval mode"
+    upload = client.post(
+        "/api/videos/upload",
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": (
+                "sample.mp4.heatmap.json",
+                _heatmap_upload_payload(media),
+                "application/json",
+            ),
+        },
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"heatmapIntervalMode": True},
+        },
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, response.json()["jobId"])
+        assert job is not None
+        assert job.settings_json["heatmapIntervalMode"] is True
+
+
+def test_upload_video_rejects_invalid_heatmap_and_cleans_up_media(client: TestClient) -> None:
+    media = b"video with invalid heatmap"
+    payload = json.loads(_heatmap_upload_payload(media))
+    payload["media"]["sha256"] = "0" * 64
+
+    response = client.post(
+        "/api/videos/upload",
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": (
+                "sample.mp4.heatmap.json",
+                json.dumps(payload).encode("utf-8"),
+                "application/json",
+            ),
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "heatmap_media_sha256_mismatch"
+    storage = app.dependency_overrides[get_storage_paths]()
+    assert list(storage.uploads.iterdir()) == []
+    with next(app.dependency_overrides[get_db]()) as db:
+        assert list(db.scalars(select(Video)).all()) == []
+
+
+def test_upload_video_rejects_wrong_sidecar_filename_and_cleans_up_media(
+    client: TestClient,
+) -> None:
+    media = b"video with wrongly named heatmap"
+    response = client.post(
+        "/api/videos/upload",
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": (
+                "other.mp4.heatmap.json",
+                _heatmap_upload_payload(media),
+                "application/json",
+            ),
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "heatmap_filename_mismatch"
+    storage = app.dependency_overrides[get_storage_paths]()
+    assert list(storage.uploads.iterdir()) == []
 
 
 def test_upload_video_rejects_invalid_file_type(client: TestClient) -> None:
@@ -472,6 +678,7 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["minGapBetweenSubtitles"] == 0.08
         assert job.settings_json["selectionPolicy"] == "fill_requested"
         assert job.settings_json["crossTypeOverlapDedupe"] is False
+        assert job.settings_json["heatmapIntervalMode"] is False
         assert job.settings_json["openaiCandidateLimit"] == 40
         assert job.settings_json["openaiModel"] == "gpt-5.5"
         assert job.settings_json["openaiFallbackToRuleScore"] is True
@@ -847,6 +1054,7 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["candidateChunkOverlapSeconds"]["default"] == 75.0
     assert properties["selectionPolicy"]["default"] == "fill_requested"
     assert properties["crossTypeOverlapDedupe"]["default"] is False
+    assert properties["heatmapIntervalMode"]["default"] is False
     assert properties["openaiCandidateLimit"]["default"] == 40
     assert properties["openaiModel"]["default"] == "gpt-5.5"
     assert properties["openaiFallbackToRuleScore"]["default"] is True

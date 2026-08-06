@@ -124,8 +124,9 @@ def parse_selection_settings(
     return CandidateSelectionSettings(**normalized)
 
 
-def _rank_key(candidate: Candidate) -> tuple[float, int, float, float, int, float]:
+def _rank_key(candidate: Candidate) -> tuple[float, float, int, float, float, int, float]:
     return (
+        candidate.heatmap_direct_score if candidate.heatmap_direct_score is not None else -1.0,
         effective_final_score(candidate),
         1 if candidate.should_use is True else 0,
         candidate.rule_score if candidate.rule_score is not None else 0.0,

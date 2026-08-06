@@ -7,6 +7,7 @@ type ClipSelectionEditorProps = {
   settings: ClipSettings;
   disabled?: boolean;
   compact?: boolean;
+  workspace?: boolean;
   onChange: (settings: ClipSettings) => void;
 };
 
@@ -80,6 +81,7 @@ export function ClipSelectionEditor({
   settings,
   disabled = false,
   compact = false,
+  workspace = false,
   onChange
 }: ClipSelectionEditorProps) {
   const normalManual = isManualTimeMode(settings, "normal");
@@ -89,7 +91,11 @@ export function ClipSelectionEditor({
     (settings.shortCount > 0 && !shortManual);
 
   return (
-    <section className="border-y border-neutral-200 py-5 md:col-span-2">
+    <section
+      className={`border-y border-neutral-200 py-5 md:col-span-2 ${
+        workspace ? "2xl:col-span-4" : ""
+      }`}
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="text-sm font-semibold text-neutral-900">切り抜き内容</h3>
         <span

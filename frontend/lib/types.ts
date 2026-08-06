@@ -54,6 +54,7 @@ export type ClipSettings = {
   excludePromotionalContent: boolean;
   selectionPolicy: "fill_requested" | "strict_quality";
   crossTypeOverlapDedupe: boolean;
+  heatmapIntervalMode: boolean;
   useOpenAIScoring: boolean;
   openaiCandidateLimit: number;
   openaiModel: string;

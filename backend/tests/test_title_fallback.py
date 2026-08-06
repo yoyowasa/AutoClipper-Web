@@ -76,6 +76,38 @@ def test_title_skips_generic_intro_segments() -> None:
     assert titled.title == "一週間休んだ理由を話します"
 
 
+def test_known_multilingual_asr_title_is_postprocessed() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="その農منにしとったっちゃん",
+        title="その農منにしとったっちゃん",
+    )
+
+    titled = candidate_with_title(candidate, index=1)
+
+    assert titled.title == "その能面にしとったっちゃん"
+    assert titled.overlay_title == "その能面にしとったっちゃん"
+
+
+def test_unknown_mixed_script_title_uses_deterministic_fallback() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="その農غにしとったっちゃん そしたら なんか知らんけど",
+        title="その農غにしとったっちゃん",
+    )
+    segments = [
+        TranscriptSegment(start=12.0, end=14.0, text="その農غにしとったっちゃん"),
+        TranscriptSegment(start=14.0, end=15.0, text="そしたら"),
+        TranscriptSegment(start=15.0, end=16.0, text="なんか知らんけど"),
+    ]
+
+    titled = candidate_with_title(candidate, index=1, transcript_segments=segments)
+
+    assert titled.title == "Short 01"
+    assert titled.overlay_title == "Short 01"
+    assert titled.title_source == "deterministic_fallback"
+
+
 def test_clip_without_transcript_gets_deterministic_fallback_title() -> None:
     candidate = make_candidate(candidate_type="short", transcript_text="")
 

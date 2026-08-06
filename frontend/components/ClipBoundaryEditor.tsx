@@ -79,10 +79,10 @@ function BoundaryTimeInput({
   return (
     <div>
       <p className="text-xs font-semibold text-neutral-700">{label}</p>
-      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2">
+      <div className="mt-1 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-1.5">
         <input
           aria-label={`${label} 分`}
-          className="min-h-10 min-w-0 border border-neutral-300 px-2 text-sm tabular-nums"
+          className="min-h-9 min-w-0 border border-neutral-300 px-2 text-sm tabular-nums"
           disabled={disabled}
           min={0}
           step={1}
@@ -95,7 +95,7 @@ function BoundaryTimeInput({
         <span className="text-xs text-neutral-500">分</span>
         <input
           aria-label={`${label} 秒`}
-          className="min-h-10 min-w-0 border border-neutral-300 px-2 text-sm tabular-nums"
+          className="min-h-9 min-w-0 border border-neutral-300 px-2 text-sm tabular-nums"
           disabled={disabled}
           max={59.999}
           min={0}
@@ -181,13 +181,13 @@ export function ClipBoundaryEditor({
   }
 
   return (
-    <section className="border-b border-neutral-300 bg-blue-50 px-5 py-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-neutral-950">
+    <section className="border-b border-neutral-300 bg-blue-50 px-5 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <h3 className="shrink-0 text-sm font-semibold text-neutral-950">
             このclipの開始・終了を調整
           </h3>
-          <p className="mt-1 text-xs leading-5 text-neutral-600">
+          <p className="min-w-[260px] flex-1 text-xs leading-4 text-neutral-600">
             分・秒を直接変更するか、前後の追加ボタンを使います。選ばれた場面は維持され、字幕生成も行いません。
           </p>
         </div>
@@ -198,7 +198,7 @@ export function ClipBoundaryEditor({
         ) : null}
       </div>
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <div>
           <BoundaryTimeInput
             disabled={disabled}
@@ -206,7 +206,7 @@ export function ClipBoundaryEditor({
             parts={startParts}
             onChange={setStartParts}
           />
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-1 flex flex-wrap gap-1">
             {QUICK_ADJUSTMENTS.map((seconds) => (
               <button
                 className="min-h-8 border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
@@ -228,7 +228,7 @@ export function ClipBoundaryEditor({
             parts={endParts}
             onChange={setEndParts}
           />
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-1 flex flex-wrap gap-1">
             {QUICK_ADJUSTMENTS.map((seconds) => (
               <button
                 className="min-h-8 border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
@@ -248,9 +248,9 @@ export function ClipBoundaryEditor({
         </div>
       </div>
 
-      <div className="mt-4 border-t border-blue-200 pt-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-xs leading-5 text-neutral-700">
+      <div className="mt-3 border-t border-blue-200 pt-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-4 text-neutral-700">
             <p>
               自動選定: {formatTime(recommendedStart)} -{" "}
               {formatTime(recommendedEnd)}
@@ -265,7 +265,7 @@ export function ClipBoundaryEditor({
           </div>
           <div className="flex flex-wrap gap-2">
             <button
-              className="min-h-10 border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-50"
+              className="min-h-9 border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-50"
               disabled={disabled}
               type="button"
               onClick={resetRecommended}
@@ -273,7 +273,7 @@ export function ClipBoundaryEditor({
               自動選定の範囲へ戻す
             </button>
             <button
-              className="min-h-10 bg-blue-700 px-4 text-xs font-semibold text-white disabled:bg-neutral-300"
+              className="min-h-9 bg-blue-700 px-4 text-xs font-semibold text-white disabled:bg-neutral-300"
               disabled={disabled || !changed || validation !== null}
               type="button"
               onClick={() => {
@@ -287,9 +287,9 @@ export function ClipBoundaryEditor({
           </div>
         </div>
         {validation ? (
-          <p className="mt-2 text-xs font-medium text-red-700">{validation}</p>
+          <p className="mt-1 text-xs font-medium leading-4 text-red-700">{validation}</p>
         ) : (
-          <p className="mt-2 text-xs text-neutral-500">
+          <p className="mt-1 text-xs leading-4 text-neutral-500">
             対象clip 1本の軽量動画だけを作り直します。OpenAI API料金は発生しません。
           </p>
         )}

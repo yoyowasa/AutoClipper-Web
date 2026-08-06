@@ -418,7 +418,7 @@ export default function ClipPlanReviewPage() {
   return (
     <main className="min-h-screen bg-[#f7f7f4] text-neutral-950">
       <header className="border-b border-neutral-300 bg-white px-5 py-4">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-4">
+        <div className="flex w-full flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs font-semibold text-blue-700">工程 2 / 4</p>
             <h1 className="mt-1 text-2xl font-semibold">切り抜き予定の確認</h1>
@@ -436,7 +436,7 @@ export default function ClipPlanReviewPage() {
       </header>
 
       <div className="border-b border-neutral-300 bg-neutral-100 px-5 py-3">
-        <div className="mx-auto grid max-w-[1600px] grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <div className="grid w-full grid-cols-2 gap-2 text-xs sm:grid-cols-4">
           <div className="border-l-4 border-emerald-500 px-3 py-2 text-emerald-900">
             1. 解析・選定済み
           </div>
@@ -453,14 +453,14 @@ export default function ClipPlanReviewPage() {
       </div>
 
       {error ? (
-        <div className="mx-auto mt-4 max-w-[1600px] px-5">
+        <div className="mt-4 w-full px-5">
           <div className="border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
             {error}
           </div>
         </div>
       ) : null}
 
-      <div className="mx-auto grid max-w-[1600px] lg:grid-cols-[280px_minmax(0,1fr)_390px]">
+      <div className="grid w-full lg:grid-cols-[280px_minmax(0,1fr)_390px]">
         <aside className="border-r border-neutral-300 bg-white lg:row-span-2 lg:min-h-[calc(100vh-145px)]">
           <div className="border-b border-neutral-300 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
@@ -504,7 +504,7 @@ export default function ClipPlanReviewPage() {
                       selected ? "text-neutral-300" : "text-neutral-500"
                     }`}
                   >
-                    {formatTime(clip.start)} - {formatTime(clip.end)}・
+                    元動画 {formatTime(clip.start)} - {formatTime(clip.end)}・
                     {formatTime(clip.duration)}
                   </span>
                 </button>
@@ -516,63 +516,11 @@ export default function ClipPlanReviewPage() {
         <section className="min-w-0 border-b border-neutral-300 bg-white lg:col-start-2 lg:row-start-1 lg:border-r">
           {selectedClip ? (
             <>
-              <div className="border-b border-neutral-300 px-5 py-4">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold text-blue-700">
-                      {clipLabel(selectedClip, plan.clips)}
-                    </p>
-                    <h2 className="mt-1 text-lg font-semibold">{selectedClip.title}</h2>
-                    <p className="mt-1 text-sm tabular-nums text-neutral-600">
-                      元動画 {formatTime(selectedClip.start)} -{" "}
-                      {formatTime(selectedClip.end)}（{formatTime(selectedClip.duration)}）
-                    </p>
-                  </div>
-                  <span className="border border-neutral-300 bg-neutral-50 px-3 py-2 text-xs text-neutral-700">
-                    {selectedClip.manuallyAdjusted
-                      ? "範囲を手動調整済み"
-                      : selectedClip.boundaryRefined
-                        ? "境界補正あり"
-                        : "自動選定のまま"}
-                  </span>
-                </div>
-              </div>
-
-              <ClipBoundaryEditor
-                clip={selectedClip}
-                disabled={controlsDisabled}
-                key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}`}
-                saving={isAdjusting}
-                sourceDuration={plan.sourceDuration}
-                onDraftChange={handleBoundaryDraftChange}
-                onSave={(start, end) =>
-                  void handleBoundaryUpdate(start, end)
-                }
-              />
-
-              {selectedClip.type === "short" ? (
-                <ClipHookSceneEditor
-                  clip={selectedClip}
-                  disabled={controlsDisabled}
-                  key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
-                  playheadSourceTime={
-                    previewPlayheadSourceTime >= selectedClip.start &&
-                    previewPlayheadSourceTime <= selectedClip.end
-                      ? previewPlayheadSourceTime
-                      : (selectedClip.hookSceneStart ?? selectedClip.start)
-                  }
-                  saving={isUpdatingHookScene}
-                  shortMaxDuration={plan.settings.shortMaxDuration}
-                  onSave={(start, end) =>
-                    void handleHookSceneUpdate(start, end)
-                  }
-                />
-              ) : null}
-
-              <div className="bg-neutral-950 p-4">
-                <div className="mx-auto aspect-video w-full max-w-[1100px] bg-black">
+              <div className="min-[1900px]:grid min-[1900px]:grid-cols-[minmax(0,1fr)_480px] min-[1900px]:items-start">
+                <div className="aspect-video w-full bg-black">
                   {selectedClip.previewVideoUrl ? (
                     <video
+                      aria-label={`${selectedClip.title} のプレビュー`}
                       className="h-full w-full object-contain"
                       controls
                       key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}-${plan.updatedAt}`}
@@ -585,6 +533,40 @@ export default function ClipPlanReviewPage() {
                       プレビュー動画を準備できませんでした
                     </div>
                   )}
+                </div>
+
+                <div className="min-w-0 min-[1900px]:border-l min-[1900px]:border-neutral-300">
+                  <ClipBoundaryEditor
+                    clip={selectedClip}
+                    disabled={controlsDisabled}
+                    key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}`}
+                    saving={isAdjusting}
+                    sourceDuration={plan.sourceDuration}
+                    onDraftChange={handleBoundaryDraftChange}
+                    onSave={(start, end) =>
+                      void handleBoundaryUpdate(start, end)
+                    }
+                  />
+
+                  {selectedClip.type === "short" ? (
+                    <ClipHookSceneEditor
+                      clip={selectedClip}
+                      compact
+                      disabled={controlsDisabled}
+                      key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
+                      playheadSourceTime={
+                        previewPlayheadSourceTime >= selectedClip.start &&
+                        previewPlayheadSourceTime <= selectedClip.end
+                          ? previewPlayheadSourceTime
+                          : (selectedClip.hookSceneStart ?? selectedClip.start)
+                      }
+                      saving={isUpdatingHookScene}
+                      shortMaxDuration={plan.settings.shortMaxDuration}
+                      onSave={(start, end) =>
+                        void handleHookSceneUpdate(start, end)
+                      }
+                    />
+                  ) : null}
                 </div>
               </div>
             </>

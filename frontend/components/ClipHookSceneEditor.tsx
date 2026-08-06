@@ -12,6 +12,7 @@ type HookSceneEditableClip = {
 
 type ClipHookSceneEditorProps = {
   clip: HookSceneEditableClip;
+  compact?: boolean;
   disabled?: boolean;
   saving?: boolean;
   playheadSourceTime: number;
@@ -65,11 +66,13 @@ function clamp(value: number, minimum: number, maximum: number): number {
 }
 
 function HookTimeInput({
+  compact,
   disabled,
   label,
   parts,
   onChange
 }: {
+  compact: boolean;
   disabled: boolean;
   label: string;
   parts: TimeParts;
@@ -78,10 +81,16 @@ function HookTimeInput({
   return (
     <label className="block">
       <span className="text-xs font-semibold text-neutral-700">{label}</span>
-      <span className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2">
+      <span
+        className={
+          compact
+            ? "mt-1 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-1.5"
+            : "mt-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-2"
+        }
+      >
         <input
           aria-label={`${label} 分`}
-          className="min-h-10 min-w-0 border border-neutral-300 bg-white px-2 text-sm tabular-nums"
+          className={`${compact ? "min-h-9" : "min-h-10"} min-w-0 border border-neutral-300 bg-white px-2 text-sm tabular-nums`}
           disabled={disabled}
           min={0}
           step={1}
@@ -94,7 +103,7 @@ function HookTimeInput({
         <span className="text-xs text-neutral-500">分</span>
         <input
           aria-label={`${label} 秒`}
-          className="min-h-10 min-w-0 border border-neutral-300 bg-white px-2 text-sm tabular-nums"
+          className={`${compact ? "min-h-9" : "min-h-10"} min-w-0 border border-neutral-300 bg-white px-2 text-sm tabular-nums`}
           disabled={disabled}
           max={59.999}
           min={0}
@@ -113,6 +122,7 @@ function HookTimeInput({
 
 export function ClipHookSceneEditor({
   clip,
+  compact = false,
   disabled = false,
   saving = false,
   playheadSourceTime,
@@ -194,13 +204,33 @@ export function ClipHookSceneEditor({
   }
 
   return (
-    <section className="border-b border-neutral-300 bg-amber-50 px-5 py-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold text-neutral-950">
+    <section
+      className={`border-b border-neutral-300 bg-amber-50 px-5 ${compact ? "py-2" : "py-4"}`}
+    >
+      <div
+        className={
+          compact
+            ? "flex flex-wrap items-center justify-between gap-x-3 gap-y-1"
+            : "flex flex-wrap items-start justify-between gap-3"
+        }
+      >
+        <div
+          className={
+            compact
+              ? "flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1"
+              : undefined
+          }
+        >
+          <h3 className={`${compact ? "shrink-0 " : ""}text-sm font-semibold text-neutral-950`}>
             冒頭へ見せ場を複製
           </h3>
-          <p className="mt-1 text-xs leading-5 text-neutral-600">
+          <p
+            className={
+              compact
+                ? "min-w-[260px] flex-1 text-xs leading-4 text-neutral-600"
+                : "mt-1 text-xs leading-5 text-neutral-600"
+            }
+          >
             時間はメイン動画・字幕と同じくclip先頭を0:00とします。元動画時刻も併記します。
           </p>
         </div>
@@ -209,8 +239,10 @@ export function ClipHookSceneEditor({
         </span>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <span className="text-xs leading-5 text-neutral-700">
+      <div
+        className={`${compact ? "mt-2 gap-1.5" : "mt-3 gap-2"} flex flex-wrap items-center`}
+      >
+        <span className={`text-xs ${compact ? "leading-4" : "leading-5"} text-neutral-700`}>
           <span className="font-semibold">
             現在位置（clip内）: {formatTime(playheadClipTime)}
           </span>
@@ -220,7 +252,7 @@ export function ClipHookSceneEditor({
         </span>
         {HOOK_LENGTHS.map((seconds) => (
           <button
-            className="min-h-9 border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-900 disabled:opacity-50"
+            className={`${compact ? "min-h-8 px-2" : "min-h-9 px-3"} border border-neutral-300 bg-white text-xs font-semibold text-neutral-900 disabled:opacity-50`}
             disabled={disabled}
             key={seconds}
             type="button"
@@ -231,14 +263,16 @@ export function ClipHookSceneEditor({
         ))}
       </div>
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+      <div className={`${compact ? "mt-3 gap-3" : "mt-4 gap-4"} grid sm:grid-cols-2`}>
         <HookTimeInput
+          compact={compact}
           disabled={disabled}
           label="clip内の開始"
           parts={startParts}
           onChange={setStartParts}
         />
         <HookTimeInput
+          compact={compact}
           disabled={disabled}
           label="clip内の終了"
           parts={endParts}
@@ -246,8 +280,16 @@ export function ClipHookSceneEditor({
         />
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-amber-200 pt-3">
-        <div className="text-xs leading-5 text-neutral-700">
+      <div
+        className={`${compact ? "mt-3 gap-2 pt-2" : "mt-4 gap-3 pt-3"} flex flex-wrap items-center justify-between border-t border-amber-200`}
+      >
+        <div
+          className={
+            compact
+              ? "flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-4 text-neutral-700"
+              : "text-xs leading-5 text-neutral-700"
+          }
+        >
           <p>
             clip内: {start === null ? "--" : formatTime(start)} -{" "}
             {end === null ? "--" : formatTime(end)}
@@ -264,7 +306,7 @@ export function ClipHookSceneEditor({
         <div className="flex flex-wrap gap-2">
           {hasSavedHook ? (
             <button
-              className="min-h-10 border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-50"
+              className={`${compact ? "min-h-9" : "min-h-10"} border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-50`}
               disabled={disabled}
               type="button"
               onClick={() => onSave(null, null)}
@@ -273,7 +315,7 @@ export function ClipHookSceneEditor({
             </button>
           ) : null}
           <button
-            className="min-h-10 bg-amber-600 px-4 text-xs font-semibold text-white disabled:bg-neutral-300"
+            className={`${compact ? "min-h-9" : "min-h-10"} bg-amber-600 px-4 text-xs font-semibold text-white disabled:bg-neutral-300`}
             disabled={disabled || !changed || validation !== null}
             type="button"
             onClick={() => {
@@ -287,16 +329,24 @@ export function ClipHookSceneEditor({
         </div>
       </div>
       {validation ? (
-        <p className="mt-2 text-xs font-medium text-red-700">{validation}</p>
+        <p
+          className={`${compact ? "mt-1 leading-4" : "mt-2"} text-xs font-medium text-red-700`}
+        >
+          {validation}
+        </p>
       ) : (
         <>
           {clipAlreadyExceedsMaximum && projectedDuration !== null ? (
-            <p className="mt-2 text-xs font-medium text-amber-800">
+            <p
+              className={`${compact ? "mt-1 leading-4" : "mt-2"} text-xs font-medium text-amber-800`}
+            >
               元のclipが上限 {formatTime(shortMaxDuration)} を超えています。
               追加後 {formatTime(projectedDuration)} で保存します。
             </p>
           ) : null}
-          <p className="mt-2 text-xs text-neutral-500">
+          <p
+            className={`${compact ? "mt-1 leading-4" : "mt-2"} text-xs text-neutral-500`}
+          >
             対象ショートの軽量プレビューだけを作り直します。OpenAI APIは使いません。
           </p>
         </>

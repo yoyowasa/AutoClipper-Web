@@ -412,6 +412,7 @@ class JobSettings(BaseModel):
     subtitle_correction_fallback_enabled: bool = Field(default=True, alias="subtitleCorrectionFallbackEnabled")
     selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
     cross_type_overlap_dedupe: bool = Field(default=False, alias="crossTypeOverlapDedupe")
+    heatmap_interval_mode: bool = Field(default=False, alias="heatmapIntervalMode")
     use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")
     openai_candidate_limit: int = Field(default=40, ge=0, alias="openaiCandidateLimit")
     openai_model: str = Field(default="gpt-5.5", min_length=1, alias="openaiModel")

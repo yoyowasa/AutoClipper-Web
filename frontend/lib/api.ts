@@ -92,11 +92,15 @@ export async function saveSubtitleStylePresets(
 
 export function uploadVideo(
   file: File,
-  onProgress?: (percentage: number) => void
+  onProgress?: (percentage: number) => void,
+  heatmap?: File | null
 ): Promise<VideoUploadResponse> {
   return new Promise((resolve, reject) => {
     const body = new FormData();
     body.append("file", file);
+    if (heatmap) {
+      body.append("heatmap", heatmap);
+    }
 
     const request = new XMLHttpRequest();
     request.open("POST", `${API_BASE_URL}/api/videos/upload`);

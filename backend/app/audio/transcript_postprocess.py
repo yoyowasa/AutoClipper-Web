@@ -15,6 +15,10 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 RAW_TRANSCRIPT_FILENAME = "raw_transcript_segments.json"
 TRANSCRIPT_POSTPROCESS_SUMMARY_FILENAME = "transcript_postprocess_summary.json"
 
+KNOWN_TRANSCRIPT_ARTIFACT_REPAIRS: dict[str, str] = {
+    "農من": "能面",
+}
+
 
 DEFAULT_TRANSCRIPT_REPLACEMENTS: dict[str, str] = {
     "オープンAI": "OpenAI",
@@ -30,6 +34,7 @@ DEFAULT_TRANSCRIPT_REPLACEMENTS: dict[str, str] = {
     "ユーチューブ": "YouTube",
     "ニューズピックス": "NewsPicks",
     "リハック": "ReHacQ",
+    **KNOWN_TRANSCRIPT_ARTIFACT_REPAIRS,
 }
 
 
@@ -216,6 +221,27 @@ def postprocess_transcript_segments(
         "changed_segments": changed_segments[:20],
     }
     return TranscriptPostprocessResult(segments=processed, summary=summary)
+
+
+def repair_known_transcript_artifact_text(text: str) -> str:
+    repaired = str(text)
+    for source, target in KNOWN_TRANSCRIPT_ARTIFACT_REPAIRS.items():
+        repaired = repaired.replace(source, target)
+    return repaired
+
+
+def repair_known_transcript_artifact_segments(
+    segments: Sequence[TranscriptSegment],
+) -> list[TranscriptSegment]:
+    return [
+        TranscriptSegment(
+            start=segment.start,
+            end=segment.end,
+            text=repair_known_transcript_artifact_text(segment.text),
+            confidence=segment.confidence,
+        )
+        for segment in segments
+    ]
 
 
 def raw_transcript_output_path(output_dir: str | Path) -> Path:

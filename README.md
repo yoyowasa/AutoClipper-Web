@@ -38,7 +38,7 @@ Double-click:
 Start AutoClipper.cmd
 ```
 
-The launcher checks Docker, ports, disk space, `.env`, GPU support, and service health; starts the four services; waits for the app; and opens `/upload`. On a compatible NVIDIA system, `Recommended Start` uses the GPU worker and preselects `turbo / ja / cuda / float16`. Otherwise it starts the CPU-compatible profile and shows the reason. An explicit GPU start never falls back silently. The launcher can also show logs and open the uploads/outputs folders. Normal stop uses `docker compose stop` and preserves SQLite, Redis data, uploads, outputs, and the Whisper model cache.
+The desktop entrypoint starts an installed Docker Desktop when its daemon is stopped, waits for the engine, starts the recommended four-service profile, waits for the app, and opens `/upload`. On a compatible NVIDIA system, the recommended profile uses the GPU worker and preselects `turbo / ja / cuda / float16`. Otherwise it starts the CPU-compatible profile and shows the reason. An explicit GPU start never falls back silently. The launcher can also retry a selected profile, show logs, and open the uploads/outputs folders. Normal stop uses `docker compose stop` and preserves SQLite, Redis data, uploads, outputs, and the Whisper model cache.
 
 The launcher MVP requires Python 3.11+. Docker Desktop remains required. See `docs/WINDOWS_LAUNCHER.md` for controls and troubleshooting.
 
@@ -52,6 +52,8 @@ Copy-Item .env.example .env
 
 Video uploads default to a maximum of 8 GiB. Override
 `MAX_UPLOAD_SIZE_BYTES` in `.env` when a different local limit is required.
+Optional YouTube heatmap sidecars default to 5 MiB. Override
+`MAX_HEATMAP_SIDECAR_SIZE_BYTES` when required.
 
 Start all services:
 
@@ -102,8 +104,11 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec -T worker `
   python -m app.audio.gpu_preflight
 ```
 
-The GPU override changes only the worker image. Backend and frontend remain on their smaller
-default images. Whisper model downloads are retained in the `whisper_model_cache` volume.
+The GPU override changes only the worker image. CPU and GPU workers use distinct,
+Compose-project-scoped local image names so switching profiles or checkouts cannot reuse the
+wrong base image. Backend and frontend remain on their smaller default images. Whisper model
+downloads are retained in the
+`whisper_model_cache` volume.
 
 Use `transcriptionDevice=cuda` for an explicit GPU requirement. That mode fails with
 `transcription_cuda_unavailable` instead of silently using CPU. `transcriptionDevice=auto`
@@ -111,8 +116,14 @@ uses CUDA when available and records a CPU fallback reason otherwise.
 
 The Windows launcher can select this override automatically. `Recommended Start` uses it only
 after the host NVIDIA GPU and Docker NVIDIA runtime pass preflight; `GPU Required Start` stops
-on failure instead of silently switching to CPU. `CPU Compatible Start` always uses the default
-Compose worker. The launcher opens Upload with the matching transcription profile selected.
+on failure instead of silently switching to CPU. Profile changes rebuild and recreate the worker.
+An already-running GPU worker is rechecked before reuse, including loading
+`libcublas.so.12` and `libcudnn.so.9`. The preflight payload is versioned, so an older worker is
+rebuilt instead of reused. A GPU worker runs the same check before it connects to RQ and cannot
+take a queued job with an invalid CUDA runtime. This startup check runs in a separate process so
+the RQ parent remains CUDA-uninitialized before it forks a job process. `CPU Compatible Start`
+always uses the default Compose worker. The launcher opens Upload with the matching
+transcription profile selected.
 
 ## Local subtitle correction benchmark
 
@@ -211,6 +222,30 @@ curl.exe -F "file=@storage/temp/smoke_runtime/smoke.mp4;type=video/mp4" http://l
 ```
 
 The upload response includes `videoId`.
+
+### Optional YouTube heatmap sidecar
+
+For a video downloaded by `YouTubeDownloader`, the Upload UI can also send the
+adjacent `<video filename>.heatmap.json` file. The API equivalent is an optional
+multipart part named `heatmap`:
+
+```powershell
+curl.exe -F "file=@sample.mp4;type=video/mp4" -F "heatmap=@sample.mp4.heatmap.json;type=application/json" http://localhost:8000/api/videos/upload
+```
+
+AutoClipper validates sidecar schema v1, source, original filename, byte size,
+SHA-256, finite ordered intervals, and the normalized `0..1` value range before
+saving it. The worker revalidates the binding and accepts `duration_seconds`
+within `max(2 seconds, 0.1% of the probed duration)`. `JSON区間モード` is OFF by
+default. When OFF, a valid value is only a supporting score signal (up to +10);
+missing or invalid data falls back to the existing subtitle/audio/video scoring
+path. When ON, positive heatmap intervals seed the candidate pool and are ranked
+by their normalized in-video value before existing quality filters are applied.
+Missing, unavailable, invalid, or unusable interval data stops the job explicitly
+instead of falling back. Manual time ranges still take priority for their output
+type. The value is not a view count and cannot bypass existing quality gates.
+Validation and mode decisions are recorded in
+`heatmap_validation_summary.json`.
 
 Create a job:
 
@@ -1298,6 +1333,10 @@ Docker command not found:
 - Verify `C:\Program Files\Docker\Docker\resources\bin` is on PATH.
 
 Docker daemon not running:
+
+- `Start AutoClipper.cmd` normally starts Docker Desktop and waits up to 180 seconds.
+- If startup times out, check Docker Desktop for an agreement prompt, WSL update, or Windows restart request.
+- Manual fallback:
 
 ```powershell
 Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"

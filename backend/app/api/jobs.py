@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.audio.openai_transcript_correction import TRANSCRIPT_CORRECTION_PROGRESS_FILENAME
 from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.audio.transcript_postprocess import repair_known_transcript_artifact_segments
 from app.candidates.select_candidates import CandidateSelection
 from app.config import Settings, get_settings
 from app.db import get_db
@@ -81,6 +82,7 @@ from app.schemas import (
     SubtitleReviewSegmentUpdateRequest,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
+from app.video.heatmap import HeatmapSidecarError, heatmap_sidecar_path, parse_heatmap_sidecar
 
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -399,6 +401,23 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
             if key in audio_features:
                 details[key] = audio_features[key]
 
+    heatmap_summary = _read_json_if_exists(output_dir / "heatmap_validation_summary.json")
+    if isinstance(heatmap_summary, dict):
+        details["heatmapStatus"] = heatmap_summary.get("status")
+        details["heatmapApplied"] = bool(heatmap_summary.get("applied", False))
+        details["heatmapFallbackUsed"] = bool(
+            heatmap_summary.get("fallback_used", False)
+        )
+        details["heatmapFallbackReason"] = heatmap_summary.get("fallback_reason")
+        details["heatmapSegmentCount"] = heatmap_summary.get("segment_count", 0)
+        details["heatmapIntervalModeRequested"] = bool(
+            heatmap_summary.get("interval_mode_requested", False)
+        )
+        details["heatmapIntervalModeApplied"] = bool(
+            heatmap_summary.get("interval_mode_applied", False)
+        )
+        details["heatmapSelectionBehavior"] = heatmap_summary.get("selection_behavior")
+
     transcript_segments = _read_json_if_exists(output_dir / "transcript_segments.json")
     if isinstance(transcript_segments, list):
         texts = [
@@ -592,10 +611,44 @@ def create_job(
     request: JobCreateRequest,
     db: Session = Depends(get_db),
     enqueue_job: JobEnqueue = Depends(get_enqueue_job),
+    paths: StoragePaths = Depends(get_storage_paths),
+    app_settings: Settings = Depends(get_settings),
 ) -> JobCreateResponse:
     video = db.get(Video, request.video_id)
     if video is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="video not found")
+
+    settings = request.settings
+    automatic_output = (
+        settings.normal_clip_count > 0 and not settings.normal_clip_time_ranges
+    ) or (
+        settings.short_count > 0 and not settings.short_clip_time_ranges
+    )
+    if settings.heatmap_interval_mode and automatic_output:
+        sidecar_path = heatmap_sidecar_path(paths.resolve_stored_file(video.stored_path))
+        unavailable_reason = "heatmap_sidecar_not_provided"
+        try:
+            if sidecar_path.stat().st_size > app_settings.max_heatmap_sidecar_size_bytes:
+                unavailable_reason = "heatmap_sidecar_too_large"
+            else:
+                sidecar = parse_heatmap_sidecar(sidecar_path.read_bytes())
+                if sidecar.heatmap_available and any(segment.value > 0 for segment in sidecar.heatmap):
+                    unavailable_reason = ""
+                else:
+                    unavailable_reason = "heatmap_unavailable"
+        except HeatmapSidecarError as exc:
+            unavailable_reason = exc.code
+        except OSError:
+            unavailable_reason = "heatmap_sidecar_not_provided"
+        if unavailable_reason:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "heatmap_interval_mode_requires_data",
+                    "message": "JSON区間モードには有効な人気区間JSONが必要です。",
+                    "reason": unavailable_reason,
+                },
+            )
 
     job = Job(
         id=make_id("job"),
@@ -710,6 +763,7 @@ def get_clip_plan_transcript_segments(
         TranscriptSegment.model_validate(item)
         for item in transcript_payload
     ]
+    transcript_segments = repair_known_transcript_artifact_segments(transcript_segments)
     return [
         segment
         for segment in transcript_segments
@@ -1054,6 +1108,7 @@ def approve_clip_plan(
         TranscriptSegment.model_validate(item)
         for item in transcript_payload
     ]
+    transcript_segments = repair_known_transcript_artifact_segments(transcript_segments)
     review_document = build_subtitle_review(
         job.id,
         selection,
@@ -1062,7 +1117,11 @@ def approve_clip_plan(
             (job.settings_json or {}).get("shortMaxDuration", 75.0)
         ),
     )
+    planned_titles = {clip.id: clip.title for clip in document.clips}
     for clip in review_document.clips:
+        if clip.id in planned_titles:
+            clip.title = planned_titles[clip.id]
+            clip.original_title = planned_titles[clip.id]
         preview_path = subtitle_review_preview_path(output_dir, clip.id)
         if preview_path.is_file():
             clip.preview_video_url = subtitle_review_preview_url(

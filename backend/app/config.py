@@ -1,9 +1,11 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 DEFAULT_MAX_UPLOAD_SIZE_BYTES = 8 * 1024 * 1024 * 1024
+DEFAULT_MAX_HEATMAP_SIDECAR_SIZE_BYTES = 5 * 1024 * 1024
 
 
 class Settings(BaseSettings):
@@ -12,8 +14,10 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///../storage/autoclipper.db"
     redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "autoclipper"
+    autoclipper_runtime_profile: Literal["cpu", "gpu"] = "cpu"
     storage_root: str = "../storage"
     max_upload_size_bytes: int = DEFAULT_MAX_UPLOAD_SIZE_BYTES
+    max_heatmap_sidecar_size_bytes: int = DEFAULT_MAX_HEATMAP_SIDECAR_SIZE_BYTES
     allowed_video_extensions: str = ".mp4,.mov,.mkv,.webm"
     allowed_video_content_types: str = "video/mp4,video/quicktime,video/x-matroska,video/webm"
 

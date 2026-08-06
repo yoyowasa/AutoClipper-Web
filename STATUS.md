@@ -6372,6 +6372,569 @@ pip check: pass
 - `1536px`未満では各枠を縦積みするため、ページ縦スクロールを使用する。
 - フック映像の詳細設定を開いた場合は、タイトル・フックパネル内をスクロールする。
 
+## 2026-08-02 Task 96 YouTube人気区間sidecar連携
+
+### 目的
+
+- Downloaderが出力する`<動画名>.heatmap.json`を任意入力として受け取り、
+  同一動画との照合後に自動候補の補助スコアへ使用する。
+- sidecarがない、またはworker実行時の再検証に失敗した場合も、既存編集処理を継続する。
+
+### 変更
+
+- 新規アップロード画面と`POST /api/videos/upload`へ任意の`heatmap`ファイルを追加。
+- JSONは`5 MiB`以下、UTF-8、`schema_version == 1`、厳密な型、UTC取得日時、
+  区間順序、有限値、`value`の`0..1`、`heatmap_available`との整合を検証。
+- 元動画のファイル名、サイズ、SHA-256、動画時間を照合。
+  動画時間の許容差は`max(2秒, 実時間の0.1%)`。
+- 検証済みsidecarを`<保存動画パス>.heatmap.json`へ正規化して保存。
+  契約外フィールドは保存しない。
+- worker開始後にもsidecarと動画を再照合し、結果を
+  `heatmap_validation_summary.json`へ保存。
+- clip-plan再選定時も再照合・再注釈し、sidecarが失効した場合は古い補助値を消去。
+- 状態を`not_provided / unavailable / invalid_fallback / applied`で記録し、
+  APIと処理状況画面へ表示。
+- 人気区間との重複時間で候補ごとの値を算出し、ルールスコアへ最大`+10`の
+  補助要素として加算。`value`は視聴回数ではなく動画内相対値。
+- OpenAI scoringにも同じ意味を明記し、人気区間だけを採用理由にしない制約を追加。
+- OpenAI score cache keyへsystem promptを含め、prompt変更前の結果を再利用しない。
+- JSON選択inputを都度リセットし、外した同一ファイルを再選択可能にした。
+- 既存hard gate、手動範囲、再編集APIは変更していない。
+- 主な変更先:
+  `backend/app/video/heatmap.py`、`backend/app/scoring/heatmap.py`、
+  `backend/app/api/videos.py`、`backend/app/jobs/runner.py`、
+  `frontend/app/upload/page.tsx`、`frontend/components/JobProgress.tsx`、
+  `README.md`。
+
+### 検証
+
+- Downloader契約・実装のread-only確認: unit test `27 passed`。
+- backend `ruff check .`: pass。
+- backend `pytest`: `423 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- Docker Compose rebuild: pass。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+- 実ブラウザ確認: 新規アップロード時だけJSON選択欄と説明を表示、
+  再編集時は非表示、console errorなし。
+- `git diff --check`: pass。
+
+### 未解決・制限
+
+- 許可済み実動画によるDownloaderのyt-dlp→FFmpeg→sidecar生成から
+  AutoClipper処理までの実E2Eは未確認。
+- 長尺実動画での追加SHA-256計算時間と実運用性能は未確認。
+- 人気区間だけを起点に新しい候補を生成する処理は未実装。
+  今回は既存候補集合の補助スコアに限定。
+- 実動画での生成品質とユーザー受入は未確認。
+
+## 2026-08-03 Task 97 GPU workerのCUDAライブラリ欠落修正
+
+### 目的
+
+- GPU profileのworkerで`libcublas.so.12`が見つからず、文字起こしが
+  `transcription_failed`になる起動不整合を解消する。
+- 誤ったworker imageをjob投入前に検出し、同じ不整合の再発を防ぐ。
+
+### 観測事実・原因
+
+- 失敗jobは`turbo / ja / cuda / float16`で実行されていた。
+- workerにはRTX 5070 Tiが割り当てられ、CUDA device countは`1`だった。
+- 稼働workerの実体はCPU用Debian/Python imageで、GPU用Ubuntu/CUDA imageではなかった。
+- CPU/GPU Composeが同じ`autoclipperweb-worker`tagを共有し、launcherのprofile切替が
+  `--force-recreate`のみだったため、CPU imageをGPU設定付きで再利用していた。
+- 従来のGPU preflightはCUDA deviceの可視性だけを確認し、
+  `libcublas.so.12`と`libcudnn.so.9`の実ロードを確認していなかった。
+- 動画probe、音声抽出、音声特徴量計算は成功しており、動画・音声破損は原因ではない。
+
+### 変更
+
+- CPU/GPU worker imageを`${COMPOSE_PROJECT_NAME}`単位の別tagへ分離。
+  profile間だけでなく別clone・別Compose project間の再利用も防止。
+- CPU/GPU profile切替時は対象workerを`--build --force-recreate`するようlauncherを修正。
+- 既にGPU profileで起動中でもGPU preflightを再実行し、不整合ならworkerを再build。
+- preflight payloadをversion `1`として検証し、旧imageの結果は合格扱いしない。
+- profile切替・GPU修復では稼働workerをbuild前に停止し、build中のjob取得を防止。
+- GPU worker自身もRQ接続前に別processでpreflightを実行し、不正なCUDA runtimeでは
+  jobを取得しない。RQ親processはCUDA未初期化のまま保ち、fork後の初期化失敗を防ぐ。
+- GPU preflightで`libcublas.so.12`と`libcudnn.so.9`を`ctypes.CDLL`で実ロード。
+  欠落時は`transcription_cuda_libraries_unavailable`で起動前に失敗させる。
+- READMEへimage分離、profile切替build、native CUDA library検査を追記。
+- 変更ファイル:
+  `docker-compose.yml`、`docker-compose.gpu.yml`、
+  `backend/app/audio/gpu_preflight.py`、`backend/app/config.py`、
+  `backend/app/jobs/worker.py`、`launcher/controller.py`、
+  `backend/tests/test_gpu_preflight.py`、`backend/tests/test_worker_startup.py`、
+  `backend/tests/test_windows_launcher.py`、`README.md`。
+
+### 検証
+
+- 関連test: `47 passed`。
+- backend `ruff check app tests`: pass。
+- backend全体: `432 passed, 1 skipped`。
+- frontend lint / typecheck / build: pass。
+- CPU/GPU Composeの解決image:
+  `autoclipperweb-worker-cpu / autoclipperweb-worker-gpu`。
+- 別project `alternate-review`での解決image:
+  `alternate-review-worker-cpu / alternate-review-worker-gpu`。
+- GPU worker fresh build: pass。
+- GPU preflight schema `1`: `cuda/float16`、CUDA device `1`、RTX 5070 Ti、
+  `libcublas.so.12 / libcudnn.so.9`実ロード成功、fallbackなし。
+- launcherの起動済みGPU再検証: `already_running=true / profile=gpu / fallback=false`。
+- launcher実機profile切替: GPU→CPUでCPU image・CUDA device `0`、
+  CPU→GPUでGPU image・CUDA device `1`へ復帰。最終状態は
+  `autoclipperweb-worker-gpu / cuda / float16 / fallback=false`。
+- 最終確認時のRQ queueは`0`、backendはhealthy、workerはGPU imageで稼働中。
+- 失敗動画から抽出した10秒音声を実RQ jobとしてenqueueし、RQのfork子processで
+  同じ`turbo / ja / cuda / float16`文字起こしが`finished`。
+  `1 segment`、model load `2.644秒`、transcription `6.215秒`、
+  peak VRAM `5434 MiB`、fallbackなし。
+- worker logでpreflight schema `1`の出力後にRQ親が起動し、その後に上記jobを
+  取得・完了した順序を確認。検証jobは削除、一時WAVも削除、queueは`0`へ復帰。
+- `scripts/smoke_runtime.py --skip-video`: pass。
+
+### 未解決・制限
+
+- 元の失敗jobは履歴保持のため`failed`のまま。再enqueueは行っていない。
+- 元動画全長`1816秒`の再処理と、通常切り抜き・ショート・ZIPまでの完全E2Eは未確認。
+
+## 2026-08-03 Task 98 切り抜き予定画面の動画優先配置
+
+### 目的
+
+- 「切り抜き予定の確認」で、ページをスクロールする前に動画を再生できる配置へ変更する。
+- 字幕・文字起こし領域のレイアウトと動作は維持する。
+
+### 観測事実・原因
+
+- 変更前の中央列は`選択clip見出し → 開始・終了調整 → 冒頭見せ場調整 → 動画`の順だった。
+- `1280x720 / scrollY=0`では動画上端が`925px`で、2つの時間調整UIの下に隠れていた。
+
+### 変更
+
+- 中央列を`選択clip見出し → 動画 → 開始・終了調整 → 冒頭見せ場調整`へ並べ替え。
+- 動画へ選択clip名を含む`aria-label`を追加。
+- 右側の文字起こしaside、state、API、動画更新key、`onTimeUpdate`は変更なし。
+- 変更ファイル: `frontend/app/jobs/[jobId]/clips/page.tsx`。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- frontend image build・container再作成: pass。host/containerの対象ファイルSHA-256一致。
+- `1280x720 / scrollY=0`: video `top=288 / bottom=601`、全体表示、controls可視。
+- `1366x768 / scrollY=0`: video `top=288 / bottom=650`、全体表示、controls可視。
+- `1025x768 / scrollY=0`: video `top=334 / bottom=505`、全体表示、controls可視。
+- 右文字起こしaside: `sticky / width=390 / 23区間 / overflow-y=auto`を維持。
+- browser console error / warning: `0 / 0`。
+- 独立レビュー: P0 / P1 / P2 / P3なし。
+
+### 未解決・制限
+
+- Chrome profileが`80%` zoomのため`1024x768` exactは未確認。最接近`1025x768`は確認済み。
+- `lg`未満では左clip一覧が動画より先に縦積みされるため、狭幅での無スクロール開始は保証外。
+- ユーザー受入は未確認。
+
+## 2026-08-03 Task 99 切り抜き予定画面の全幅化
+
+### 目的
+
+- `80%` zoomの横長viewportで左右に余っていた領域を、切り抜き予定の中央作業列へ渡す。
+- 字幕列の幅と、スクロール前に動画再生を開始できる状態を維持する。
+
+### 観測事実・原因
+
+- 変更前はheader、工程表示、error、3列gridが`max-w-[1600px]`で制限されていた。
+- `2400x1128` viewportではgridが`1600px`、左右余白が各`390.625px`、
+  列幅が`280 / 930 / 390px`、動画幅が`896.76px`だった。
+
+### 変更
+
+- header、工程表示、error、3列gridから`max-w-[1600px]`を除去し、`w-full`へ変更。
+- 左clip一覧`280px`、右文字起こし`390px`、動画上限`1100px`は維持。
+  追加された横幅は中央作業列だけへ渡す。
+- 変更ファイル: `frontend/app/jobs/[jobId]/clips/page.tsx`。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- frontend image build・container再作成: pass。
+- `2400x1128 / scrollY=0`: body/grid `2381.25px`、外余白`0 / 0px`、
+  列幅`280 / 1711.25 / 390px`。
+- 動画: `1100x618.75px`、`top=287.62 / bottom=906.37px`、
+  viewport下余裕`221.63px`、controls可視、readyState `4`。
+- 右文字起こし列: `390px / sticky`を維持。scrollX `0`、console error `0`。
+- `1920x1080 / 2560x1440`: 全幅表示を確認。`1920x1080`は動画controlsまで初期表示。
+- `390x844 / 1025x768`: document幅とclient幅が一致し、横overflowなし。
+- 独立レビュー: P0 / P1 / P2 / P3なし。
+
+### 未解決・制限
+
+- 動画上限`1100px`は、横幅連動で動画が縦にも伸びて初期viewportから外れるのを防ぐため維持。
+- `lg`未満の縦積み順は変更なし。
+- ユーザー受入は未確認。
+
+## 2026-08-03 Task 100 切り抜き予定画面の一画面4列配置
+
+### 目的
+
+- 横長viewportを`clip一覧 | 動画 | 時間調整 | 文字起こし`として使い、
+  開始・終了調整と冒頭見せ場複製をスクロール前に操作できる配置へ変更する。
+- 文字起こしUIの幅・sticky・内部scrollは維持する。
+
+### 観測事実・原因
+
+- Task 99後も動画は`p-4`と`max-w-[1100px]`で制限され、`2400x1128`では
+  動画左右に各約`293px`の黒い余白が残っていた。
+- 2つの時間調整UIが動画下に縦積みされ、冒頭見せ場複製は初期viewport外だった。
+
+### 変更
+
+- `1900px`以上では中央作業列を`minmax(0, 1fr) / 480px`へ分割。
+- 動画の右、文字起こしの左へ、開始・終了調整と冒頭見せ場複製を縦配置。
+- 動画外側の`p-4`、`mx-auto`、`max-w-[1100px]`を除去し、専用列幅へ一致させた。
+- `1900px`未満は`動画 → 開始・終了調整 → 冒頭見せ場複製`の縦並びを維持。
+- editor本体、state、API、文字起こしasideは変更なし。
+- 変更ファイル: `frontend/app/jobs/[jobId]/clips/page.tsx`。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- frontend image build・container再作成: pass。host/containerの対象ファイルSHA-256一致。
+- HTTP `200`、browser console error / warning: `0 / 0`。
+- `2400x1128 / scrollY=0`: 外側列`280 / 1714.67 / 390px`、
+  中央内側列`1234 / 480px`。動画`1234x694.13px`で専用列の左右と一致。
+- 同viewportで開始・終了panel `top=270 / bottom=671.33px`、
+  冒頭見せ場panel `top=671.33 / bottom=1078px`。両panelを初期画面内で確認。
+- `1920x1080 / scrollY=0`: 中央内側列`754 / 480px`、
+  冒頭見せ場panel下端`1078px`で初期画面内。
+- 文字起こし列: `390px / sticky / overflow-y=auto`を維持。
+- `1366x768 / 1025x768 / 390x844`: 内側4列化なし、従来の縦並び、横overflowなし。
+- 独立レビュー: P0 / P1 / P2 / P3なし。
+
+### 未解決・制限
+
+- `1900px`未満は縦並びのため、時間調整までの無スクロール表示は保証外。
+- `1920x1080`での下端余裕は`2px`。フォントや文言変更時は再計測が必要。
+- 保存APIを伴う実操作、通常clipで冒頭見せ場panelが非表示になる状態は未確認。
+- ユーザー受入は未確認。
+
+## 2026-08-04 Task 101 デスクトップ一括起動
+
+### 目的
+
+- デスクトップの`AutoClipper.lnk`を1回起動するだけで、停止中のDocker Desktopから
+  AutoClipper推奨構成とUpload画面まで自動起動する。
+
+### 観測事実・原因
+
+- shortcutは`C:\BOT\AutoClipper Web\Start AutoClipper.cmd`を正しく参照していた。
+- Docker Desktopはインストール済みだったが、daemon停止時のLauncherは
+  `preflight()`でエラー表示して終了し、Docker Desktopを起動する処理がなかった。
+- 初回の冷間E2Eで外部commandの`stdout / stderr=None`がredact処理へ渡り、
+  `'NoneType' object has no attribute 'replace'`を検出した。
+
+### 変更
+
+- `LauncherController.start()`の先頭でDocker daemonを確認し、停止中なら
+  `docker desktop start --detach --timeout 30`を実行する。
+- Desktop CLIを使えない場合は、既知のインストール先にある
+  `Docker Desktop.exe`をshellなしで起動する。
+- daemon準備を最大`180秒`待ち、未準備ならComposeを実行せず専用エラーを返す。
+- GUI初期表示後に`recommended` profileを自動起動し、
+  `Docker Desktop → 4 services → health確認 → /upload`を1操作へ統合した。
+- Refreshの`preflight()`は読み取り専用を維持した。
+- redact入力を`None / bytes / str`で正規化し、冷間起動時のcommand出力差を吸収した。
+- 起動処理全体へhard deadlineを適用し、各Docker commandへ残り時間だけを渡す。
+- Desktop CLIのstartが非0でも起動途中のdaemonをpollし、即失敗や重複起動を避ける。
+- per-user版Docker DesktopのCLI探索と、popup表示前の秘密値redactを追加した。
+- Docker未導入、Desktop未検出、起動失敗、timeout、起動済み、CLI fallbackをtest追加。
+- shortcutと`Start AutoClipper.cmd`は変更なし。
+- 変更ファイル: `launcher/controller.py`、`launcher/app.py`、
+  `backend/tests/test_windows_launcher.py`、`README.md`、
+  `docs/WINDOWS_LAUNCHER.md`、`STATUS.md`。
+
+### 検証
+
+- launcher関連test: `40 passed`。
+- backend全体: `443 passed, 1 skipped`。
+- backend/launcher ruff、launcher compileall: pass。
+- frontend lint / typecheck / build: pass。
+- CPU/GPU Compose `config --quiet`: pass。
+- Docker Desktop process `0`かつdaemon不通、Compose停止状態から実shortcutを起動。
+- 最終コードの実launcher log: `00:20:41`起動開始、`00:21:04`Docker Desktopと
+  4 services起動、`00:21:05`GPU recommended完了。所要約`24.3秒`。
+- 起動後: backend/frontend/worker/redis稼働、backend healthy、
+  `/health=200`、`/upload=200`、RQ queue `0`。
+- worker: `gpu / cuda / float16`、RTX 5070 Ti、CUDA device `1`、fallbackなし。
+- `git diff --check`: whitespace errorなし。
+- 独立レビュー再確認: P0 / P1 / P2なし。
+
+### 未解決・制限
+
+- Docker Desktop自体のインストールは自動化しない。事前インストールが必要。
+- 利用規約確認、WSL更新、Windows再起動要求が出た場合は`180秒`でtimeoutし、
+  Docker Desktop画面でのユーザー操作が必要。
+- clean Windows初回導入状態のE2Eとユーザー受入は未確認。
+
+## 2026-08-04 Task 102 TOP画面の高密度ワークスペース化
+
+### 目的
+
+- 字幕再編集画面のデザイン言語を基準に、TOP `/upload`を横幅いっぱい使う高密度UIへ変更する。
+- 参照画面の機能は複製せず、既存の動画入力・生成設定・開始操作を初期画面で把握できる構成にする。
+
+### 観測事実・原因
+
+- 従来TOPは`max-w-5xl`の縦積みで、`1920x957`でもフォーム幅が`1024px`に限定されていた。
+- 入力、設定、開始操作が縦に離れ、設定全体を確認してから処理開始へ戻る必要があった。
+- 参照画面は外周約`16px`、薄い罫線、角丸・影なし、左右固定列と中央可変列で情報密度を確保していた。
+
+### 変更
+
+- `/upload`を外周`16px`の全幅ワークスペースへ変更した。
+- desktopを`入力動画 340px / 生成設定 可変 / 処理開始 300px`の3列にした。
+- desktopはページ全体をviewport内に収め、中央設定だけを内部スクロールにした。
+- mobileは1列と通常の縦スクロールへ切り替え、上部に開始操作を残した。
+- 新規/再編集、動画選択、heatmap sidecar、設定、要約、開始操作を既存state/APIのまま再配置した。
+- `UploadDropzone`へTOP専用compact表示、`SettingsPanel`へworkspace密度を追加した。
+- 入力内容・出力本数・確認工程・処理フローを表示する`UploadWorkspaceSummary`を追加した。
+- 右側の確認工程・処理フローを字幕焼き込み設定と再編集modeへ連動させた。
+- TOP配下だけに`Yu Gothic UI`優先、角丸・影なし、focus outlineを適用した。
+- `html lang`を`ja`へ変更した。
+- 変更ファイル: `frontend/app/upload/page.tsx`、`frontend/components/UploadWorkspaceSummary.tsx`、
+  `frontend/components/UploadDropzone.tsx`、`frontend/components/SettingsPanel.tsx`、
+  `frontend/components/ManualClipRangeEditor.tsx`、`frontend/app/globals.css`、
+  `frontend/app/layout.tsx`、`design-qa.md`、`STATUS.md`。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- backend ruff: pass。backend全体: `443 passed, 1 skipped`。
+- CPU/GPU Compose `config --quiet`: pass。
+- 稼働中Compose: backend healthy、frontend/worker/redis稼働。`/health=200`、`/upload=200`。
+- `1920x957`: document `1920x957`、横overflowなし。3列`340 / 1231 / 300px`。
+- `1366x768`: 横overflowなし。3列`340 / 692.67 / 300px`、入力と開始操作を初期画面内に確認。
+- `1280x767`: document・中央設定とも横overflowなし。手動範囲は1列へ切替。
+- `390x844`: 横overflowなし、1列化、panel内部スクロールなし。
+- 新規/再編集tab、出力モード変更、動画選択/解除、要約連動、開始ボタンの有効/無効: pass。
+- 字幕焼き込みOFF、予定確認OFF、字幕確認OFF、再編集modeの右側フロー連動: pass。
+- browser console error / warning: `0 / 0`。
+- 参照画像と同じ`1920x957`で全体・上部拡大を1枚にした比較QA: pass。
+- 独立レビュー再確認: P0 / P1 / P2なし。P3は`<xl`で同じsubmitを上部と最下部に置く意図した導線のみ。
+
+### 未解決・制限
+
+- 実動画を送信するjob作成E2Eは未実行。
+- TOP以外の画面は今回のデザイン統一対象外。
+- ユーザー受入は未確認。
+
+## 2026-08-04 Task 103 TOP画面の情報整理
+
+### 目的
+
+- 注釈7点を基準に、TOP `/upload`の重複情報、空き領域、崩れたショート設定を整理する。
+- 左の動画・人気区間JSON入力と字幕スタイル本体は維持する。
+
+### 観測事実・原因
+
+- 右側`UploadWorkspaceSummary`は左入力と中央設定を再掲し、固有機能は開始ボタンだけだった。
+- 手動時間指定、4工程カード、2つの確認panelが常時展開され、初期画面の縦幅を消費していた。
+- `Short layout`と`Short overlay title`が別行・別幅で配置され、広い空白と位置ずれを作っていた。
+
+### 変更
+
+- desktopを`入力動画 340px / 生成設定 可変`の2列にし、重複していた右側要約を削除した。
+- 開始操作を`UploadActionBar`へ分離し、生成設定の下端へ固定した。
+- 手動時間指定を初期状態で閉じ、使用中だけ`時間指定中`と表示するdetailsへ変更した。
+- 通常・ショートの切り抜き方針をTOP中央幅いっぱいの2列にした。
+- `ショート画面 / ショート冒頭タイトル / 字幕を焼き込む`を1区画へ集約した。
+- 4工程カードを削除し、実際の2つの確認設定だけを閉じたdetailsへ移した。
+- 閉じた確認設定のsummaryへ`予定確認 + 字幕確認 / なし`の現在値を表示した。
+- 手動時間の検証失敗時はdetailsを自動展開し、最初の不足欄へfocusするようにした。
+- mobileでは下部`UploadActionBar`を非表示にし、上部の開始ボタン1個だけを表示した。
+- 処理モード・動画タイプを日本語化し、本数2項目をdesktop幅いっぱいへ配置した。
+- 新規 / 再編集の切替を不完全なtab ARIAから`aria-pressed`のbutton groupへ変更した。
+- 左の入力動画・人気区間JSONと`SubtitleStyleEditor`本体は変更していない。
+- 変更ファイル: `frontend/app/upload/page.tsx`、`frontend/components/UploadActionBar.tsx`、
+  `frontend/components/SettingsPanel.tsx`、`frontend/components/ManualClipRangeEditor.tsx`、
+  `frontend/components/ClipSelectionEditor.tsx`、削除`frontend/components/UploadWorkspaceSummary.tsx`、
+  `design-qa.md`、`STATUS.md`。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- backend ruff: pass。backend全体: `443 passed, 1 skipped`。
+- CPU/GPU Compose `config --quiet`: pass。
+- 稼働中Compose: backend healthy、frontend/worker/redis稼働。`/health=200`、`/upload=200`。
+- `1920x957 / 1821x1272 / 1280x767 / 390x844`: document横overflowなし。
+- desktop: 開始操作をviewport内に常時表示。mobile: 上部開始操作を表示。
+- 手動時間・確認設定の開閉、ショート画面・冒頭タイトルの変更と復帰: pass。
+- 手動時間を途中入力して閉じた状態で開始: エラー表示、details再展開、不足欄focusを確認。
+- desktop / mobileの実表示submit: 各`1`。
+- 新規作成 / 完成動画再編集の見出し・JSON表示・CTA連動: pass。
+- 通常のみ / ショートのみ: 残る本数欄を全幅表示し、ショート設定・見出しを出力対象へ連動: pass。
+- browser console error / warning: `0 / 0`。
+- 参照デザイン / 実装、注釈前 / 実装を各1枚の比較画像で確認: pass。
+- 独立再レビュー: P0 / P1 / P2 / P3なし。
+
+### 未解決・制限
+
+- 実動画を選択してjobを作成するE2Eは未実行。
+- TOP以外の画面は今回の変更対象外。
+- ユーザー受入は未確認。
+
+## 2026-08-04 Task 104 切り抜き予定画面の重複整理と文字起こし誤認識補正
+
+### 目的
+
+- 切り抜き予定画面の重複情報を減らし、動画確認を上から始められる状態にする。
+- 左のclip一覧で時刻が元動画基準だと明示する。
+- `その農منにしとったっちゃん`の表示と、その誤認識がタイトルへ流入する経路を補正する。
+
+### 観測事実・原因
+
+- 選択clipの種別・タイトル・元動画範囲が左一覧と動画直上の2か所に重複していた。
+- 該当jobの`raw_transcript_segments.json`に`農من`が保存済みで、UI描画や文字コード変換による崩れではなかった。
+- `من`はArabic文字`U+0645 / U+0646`。日本語文字起こしへ隣接して混入したWhisperの多言語誤認識だった。
+- 該当jobはOpenAI文字起こし補正が無効で、未補正segmentが候補タイトルへ昇格していた。
+
+### 変更
+
+- 動画直上の重複メタ情報を削除し、進捗表示の直下から動画を表示するようにした。
+- 左一覧の全clip時刻へ`元動画`を付けた。
+- 既知誤認識`農من -> 能面`を既定の文字起こし後処理へ追加した。
+- 日本語へ隣接するArabic等の想定外scriptを検出し、未補正文字列をタイトル採用しないguardを追加した。
+- clip plan生成時と既存plan読込時に既知誤認識だけを冪等補正し、既存jobも再解析なしで表示補正するようにした。
+- 文字起こし区間APIと字幕確認への引継ぎでも既知誤認識を補正したsegmentを使うようにした。
+- 既存成果物ではユーザー辞書を再適用せず、`NewsPicks -> NewsPicks公式公式`のような多重置換を防いだ。
+- 変更ファイル: `frontend/app/jobs/[jobId]/clips/page.tsx`、
+  `backend/app/audio/transcript_postprocess.py`、`backend/app/audio/transcript_suspicion.py`、
+  `backend/app/candidates/title_fallback.py`、`backend/app/jobs/clip_plan.py`、
+  `backend/app/api/jobs.py`、`backend/tests/test_clip_plan.py`、
+  `backend/tests/test_title_fallback.py`、`backend/tests/test_transcript_postprocess.py`、
+  `backend/tests/test_transcript_suspicion.py`、`design-qa.md`、`STATUS.md`。
+
+### 検証
+
+- 関連test: `37 passed`。
+- backend全体: `453 passed, 1 skipped`。既知のStarlette deprecation warning `1`のみ。
+- backend/launcher ruff: pass。
+- frontend lint / typecheck / build: pass。
+- CPU/GPU Compose `config --quiet`: pass。
+- frontend imageを再build後、backend / workerを最終コードで再buildし、Compose再起動: pass。
+- 稼働中Compose: backend healthy、frontend/worker/redis稼働、`/health=ok`、対象画面`200`。
+- 対象job API: clip `5`件、タイトル`その能面にしとったっちゃん`、
+  タイトル・対象文字起こし区間ともArabic文字なし。
+- `1821x1272`: document横overflowなし。重複メタ情報なし、左5件すべて`元動画`表示、
+  Short 1選択時も動画・時間調整・見せ場複製・文字起こしが連動。
+- Browser console: error `0`、warning `0`。開発用info / HMR logのみ。
+- 実装画像: `.codex_tmp/task104-clip-review-after-1821x1272.png`。
+- 独立レビューで既存成果物へのユーザー辞書再適用をP1検出し、冪等な既知補正へ限定して修正。再レビューP0 / P1なし。
+
+### 未解決・制限
+
+- 保存済みraw transcript artifact自体は書き換えない。読込・API応答・次工程への引継ぎ時に補正する。
+- 許可済み実動画を再文字起こしするE2Eは未実行。
+- clip再選定、予定確定、字幕保存は変更を避けるため実行していない。
+- ユーザー受入は未確認。
+
+## 2026-08-04 Task 105 切り抜き調整パネルの縦幅圧縮
+
+### 目的
+
+- `1821x1272`の初期表示で、動画、開始・終了調整、冒頭への見せ場複製の入力・追加ボタンまでスクロールなしで操作できるようにする。
+- 配置、字幕列、動画、左clip一覧は維持する。
+
+### 観測事実・原因
+
+- 変更前は開始・終了調整`289.3px`、見せ場複製`325.3px`、見せ場複製の下端`1418.6px`だった。
+- viewport下端まで約`147px`不足し、見せ場複製の入力欄と追加ボタンが初期表示外だった。
+- 両panel内の縦余白、見出しと説明の縦積み、要約の3行表示が高さを消費していた。
+
+### 変更
+
+- 開始・終了調整の見出しと説明を横並び可能にし、panel余白、入力間隔、要約部を圧縮した。
+- 見せ場複製へ`compact`表示を追加し、切り抜き予定画面だけで使用した。
+- 字幕画面で共有する見せ場複製は`compact=false`を既定とし、従来表示を維持した。
+- 文字サイズ、色、文言、動画、左clip一覧、右文字起こし、保存処理は変更していない。
+- 変更ファイル: `frontend/components/ClipBoundaryEditor.tsx`、
+  `frontend/components/ClipHookSceneEditor.tsx`、`frontend/app/jobs/[jobId]/clips/page.tsx`、
+  `design-qa.md`、`STATUS.md`。
+
+### 検証
+
+- frontend lint / typecheck / build: pass。
+- frontend image再build・container再作成: pass。
+- 稼働中Compose: backend healthy、frontend/worker/redis稼働。`/health=200`、対象画面`200`。
+- `1821x1272`: 開始・終了調整`217.3px`、見せ場複製`234.7px`、合計`162.7px`削減。
+- 見せ場複製の下端`1256.0px`、追加ボタン下端`1227.3px`、viewport下端まで`16.0px`。両方とも初期表示内。
+- `1821x1272 / 1280x720`: document横overflow`0`。両panelと追加ボタンの存在を確認。
+- `前に+5秒 -> 自動選定の範囲へ戻す`、`ここから3秒 -> ここから2秒`のstate連動: pass。保存APIは未実行。
+- Browser console: error`0`、warning`0`。開発用info / HMR logのみ。
+- Before / After比較: `.codex_tmp/task105-before-after-final-1821x1272.png`、panel拡大比較: `.codex_tmp/task105-panels-before-after-final.png`。
+
+### 未解決・制限
+
+- 上限超過警告や入力エラーが表示される非初期状態は、その文量分だけ縦スクロールが発生し得る。
+- 保存・再生成は既存job成果物を変えないため実行していない。
+- ユーザー受入は未確認。
+
+## 2026-08-05 Task 106 JSON区間モード
+
+### 目的
+
+- 人気区間JSONを選択した際、ユーザーがJSON基準の候補生成と従来の補助評価を明示的に切り替えられるようにする。
+- `ON`: JSON人気区間を候補生成の起点にする。`OFF`: 従来候補へ人気度を最大`+10`点の補助として使う。
+
+### 観測事実・原因
+
+- 変更前はsidecarをアップロードしても常に従来候補を生成し、重複時間の人気度を補助加点するだけだった。
+- JSONから候補区間を直接生成する設定、API field、候補生成strategy、UI切替がなかった。
+- 無効・未添付sidecarは常に従来評価へfallbackするため、JSON基準を要求したか判別できなかった。
+
+### 変更
+
+- `heatmapIntervalMode`をfrontend/backendのjob設定へ追加し、既定値を`false`にした。
+- TOPの人気区間JSON欄へ`OFF / ON`を追加した。JSON未選択時はON不可、JSON解除・動画変更・再編集切替時はOFFへ戻す。
+- ON時は正規化値が正の人気区間を`value desc / start asc`でseed化し、通常・ショートの設定済みmin/max/stepへ拡張して候補を生成する。
+- 同一ピークの細粒度区間がseed上限を独占しないよう、出力種別の最短時間単位で時系列分散してからseed上限を適用する。
+- 動画端shift、字幕境界補正、完全重複排除、start/time bucket上限、global候補上限を適用した。
+- 候補へ`generation_source`、seed開始・終了・値、動画全体時間基準の`heatmap_direct_score`を保存した。
+- ON時の候補順位は`heatmap_direct_score`を第一キーとし、その後に既存rule/OpenAI scoreを使う。hard gate、品質閾値、重複排除は維持した。
+- 手動時間指定がある種類は手動区間を優先し、未指定の種類だけJSON候補を生成する。
+- ONかつ自動出力ありでJSON未添付、`heatmap_available=false`、値が全て0、worker再検証失敗の場合は従来処理へ黙ってfallbackせず明示失敗する。
+- workerで実動画時間内に残る正値区間を再判定し、動画外区間しかない場合と自動出力種別の候補が0件の場合も明示失敗する。
+- clip再選定でもmodeとseed由来候補を保持し、sidecarを再検証する。
+- job進捗へ`JSON区間モードで候補生成`と表示する。
+- ON適用失敗時のjob進捗を`従来評価`ではなく`JSON区間モードを適用できず停止`と表示する。
+- 変更ファイル: `backend/app/schemas.py`、`backend/app/api/jobs.py`、
+  `backend/app/candidates/generate_heatmap_candidates.py`、
+  `backend/app/candidates/merge_boundaries.py`、`backend/app/candidates/select_candidates.py`、
+  `backend/app/scoring/heatmap.py`、`backend/app/jobs/runner.py`、
+  `backend/tests/test_heatmap_interval_candidates.py`、`backend/tests/test_api_routes.py`、
+  `backend/tests/test_real_pipeline.py`、`frontend/lib/types.ts`、
+  `frontend/components/SettingsPanel.tsx`、`frontend/components/JobProgress.tsx`、
+  `frontend/app/upload/page.tsx`、`README.md`、`STATUS.md`。
+
+### 検証
+
+- backend全体: `462 passed, 1 skipped`。既知のStarlette deprecation warning `1`のみ。
+- backend ruff: pass。frontend lint / typecheck / build: pass。
+- ON通常・ショート: 高いJSON区間を含む候補を選択し、`strategy=heatmap_intervals`、seed情報、direct scoreを保存: pass。
+- OFF: 既存E2Eで`heatmap_score=7.5`の補助評価を維持: pass。
+- ON＋JSONなし / `heatmap_available=false`: job作成を`422`で拒否: pass。
+- job作成後のsidecar改ざん: workerが`heatmap_interval_mode_unavailable`で失敗し、従来候補へfallbackしない: pass。
+- ON＋手動時間指定: start/end完全一致、`manual_time_range_locked`、再選定後もmode保持: pass。
+- GPU Composeを全image再build・再作成: pass。backend healthy、frontend/worker/redis稼働、CUDA preflight `ok=true`。
+- Browser: JSON未選択でON disabled、JSON選択でON可能、ON文言切替、JSON解除でOFF復帰: pass。
+- Browser console: error`0`、warning`0`。
+- 独立再レビュー: P0/P1/P2なし。密集ピーク再現は通常2本選択・未達0、動画外正値区間はON適用不可を確認。
+
+### 未解決・制限
+
+- Downloaderが生成した許可済み実動画・実sidecarによる`upload -> worker -> FFmpeg -> JSON区間選定`の実E2Eは未実行。
+- JSON区間でも既存hard gateを通過しない候補は採用しない。`strict_quality`では要求本数未達になり得る。
+- ユーザー受入は未確認。
+
 ## 2026-08-06 Task 107 文字起こし言語の日本語固定
 
 ### 目的
@@ -6383,7 +6946,7 @@ pip check: pass
 
 - 通常uploadの既定値、backend schema、worker fallback、CPU launcherが`transcriptionLanguage=auto`だった。
 - GPU profileだけ`ja`で、profileなしの`/upload`から新しいjobを作ると`auto`へ戻った。
-- 正式な完成MP4再編集は既存jobを開き、再文字起こししない。英語字幕jobは新しいjobとして`base / auto / cpu`で処理されていた。
+- 正式な完成MP4再編集は既存jobを開き、再文字起こししない。今回の英語字幕jobは新しいjobとして`base / auto / cpu`で処理されていた。
 
 ### 変更
 
@@ -6400,10 +6963,10 @@ pip check: pass
 
 ### 検証
 
-- 分離branchの関連test: `11 passed`。既知のStarlette deprecation warning `1`のみ。
+- 関連test: `11 passed`。既知のStarlette deprecation warning `1`のみ。
 - 対象backend/launcher/script ruff: pass。
-- 分離branchのfrontend typecheck / lint / build: pass。nested worktree由来のworkspace root warningのみ。
-- 統合作業ツリーのGPU Composeでbackend / frontend / workerを再build・再作成: pass。
+- frontend typecheck / lint / build: pass。
+- GPU Composeでbackend / frontend / workerを再build・再作成: pass。
 - 稼働確認: backend healthy、`/health=ok`、`/upload?runtimeProfile=gpu=200`、worker GPU preflight `ok=true`。
 - 稼働container内でAPI既定値、旧`auto`正規化、worker fallbackがすべて`ja`: pass。
 
@@ -6411,5 +6974,4 @@ pip check: pass
 
 - 修正前に生成済みの英語transcript artifactは自動変換しない。正しい日本語jobを使うか、修正後に新規処理が必要。
 - 許可済み実動画を修正後に新規文字起こしするE2Eは未実行。
-- 分離branch単体のDocker Compose buildは再実行していない。
 - ユーザー受入は未確認。

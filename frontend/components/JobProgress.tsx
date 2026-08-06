@@ -6,6 +6,8 @@ const errorLabels: Record<string, string> = {
   audio_extraction_failed: "動画の音声を読み込めません",
   transcript_unusable: "文字起こし結果を利用できません",
   transcription_quality_fallback_failed: "文字起こしの再試行に失敗しました",
+  heatmap_interval_mode_unavailable: "JSON区間モードを適用できません",
+  heatmap_interval_mode_no_candidates: "JSON区間から候補を作成できません",
 };
 
 export function JobProgress({ job }: { job: JobStatusResponse }) {
@@ -20,6 +22,35 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
   const correctionTargetsCompleted = detailNumber("correctionTargetsCompleted");
   const correctionTargetsTotal = detailNumber("correctionTargetsTotal");
   const transcriptSegmentCount = detailNumber("transcriptSegmentCount");
+  const heatmapStatus =
+    typeof job.details.heatmapStatus === "string" ? job.details.heatmapStatus : null;
+  const heatmapSegmentCount = detailNumber("heatmapSegmentCount") ?? 0;
+  const heatmapIntervalModeRequested = job.details.heatmapIntervalModeRequested === true;
+  const heatmapIntervalModeApplied = job.details.heatmapIntervalModeApplied === true;
+  const heatmapSelectionBehavior =
+    typeof job.details.heatmapSelectionBehavior === "string"
+      ? job.details.heatmapSelectionBehavior
+      : null;
+  const heatmapModeUnavailable =
+    heatmapIntervalModeRequested &&
+    !heatmapIntervalModeApplied &&
+    heatmapSelectionBehavior !== "manual_ranges";
+  let heatmapLabel: string | null = null;
+  if (heatmapIntervalModeApplied) {
+    heatmapLabel = `JSON区間モードで候補生成（${heatmapSegmentCount}区間）`;
+  } else if (heatmapIntervalModeRequested && heatmapSelectionBehavior === "manual_ranges") {
+    heatmapLabel = "手動指定区間を優先（JSON区間モード対象なし）";
+  } else if (heatmapModeUnavailable) {
+    heatmapLabel = "JSON区間モードを適用できず停止";
+  } else if (heatmapStatus === "applied") {
+    heatmapLabel = `人気区間を補助評価に使用（${heatmapSegmentCount}区間）`;
+  } else if (heatmapStatus === "unavailable") {
+    heatmapLabel = "人気区間データなし（従来評価）";
+  } else if (heatmapStatus === "invalid_fallback") {
+    heatmapLabel = "人気区間JSON不一致（従来評価）";
+  } else if (heatmapStatus === "not_provided") {
+    heatmapLabel = "人気区間JSONなし（従来評価）";
+  }
   const showCorrectionProgress =
     job.status === "correcting_subtitles" &&
     correctionProgress !== null &&
@@ -62,6 +93,21 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
             style={{ width: `${job.progress}%` }}
           />
         </div>
+
+        {heatmapLabel ? (
+          <p
+            className={`text-xs ${
+              heatmapModeUnavailable
+                ? "text-red-700"
+                : heatmapStatus === "applied"
+                  ? "text-emerald-700"
+                  : "text-neutral-600"
+            }`}
+            data-testid="heatmap-status"
+          >
+            {heatmapLabel}
+          </p>
+        ) : null}
 
         {showCorrectionProgress ? (
           <div className="border-t border-neutral-200 pt-4" data-testid="subtitle-correction-progress">

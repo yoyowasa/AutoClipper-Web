@@ -12,6 +12,8 @@ import {
 type SettingsPanelProps = {
   settings: ClipSettings;
   disabled?: boolean;
+  workspace?: boolean;
+  revealManualRanges?: number;
   onChange: (settings: ClipSettings) => void;
 };
 
@@ -34,6 +36,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   excludePromotionalContent: false,
   selectionPolicy: "strict_quality",
   crossTypeOverlapDedupe: false,
+  heatmapIntervalMode: false,
   useOpenAIScoring: false,
   openaiCandidateLimit: 8,
   openaiModel: "gpt-5.5",
@@ -127,15 +130,30 @@ function withOutputMode(settings: ClipSettings, mode: OutputMode): ClipSettings 
 export function SettingsPanel({
   settings,
   disabled = false,
+  workspace = false,
+  revealManualRanges = 0,
   onChange
 }: SettingsPanelProps) {
   const outputMode = outputModeForSettings(settings);
 
   return (
-    <section className="rounded-md border border-neutral-300 bg-white p-5">
-      <div className="grid gap-5 md:grid-cols-2">
+    <section
+      className={
+        workspace
+          ? "top-workspace-settings bg-white"
+          : "rounded-md border border-neutral-300 bg-white p-5"
+      }
+      data-density={workspace ? "workspace" : "default"}
+    >
+      <div
+        className={
+          workspace
+            ? "grid gap-3 p-3 md:grid-cols-2 2xl:grid-cols-4"
+            : "grid gap-5 md:grid-cols-2"
+        }
+      >
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-neutral-700">Mode</span>
+          <span className="text-sm font-medium text-neutral-700">処理モード</span>
           <select
             className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
             disabled={disabled}
@@ -144,13 +162,13 @@ export function SettingsPanel({
               onChange({ ...settings, mode: event.target.value as ClipSettings["mode"] })
             }
           >
-            <option value="high_quality">High quality</option>
-            <option value="fast">Fast</option>
+            <option value="high_quality">高品質</option>
+            <option value="fast">高速</option>
           </select>
         </label>
 
         <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-neutral-700">Profile</span>
+          <span className="text-sm font-medium text-neutral-700">動画タイプ</span>
           <select
             className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
             disabled={disabled}
@@ -159,10 +177,10 @@ export function SettingsPanel({
               onChange({ ...settings, profile: event.target.value as ClipSettings["profile"] })
             }
           >
-            <option value="auto">Auto</option>
-            <option value="talk">Talk</option>
-            <option value="gameplay">Gameplay</option>
-            <option value="lecture">Lecture</option>
+            <option value="auto">自動</option>
+            <option value="talk">トーク</option>
+            <option value="gameplay">ゲーム</option>
+            <option value="lecture">講義</option>
           </select>
         </label>
 
@@ -197,7 +215,15 @@ export function SettingsPanel({
         </fieldset>
 
         {settings.normalClipCount > 0 ? (
-          <label className="flex flex-col gap-2">
+          <label
+            className={`flex flex-col gap-2 ${
+              workspace
+                ? settings.shortCount === 0
+                  ? "md:col-span-2 2xl:col-span-4"
+                  : "2xl:col-span-2"
+                : ""
+            }`}
+          >
             <span className="text-sm font-medium text-neutral-700">通常切り抜きの本数</span>
             <input
               className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
@@ -218,7 +244,15 @@ export function SettingsPanel({
         ) : null}
 
         {settings.shortCount > 0 ? (
-          <label className="flex flex-col gap-2">
+          <label
+            className={`flex flex-col gap-2 ${
+              workspace
+                ? settings.normalClipCount === 0
+                  ? "md:col-span-2 2xl:col-span-4"
+                  : "2xl:col-span-2"
+                : ""
+            }`}
+          >
             <span className="text-sm font-medium text-neutral-700">ショートの本数</span>
             <input
               className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
@@ -240,145 +274,172 @@ export function SettingsPanel({
 
         <ManualClipRangeEditor
           disabled={disabled}
+          revealKey={revealManualRanges}
           settings={settings}
+          workspace={workspace}
           onChange={onChange}
         />
 
         <ClipSelectionEditor
           disabled={disabled}
           settings={settings}
+          workspace={workspace}
           onChange={onChange}
         />
 
-        <label className="flex flex-col gap-2">
-          <span className="text-sm font-medium text-neutral-700">Short layout</span>
-          <select
-            className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-            disabled={disabled || settings.shortCount === 0}
-            value={settings.shortLayout}
-            onChange={(event) =>
-              onChange({
-                ...settings,
-                shortLayout: event.target.value as ClipSettings["shortLayout"]
-              })
-            }
-          >
-            <option value="auto">Auto</option>
-            <option value="center_crop">Center crop</option>
-            <option value="blur_background">Blur background</option>
-          </select>
-        </label>
-
-        <label className="flex min-h-10 items-center gap-3 self-end">
-          <input
-            checked={settings.burnSubtitles}
-            className="h-4 w-4"
-            disabled={disabled}
-            type="checkbox"
-            onChange={(event) =>
-              onChange({
-                ...settings,
-                burnSubtitles: event.target.checked
-              })
-            }
-          />
-          <span className="text-sm font-medium text-neutral-700">字幕を動画へ焼き込む</span>
-        </label>
-
-        <section className="border-y border-neutral-200 py-5 md:col-span-2">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="border-l-4 border-emerald-500 bg-emerald-50 px-4 py-3">
-              <p className="text-xs font-semibold text-emerald-800">1. 自動処理</p>
-              <p className="mt-1 text-sm font-medium text-neutral-900">文字起こし・clip選定</p>
-            </div>
-            <div className="border-l-4 border-blue-500 bg-blue-50 px-4 py-3">
-              <p className="text-xs font-semibold text-blue-800">2. 予定確認</p>
-              <p className="mt-1 text-sm font-medium text-neutral-900">範囲を再生・再選定</p>
-            </div>
-            <div className="border-l-4 border-sky-500 bg-sky-50 px-4 py-3">
-              <p className="text-xs font-semibold text-sky-800">3. 字幕確認</p>
-              <p className="mt-1 text-sm font-medium text-neutral-900">clipごとに字幕を修正</p>
-            </div>
-            <div className="border-l-4 border-amber-500 bg-amber-50 px-4 py-3">
-              <p className="text-xs font-semibold text-amber-800">4. 書き出し</p>
-              <p className="mt-1 text-sm font-medium text-neutral-900">字幕焼き込み・ZIP生成</p>
-            </div>
+        <section
+          className={`border-y border-neutral-200 py-5 md:col-span-2 ${
+            workspace ? "2xl:col-span-4" : ""
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-neutral-900">
+              {settings.shortCount > 0 ? "ショート・字幕" : "字幕"}
+            </h3>
+            <span className="text-xs text-neutral-500">表示方法と確認工程</span>
           </div>
-          <label className="mt-4 flex min-h-11 items-start gap-3 border border-neutral-300 bg-white px-4 py-3">
-            <input
-              checked={settings.requireClipPlanReview}
-              className="mt-0.5 h-4 w-4"
-              disabled={disabled || !settings.burnSubtitles || !settings.requireSubtitleReview}
-              type="checkbox"
-              onChange={(event) =>
-                onChange({
-                  ...settings,
-                  requireClipPlanReview: event.target.checked
-                })
-              }
-            />
-            <span>
-              <span className="block text-sm font-semibold text-neutral-900">
-                字幕確認の前に切り抜き範囲を確認する
+          <div
+            className={`mt-3 grid items-end gap-3 ${
+              settings.shortCount > 0
+                ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
+                : "lg:grid-cols-[auto]"
+            }`}
+          >
+            {settings.shortCount > 0 ? (
+              <>
+                <label className="flex min-w-0 flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">ショート画面</span>
+              <select
+                className="min-h-10 w-full border border-neutral-300 bg-white px-3 text-sm"
+                disabled={disabled || settings.shortCount === 0}
+                value={settings.shortLayout}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    shortLayout: event.target.value as ClipSettings["shortLayout"]
+                  })
+                }
+              >
+                <option value="auto">自動</option>
+                <option value="center_crop">中央を切り抜く</option>
+                <option value="blur_background">ぼかし背景</option>
+              </select>
+                </label>
+
+                <label className="flex min-w-0 flex-col gap-2">
+              <span className="text-sm font-medium text-neutral-700">ショート冒頭タイトル</span>
+              <select
+                className="min-h-10 w-full border border-neutral-300 bg-white px-3 text-sm"
+                disabled={disabled || settings.shortCount === 0}
+                value={settings.shortOverlayTitleMode}
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    shortOverlayTitleMode:
+                      event.target.value as ClipSettings["shortOverlayTitleMode"]
+                  })
+                }
+              >
+                <option value="auto">自動</option>
+                <option value="always">常に表示</option>
+                <option value="high_quality_only">高品質時のみ</option>
+                <option value="never">表示しない</option>
+              </select>
+                </label>
+              </>
+            ) : null}
+
+            <label className="flex min-h-10 items-center gap-3 border border-neutral-300 bg-white px-3 lg:justify-self-start">
+              <input
+                checked={settings.burnSubtitles}
+                className="h-4 w-4"
+                disabled={disabled}
+                type="checkbox"
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    burnSubtitles: event.target.checked
+                  })
+                }
+              />
+              <span className="whitespace-nowrap text-sm font-medium text-neutral-700">
+                字幕を焼き込む
               </span>
-              <span className="mt-1 block text-xs text-neutral-600">
-                軽量プレビューで予定範囲を確認し、狙う場面を変えて再選定できます。
+            </label>
+          </div>
+
+          <details className="mt-3" data-testid="review-settings-details">
+            <summary className="cursor-pointer text-sm font-medium text-neutral-700">
+              <span className="ml-1 inline-flex w-[calc(100%_-_1.25rem)] items-center justify-between gap-3 align-middle">
+                <span>開始後の確認</span>
+                <span className="text-xs font-normal text-neutral-500">
+                  {!settings.burnSubtitles
+                    ? "なし"
+                    : [
+                        settings.requireClipPlanReview ? "予定確認" : null,
+                        settings.requireSubtitleReview ? "字幕確認" : null
+                      ]
+                        .filter((value): value is string => value !== null)
+                        .join(" + ") || "なし"}
+                </span>
               </span>
-            </span>
-          </label>
-          <label className="mt-4 flex min-h-11 items-start gap-3 border border-neutral-300 bg-white px-4 py-3">
-            <input
-              checked={settings.requireSubtitleReview}
-              className="mt-0.5 h-4 w-4"
-              disabled={disabled || !settings.burnSubtitles}
-              type="checkbox"
-              onChange={(event) =>
-              onChange({
-                  ...settings,
-                  requireSubtitleReview: event.target.checked,
-                  requireClipPlanReview: event.target.checked
-                    ? settings.requireClipPlanReview
-                    : false
-                })
-              }
-            />
-            <span>
-              <span className="block text-sm font-semibold text-neutral-900">
-                レンダリング前に字幕を確認する
-              </span>
-              <span className="mt-1 block text-xs text-neutral-600">
-                選定完了後に一時停止し、通常切り抜きとショートを1本ずつ確認します。
-              </span>
-            </span>
-          </label>
-          {!settings.burnSubtitles ? (
-            <p className="mt-2 text-xs text-amber-700">
-              字幕焼き込みがOFFのため、手動確認工程は実行されません。
-            </p>
-          ) : null}
+            </summary>
+            <div className="grid gap-3 border-x border-b border-neutral-200 p-3 md:grid-cols-2">
+              <label className="flex items-start gap-2">
+                <input
+                  checked={settings.requireClipPlanReview}
+                  className="mt-0.5 h-4 w-4"
+                  disabled={disabled || !settings.burnSubtitles || !settings.requireSubtitleReview}
+                  type="checkbox"
+                  onChange={(event) =>
+                    onChange({
+                      ...settings,
+                      requireClipPlanReview: event.target.checked
+                    })
+                  }
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-neutral-900">
+                    切り抜き予定を確認
+                  </span>
+                  <span className="mt-1 block text-xs text-neutral-600">
+                    範囲を再生し、必要なら場面を選び直します。
+                  </span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2">
+                <input
+                  checked={settings.requireSubtitleReview}
+                  className="mt-0.5 h-4 w-4"
+                  disabled={disabled || !settings.burnSubtitles}
+                  type="checkbox"
+                  onChange={(event) =>
+                    onChange({
+                      ...settings,
+                      requireSubtitleReview: event.target.checked,
+                      requireClipPlanReview: event.target.checked
+                        ? settings.requireClipPlanReview
+                        : false
+                    })
+                  }
+                />
+                <span>
+                  <span className="block text-sm font-semibold text-neutral-900">字幕を確認</span>
+                  <span className="mt-1 block text-xs text-neutral-600">
+                    書き出し前に字幕を確認します。
+                  </span>
+                </span>
+              </label>
+              {!settings.burnSubtitles ? (
+                <p className="text-xs text-amber-700 md:col-span-2">
+                  字幕焼き込みがOFFのため、確認工程は実行されません。
+                </p>
+              ) : null}
+            </div>
+          </details>
         </section>
 
-        <label className="flex flex-col gap-2 md:col-span-2">
-          <span className="text-sm font-medium text-neutral-700">Short overlay title</span>
-          <select
-            className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-            disabled={disabled || settings.shortCount === 0}
-            value={settings.shortOverlayTitleMode}
-            onChange={(event) =>
-              onChange({
-                ...settings,
-                shortOverlayTitleMode: event.target.value as ClipSettings["shortOverlayTitleMode"]
-              })
-            }
-          >
-            <option value="auto">Auto</option>
-            <option value="always">Always</option>
-            <option value="high_quality_only">High quality only</option>
-            <option value="never">Never</option>
-          </select>
-        </label>
-
-        <details className="md:col-span-2">
+        <details className={workspace ? "md:col-span-2 2xl:col-span-4" : "md:col-span-2"}>
           <summary className="cursor-pointer text-sm font-medium text-neutral-700">
             詳細な長さ設定
           </summary>
@@ -473,9 +534,11 @@ export function SettingsPanel({
           </div>
         </details>
 
-        <SubtitleStyleEditor disabled={disabled} settings={settings} onChange={onChange} />
+        <div className={workspace ? "md:col-span-2 2xl:col-span-4" : "md:col-span-2"}>
+          <SubtitleStyleEditor disabled={disabled} settings={settings} onChange={onChange} />
+        </div>
 
-        <details className="md:col-span-2">
+        <details className={workspace ? "md:col-span-2 2xl:col-span-4" : "md:col-span-2"}>
           <summary className="cursor-pointer text-sm font-medium text-neutral-700">
             文字起こし・字幕校正
           </summary>

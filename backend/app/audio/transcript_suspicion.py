@@ -18,6 +18,11 @@ SUBTITLE_CORRECTION_TARGETS_FILENAME = "subtitle_correction_targets.json"
 
 _ENTITY_TOKEN_RE = re.compile(r"[ァ-ヶー]{4,}|[A-Za-z][A-Za-z0-9+._-]{2,}")
 _MIXED_SCRIPT_RE = re.compile(r"(?:[A-Za-z]{2,}[ァ-ヶー]+|[ァ-ヶー]+[A-Za-z]{2,})")
+_UNEXPECTED_SCRIPT_RE = re.compile(
+    r"[\u0400-\u052f\u0590-\u05ff\u0600-\u06ff\u0750-\u077f"
+    r"\u0900-\u097f\u0e00-\u0e7f\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]"
+)
+_JAPANESE_SCRIPT_RE = re.compile(r"[一-龯々〆ヵヶぁ-んァ-ヶー]")
 _KANJI_KATAKANA_BOUNDARY_RE = re.compile(r"(?:[一-龯][ァ-ヶー]{4,}|[ァ-ヶー]{4,}[一-龯])")
 _JAPANESE_NUMERIC_BRIDGE_RE = re.compile(r"[一-龯ぁ-んァ-ヶー]\d{1,3}[一-龯ぁ-んァ-ヶー]")
 _REPEATED_FRAGMENT_RE = re.compile(r"(.{2,8}?)(?:\1){2,}")
@@ -52,6 +57,16 @@ _KNOWN_GLOSSARY_RESCUE_ALIASES: dict[str, str] = {
     "氷関係": "小売関係",
     "ナブ": "NAV",
 }
+
+
+def contains_unexpected_script(text: str) -> bool:
+    for index, character in enumerate(text):
+        if not _UNEXPECTED_SCRIPT_RE.fullmatch(character):
+            continue
+        adjacent = text[max(0, index - 1) : index] + text[index + 1 : index + 2]
+        if _JAPANESE_SCRIPT_RE.search(adjacent):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -335,6 +350,8 @@ def analyze_transcript_suspicion(
             signals["list_introduction_context"] = 0.40
         if _MIXED_SCRIPT_RE.search(segment.text):
             signals["mixed_script_token"] = 0.50
+        if contains_unexpected_script(segment.text):
+            signals["unexpected_script"] = 0.65
         if _KANJI_KATAKANA_BOUNDARY_RE.search(segment.text):
             signals["kanji_katakana_boundary"] = 0.15
         if _JAPANESE_NUMERIC_BRIDGE_RE.search(segment.text):

@@ -1,4 +1,5 @@
 import json
+import hashlib
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,7 @@ from app.models import Job
 from app.scoring.openai_score import OpenAICandidateScorer
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.black_screen import BlackScreenSegment, VisualQuality
+from app.video.heatmap import heatmap_sidecar_path
 from app.video.probe import VideoMetadata
 from app.video.scene_detect import SceneSegment
 
@@ -339,9 +341,33 @@ def test_finalist_on_demand_scores_selected_rule_only_candidates() -> None:
 
 
 def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> None:
+    media = b"fake video bytes"
+    sidecar = json.dumps(
+        {
+            "schema_version": 1,
+            "source": {
+                "name": "youtube_most_replayed",
+                "video_id": "BaW_jenozKc",
+                "fetched_at": "2026-08-02T03:30:00Z",
+                "extractor": "yt-dlp",
+                "extractor_version": "2026.07.04",
+            },
+            "media": {
+                "filename": "sample.mp4",
+                "sha256": hashlib.sha256(media).hexdigest(),
+                "size_bytes": len(media),
+            },
+            "duration_seconds": 240.0,
+            "heatmap_available": True,
+            "heatmap": [{"start_time": 0.0, "end_time": 240.0, "value": 0.75}],
+        }
+    ).encode("utf-8")
     upload = client.post(
         "/api/videos/upload",
-        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": ("sample.mp4.heatmap.json", sidecar, "application/json"),
+        },
     ).json()
     created = client.post(
         "/api/jobs",
@@ -420,6 +446,9 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     status_response = client.get(f"/api/jobs/{created['jobId']}")
     assert status_response.status_code == 200
     assert status_response.json()["status"] == "completed"
+    assert status_response.json()["details"]["heatmapStatus"] == "applied"
+    assert status_response.json()["details"]["heatmapApplied"] is True
+    assert status_response.json()["details"]["heatmapSegmentCount"] == 1
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200
@@ -437,6 +466,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     job_dir = storage.outputs / created["jobId"]
     for name in [
         "video_metadata.json",
+        "heatmap_validation_summary.json",
         "raw_transcript_segments.json",
         "deterministic_transcript_segments.json",
         "transcript_segments.json",
@@ -468,12 +498,16 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert selected_normal["original_start"] is not None
     assert selected_normal["refined_start"] is not None
     assert selected_normal["boundary_refined"] is not None
+    assert selected_normal["heatmap_value"] == 0.75
+    assert selected_normal["heatmap_score"] == 7.5
     assert selected_short["title"]
     assert selected_short["overlay_title"]
     assert selected_short["title_source"] == "transcript_fallback"
     assert selected_short["original_start"] is not None
     assert selected_short["refined_start"] is not None
     assert selected_short["boundary_refined"] is not None
+    assert selected_short["heatmap_value"] == 0.75
+    assert selected_short["heatmap_score"] == 7.5
     raw_transcript = json.loads((job_dir / "raw_transcript_segments.json").read_text(encoding="utf-8"))
     processed_transcript = json.loads((job_dir / "transcript_segments.json").read_text(encoding="utf-8"))
     assert raw_transcript[0]["text"] == "why automation mistakes matter before launch"
@@ -533,6 +567,8 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert candidate_summary["candidates_with_transcript_text"] == candidate_summary["total_candidates"]
     assert candidate_summary["avg_rule_score"] is not None
     assert candidate_summary["avg_final_score"] is not None
+    assert candidate_summary["heatmap_annotated_count"] == candidate_summary["total_candidates"]
+    assert candidate_summary["avg_heatmap_value"] == 0.75
 
     selected_summary = json.loads((job_dir / "selected_clips_summary.json").read_text(encoding="utf-8"))
     assert selected_summary["selected_normal_count"] == 1
@@ -590,17 +626,240 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "metadata/subtitle_correction_progress.json" in names
     assert "metadata/transcript_summary.json" in names
     assert "metadata/transcript_postprocess_summary.json" in names
+    assert "metadata/heatmap_validation_summary.json" in names
     assert "metadata/selected_clips_summary.json" in names
     assert "normal_01.mp4" not in names
     assert "short_01.ass" not in names
 
 
+def test_pipeline_uses_heatmap_intervals_as_candidate_source_when_mode_is_on(
+    client: TestClient,
+) -> None:
+    media = b"fake interval mode video"
+    sidecar = json.dumps(
+        {
+            "schema_version": 1,
+            "source": {
+                "name": "youtube_most_replayed",
+                "video_id": "interval-mode-video",
+                "fetched_at": "2026-08-02T03:30:00Z",
+                "extractor": "yt-dlp",
+                "extractor_version": "2026.07.04",
+            },
+            "media": {
+                "filename": "sample.mp4",
+                "sha256": hashlib.sha256(media).hexdigest(),
+                "size_bytes": len(media),
+            },
+            "duration_seconds": 240.0,
+            "heatmap_available": True,
+            "heatmap": [
+                {"start_time": 20.0, "end_time": 38.0, "value": 0.2},
+                {"start_time": 150.0, "end_time": 168.0, "value": 1.0},
+            ],
+        }
+    ).encode("utf-8")
+    upload = client.post(
+        "/api/videos/upload",
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": ("sample.mp4.heatmap.json", sidecar, "application/json"),
+        },
+    ).json()
+    created_response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 90,
+                "shortMinDuration": 20,
+                "shortMaxDuration": 20,
+                "heatmapIntervalMode": True,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+                "enableBoundaryRefinement": False,
+                "useOpenAIScoring": False,
+                "burnSubtitles": False,
+            },
+        },
+    )
+    assert created_response.status_code == 201
+    created = created_response.json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"rendered")
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=240.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=lambda _path: fake_transcript(),
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        normal_renderer=fake_render,
+        short_renderer=fake_render,
+    )
+
+    run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    job_dir = storage.job_outputs(created["jobId"])
+    selected = json.loads((job_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    clips = [*selected["normalClips"], *selected["shorts"]]
+    assert len(clips) == 2
+    assert all(clip["start"] < 168.0 and clip["end"] > 150.0 for clip in clips)
+    assert all(clip["generation_source"] == "heatmap_interval" for clip in clips)
+    assert all(clip["heatmap_seed_value"] == 1.0 for clip in clips)
+    assert all(clip["heatmap_direct_score"] > 0 for clip in clips)
+
+    generation_summary = json.loads(
+        (job_dir / "candidate_generation_summary.json").read_text(encoding="utf-8")
+    )
+    assert generation_summary["by_type"]["normal"]["strategy"] == "heatmap_intervals"
+    assert generation_summary["by_type"]["short"]["strategy"] == "heatmap_intervals"
+    heatmap_summary = json.loads(
+        (job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8")
+    )
+    assert heatmap_summary["interval_mode_requested"] is True
+    assert heatmap_summary["interval_mode_applied"] is True
+    assert heatmap_summary["selection_behavior"] == "heatmap_intervals"
+    status = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert status["status"] == "completed"
+    assert status["details"]["heatmapIntervalModeApplied"] is True
+
+
+def test_pipeline_fails_instead_of_falling_back_when_interval_sidecar_is_tampered(
+    client: TestClient,
+) -> None:
+    media = b"fake tamper video"
+    sidecar = json.dumps(
+        {
+            "schema_version": 1,
+            "source": {
+                "name": "youtube_most_replayed",
+                "video_id": "tamper-video",
+                "fetched_at": "2026-08-02T03:30:00Z",
+                "extractor": "yt-dlp",
+                "extractor_version": "2026.07.04",
+            },
+            "media": {
+                "filename": "sample.mp4",
+                "sha256": hashlib.sha256(media).hexdigest(),
+                "size_bytes": len(media),
+            },
+            "duration_seconds": 240.0,
+            "heatmap_available": True,
+            "heatmap": [{"start_time": 150.0, "end_time": 168.0, "value": 1.0}],
+        }
+    ).encode("utf-8")
+    upload = client.post(
+        "/api/videos/upload",
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": ("sample.mp4.heatmap.json", sidecar, "application/json"),
+        },
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"heatmapIntervalMode": True},
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        video_path = storage.resolve_stored_file(job.video.stored_path)
+    heatmap_sidecar_path(video_path).write_text("{}", encoding="utf-8")
+
+    run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=AutoClipperPipelineDependencies(
+            probe_metadata=lambda _path: VideoMetadata(
+                duration=240.0,
+                width=1920,
+                height=1080,
+                fps=30.0,
+                has_audio=True,
+            )
+        ),
+    )
+
+    status = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert status["status"] == "failed"
+    assert status["error"]["code"] == "heatmap_interval_mode_unavailable"
+    summary = json.loads(
+        (storage.job_outputs(created["jobId"]) / "heatmap_validation_summary.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert summary["status"] == "invalid_fallback"
+    assert summary["interval_mode_requested"] is True
+    assert summary["interval_mode_applied"] is False
+
+
 def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     client: TestClient,
 ) -> None:
+    media = b"fake video bytes"
+    sidecar = json.dumps(
+        {
+            "schema_version": 1,
+            "source": {
+                "name": "youtube_most_replayed",
+                "video_id": "manual-range-video",
+                "fetched_at": "2026-08-02T03:30:00Z",
+                "extractor": "yt-dlp",
+                "extractor_version": "2026.07.04",
+            },
+            "media": {
+                "filename": "sample.mp4",
+                "sha256": hashlib.sha256(media).hexdigest(),
+                "size_bytes": len(media),
+            },
+            "duration_seconds": 240.0,
+            "heatmap_available": True,
+            "heatmap": [{"start_time": 0.0, "end_time": 240.0, "value": 0.6}],
+        }
+    ).encode("utf-8")
     upload = client.post(
         "/api/videos/upload",
-        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": ("sample.mp4.heatmap.json", sidecar, "application/json"),
+        },
     ).json()
     created = client.post(
         "/api/jobs",
@@ -616,6 +875,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
                     {"startSeconds": 60, "endSeconds": 75},
                     {"startSeconds": 150, "endSeconds": 180},
                 ],
+                "heatmapIntervalMode": True,
                 "useOpenAIScoring": True,
                 "enableBoundaryRefinement": True,
                 "burnSubtitles": True,
@@ -696,6 +956,10 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     ]
     assert all(
         clip["boundary_refinement_reason"] == "manual_time_range_locked"
+        for clip in [*selected["normalClips"], *selected["shorts"]]
+    )
+    assert all(
+        clip["heatmap_value"] == 0.6
         for clip in [*selected["normalClips"], *selected["shorts"]]
     )
     assert not (storage.job_outputs(created["jobId"]) / "openai_scoring_summary.json").exists()
@@ -811,6 +1075,14 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     revised_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
     assert revised_plan["revision"] == 2
     assert revised_plan["settings"]["normalClipGuidance"] == "結論を優先"
+    assert revised_plan["settings"]["heatmapIntervalMode"] is True
+    reselected = json.loads(
+        (output_dir / "selected_clips.json").read_text(encoding="utf-8")
+    )
+    assert all(
+        clip["heatmap_value"] == 0.6
+        for clip in [*reselected["normalClips"], *reselected["shorts"]]
+    )
     assert client.get(f"/api/jobs/{created['jobId']}").json()["details"][
         "clipPlanRevision"
     ] == 2
@@ -2002,6 +2274,7 @@ def test_real_pipeline_retries_repeated_turbo_transcript_with_small_on_cuda(
                 "shortMaxDuration": 75,
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
+                "heatmapIntervalMode": False,
                 "useOpenAIScoring": False,
                 "subtitleCorrectionMode": "off",
                 "whisperModelSize": "turbo",

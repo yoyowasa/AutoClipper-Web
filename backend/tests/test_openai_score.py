@@ -1,4 +1,5 @@
 import json
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -159,6 +160,41 @@ def test_score_payload_includes_type_specific_selection_preference() -> None:
         "exclude_intro_outro": True,
         "exclude_promotional_content": True,
     }
+
+
+def test_score_payload_labels_heatmap_as_relative_supporting_signal() -> None:
+    candidate = make_candidate().model_copy(
+        update={
+            "heatmap_value": 0.82,
+            "heatmap_overlap_seconds": 25.0,
+            "heatmap_score": 8.2,
+        }
+    )
+
+    payload = build_score_input_payload(candidate)
+
+    assert payload["heatmap_features"] == {
+        "value": 0.82,
+        "overlap_seconds": 25.0,
+        "score_bonus": 8.2,
+        "value_semantics": "relative_in_video_0_to_1_not_view_count",
+        "supporting_signal_only": True,
+    }
+    assert candidate_score_cache_key(candidate) != candidate_score_cache_key(make_candidate())
+
+
+def test_score_cache_key_includes_system_prompt_context() -> None:
+    candidate = make_candidate()
+    legacy_payload = build_score_input_payload(candidate)
+    legacy_encoded = json.dumps(
+        legacy_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    legacy_key = sha256(legacy_encoded.encode("utf-8")).hexdigest()
+
+    assert candidate_score_cache_key(candidate) != legacy_key
 
 
 def test_score_cache_key_changes_with_selection_preference() -> None:

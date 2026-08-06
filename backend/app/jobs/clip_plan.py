@@ -5,6 +5,7 @@ from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.audio.transcript_postprocess import repair_known_transcript_artifact_text
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
 
@@ -107,6 +108,10 @@ def _candidate_title(candidate: Candidate, index: int) -> str:
     return (candidate.title or candidate.overlay_title or f"{prefix} {index:02d}").strip()
 
 
+def _repaired_artifact_text(text: str) -> str:
+    return repair_known_transcript_artifact_text(text)
+
+
 def _excerpt(text: str, limit: int = 360) -> str:
     normalized = " ".join(text.split())
     if len(normalized) <= limit:
@@ -130,11 +135,15 @@ def build_clip_plan(
             ClipPlanClip(
                 id=candidate.id,
                 type=candidate.type,
-                title=_candidate_title(candidate, type_indices[candidate.type]),
+                title=_repaired_artifact_text(
+                    _candidate_title(candidate, type_indices[candidate.type])
+                ),
                 start=candidate.start,
                 end=candidate.end,
                 duration=candidate.duration,
-                transcriptExcerpt=_excerpt(candidate.transcript_text),
+                transcriptExcerpt=_excerpt(
+                    _repaired_artifact_text(candidate.transcript_text)
+                ),
                 finalScore=candidate.final_score,
                 ruleScore=candidate.rule_score,
                 aiScore=candidate.ai_score,
@@ -262,4 +271,8 @@ def write_clip_plan(document: ClipPlanDocument, output_path: str | Path) -> Path
 
 def load_clip_plan(path: str | Path) -> ClipPlanDocument:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    return ClipPlanDocument.model_validate(payload)
+    document = ClipPlanDocument.model_validate(payload)
+    for clip in document.clips:
+        clip.title = _repaired_artifact_text(clip.title)
+        clip.transcript_excerpt = _repaired_artifact_text(clip.transcript_excerpt)
+    return document

@@ -11,6 +11,7 @@ services:
       STORAGE_ROOT: /app/storage
       ASS_FONTS_DIR: /app/fonts
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-8589934592}
+      MAX_HEATMAP_SIDECAR_SIZE_BYTES: ${MAX_HEATMAP_SIDECAR_SIZE_BYTES:-5242880}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
     ports:
       - "8000:8000"
@@ -32,6 +33,7 @@ services:
       retries: 5
 
   worker:
+    image: ${COMPOSE_PROJECT_NAME:-autoclipperweb}-worker-cpu
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -43,6 +45,7 @@ services:
       STORAGE_ROOT: /app/storage
       ASS_FONTS_DIR: /app/fonts
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-8589934592}
+      MAX_HEATMAP_SIDECAR_SIZE_BYTES: ${MAX_HEATMAP_SIDECAR_SIZE_BYTES:-5242880}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       AUTOCLIPPER_RUNTIME_PROFILE: cpu
     volumes:

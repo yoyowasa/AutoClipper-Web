@@ -67,3 +67,57 @@ body {
   background: #f7f7f4;
   color: #171717;
 }
+
+.top-workspace {
+  font-family: "Yu Gothic UI", "Meiryo UI", Meiryo, system-ui, sans-serif;
+}
+
+.top-workspace button,
+.top-workspace input,
+.top-workspace select,
+.top-workspace textarea,
+.top-workspace details,
+.top-workspace section {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.top-workspace input:not([type="checkbox"]):not([type="color"]):not([type="range"]),
+.top-workspace select,
+.top-workspace textarea {
+  border-color: #d4d4d0;
+}
+
+.top-workspace input:focus-visible,
+.top-workspace select:focus-visible,
+.top-workspace textarea:focus-visible,
+.top-workspace button:focus-visible,
+.top-workspace summary:focus-visible {
+  outline: 2px solid #0369a1;
+  outline-offset: 2px;
+}
+
+.top-workspace-settings input:not([type="checkbox"]):not([type="color"]):not([type="range"]),
+.top-workspace-settings select {
+  min-height: 36px;
+}
+
+.top-workspace-settings textarea {
+  min-height: 76px;
+}
+
+.top-workspace-settings .text-sm {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.top-workspace-settings .text-xs {
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+.top-workspace-settings details > summary {
+  border: 1px solid #d4d4d0;
+  background: #fafaf9;
+  padding: 0.625rem 0.75rem;
+}

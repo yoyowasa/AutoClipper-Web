@@ -53,6 +53,8 @@ JAPANESE_HOOK_KEYWORDS = {
     "やば",
 }
 
+HEATMAP_SCORE_MAX = 10.0
+
 INCOMPLETE_START_WORDS = {
     "and",
     "because",
@@ -88,6 +90,7 @@ class RuleScoreBreakdown(BaseModel):
     duration_score: float = Field(ge=0, le=20)
     transcript_length_score: float = Field(ge=0, le=15)
     audio_peak_score: float = Field(ge=0, le=10)
+    heatmap_score: float = Field(ge=0, le=HEATMAP_SCORE_MAX)
     incomplete_penalty: float = Field(ge=0, le=25)
     generic_content_penalty: float = Field(ge=0, le=25)
     final_score: float = Field(ge=0, le=100)
@@ -196,6 +199,12 @@ def audio_peak_score(volume_peak: float) -> float:
     return 2.0 if peak > 0 else 0.0
 
 
+def heatmap_popularity_score(value: float | None) -> float:
+    if value is None:
+        return 0.0
+    return _clamp(value, maximum=1.0) * HEATMAP_SCORE_MAX
+
+
 def incomplete_boundary_penalty(transcript_text: str) -> float:
     text = transcript_text.strip()
     if not text:
@@ -236,10 +245,20 @@ def score_candidate(
     duration = duration_fit_score(candidate)
     length = transcript_length_score(candidate)
     peak = audio_peak_score(volume_peak)
+    heatmap = heatmap_popularity_score(candidate.heatmap_value)
     penalty = incomplete_boundary_penalty(candidate.transcript_text)
     generic_penalty = generic_content_penalty(candidate.transcript_text, preference)
     final = _clamp(
-        hook + guidance + silence + speech + duration + length + peak - penalty - generic_penalty
+        hook
+        + guidance
+        + silence
+        + speech
+        + duration
+        + length
+        + peak
+        + heatmap
+        - penalty
+        - generic_penalty
     )
 
     return RuleScoreBreakdown(
@@ -250,6 +269,7 @@ def score_candidate(
         duration_score=duration,
         transcript_length_score=length,
         audio_peak_score=peak,
+        heatmap_score=heatmap,
         incomplete_penalty=penalty,
         generic_content_penalty=generic_penalty,
         final_score=round(final, 3),
@@ -275,7 +295,15 @@ def apply_rule_score(
     for flag in generic_content_flags(candidate.transcript_text, preference):
         if flag not in flags:
             flags.append(flag)
-    return candidate.model_copy(update={"rule_score": breakdown.final_score, "risk_flags": flags})
+    return candidate.model_copy(
+        update={
+            "rule_score": breakdown.final_score,
+            "heatmap_score": (
+                breakdown.heatmap_score if candidate.heatmap_value is not None else None
+            ),
+            "risk_flags": flags,
+        }
+    )
 
 
 def score_candidates(

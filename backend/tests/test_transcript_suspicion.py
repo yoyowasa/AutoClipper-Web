@@ -25,6 +25,19 @@ def test_low_confidence_and_mixed_script_are_suspicious() -> None:
     assert "low_asr_confidence" in result.segments[2].reasons
 
 
+def test_unexpected_script_in_japanese_transcript_is_suspicious() -> None:
+    result = analyze_transcript_suspicion([segment("その農منにしとったっちゃん", 0.99)])
+
+    assert result.target_indices == [0]
+    assert "unexpected_script" in result.segments[0].reasons
+
+
+def test_separate_foreign_script_token_is_not_marked_as_corrupt() -> None:
+    result = analyze_transcript_suspicion([segment("名前は محمد です", 0.99)])
+
+    assert result.target_indices == []
+
+
 def test_kanji_katakana_boundary_combines_with_moderate_confidence() -> None:
     result = analyze_transcript_suspicion(
         [segment("通常の冒頭です", 0.99), segment("対応コーパネルの性能", 0.89)],
