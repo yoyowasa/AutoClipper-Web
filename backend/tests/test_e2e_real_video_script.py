@@ -24,7 +24,7 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.mode == "low_cost"
     assert args.profile == "talk"
     assert args.whisper_model_size == "base"
-    assert args.transcription_language == "auto"
+    assert args.transcription_language == "ja"
     assert args.transcription_device == "cpu"
     assert args.transcription_compute_type == "auto"
     assert args.subtitle_correction_mode == "off"

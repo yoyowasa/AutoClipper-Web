@@ -11,12 +11,19 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from launcher.controller import (  # noqa: E402
+    CPU_PROFILE,
+    GPU_PROFILE,
     CommandResult,
     HostGpu,
     LauncherController,
     LauncherError,
     parse_compose_ps,
 )
+
+
+def test_runtime_profiles_use_japanese_transcription() -> None:
+    assert CPU_PROFILE.language == "ja"
+    assert GPU_PROFILE.language == "ja"
 
 
 def compose_ps(*, running: bool = True) -> str:

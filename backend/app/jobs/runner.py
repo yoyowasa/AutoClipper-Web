@@ -205,7 +205,6 @@ class PipelineExpectedError(Exception):
 
 
 WHISPER_MODEL_SIZES = {"base", "small", "medium", "large-v3", "turbo"}
-TRANSCRIPTION_LANGUAGES = {"auto", "ja"}
 SUBTITLE_CORRECTION_REASONING_EFFORTS = {
     "default",
     "none",
@@ -224,10 +223,8 @@ def _whisper_model_size_setting(settings: dict[str, Any]) -> str:
     return normalized if normalized in WHISPER_MODEL_SIZES else "base"
 
 
-def _transcription_language_setting(settings: dict[str, Any]) -> str:
-    value = settings.get("transcriptionLanguage") or settings.get("transcription_language") or "auto"
-    normalized = str(value).strip().lower()
-    return normalized if normalized in TRANSCRIPTION_LANGUAGES else "auto"
+def _transcription_language_setting(_settings: dict[str, Any]) -> str:
+    return "ja"
 
 
 def _transcription_device_setting(settings: dict[str, Any]) -> str:
@@ -830,7 +827,7 @@ def _transcribe_with_faster_whisper(
         model_size=model,
         device=device,
         compute_type=compute_type,
-        language=None if language == "auto" else language,
+        language=language,
     )
     segments = engine.transcribe(audio_path)
     return segments, dict(engine.diagnostics)

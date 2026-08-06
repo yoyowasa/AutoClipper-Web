@@ -30,6 +30,7 @@ from app.jobs.runner import (
     _build_openai_scoring_pool,
     _ensure_selected_candidates_openai_scored,
     _score_candidate_list,
+    _transcription_language_setting,
     run_autoclipper_job,
     run_clip_plan_boundary_update,
     run_clip_plan_hook_scene_update,
@@ -54,6 +55,18 @@ SUMMARY_FILENAMES = [
     "rejection_summary.json",
     "selected_clips_summary.json",
 ]
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {},
+        {"transcriptionLanguage": "auto"},
+        {"transcription_language": "en"},
+    ],
+)
+def test_transcription_language_setting_forces_japanese(settings: dict[str, Any]) -> None:
+    assert _transcription_language_setting(settings) == "ja"
 
 
 class EchoCorrectionResponse:
@@ -471,7 +484,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert transcript_summary["total_speech_duration"] == 195.0
     assert transcript_summary["transcription_engine"] == "faster_whisper"
     assert transcript_summary["transcription_model"] == "base"
-    assert transcript_summary["transcription_language"] == "auto"
+    assert transcript_summary["transcription_language"] == "ja"
     assert transcript_summary["transcription_runtime"]["requested_device"] == "cpu"
     assert transcript_summary["transcription_runtime"]["actual_device"] == "injected"
     assert transcript_summary["transcription_runtime"]["requested_compute_type"] == "auto"

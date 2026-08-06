@@ -59,7 +59,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   normalSubtitleXPercent: 50,
   normalSubtitleYPercent: 84,
   whisperModelSize: "base",
-  transcriptionLanguage: "auto",
+  transcriptionLanguage: "ja",
   transcriptionDevice: "cpu",
   transcriptionComputeType: "auto",
   subtitleCorrectionMode: "off",
@@ -541,23 +541,15 @@ export function SettingsPanel({
               </select>
             </label>
 
-            <label className="flex flex-col gap-2">
+            <div className="flex flex-col gap-2">
               <span className="text-sm font-medium text-neutral-700">音声言語</span>
-              <select
-                className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-                disabled={disabled}
-                value={settings.transcriptionLanguage}
-                onChange={(event) =>
-                  onChange({
-                    ...settings,
-                    transcriptionLanguage: event.target.value as ClipSettings["transcriptionLanguage"]
-                  })
-                }
+              <div
+                aria-label="音声言語"
+                className="flex min-h-10 items-center rounded-md border border-neutral-300 bg-neutral-100 px-3 text-sm text-neutral-700"
               >
-                <option value="auto">自動判定</option>
-                <option value="ja">日本語固定</option>
-              </select>
-            </label>
+                日本語（固定）
+              </div>
+            </div>
 
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium text-neutral-700">OpenAI字幕校正</span>
