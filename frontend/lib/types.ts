@@ -108,7 +108,7 @@ export type ClipSettings = {
   useDefaultTranscriptDictionary?: boolean;
   transcriptReplacements?: Record<string, string>;
   whisperModelSize: "base" | "small" | "medium" | "large-v3" | "turbo";
-  transcriptionLanguage: "auto" | "ja";
+  transcriptionLanguage: "ja";
   transcriptionDevice: "auto" | "cpu" | "cuda";
   transcriptionComputeType: "auto" | "int8" | "float16" | "int8_float16";
   subtitleCorrectionMode: "off" | "openai";

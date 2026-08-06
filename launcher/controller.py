@@ -50,7 +50,7 @@ class RuntimeProfile:
         )
 
 
-CPU_PROFILE = RuntimeProfile("cpu", "CPU compatible", "base", "auto", "cpu", "auto")
+CPU_PROFILE = RuntimeProfile("cpu", "CPU compatible", "base", "ja", "cpu", "auto")
 GPU_PROFILE = RuntimeProfile("gpu", "GPU recommended", "turbo", "ja", "cuda", "float16")
 
 

@@ -477,6 +477,7 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["openaiFallbackToRuleScore"] is True
         assert job.settings_json["ensureSelectedOpenAIScored"] is True
         assert job.settings_json["openaiFinalistScoringLimit"] == 20
+        assert job.settings_json["transcriptionLanguage"] == "ja"
 
 
 def test_job_status_exposes_subtitle_correction_progress_artifact(client: TestClient) -> None:
@@ -850,7 +851,8 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["openaiModel"]["default"] == "gpt-5.5"
     assert properties["openaiFallbackToRuleScore"]["default"] is True
     assert properties["whisperModelSize"]["default"] == "base"
-    assert properties["transcriptionLanguage"]["default"] == "auto"
+    assert properties["transcriptionLanguage"]["default"] == "ja"
+    assert properties["transcriptionLanguage"]["const"] == "ja"
     assert properties["transcriptionDevice"]["default"] == "cpu"
     assert properties["transcriptionComputeType"]["default"] == "auto"
     assert properties["subtitleCorrectionMode"]["default"] == "off"
@@ -887,7 +889,45 @@ def test_job_creation_rejects_unsupported_transcription_profile(client: TestClie
         "/api/jobs",
         json={
             "videoId": upload["videoId"],
-            "settings": {"whisperModelSize": "tiny", "transcriptionLanguage": "en"},
+            "settings": {"whisperModelSize": "tiny"},
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_job_creation_normalizes_legacy_auto_language_to_japanese(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"transcriptionLanguage": "auto"},
+        },
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, response.json()["jobId"])
+        assert job is not None
+        assert job.settings_json["transcriptionLanguage"] == "ja"
+
+
+def test_job_creation_rejects_non_japanese_transcription_language(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"transcriptionLanguage": "en"},
         },
     )
 

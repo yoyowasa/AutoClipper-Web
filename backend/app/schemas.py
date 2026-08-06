@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.candidates.merge_boundaries import ClipTextStyle
 
@@ -44,7 +44,7 @@ ClipSelectionPreset = Literal[
 ]
 ShortOverlayTitleMode = Literal["auto", "always", "high_quality_only", "never"]
 WhisperModelSize = Literal["base", "small", "medium", "large-v3", "turbo"]
-TranscriptionLanguage = Literal["auto", "ja"]
+TranscriptionLanguage = Literal["ja"]
 TranscriptionDevice = Literal["auto", "cpu", "cuda"]
 TranscriptionComputeType = Literal["auto", "int8", "float16", "int8_float16"]
 SubtitleCorrectionMode = Literal["off", "openai"]
@@ -385,7 +385,7 @@ class JobSettings(BaseModel):
     use_default_transcript_dictionary: bool = Field(default=True, alias="useDefaultTranscriptDictionary")
     transcript_replacements: dict[str, str] = Field(default_factory=dict, alias="transcriptReplacements")
     whisper_model_size: WhisperModelSize = Field(default="base", alias="whisperModelSize")
-    transcription_language: TranscriptionLanguage = Field(default="auto", alias="transcriptionLanguage")
+    transcription_language: TranscriptionLanguage = Field(default="ja", alias="transcriptionLanguage")
     transcription_device: TranscriptionDevice = Field(default="cpu", alias="transcriptionDevice")
     transcription_compute_type: TranscriptionComputeType = Field(default="auto", alias="transcriptionComputeType")
     subtitle_correction_mode: SubtitleCorrectionMode = Field(default="off", alias="subtitleCorrectionMode")
@@ -429,6 +429,13 @@ class JobSettings(BaseModel):
     e2e_fixture_transcript: bool = Field(default=False, alias="e2eFixtureTranscript")
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    @field_validator("transcription_language", mode="before")
+    @classmethod
+    def normalize_legacy_transcription_language(cls, value: Any) -> Any:
+        if isinstance(value, str) and value.strip().lower() in {"auto", "ja"}:
+            return "ja"
+        return value
 
     @model_validator(mode="after")
     def validate_duration_ranges(self) -> "JobSettings":

@@ -180,9 +180,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--transcription-language",
-        default="auto",
-        choices=["auto", "ja"],
-        help="Use auto detection or force Japanese transcription.",
+        default="ja",
+        choices=["ja"],
+        help="Japanese transcription is required by AutoClipper.",
     )
     parser.add_argument(
         "--transcription-device",

@@ -6371,3 +6371,45 @@ pip check: pass
 - エラー通知と、字幕確定後・書き出し中の状態通知は必要なため全幅表示を維持する。
 - `1536px`未満では各枠を縦積みするため、ページ縦スクロールを使用する。
 - フック映像の詳細設定を開いた場合は、タイトル・フックパネル内をスクロールする。
+
+## 2026-08-06 Task 107 文字起こし言語の日本語固定
+
+### 目的
+
+- 新規処理や設定引き継ぎ漏れがあっても、Whisperの自動言語判定で英語字幕が生成されないようにする。
+- 現在の日本語専用運用をUI、API、worker、launcherで一貫して強制する。
+
+### 観測事実・原因
+
+- 通常uploadの既定値、backend schema、worker fallback、CPU launcherが`transcriptionLanguage=auto`だった。
+- GPU profileだけ`ja`で、profileなしの`/upload`から新しいjobを作ると`auto`へ戻った。
+- 正式な完成MP4再編集は既存jobを開き、再文字起こししない。英語字幕jobは新しいjobとして`base / auto / cpu`で処理されていた。
+
+### 変更
+
+- frontendの既定値と型を`ja`のみにし、音声言語UIを`日本語（固定）`表示へ変更した。
+- API schemaを`ja`のみ、既定値`ja`にした。旧client/jobの`auto`は`ja`へ正規化し、`en`など非日本語指定は`422`で拒否する。
+- workerは保存済み設定が欠損、`auto`、不正値でも必ず`ja`をWhisperへ渡すようにした。
+- CPU/GPU launcherと実動画E2E scriptの既定言語を`ja`へ統一した。
+- READMEの既定値・対応言語を日本語固定へ更新し、API、pipeline、launcher、scriptの再発testを追加した。
+- 変更ファイル: `frontend/components/SettingsPanel.tsx`、`frontend/lib/types.ts`、
+  `backend/app/schemas.py`、`backend/app/jobs/runner.py`、
+  `launcher/controller.py`、`scripts/e2e_real_video.py`、`README.md`、
+  `backend/tests/test_api_routes.py`、`backend/tests/test_real_pipeline.py`、
+  `backend/tests/test_e2e_real_video_script.py`、`backend/tests/test_windows_launcher.py`、`STATUS.md`。
+
+### 検証
+
+- 分離branchの関連test: `11 passed`。既知のStarlette deprecation warning `1`のみ。
+- 対象backend/launcher/script ruff: pass。
+- 分離branchのfrontend typecheck / lint / build: pass。nested worktree由来のworkspace root warningのみ。
+- 統合作業ツリーのGPU Composeでbackend / frontend / workerを再build・再作成: pass。
+- 稼働確認: backend healthy、`/health=ok`、`/upload?runtimeProfile=gpu=200`、worker GPU preflight `ok=true`。
+- 稼働container内でAPI既定値、旧`auto`正規化、worker fallbackがすべて`ja`: pass。
+
+### 未解決・制限
+
+- 修正前に生成済みの英語transcript artifactは自動変換しない。正しい日本語jobを使うか、修正後に新規処理が必要。
+- 許可済み実動画を修正後に新規文字起こしするE2Eは未実行。
+- 分離branch単体のDocker Compose buildは再実行していない。
+- ユーザー受入は未確認。

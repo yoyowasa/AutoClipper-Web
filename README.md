@@ -465,7 +465,7 @@ The JSON file must be an object:
 
 ### Raw transcription benchmark
 
-The compatibility default remains `whisperModelSize=base`, `transcriptionLanguage=auto`,
+The compatibility default is `whisperModelSize=base`, `transcriptionLanguage=ja`,
 `transcriptionDevice=cpu`, and `transcriptionComputeType=auto`.
 For a real-video job, the raw faster-whisper profile can be changed without enabling transcript correction:
 
@@ -479,8 +479,8 @@ python scripts/e2e_real_video.py `
   --mode low_cost
 ```
 
-Supported model sizes are `base`, `small`, `medium`, `large-v3`, and `turbo`. Supported
-language modes are `auto` and `ja`. Device modes are `cpu`, `cuda`, and `auto`; compute
+Supported model sizes are `base`, `small`, `medium`, `large-v3`, and `turbo`. The
+transcription language is fixed to `ja`. Device modes are `cpu`, `cuda`, and `auto`; compute
 types are `auto`, `int8`, `float16`, and `int8_float16`.
 
 The selected and actual runtime values are written to `transcript_summary.json`, including
@@ -826,7 +826,7 @@ default and the Upload UI limits the initial pool to 8 candidates.
       "オープンAI": "OpenAI"
     },
     "whisperModelSize": "base",
-    "transcriptionLanguage": "auto",
+    "transcriptionLanguage": "ja",
     "transcriptionDevice": "cpu",
     "transcriptionComputeType": "auto",
     "subtitleCorrectionMode": "off",
@@ -899,7 +899,7 @@ Production-safe defaults remain:
 - `useDefaultTranscriptDictionary`: `true`
 - `transcriptReplacements`: `{}`
 - `whisperModelSize`: `base`
-- `transcriptionLanguage`: `auto`
+- `transcriptionLanguage`: `ja`（固定）
 - `transcriptionDevice`: `cpu`
 - `transcriptionComputeType`: `auto`
 - `subtitleCorrectionMode`: `off`
