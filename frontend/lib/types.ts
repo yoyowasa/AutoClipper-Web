@@ -102,6 +102,8 @@ export type ClipSettings = {
   normalSubtitleOutlineColor?: string;
   shortLayout: "auto" | "center_crop" | "blur_background";
   shortOverlayTitleMode: "auto" | "always" | "high_quality_only" | "never";
+  shortTopBannerEnabled: boolean;
+  shortBottomBannerEnabled: boolean;
   enableTranscriptPostProcessing?: boolean;
   transcriptNormalizeUnicode?: boolean;
   transcriptNormalizeWhitespace?: boolean;
@@ -262,6 +264,7 @@ export type SubtitleReviewClip = {
   title: string;
   originalTitle: string | null;
   titleEdited: boolean;
+  overlayTitleExpected: boolean;
   hookText: string;
   hookDurationSeconds: number;
   hookSceneStart: number | null;
@@ -286,6 +289,9 @@ export type SubtitleReviewDocument = {
   reopenedAt: string | null;
   sourceVideoUrl: string;
   shortMaxDuration: number;
+  shortOverlayTitleMode: "auto" | "always" | "high_quality_only" | "never";
+  shortTopBannerEnabled: boolean;
+  shortBottomBannerEnabled: boolean;
   clips: SubtitleReviewClip[];
   segments: SubtitleReviewSegment[];
   confirmedClipCount: number;
@@ -294,6 +300,11 @@ export type SubtitleReviewDocument = {
   createdAt: string;
   updatedAt: string;
 };
+
+export type SubtitleReviewShortBannerSettings = Pick<
+  SubtitleReviewDocument,
+  "shortTopBannerEnabled" | "shortBottomBannerEnabled"
+>;
 
 export type SubtitleReviewFinalizeResponse = {
   jobId: string;

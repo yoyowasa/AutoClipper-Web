@@ -1073,8 +1073,15 @@ Title fallback behavior:
 - Fallback priority is existing/OpenAI title, candidate transcript text, transcript segments within the clip range, then deterministic labels such as `Normal Clip 01` or `Short 01`.
 - Generated `selected_clips.json`, `normal_XX.json`, and `short_XX.json` include `title` and `title_source`.
 - Short metadata also includes `overlay_title`, `overlay_title_expected`, `overlay_title_rendered`, and `overlay_title_mode`.
-- `shortOverlayTitleMode` controls short title burn-in: `auto`, `always`, `high_quality_only`, or `never`.
+- `shortOverlayTitleMode` controls short title burn-in: `auto`, `always`, `high_quality_only`, or `never`; new jobs default to `auto`.
 - In `auto`, high-quality runs expect a burned-in overlay title; low-cost runs keep overlay titles as metadata and do not force title burn-in.
+- `shortTopBannerEnabled` and `shortBottomBannerEnabled` independently control the full-duration short-video banners. Both default to `false` and do not affect normal clips.
+- The top switch controls the bundled Japanese-pattern background. After the pattern has been enabled, turning it off keeps the displayed title as a title-only overlay and removes only the background.
+- Each subtitle-review clip exposes `overlayTitleExpected`, calculated by the same policy used by the renderer, so the 9:16 preview matches `high_quality`, low-cost, manual-title, and banner settings.
+- The bottom banner uses `backend/app/render/assets/short_bottom_banner.png` as supplied, without redrawing its logo or text, and scales the complete image uniformly to the short-video width.
+- The subtitle review and completed-video re-edit screen exposes the same two switches for short clips. Changes are saved immediately to the original job and used by the next re-render.
+- The subtitle review and re-edit screen immediately shows the enabled banners in the 9:16 text-placement preview, using the same PNG bytes as the renderer. Normal-clip previews remain unchanged.
+- The main review player keeps the source aspect ratio. The 9:16 panel previews banner and text placement; it does not simulate the final `auto` / `blur_background` crop strategy.
 - Audit treats an empty title as `missing_title`; deterministic labels are reported as the weaker `generic_fallback_title`.
 - Audit only reports `missing_ass_title_event` when overlay title burn-in is expected but the ASS title event is missing.
 

@@ -17,6 +17,7 @@ import {
   toApiUrl,
   updateSubtitleReviewClipContent,
   updateSubtitleReviewHookScene,
+  updateSubtitleReviewShortBannerSettings,
   updateSubtitleReviewSegment
 } from "../../../../lib/api";
 import {
@@ -134,6 +135,8 @@ export default function SubtitleReviewPage() {
   const [dirtySegmentIds, setDirtySegmentIds] = useState<Set<string>>(new Set());
   const [savingSegmentId, setSavingSegmentId] = useState<string | null>(null);
   const [savingClipContentId, setSavingClipContentId] = useState<string | null>(null);
+  const [isSavingShortBannerSettings, setIsSavingShortBannerSettings] =
+    useState(false);
   const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
   const [confirmingClipId, setConfirmingClipId] = useState<string | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
@@ -267,8 +270,16 @@ export default function SubtitleReviewPage() {
     () => review?.clips.find((clip) => clip.id === selectedClipId) ?? null,
     [review, selectedClipId]
   );
+  const hasReviewMutationInFlight =
+    savingSegmentId !== null ||
+    savingClipContentId !== null ||
+    isUpdatingHookScene ||
+    confirmingClipId !== null ||
+    isSavingShortBannerSettings ||
+    isFinalizing;
   const isEditable =
-    review?.state === "awaiting_review" && !isUpdatingHookScene;
+    review?.state === "awaiting_review" &&
+    !hasReviewMutationInFlight;
   const segmentsById = useMemo(
     () => new Map(review?.segments.map((segment) => [segment.id, segment]) ?? []),
     [review]
@@ -397,6 +408,22 @@ export default function SubtitleReviewPage() {
           selectedClip.type
         )
       : null;
+  const shortTitleOutputEnabled =
+    selectedClip?.type === "short" && selectedClip.overlayTitleExpected;
+  const shortBannerPreviewProps =
+    selectedClip?.type === "short"
+      ? {
+          shortTitleOutputEnabled,
+          shortTopBannerEnabled: review?.shortTopBannerEnabled ?? false,
+          shortTopBannerUrl: toApiUrl(
+            `/api/jobs/${jobId}/subtitle-review/banner-assets/top`
+          ),
+          shortBottomBannerEnabled: review?.shortBottomBannerEnabled ?? false,
+          shortBottomBannerUrl: toApiUrl(
+            `/api/jobs/${jobId}/subtitle-review/banner-assets/bottom`
+          )
+        }
+      : {};
 
   useEffect(() => {
     const video = videoRef.current;
@@ -740,6 +767,77 @@ export default function SubtitleReviewPage() {
     }
   }
 
+  async function saveShortBannerSettings(
+    shortTopBannerEnabled: boolean,
+    shortBottomBannerEnabled: boolean
+  ) {
+    if (!review || !isEditable || hasReviewMutationInFlight) {
+      return;
+    }
+    const previousSettings = {
+      shortOverlayTitleMode: review.shortOverlayTitleMode,
+      shortTopBannerEnabled: review.shortTopBannerEnabled,
+      shortBottomBannerEnabled: review.shortBottomBannerEnabled,
+      clips: review.clips
+    };
+    const topBannerChanged =
+      shortTopBannerEnabled !== review.shortTopBannerEnabled;
+    const nextShortOverlayTitleMode: SubtitleReviewDocument["shortOverlayTitleMode"] =
+      topBannerChanged && !shortTopBannerEnabled
+        ? "always"
+        : review.shortOverlayTitleMode;
+    const optimisticSettings = {
+      shortOverlayTitleMode: nextShortOverlayTitleMode,
+      shortTopBannerEnabled,
+      shortBottomBannerEnabled,
+      clips:
+        topBannerChanged
+          ? review.clips.map((clip) =>
+              clip.type === "short"
+                ? { ...clip, overlayTitleExpected: true }
+                : clip
+            )
+          : review.clips
+    };
+    const requestBody = {
+      shortTopBannerEnabled,
+      shortBottomBannerEnabled
+    };
+    setReview((current) =>
+      current
+        ? {
+            ...current,
+            ...optimisticSettings
+          }
+        : current
+    );
+    setIsSavingShortBannerSettings(true);
+    setError(null);
+    try {
+      const updated = await updateSubtitleReviewShortBannerSettings(
+        jobId,
+        requestBody
+      );
+      setReview(updated);
+    } catch (caught) {
+      setReview((current) =>
+        current
+          ? {
+              ...current,
+              ...previousSettings
+            }
+          : current
+      );
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "ショート帯設定を保存できませんでした"
+      );
+    } finally {
+      setIsSavingShortBannerSettings(false);
+    }
+  }
+
   async function saveSegment(segment: SubtitleReviewSegment) {
     const text = drafts[segment.id] ?? "";
     setSavingSegmentId(segment.id);
@@ -792,6 +890,10 @@ export default function SubtitleReviewPage() {
   }
 
   async function confirmSelectedClip() {
+    if (isSavingShortBannerSettings) {
+      setError("ショート帯設定の保存完了後に確認してください。");
+      return;
+    }
     if (!selectedClip || selectedClipHasDirtySegments || selectedClipHasDirtyContent) {
       setError("未保存のタイトル、フック、または字幕があります。先に保存してください。");
       return;
@@ -813,6 +915,10 @@ export default function SubtitleReviewPage() {
   }
 
   async function startRendering() {
+    if (isSavingShortBannerSettings) {
+      setError("ショート帯設定の保存完了後にレンダリングしてください。");
+      return;
+    }
     if (!review || dirtySegmentIds.size > 0 || hasDirtyClipContent) {
       setError("未保存のタイトル、フック、または字幕があります。先に保存してください。");
       return;
@@ -996,6 +1102,7 @@ export default function SubtitleReviewPage() {
                   !allConfirmed ||
                   dirtySegmentIds.size > 0 ||
                   hasDirtyClipContent ||
+                  isSavingShortBannerSettings ||
                   isFinalizing
                 }
                 type="button"
@@ -1251,12 +1358,15 @@ export default function SubtitleReviewPage() {
                   <div>
                     <h3 className="text-sm font-semibold">文字配置プレビュー</h3>
                     <p className="mt-0.5 text-[11px] text-neutral-500">
-                      下段のタイトル・フック・字幕設定と連動
+                      上下帯・タイトル・フック・字幕設定と連動
                     </p>
                   </div>
                   <span className="bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-800">
                     {selectedTextStyleTarget === "title"
-                      ? "タイトル"
+                      ? selectedClip.type === "short" &&
+                        !shortTitleOutputEnabled
+                        ? "タイトル（出力OFF）"
+                        : "タイトル"
                       : selectedTextStyleTarget === "hook"
                         ? "フック"
                         : "字幕"}
@@ -1267,6 +1377,7 @@ export default function SubtitleReviewPage() {
                     clipType={selectedClip.type}
                     displayMode="workspace"
                     selectedTarget={selectedTextStyleTarget}
+                    {...shortBannerPreviewProps}
                     styles={selectedClipTextStyles}
                     subtitleText={stylePreviewSubtitleText}
                     titleText={selectedClipContentDraft?.title ?? ""}
@@ -1316,6 +1427,52 @@ export default function SubtitleReviewPage() {
 
                     {selectedClip.type === "short" ? (
                       <>
+                        <fieldset className="mt-3 border-t border-neutral-300 pt-3">
+                          <legend className="sr-only">ショート帯（書出し時）</legend>
+                          <div className="grid min-h-10 grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] border border-neutral-300 bg-white">
+                            <span
+                              aria-live="polite"
+                              className="flex items-center border-r border-neutral-300 bg-neutral-50 px-3 text-sm font-semibold text-neutral-700"
+                            >
+                              {isSavingShortBannerSettings ? "保存中" : "帯プレビュー"}
+                            </span>
+                            <label className="flex cursor-pointer items-center gap-2 border-r border-neutral-300 px-3">
+                              <input
+                                checked={review.shortTopBannerEnabled}
+                                className="h-4 w-4"
+                                disabled={!isEditable || isSavingShortBannerSettings}
+                                type="checkbox"
+                                onChange={(event) =>
+                                  void saveShortBannerSettings(
+                                    event.target.checked,
+                                    review.shortBottomBannerEnabled
+                                  )
+                                }
+                              />
+                              <span className="text-sm font-semibold text-neutral-700">
+                                上: 柄帯
+                              </span>
+                            </label>
+                            <label className="flex cursor-pointer items-center gap-2 px-3">
+                              <input
+                                checked={review.shortBottomBannerEnabled}
+                                className="h-4 w-4"
+                                disabled={!isEditable || isSavingShortBannerSettings}
+                                type="checkbox"
+                                onChange={(event) =>
+                                  void saveShortBannerSettings(
+                                    review.shortTopBannerEnabled,
+                                    event.target.checked
+                                  )
+                                }
+                              />
+                              <span className="text-sm font-semibold text-neutral-700">
+                                下: ロゴ
+                              </span>
+                            </label>
+                          </div>
+                        </fieldset>
+
                         <label className="mt-2 block text-xs font-semibold text-neutral-700">
                           冒頭フック
                           <textarea
@@ -1553,6 +1710,7 @@ export default function SubtitleReviewPage() {
                       !isEditable ||
                       selectedClipHasDirtySegments ||
                       selectedClipHasDirtyContent ||
+                      isSavingShortBannerSettings ||
                       confirmingClipId === selectedClip.id
                     }
                     type="button"

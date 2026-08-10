@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 
 import {
@@ -37,6 +38,11 @@ type ClipTextStylePreviewProps = {
   clipType: ExportType;
   displayMode?: "compact" | "workspace";
   selectedTarget: ClipTextTarget;
+  shortTitleOutputEnabled?: boolean;
+  shortTopBannerEnabled?: boolean;
+  shortTopBannerUrl?: string;
+  shortBottomBannerEnabled?: boolean;
+  shortBottomBannerUrl?: string;
   styles: ClipTextStyles;
   titleText: string;
   hookText: string;
@@ -128,6 +134,11 @@ export function ClipTextStylePreview({
   clipType,
   displayMode = "compact",
   selectedTarget,
+  shortTitleOutputEnabled,
+  shortTopBannerEnabled = false,
+  shortTopBannerUrl,
+  shortBottomBannerEnabled = false,
+  shortBottomBannerUrl,
   styles,
   titleText,
   hookText,
@@ -145,6 +156,10 @@ export function ClipTextStylePreview({
     style.yPercent
   );
   const previewText = sampleText(target, titleText, hookText, subtitleText);
+  const titleOutputDisabled =
+    clipType === "short" &&
+    target === "title" &&
+    shortTitleOutputEnabled === false;
   const outputWidthPercent = clipType === "short" ? 10.8 : 19.2;
   const previewFontSizePercent = style.fontSize / outputWidthPercent;
   const previewOutlinePercent = style.outlineWidth / outputWidthPercent;
@@ -165,12 +180,50 @@ export function ClipTextStylePreview({
     >
       <div className="absolute inset-y-0 right-0 w-[36%] bg-[#82959C]" />
       <div className="absolute bottom-0 left-0 h-[18%] w-full bg-[#111A1E]" />
+      {clipType === "short" && shortTopBannerUrl ? (
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-x-0 top-0 z-10 aspect-[3/1] overflow-hidden ${
+            shortTopBannerEnabled ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          <Image
+            fill
+            unoptimized
+            alt=""
+            className="object-contain"
+            draggable={false}
+            loading="eager"
+            sizes="(min-width: 1024px) 30vw, 230px"
+            src={shortTopBannerUrl}
+          />
+        </div>
+      ) : null}
+      {clipType === "short" && shortBottomBannerUrl ? (
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-x-0 bottom-0 z-10 aspect-[3/1] overflow-hidden ${
+            shortBottomBannerEnabled ? "opacity-100" : "opacity-0"
+          }`}
+        >
+          <Image
+            fill
+            unoptimized
+            alt=""
+            className="object-contain"
+            draggable={false}
+            loading="eager"
+            sizes="(min-width: 1024px) 30vw, 230px"
+            src={shortBottomBannerUrl}
+          />
+        </div>
+      ) : null}
       {verticalPresets.map((preset) => {
         const selected = selectedVerticalPreset?.id === preset.id;
         return (
           <div
             aria-hidden="true"
-            className={`absolute left-0 w-full border-t ${
+            className={`absolute left-0 z-20 w-full border-t ${
               selected ? "border-sky-300" : "border-white/10"
             }`}
             key={preset.id}
@@ -184,22 +237,24 @@ export function ClipTextStylePreview({
           </div>
         );
       })}
-      <p
-        className="absolute m-0 max-w-[90%] whitespace-pre-line text-center leading-[1.2]"
-        style={{
-          color: style.primaryColor,
-          fontFamily: clipTextFontFamily(style.fontPreset),
-          fontSize: `clamp(4px, ${previewFontSizePercent}cqw, 52px)`,
-          fontWeight: clipTextFontWeight(style.fontPreset),
-          left: `${style.xPercent}%`,
-          top: `${style.yPercent}%`,
-          transform: "translate(-50%, -50%)",
-          WebkitTextStroke: `clamp(0px, ${previewOutlinePercent}cqw, 4px) ${style.outlineColor}`,
-          textShadow: `0 2px 2px ${style.outlineColor}`
-        }}
-      >
-        {previewText}
-      </p>
+      {!titleOutputDisabled ? (
+        <p
+          className="absolute z-30 m-0 max-w-[90%] whitespace-pre-line text-center leading-[1.2]"
+          style={{
+            color: style.primaryColor,
+            fontFamily: clipTextFontFamily(style.fontPreset),
+            fontSize: `clamp(4px, ${previewFontSizePercent}cqw, 52px)`,
+            fontWeight: clipTextFontWeight(style.fontPreset),
+            left: `${style.xPercent}%`,
+            top: `${style.yPercent}%`,
+            transform: "translate(-50%, -50%)",
+            WebkitTextStroke: `clamp(0px, ${previewOutlinePercent}cqw, 4px) ${style.outlineColor}`,
+            textShadow: `0 2px 2px ${style.outlineColor}`
+          }}
+        >
+          {previewText}
+        </p>
+      ) : null}
     </div>
   );
 }

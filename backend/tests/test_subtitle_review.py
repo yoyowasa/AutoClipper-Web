@@ -47,6 +47,40 @@ def _review_fixture():
     return transcript, build_subtitle_review("job_review", selection, transcript)
 
 
+def test_review_build_defaults_to_auto_and_exposes_title_expectation_alias() -> None:
+    _transcript, review = _review_fixture()
+    clips = {clip.type: clip for clip in review.clips}
+
+    assert review.short_overlay_title_mode == "auto"
+    assert clips["normal"].overlay_title_expected is False
+    assert clips["short"].overlay_title_expected is True
+    payload = review.model_dump(by_alias=True)
+    payload_clips = {clip["type"]: clip for clip in payload["clips"]}
+    assert payload_clips["normal"]["overlayTitleExpected"] is False
+    assert payload_clips["short"]["overlayTitleExpected"] is True
+
+
+def test_review_build_preserves_short_render_settings() -> None:
+    transcript = [TranscriptSegment(start=0.0, end=10.0, text="short")]
+    selection = CandidateSelection(
+        shorts=[_candidate("short_1", "short", 0.0, 10.0)],
+    )
+
+    review = build_subtitle_review(
+        "job_review",
+        selection,
+        transcript,
+        short_overlay_title_mode="high_quality_only",
+        short_top_banner_enabled=True,
+        short_bottom_banner_enabled=True,
+    )
+
+    assert review.short_overlay_title_mode == "high_quality_only"
+    assert review.short_top_banner_enabled is True
+    assert review.short_bottom_banner_enabled is True
+    assert review.clips[0].overlay_title_expected is True
+
+
 def test_shared_segment_edit_invalidates_and_updates_both_clips() -> None:
     transcript, review = _review_fixture()
     review = confirm_review_clip(review, "normal_1")

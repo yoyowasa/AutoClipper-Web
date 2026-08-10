@@ -19,6 +19,10 @@ from app.jobs.runner import run_dummy_autoclipper_job
 from app.jobs.status import SUCCESS_STATUSES
 from app.main import app
 from app.models import AppPreference, ExportItem, Job, Video, utc_now
+from app.render.render_short import (
+    DEFAULT_SHORT_BOTTOM_BANNER_PATH,
+    DEFAULT_SHORT_TOP_BANNER_PATH,
+)
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.heatmap import heatmap_sidecar_path
 
@@ -404,6 +408,173 @@ def _seed_reeditable_export() -> tuple[str, str, bytes]:
     return job_id, candidate_id, rendered_bytes
 
 
+def test_get_subtitle_review_hydrates_banner_settings_from_job(
+    client: TestClient,
+) -> None:
+    job_id, _candidate_id, _rendered_bytes = _seed_reeditable_export()
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {
+            **job.settings_json,
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": True,
+        }
+        db.commit()
+
+    response = client.get(f"/api/jobs/{job_id}/subtitle-review")
+
+    assert response.status_code == 200
+    assert response.json()["shortOverlayTitleMode"] == "auto"
+    assert response.json()["shortTopBannerEnabled"] is False
+    assert response.json()["shortBottomBannerEnabled"] is True
+    assert response.json()["clips"][0]["overlayTitleExpected"] is True
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    artifact = json.loads(
+        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8")
+    )
+    assert artifact["shortOverlayTitleMode"] == "auto"
+    assert artifact["shortTopBannerEnabled"] is False
+    assert artifact["shortBottomBannerEnabled"] is True
+    assert artifact["clips"][0]["overlayTitleExpected"] is True
+    assert summary["short_overlay_title_mode"] == "auto"
+    assert summary["short_top_banner_enabled"] is False
+    assert summary["short_bottom_banner_enabled"] is True
+    assert summary["overlay_title_expected_by_clip"] == {
+        "candidate_short_reedit": True
+    }
+
+
+def test_get_subtitle_review_preserves_explicit_never_mode(
+    client: TestClient,
+) -> None:
+    job_id, _candidate_id, _rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    artifact_path = storage.job_outputs(job_id) / "subtitle_review.json"
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    artifact["shortOverlayTitleMode"] = "auto"
+    artifact_path.write_text(
+        json.dumps(artifact, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {
+            **job.settings_json,
+            "shortOverlayTitleMode": "never",
+        }
+        db.commit()
+
+    response = client.get(f"/api/jobs/{job_id}/subtitle-review")
+
+    assert response.status_code == 200
+    assert response.json()["shortOverlayTitleMode"] == "never"
+    assert response.json()["clips"][0]["overlayTitleExpected"] is False
+    persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert persisted["shortOverlayTitleMode"] == "never"
+    assert persisted["clips"][0]["overlayTitleExpected"] is False
+
+
+def test_get_subtitle_review_persists_missing_false_title_expectation(
+    client: TestClient,
+) -> None:
+    job_id, _candidate_id, _rendered_bytes = _seed_reeditable_export()
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {
+            "mode": "low_cost",
+            "shortOverlayTitleMode": "auto",
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": False,
+        }
+        db.commit()
+
+    response = client.get(f"/api/jobs/{job_id}/subtitle-review")
+
+    assert response.status_code == 200
+    assert response.json()["clips"][0]["overlayTitleExpected"] is False
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    artifact = json.loads(
+        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8")
+    )
+    assert artifact["clips"][0]["overlayTitleExpected"] is False
+    assert summary["overlay_title_expected_by_clip"] == {
+        "candidate_short_reedit": False
+    }
+
+
+@pytest.mark.parametrize(
+    ("position", "asset_path"),
+    [
+        ("top", DEFAULT_SHORT_TOP_BANNER_PATH),
+        ("bottom", DEFAULT_SHORT_BOTTOM_BANNER_PATH),
+    ],
+)
+def test_subtitle_review_banner_asset_matches_renderer_asset(
+    client: TestClient,
+    position: str,
+    asset_path: Path,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+
+    response = client.get(
+        f"/api/jobs/{created['jobId']}/subtitle-review/banner-assets/{position}"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert "content-disposition" not in response.headers
+    assert response.content == asset_path.read_bytes()
+
+
+def test_subtitle_review_banner_asset_rejects_invalid_or_missing_asset(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    base_url = f"/api/jobs/{created['jobId']}/subtitle-review/banner-assets"
+
+    invalid = client.get(f"{base_url}/center")
+    missing_job = client.get(
+        "/api/jobs/job_missing/subtitle-review/banner-assets/top"
+    )
+    monkeypatch.setattr(
+        "app.api.jobs.DEFAULT_SHORT_TOP_BANNER_PATH",
+        tmp_path / "missing.png",
+    )
+    missing_asset = client.get(f"{base_url}/top")
+
+    assert invalid.status_code == 422
+    assert missing_job.status_code == 404
+    assert missing_asset.status_code == 404
+    assert missing_asset.json()["detail"] == "short top banner asset not found"
+
+
 def test_completed_mp4_upload_reopens_matching_job_without_saving_copy(
     client: TestClient,
 ) -> None:
@@ -458,6 +629,317 @@ def test_completed_mp4_upload_reopens_matching_job_without_saving_copy(
     assert hook_response.status_code == 202
     assert hook_response.json()["status"] == "preparing_subtitle_review"
     assert queued_hook_updates == [(job_id, candidate_id, 2.0, 4.0)]
+
+
+def test_subtitle_review_banner_settings_are_strict_and_persisted(
+    client: TestClient,
+) -> None:
+    job_id, _candidate_id, rendered_bytes = _seed_reeditable_export()
+    reopened = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("finished.mp4", rendered_bytes, "video/mp4")},
+    )
+    assert reopened.status_code == 200
+    review = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
+    assert review["shortTopBannerEnabled"] is False
+    assert review["shortBottomBannerEnabled"] is False
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {
+            **job.settings_json,
+            "mode": "low_cost",
+            "shortOverlayTitleMode": "auto",
+        }
+        db.commit()
+
+    extra_field = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": True,
+            "shortBottomBannerEnabled": False,
+            "mode": "low_cost",
+        },
+    )
+    string_bool = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": "true",
+            "shortBottomBannerEnabled": False,
+        },
+    )
+    assert extra_field.status_code == 422
+    assert string_bool.status_code == 422
+
+    bottom_only = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": True,
+        },
+    )
+    assert bottom_only.status_code == 200
+    assert bottom_only.json()["shortOverlayTitleMode"] == "auto"
+    assert bottom_only.json()["clips"][0]["overlayTitleExpected"] is False
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.settings_json["shortOverlayTitleMode"] == "auto"
+
+    response = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": True,
+            "shortBottomBannerEnabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["shortOverlayTitleMode"] == "auto"
+    assert response.json()["shortTopBannerEnabled"] is True
+    assert response.json()["shortBottomBannerEnabled"] is False
+    assert response.json()["clips"][0]["overlayTitleExpected"] is True
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.settings_json["shortTopBannerEnabled"] is True
+        assert job.settings_json["shortBottomBannerEnabled"] is False
+        assert job.settings_json["shortOverlayTitleMode"] == "auto"
+
+    disabled = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": True,
+        },
+    )
+    assert disabled.status_code == 200
+    assert disabled.json()["shortOverlayTitleMode"] == "always"
+    assert disabled.json()["clips"][0]["overlayTitleExpected"] is True
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.settings_json["shortOverlayTitleMode"] == "always"
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    artifact = json.loads(
+        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8")
+    )
+    assert artifact["shortOverlayTitleMode"] == "always"
+    assert artifact["shortTopBannerEnabled"] is False
+    assert artifact["shortBottomBannerEnabled"] is True
+    assert artifact["clips"][0]["overlayTitleExpected"] is True
+    assert summary["short_overlay_title_mode"] == "always"
+    assert summary["short_top_banner_enabled"] is False
+    assert summary["short_bottom_banner_enabled"] is True
+    assert summary["overlay_title_expected_by_clip"] == {
+        "candidate_short_reedit": True
+    }
+
+
+def test_subtitle_review_top_off_preserves_title_and_bottom_only_preserves_never(
+    client: TestClient,
+) -> None:
+    job_id, _candidate_id, rendered_bytes = _seed_reeditable_export()
+    reopened = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("finished.mp4", rendered_bytes, "video/mp4")},
+    )
+    assert reopened.status_code == 200
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {
+            **job.settings_json,
+            "mode": "low_cost",
+            "shortOverlayTitleMode": "never",
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": False,
+        }
+        db.commit()
+
+    bottom_only = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": True,
+        },
+    )
+    assert bottom_only.status_code == 200
+    assert bottom_only.json()["shortOverlayTitleMode"] == "never"
+    assert bottom_only.json()["clips"][0]["overlayTitleExpected"] is False
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {
+            **job.settings_json,
+            "mode": "low_cost",
+            "shortOverlayTitleMode": "never",
+            "shortTopBannerEnabled": True,
+            "shortBottomBannerEnabled": True,
+        }
+        db.commit()
+
+    legacy_top_off = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": True,
+        },
+    )
+    assert legacy_top_off.status_code == 200
+    assert legacy_top_off.json()["shortOverlayTitleMode"] == "always"
+    assert legacy_top_off.json()["shortTopBannerEnabled"] is False
+    assert legacy_top_off.json()["clips"][0]["overlayTitleExpected"] is True
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.settings_json["shortOverlayTitleMode"] == "always"
+
+
+@pytest.mark.parametrize(
+    "title_mode",
+    ["auto", "high_quality_only", "always"],
+)
+def test_subtitle_review_top_off_forces_title_mode_always(
+    client: TestClient,
+    title_mode: str,
+) -> None:
+    job_id, _candidate_id, rendered_bytes = _seed_reeditable_export()
+    reopened = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("finished.mp4", rendered_bytes, "video/mp4")},
+    )
+    assert reopened.status_code == 200
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {
+            **job.settings_json,
+            "mode": "low_cost",
+            "shortOverlayTitleMode": title_mode,
+            "shortTopBannerEnabled": True,
+            "shortBottomBannerEnabled": False,
+        }
+        db.commit()
+
+    response = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["shortOverlayTitleMode"] == "always"
+    assert response.json()["clips"][0]["overlayTitleExpected"] is True
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.settings_json["shortOverlayTitleMode"] == "always"
+
+
+@pytest.mark.parametrize(
+    "title_mode",
+    ["auto", "high_quality_only", "never", "always"],
+)
+def test_subtitle_review_top_on_preserves_existing_title_mode(
+    client: TestClient,
+    title_mode: str,
+) -> None:
+    job_id, _candidate_id, rendered_bytes = _seed_reeditable_export()
+    reopened = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("finished.mp4", rendered_bytes, "video/mp4")},
+    )
+    assert reopened.status_code == 200
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {
+            **job.settings_json,
+            "mode": "low_cost",
+            "shortOverlayTitleMode": title_mode,
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": False,
+        }
+        db.commit()
+
+    response = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": True,
+            "shortBottomBannerEnabled": False,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["shortOverlayTitleMode"] == title_mode
+    assert response.json()["shortTopBannerEnabled"] is True
+    assert response.json()["clips"][0]["overlayTitleExpected"] is True
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.settings_json["shortOverlayTitleMode"] == title_mode
+
+
+def test_subtitle_review_title_edit_recomputes_auto_title_expectation(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, rendered_bytes = _seed_reeditable_export()
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {
+            **job.settings_json,
+            "mode": "low_cost",
+            "shortOverlayTitleMode": "auto",
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": False,
+        }
+        db.commit()
+
+    reopened = client.post(
+        "/api/jobs/reedit-upload",
+        files={"file": ("finished.mp4", rendered_bytes, "video/mp4")},
+    )
+    assert reopened.status_code == 200
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    reopened_artifact = json.loads(
+        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
+    )
+    assert reopened_artifact["clips"][0]["overlayTitleExpected"] is False
+
+    edited = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+        json={"title": "手動で変更したタイトル"},
+    )
+
+    assert edited.status_code == 200
+    assert edited.json()["clips"][0]["titleEdited"] is True
+    assert edited.json()["clips"][0]["overlayTitleExpected"] is True
+    artifact = json.loads(
+        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8")
+    )
+    assert artifact["clips"][0]["overlayTitleExpected"] is True
+    assert summary["overlay_title_expected_by_clip"] == {candidate_id: True}
+
+    restored = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+        json={"title": "完成したショート"},
+    )
+    assert restored.status_code == 200
+    assert restored.json()["clips"][0]["titleEdited"] is False
+    assert restored.json()["clips"][0]["overlayTitleExpected"] is False
 
 
 def test_completed_mp4_upload_rejects_unknown_or_invalid_file(client: TestClient) -> None:
@@ -679,6 +1161,9 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["selectionPolicy"] == "fill_requested"
         assert job.settings_json["crossTypeOverlapDedupe"] is False
         assert job.settings_json["heatmapIntervalMode"] is False
+        assert job.settings_json["shortOverlayTitleMode"] == "auto"
+        assert job.settings_json["shortTopBannerEnabled"] is False
+        assert job.settings_json["shortBottomBannerEnabled"] is False
         assert job.settings_json["openaiCandidateLimit"] == 40
         assert job.settings_json["openaiModel"] == "gpt-5.5"
         assert job.settings_json["openaiFallbackToRuleScore"] is True
@@ -850,6 +1335,8 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "shortSubtitleAlignment": 5,
                 "shortSubtitleXPercent": 40,
                 "shortSubtitleYPercent": 57.3,
+                "shortTopBannerEnabled": True,
+                "shortBottomBannerEnabled": True,
                 "normalSubtitleFontSize": 60,
                 "normalSubtitleOutline": 4,
                 "normalSubtitleLowerMargin": 110,
@@ -905,6 +1392,8 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["shortSubtitleAlignment"] == 5
         assert job.settings_json["shortSubtitleXPercent"] == 40.0
         assert job.settings_json["shortSubtitleYPercent"] == 57.3
+        assert job.settings_json["shortTopBannerEnabled"] is True
+        assert job.settings_json["shortBottomBannerEnabled"] is True
         assert job.settings_json["normalSubtitleFontSize"] == 60
         assert job.settings_json["normalSubtitleOutline"] == 4
         assert job.settings_json["normalSubtitleLowerMargin"] == 110

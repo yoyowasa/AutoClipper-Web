@@ -2,7 +2,7 @@ import json
 import mimetypes
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -50,6 +50,7 @@ from app.jobs.subtitle_review import (
     confirm_review_clip,
     load_subtitle_review,
     queue_review_render,
+    refresh_review_overlay_title_expectations,
     reopen_completed_review,
     subtitle_review_output_path,
     subtitle_review_preview_path,
@@ -57,12 +58,18 @@ from app.jobs.subtitle_review import (
     subtitle_review_summary_path,
     update_review_clip_content,
     update_review_hook_scene,
+    update_review_render_settings,
     update_review_segment,
     write_subtitle_review,
     write_subtitle_review_summary,
 )
 from app.models import ExportItem, Job, Video
 from app.models import utc_now
+from app.render.render_short import (
+    DEFAULT_SHORT_BOTTOM_BANNER_PATH,
+    DEFAULT_SHORT_TOP_BANNER_PATH,
+)
+from app.render.title_policy import short_overlay_title_expected
 from app.schemas import (
     ClipPlanActionResponse,
     ClipPlanBoundaryUpdateRequest,
@@ -77,8 +84,10 @@ from app.schemas import (
     JobSettings,
     JobStatusResponse,
     ResultExportItem,
+    ShortOverlayTitleMode,
     SubtitleReviewFinalizeResponse,
     SubtitleReviewClipContentUpdateRequest,
+    SubtitleReviewSettingsUpdateRequest,
     SubtitleReviewSegmentUpdateRequest,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
@@ -142,6 +151,65 @@ def _persist_subtitle_review(document: SubtitleReviewDocument, paths: StoragePat
     write_subtitle_review_summary(document, subtitle_review_summary_path(output_dir))
 
 
+def _short_overlay_title_mode(settings: dict[str, Any]) -> ShortOverlayTitleMode:
+    value = settings.get("shortOverlayTitleMode", "auto")
+    if value == "auto":
+        return "auto"
+    if value == "always":
+        return "always"
+    if value == "high_quality_only":
+        return "high_quality_only"
+    if value == "never":
+        return "never"
+    return "auto"
+
+
+def _hydrate_subtitle_review_render_settings(
+    document: SubtitleReviewDocument,
+    job: Job,
+) -> tuple[SubtitleReviewDocument, bool]:
+    settings = dict(job.settings_json or {})
+    render_mode = str(settings.get("mode", "high_quality"))
+    short_overlay_title_mode = _short_overlay_title_mode(settings)
+    short_top_banner_enabled = bool(
+        settings.get("shortTopBannerEnabled", False)
+    )
+    short_bottom_banner_enabled = bool(
+        settings.get("shortBottomBannerEnabled", False)
+    )
+    changed = (
+        document.short_overlay_title_mode != short_overlay_title_mode
+        or document.short_top_banner_enabled != short_top_banner_enabled
+        or document.short_bottom_banner_enabled != short_bottom_banner_enabled
+        or any(
+            "overlay_title_expected" not in clip.model_fields_set
+            or clip.overlay_title_expected
+            != bool(
+                clip.type == "short"
+                and short_overlay_title_expected(
+                    render_mode=render_mode,
+                    stored_mode=short_overlay_title_mode,
+                    top_banner_enabled=short_top_banner_enabled,
+                    title_manually_reviewed=clip.title_edited,
+                )
+            )
+            for clip in document.clips
+        )
+    )
+    if not changed:
+        return document, False
+    return (
+        update_review_render_settings(
+            document,
+            render_mode=render_mode,
+            short_overlay_title_mode=short_overlay_title_mode,
+            short_top_banner_enabled=short_top_banner_enabled,
+            short_bottom_banner_enabled=short_bottom_banner_enabled,
+        ),
+        True,
+    )
+
+
 def _reedit_artifacts_available(
     job_id: str,
     video: Video,
@@ -175,6 +243,10 @@ def _reopen_job_subtitle_review(
     document = _get_subtitle_review_or_404(job.id, paths)
     document.short_max_duration = float(
         (job.settings_json or {}).get("shortMaxDuration", 75.0)
+    )
+    document, _settings_changed = _hydrate_subtitle_review_render_settings(
+        document,
+        job,
     )
     if job.status == "awaiting_subtitle_review" and document.state == "awaiting_review":
         if not _reedit_artifacts_available(job.id, video, paths):
@@ -1116,6 +1188,16 @@ def approve_clip_plan(
         short_max_duration=float(
             (job.settings_json or {}).get("shortMaxDuration", 75.0)
         ),
+        render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
+        short_overlay_title_mode=_short_overlay_title_mode(
+            dict(job.settings_json or {})
+        ),
+        short_top_banner_enabled=bool(
+            (job.settings_json or {}).get("shortTopBannerEnabled", False)
+        ),
+        short_bottom_banner_enabled=bool(
+            (job.settings_json or {}).get("shortBottomBannerEnabled", False)
+        ),
     )
     planned_titles = {clip.id: clip.title for clip in document.clips}
     for clip in review_document.clips:
@@ -1150,8 +1232,86 @@ def get_subtitle_review(
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
 ) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    document = _get_subtitle_review_or_404(job_id, paths)
+    document, settings_changed = _hydrate_subtitle_review_render_settings(
+        document,
+        job,
+    )
+    if settings_changed:
+        _persist_subtitle_review(document, paths)
+    return document
+
+
+@router.get("/{job_id}/subtitle-review/banner-assets/{position}")
+def get_subtitle_review_banner_asset(
+    job_id: str,
+    position: Literal["top", "bottom"],
+    db: Session = Depends(get_db),
+) -> FileResponse:
     _get_job_or_404(db, job_id)
-    return _get_subtitle_review_or_404(job_id, paths)
+    asset_path = (
+        DEFAULT_SHORT_TOP_BANNER_PATH
+        if position == "top"
+        else DEFAULT_SHORT_BOTTOM_BANNER_PATH
+    )
+    if not asset_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"short {position} banner asset not found",
+        )
+    return FileResponse(asset_path, media_type="image/png")
+
+
+@router.patch(
+    "/{job_id}/subtitle-review/settings",
+    response_model=SubtitleReviewDocument,
+)
+def update_subtitle_review_settings(
+    job_id: str,
+    request: SubtitleReviewSettingsUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_subtitle_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not editable",
+        )
+    document = _get_subtitle_review_or_404(job_id, paths)
+    if document.state != "awaiting_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not awaiting edits",
+        )
+
+    settings = dict(job.settings_json or {})
+    previous_top_banner_enabled = bool(
+        settings.get("shortTopBannerEnabled", False)
+    )
+    short_overlay_title_mode = _short_overlay_title_mode(settings)
+    if (
+        previous_top_banner_enabled
+        and not request.short_top_banner_enabled
+    ):
+        short_overlay_title_mode = "always"
+    settings["shortTopBannerEnabled"] = request.short_top_banner_enabled
+    settings["shortBottomBannerEnabled"] = request.short_bottom_banner_enabled
+    settings["shortOverlayTitleMode"] = short_overlay_title_mode
+    document = update_review_render_settings(
+        document,
+        render_mode=str(settings.get("mode", "high_quality")),
+        short_overlay_title_mode=short_overlay_title_mode,
+        short_top_banner_enabled=request.short_top_banner_enabled,
+        short_bottom_banner_enabled=request.short_bottom_banner_enabled,
+    )
+    job.settings_json = settings
+    job.updated_at = utc_now()
+    _persist_subtitle_review(document, paths)
+    db.commit()
+    db.refresh(job)
+    return document
 
 
 @router.post(
@@ -1304,6 +1464,10 @@ def update_subtitle_review_clip_content(
             hook_text=request.hook_text,
             hook_duration_seconds=request.hook_duration_seconds,
             **style_updates,
+        )
+        document = refresh_review_overlay_title_expectations(
+            document,
+            render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
         )
     except KeyError as exc:
         raise HTTPException(

@@ -10,6 +10,8 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
+from app.render.title_policy import short_overlay_title_expected
+from app.schemas import ShortOverlayTitleMode
 
 
 SUBTITLE_REVIEW_FILENAME = "subtitle_review.json"
@@ -52,6 +54,7 @@ class SubtitleReviewClip(BaseModel):
     title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
+    overlay_title_expected: bool = Field(default=False, alias="overlayTitleExpected")
     start: float = Field(ge=0)
     end: float = Field(ge=0)
     duration: float = Field(ge=0)
@@ -87,6 +90,12 @@ class SubtitleReviewDocument(BaseModel):
     reopened_at: str | None = Field(default=None, alias="reopenedAt")
     source_video_url: str = Field(alias="sourceVideoUrl")
     short_max_duration: float = Field(default=75.0, gt=0, alias="shortMaxDuration")
+    short_overlay_title_mode: ShortOverlayTitleMode = Field(
+        default="auto",
+        alias="shortOverlayTitleMode",
+    )
+    short_top_banner_enabled: bool = Field(default=False, alias="shortTopBannerEnabled")
+    short_bottom_banner_enabled: bool = Field(default=False, alias="shortBottomBannerEnabled")
     clips: list[SubtitleReviewClip] = Field(default_factory=list)
     segments: list[SubtitleReviewSegment] = Field(default_factory=list)
     confirmed_clip_count: int = Field(default=0, ge=0, alias="confirmedClipCount")
@@ -143,12 +152,34 @@ def _refresh_counts(document: SubtitleReviewDocument) -> SubtitleReviewDocument:
     return document
 
 
+def refresh_review_overlay_title_expectations(
+    document: SubtitleReviewDocument,
+    *,
+    render_mode: str | None,
+) -> SubtitleReviewDocument:
+    for clip in document.clips:
+        clip.overlay_title_expected = bool(
+            clip.type == "short"
+            and short_overlay_title_expected(
+                render_mode=render_mode,
+                stored_mode=document.short_overlay_title_mode,
+                top_banner_enabled=document.short_top_banner_enabled,
+                title_manually_reviewed=clip.title_edited,
+            )
+        )
+    return document
+
+
 def build_subtitle_review(
     job_id: str,
     selection: CandidateSelection,
     transcript_segments: Sequence[TranscriptSegment],
     *,
     short_max_duration: float = 75.0,
+    render_mode: str | None = "high_quality",
+    short_overlay_title_mode: ShortOverlayTitleMode = "auto",
+    short_top_banner_enabled: bool = False,
+    short_bottom_banner_enabled: bool = False,
 ) -> SubtitleReviewDocument:
     selected_candidates = [*selection.normal_clips, *selection.shorts]
     clip_segment_indices: dict[str, list[int]] = {}
@@ -205,16 +236,23 @@ def build_subtitle_review(
         if index in affected_clips
     ]
     now = _utc_iso()
-    return _refresh_counts(
+    document = _refresh_counts(
         SubtitleReviewDocument(
             jobId=job_id,
             sourceVideoUrl=f"/api/jobs/{job_id}/source-video",
             shortMaxDuration=short_max_duration,
+            shortOverlayTitleMode=short_overlay_title_mode,
+            shortTopBannerEnabled=short_top_banner_enabled,
+            shortBottomBannerEnabled=short_bottom_banner_enabled,
             clips=clips,
             segments=segments,
             createdAt=now,
             updatedAt=now,
         )
+    )
+    return refresh_review_overlay_title_expectations(
+        document,
+        render_mode=render_mode,
     )
 
 
@@ -252,6 +290,24 @@ def update_review_segment(
     for clip in document.clips:
         if clip.id in affected:
             clip.confirmed = False
+    return _refresh_counts(document)
+
+
+def update_review_render_settings(
+    document: SubtitleReviewDocument,
+    *,
+    render_mode: str | None,
+    short_overlay_title_mode: ShortOverlayTitleMode,
+    short_top_banner_enabled: bool,
+    short_bottom_banner_enabled: bool,
+) -> SubtitleReviewDocument:
+    document.short_overlay_title_mode = short_overlay_title_mode
+    document.short_top_banner_enabled = short_top_banner_enabled
+    document.short_bottom_banner_enabled = short_bottom_banner_enabled
+    document = refresh_review_overlay_title_expectations(
+        document,
+        render_mode=render_mode,
+    )
     return _refresh_counts(document)
 
 
@@ -457,6 +513,12 @@ def write_subtitle_review_summary(
         "state": document.state,
         "render_revision": document.render_revision,
         "reopened_at": document.reopened_at,
+        "short_overlay_title_mode": document.short_overlay_title_mode,
+        "short_top_banner_enabled": document.short_top_banner_enabled,
+        "short_bottom_banner_enabled": document.short_bottom_banner_enabled,
+        "overlay_title_expected_by_clip": {
+            clip.id: clip.overlay_title_expected for clip in document.clips
+        },
         "total_clip_count": document.total_clip_count,
         "confirmed_clip_count": document.confirmed_clip_count,
         "reviewed_segment_count": len(document.segments),

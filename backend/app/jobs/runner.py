@@ -1781,6 +1781,8 @@ def _render_selected_outputs(
         subtitle_settings=settings,
         mode=settings.get("mode"),
         short_overlay_title_mode=settings.get("shortOverlayTitleMode"),
+        short_top_banner_enabled=bool(settings.get("shortTopBannerEnabled", False)),
+        short_bottom_banner_enabled=bool(settings.get("shortBottomBannerEnabled", False)),
     )
 
     render_failures_path = _write_json(
@@ -2784,6 +2786,17 @@ def run_autoclipper_job(
                     transcript_segments,
                     short_max_duration=float(
                         settings.get("shortMaxDuration", 75.0)
+                    ),
+                    render_mode=str(settings.get("mode", "high_quality")),
+                    short_overlay_title_mode=settings.get(
+                        "shortOverlayTitleMode",
+                        "auto",
+                    ),
+                    short_top_banner_enabled=bool(
+                        settings.get("shortTopBannerEnabled", False)
+                    ),
+                    short_bottom_banner_enabled=bool(
+                        settings.get("shortBottomBannerEnabled", False)
                     ),
                 )
                 preview_total = len(review_document.clips)

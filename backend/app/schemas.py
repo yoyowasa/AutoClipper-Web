@@ -378,6 +378,8 @@ class JobSettings(BaseModel):
     normalize_audio: bool = Field(default=False, alias="normalizeAudio")
     short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
     short_overlay_title_mode: ShortOverlayTitleMode = Field(default="auto", alias="shortOverlayTitleMode")
+    short_top_banner_enabled: bool = Field(default=False, alias="shortTopBannerEnabled")
+    short_bottom_banner_enabled: bool = Field(default=False, alias="shortBottomBannerEnabled")
     enable_transcript_post_processing: bool = Field(default=True, alias="enableTranscriptPostProcessing")
     transcript_normalize_unicode: bool = Field(default=True, alias="transcriptNormalizeUnicode")
     transcript_normalize_whitespace: bool = Field(default=True, alias="transcriptNormalizeWhitespace")
@@ -523,6 +525,13 @@ class SubtitleReviewClipContentUpdateRequest(BaseModel):
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+class SubtitleReviewSettingsUpdateRequest(BaseModel):
+    short_top_banner_enabled: bool = Field(alias="shortTopBannerEnabled", strict=True)
+    short_bottom_banner_enabled: bool = Field(alias="shortBottomBannerEnabled", strict=True)
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
 class ClipPlanReselectionRequest(BaseModel):

@@ -13,6 +13,7 @@ import type {
   JobStatusResponse,
   SubtitleReviewDocument,
   SubtitleReviewFinalizeResponse,
+  SubtitleReviewShortBannerSettings,
   VideoUploadResponse
 } from "./types";
 import type {
@@ -345,6 +346,23 @@ export async function updateSubtitleReviewClipContent(
         "Content-Type": "application/json"
       },
       body: JSON.stringify(content)
+    }
+  );
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function updateSubtitleReviewShortBannerSettings(
+  jobId: string,
+  settings: SubtitleReviewShortBannerSettings
+): Promise<SubtitleReviewDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/settings`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(settings)
     }
   );
   return parseJsonResponse<SubtitleReviewDocument>(response);

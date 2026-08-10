@@ -75,7 +75,9 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   subtitleCorrectionContextSegments: 2,
   subtitleCorrectionFallbackEnabled: true,
   shortLayout: "auto",
-  shortOverlayTitleMode: "auto"
+  shortOverlayTitleMode: "auto",
+  shortTopBannerEnabled: false,
+  shortBottomBannerEnabled: false
 };
 
 export function settingsForRuntimeProfile(profile: string | null): ClipSettings {
@@ -308,44 +310,59 @@ export function SettingsPanel({
             {settings.shortCount > 0 ? (
               <>
                 <label className="flex min-w-0 flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">ショート画面</span>
-              <select
-                className="min-h-10 w-full border border-neutral-300 bg-white px-3 text-sm"
-                disabled={disabled || settings.shortCount === 0}
-                value={settings.shortLayout}
-                onChange={(event) =>
-                  onChange({
-                    ...settings,
-                    shortLayout: event.target.value as ClipSettings["shortLayout"]
-                  })
-                }
-              >
-                <option value="auto">自動</option>
-                <option value="center_crop">中央を切り抜く</option>
-                <option value="blur_background">ぼかし背景</option>
-              </select>
+                  <span className="text-sm font-medium text-neutral-700">ショート画面</span>
+                  <select
+                    className="min-h-10 w-full border border-neutral-300 bg-white px-3 text-sm"
+                    disabled={disabled || settings.shortCount === 0}
+                    value={settings.shortLayout}
+                    onChange={(event) =>
+                      onChange({
+                        ...settings,
+                        shortLayout: event.target.value as ClipSettings["shortLayout"]
+                      })
+                    }
+                  >
+                    <option value="auto">自動</option>
+                    <option value="center_crop">中央を切り抜く</option>
+                    <option value="blur_background">ぼかし背景</option>
+                  </select>
                 </label>
 
-                <label className="flex min-w-0 flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">ショート冒頭タイトル</span>
-              <select
-                className="min-h-10 w-full border border-neutral-300 bg-white px-3 text-sm"
-                disabled={disabled || settings.shortCount === 0}
-                value={settings.shortOverlayTitleMode}
-                onChange={(event) =>
-                  onChange({
-                    ...settings,
-                    shortOverlayTitleMode:
-                      event.target.value as ClipSettings["shortOverlayTitleMode"]
-                  })
-                }
-              >
-                <option value="auto">自動</option>
-                <option value="always">常に表示</option>
-                <option value="high_quality_only">高品質時のみ</option>
-                <option value="never">表示しない</option>
-              </select>
-                </label>
+                <fieldset className="flex min-w-0 flex-col gap-2">
+                  <legend className="text-sm font-medium text-neutral-700">ショート帯</legend>
+                  <div className="grid min-h-10 grid-cols-2 border border-neutral-300 bg-white">
+                    <label className="flex cursor-pointer items-center gap-2 border-r border-neutral-300 px-3">
+                      <input
+                        checked={settings.shortTopBannerEnabled}
+                        className="h-4 w-4"
+                        disabled={disabled || settings.shortCount === 0}
+                        type="checkbox"
+                        onChange={(event) =>
+                          onChange({
+                            ...settings,
+                            shortTopBannerEnabled: event.target.checked
+                          })
+                        }
+                      />
+                      <span className="text-sm font-medium text-neutral-700">上: 柄帯</span>
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-2 px-3">
+                      <input
+                        checked={settings.shortBottomBannerEnabled}
+                        className="h-4 w-4"
+                        disabled={disabled || settings.shortCount === 0}
+                        type="checkbox"
+                        onChange={(event) =>
+                          onChange({
+                            ...settings,
+                            shortBottomBannerEnabled: event.target.checked
+                          })
+                        }
+                      />
+                      <span className="text-sm font-medium text-neutral-700">下: ロゴ</span>
+                    </label>
+                  </div>
+                </fieldset>
               </>
             ) : null}
 

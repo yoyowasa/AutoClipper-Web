@@ -25,6 +25,10 @@ from app.render.crop_strategy import (
 )
 from app.render.filters import ass_filter, loudnorm_filter
 from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
+from app.render.title_policy import (
+    normalize_short_overlay_title_mode,
+    short_overlay_title_expected,
+)
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.face_detect import FaceDetection, best_face_center, detect_faces_for_clip
 from app.video.person_detect import PersonDetection, detect_person_for_clip
@@ -32,7 +36,9 @@ from app.video.probe import VideoMetadata, probe_metadata
 from app.video.speaker_detect import DialogueWindow, SpeakerDetection, detect_speaker_for_clip, dialogue_windows_for_clip
 from app.video.subject_detect import SubjectDetection, detect_subject_for_clip
 
-SHORT_OVERLAY_TITLE_MODES = {"auto", "always", "high_quality_only", "never"}
+SHORT_BANNER_ASSET_DIR = Path(__file__).resolve().parent / "assets"
+DEFAULT_SHORT_TOP_BANNER_PATH = SHORT_BANNER_ASSET_DIR / "short_top_banner.png"
+DEFAULT_SHORT_BOTTOM_BANNER_PATH = SHORT_BANNER_ASSET_DIR / "short_bottom_banner.png"
 
 
 @dataclass(frozen=True)
@@ -147,6 +153,73 @@ def _labeled_crop_filter(
     )
 
 
+def _banner_input_args(
+    *,
+    top_banner_path: str | Path | None,
+    bottom_banner_path: str | Path | None,
+    first_input_index: int,
+) -> tuple[list[str], int | None, int | None]:
+    args: list[str] = []
+    next_input_index = first_input_index
+    top_input_index: int | None = None
+    bottom_input_index: int | None = None
+
+    if top_banner_path is not None:
+        top_input_index = next_input_index
+        next_input_index += 1
+        args.extend(["-loop", "1", "-i", str(top_banner_path)])
+    if bottom_banner_path is not None:
+        bottom_input_index = next_input_index
+        args.extend(["-loop", "1", "-i", str(bottom_banner_path)])
+
+    return args, top_input_index, bottom_input_index
+
+
+def _append_banner_and_subtitle_filters(
+    filters: list[str],
+    video_label: str,
+    *,
+    subtitle_path: str | Path | None,
+    top_banner_input_index: int | None,
+    bottom_banner_input_index: int | None,
+) -> str:
+    current_label = video_label
+    has_banner = top_banner_input_index is not None or bottom_banner_input_index is not None
+
+    if top_banner_input_index is not None:
+        filters.append(
+            f"[{top_banner_input_index}:v:0]"
+            f"scale={SHORT_WIDTH}:-2,setpts=PTS-STARTPTS,format=rgba[top_banner]"
+        )
+        filters.append(
+            f"[{current_label}][top_banner]"
+            "overlay=0:0:shortest=1:format=auto[top_banded]"
+        )
+        current_label = "top_banded"
+
+    if bottom_banner_input_index is not None:
+        filters.append(
+            f"[{bottom_banner_input_index}:v:0]"
+            f"scale={SHORT_WIDTH}:-2,setpts=PTS-STARTPTS,format=rgba[bottom_banner]"
+        )
+        filters.append(
+            f"[{current_label}][bottom_banner]"
+            "overlay=0:H-h:shortest=1:format=auto[bottom_banded]"
+        )
+        current_label = "bottom_banded"
+
+    if subtitle_path is not None:
+        subtitle_output_label = "subtitled_v" if has_banner else "video_out"
+        filters.append(f"[{current_label}]{ass_filter(subtitle_path)}[{subtitle_output_label}]")
+        current_label = subtitle_output_label
+
+    if has_banner:
+        filters.append(f"[{current_label}]format=yuv420p,setsar=1[video_out]")
+        current_label = "video_out"
+
+    return current_label
+
+
 def _build_hook_prepend_filter(
     *,
     layout: CropStrategy,
@@ -158,6 +231,8 @@ def _build_hook_prepend_filter(
     speaker_center: tuple[float, float] | None,
     person_center: tuple[float, float] | None,
     subject_center: tuple[float, float] | None,
+    top_banner_input_index: int | None = None,
+    bottom_banner_input_index: int | None = None,
 ) -> tuple[str, str, str]:
     filters = [
         _labeled_crop_filter(
@@ -191,10 +266,13 @@ def _build_hook_prepend_filter(
             "concat=n=2:v=1:a=1[concat_v][concat_a]"
         ),
     ]
-    video_label = "concat_v"
-    if subtitle_path is not None:
-        filters.append(f"[concat_v]{ass_filter(subtitle_path)}[video_out]")
-        video_label = "video_out"
+    video_label = _append_banner_and_subtitle_filters(
+        filters,
+        "concat_v",
+        subtitle_path=subtitle_path,
+        top_banner_input_index=top_banner_input_index,
+        bottom_banner_input_index=bottom_banner_input_index,
+    )
     audio_label = "concat_a"
     if normalize_audio:
         filters.append(f"[concat_a]{loudnorm_filter()}[audio_out]")
@@ -219,10 +297,17 @@ def build_render_short_command(
     subject_center: tuple[float, float] | None = None,
     hook_scene_start: float | None = None,
     hook_scene_end: float | None = None,
+    top_banner_path: str | Path | None = None,
+    bottom_banner_path: str | Path | None = None,
 ) -> list[str]:
     hook_scene = _hook_scene_range(hook_scene_start, hook_scene_end)
     if hook_scene is not None:
         hook_start, _hook_end, hook_duration = hook_scene
+        banner_args, top_banner_input_index, bottom_banner_input_index = _banner_input_args(
+            top_banner_path=top_banner_path,
+            bottom_banner_path=bottom_banner_path,
+            first_input_index=2,
+        )
         filter_graph, video_label, audio_label = _build_hook_prepend_filter(
             layout=layout,
             subtitle_path=subtitle_path,
@@ -233,6 +318,8 @@ def build_render_short_command(
             speaker_center=speaker_center,
             person_center=person_center,
             subject_center=subject_center,
+            top_banner_input_index=top_banner_input_index,
+            bottom_banner_input_index=bottom_banner_input_index,
         )
         return [
             ffmpeg_bin,
@@ -249,6 +336,7 @@ def build_render_short_command(
             f"{_duration(start, end):.3f}",
             "-i",
             str(input_path),
+            *banner_args,
             "-filter_complex",
             filter_graph,
             "-map",
@@ -269,31 +357,76 @@ def build_render_short_command(
             "+faststart",
             str(output_path),
         ]
-    command = [
-        ffmpeg_bin,
-        "-y",
-        "-ss",
-        f"{start:.3f}",
-        "-i",
-        str(input_path),
-        "-t",
-        f"{_duration(start, end):.3f}",
-        "-map",
-        "0:v:0",
-        "-map",
-        "0:a?",
-        "-vf",
-        build_crop_filter(
-            layout,
+    banner_args, top_banner_input_index, bottom_banner_input_index = _banner_input_args(
+        top_banner_path=top_banner_path,
+        bottom_banner_path=bottom_banner_path,
+        first_input_index=1,
+    )
+    if banner_args:
+        filters = [
+            _labeled_crop_filter(
+                "0:v:0",
+                "main_v",
+                "main",
+                layout=layout,
+                source_width=source_width,
+                source_height=source_height,
+                face_center=face_center,
+                speaker_center=speaker_center,
+                person_center=person_center,
+                subject_center=subject_center,
+            )
+        ]
+        video_label = _append_banner_and_subtitle_filters(
+            filters,
+            "main_v",
             subtitle_path=subtitle_path,
-            source_width=source_width,
-            source_height=source_height,
-            face_center=face_center,
-            speaker_center=speaker_center,
-            person_center=person_center,
-            subject_center=subject_center,
-        ),
-    ]
+            top_banner_input_index=top_banner_input_index,
+            bottom_banner_input_index=bottom_banner_input_index,
+        )
+        command = [
+            ffmpeg_bin,
+            "-y",
+            "-ss",
+            f"{start:.3f}",
+            "-i",
+            str(input_path),
+            *banner_args,
+            "-t",
+            f"{_duration(start, end):.3f}",
+            "-filter_complex",
+            ";".join(filters),
+            "-map",
+            f"[{video_label}]",
+            "-map",
+            "0:a?",
+        ]
+    else:
+        command = [
+            ffmpeg_bin,
+            "-y",
+            "-ss",
+            f"{start:.3f}",
+            "-i",
+            str(input_path),
+            "-t",
+            f"{_duration(start, end):.3f}",
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-vf",
+            build_crop_filter(
+                layout,
+                subtitle_path=subtitle_path,
+                source_width=source_width,
+                source_height=source_height,
+                face_center=face_center,
+                speaker_center=speaker_center,
+                person_center=person_center,
+                subject_center=subject_center,
+            ),
+        ]
 
     if normalize_audio:
         command.extend(["-af", loudnorm_filter()])
@@ -454,7 +587,16 @@ def render_short_clip(
     dialogue_windows: Sequence[DialogueWindow] | None = None,
     hook_scene_start: float | None = None,
     hook_scene_end: float | None = None,
+    top_banner_path: str | Path | None = None,
+    bottom_banner_path: str | Path | None = None,
 ) -> ShortRenderResult:
+    for label, banner_path in (
+        ("top", top_banner_path),
+        ("bottom", bottom_banner_path),
+    ):
+        if banner_path is not None and not Path(banner_path).is_file():
+            raise FileNotFoundError(f"short {label} banner asset not found: {banner_path}")
+
     width, height = _source_dimensions(
         input_path,
         source_width=source_width,
@@ -535,6 +677,8 @@ def render_short_clip(
                 subject_center=subject_center if strategy == "subject_tracking_crop" else None,
                 hook_scene_start=hook_scene_start,
                 hook_scene_end=hook_scene_end,
+                top_banner_path=top_banner_path,
+                bottom_banner_path=bottom_banner_path,
             )
             command_runner(command)
             fallback_reason = crop_plan.fallback_reason
@@ -603,23 +747,8 @@ def _setting_text(settings: SubtitleRenderSettings | dict[str, Any] | None, key:
     return None
 
 
-def _normalize_overlay_title_mode(value: str | None) -> str:
-    mode = (value or "auto").strip()
-    return mode if mode in SHORT_OVERLAY_TITLE_MODES else "auto"
-
-
 def _render_mode(settings: SubtitleRenderSettings | dict[str, Any] | None, explicit_mode: str | None) -> str:
     return (explicit_mode or _setting_text(settings, "mode") or "high_quality").strip()
-
-
-def _overlay_title_expected(*, mode: str, overlay_title_mode: str) -> bool:
-    if overlay_title_mode == "always":
-        return True
-    if overlay_title_mode == "never":
-        return False
-    if overlay_title_mode in {"auto", "high_quality_only"}:
-        return mode == "high_quality"
-    return mode == "high_quality"
 
 
 def _overlay_title_for_burn(candidate: Candidate, *, expected: bool, fallback_title: str) -> str:
@@ -665,6 +794,8 @@ def _write_export_metadata(
     overlay_title_mode: str,
     hook_rendered: bool,
     hook_scene_rendered: bool,
+    top_banner_rendered: bool,
+    bottom_banner_rendered: bool,
     output_duration: float,
 ) -> Path:
     path.write_text(
@@ -686,6 +817,8 @@ def _write_export_metadata(
                 "hook_scene_end": candidate.hook_scene_end,
                 "hook_scene_duration": _candidate_hook_scene_duration(candidate),
                 "hook_scene_rendered": hook_scene_rendered,
+                "top_banner_rendered": top_banner_rendered,
+                "bottom_banner_rendered": bottom_banner_rendered,
                 "title_style": (
                     candidate.title_style.model_dump(by_alias=True)
                     if candidate.title_style
@@ -783,6 +916,8 @@ def render_selected_short_candidates(
     subtitle_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
     mode: str | None = None,
     short_overlay_title_mode: str | None = None,
+    short_top_banner_enabled: bool = False,
+    short_bottom_banner_enabled: bool = False,
 ) -> ShortRenderBatchResult:
     storage_paths = paths or get_storage_paths()
     output_dir = shorts_output_dir(storage_paths, job.id)
@@ -790,12 +925,11 @@ def render_selected_short_candidates(
     exports: list[ExportItem] = []
     failures: list[ShortRenderFailure] = []
     resolved_mode = _render_mode(subtitle_settings, mode)
-    overlay_title_mode = _normalize_overlay_title_mode(
+    stored_overlay_title_mode = normalize_short_overlay_title_mode(
         short_overlay_title_mode or _setting_text(subtitle_settings, "shortOverlayTitleMode")
     )
-    base_overlay_expected = _overlay_title_expected(
-        mode=resolved_mode,
-        overlay_title_mode=overlay_title_mode,
+    overlay_title_mode = (
+        "always" if short_top_banner_enabled else stored_overlay_title_mode
     )
 
     short_candidates = [candidate for candidate in selected_candidates if candidate.type == "short"]
@@ -804,8 +938,11 @@ def render_selected_short_candidates(
         hook_scene_duration = _candidate_hook_scene_duration(candidate)
         output_duration = candidate.duration + hook_scene_duration
         hook_scene_rendered = hook_scene_duration > 0
-        overlay_expected = base_overlay_expected or (
-            overlay_title_mode == "auto" and candidate.title_source == "manual_review"
+        overlay_expected = short_overlay_title_expected(
+            render_mode=resolved_mode,
+            stored_mode=stored_overlay_title_mode,
+            top_banner_enabled=short_top_banner_enabled,
+            title_manually_reviewed=candidate.title_source == "manual_review",
         )
         export_id = make_id("exp")
         output_path = output_dir / f"short_{index:02d}.mp4"
@@ -817,18 +954,26 @@ def render_selected_short_candidates(
             top_title = _overlay_title_for_burn(candidate, expected=overlay_expected, fallback_title=title)
             hook_rendered = bool(burn_subtitles and candidate.hook_text)
             overlay_rendered = bool(
-                burn_subtitles
-                and top_title
+                top_title
                 and (
                     not hook_rendered
                     or (candidate.hook_duration_seconds or 3.0) < output_duration
                 )
             )
-            if burn_subtitles:
+            if burn_subtitles or short_top_banner_enabled or top_title:
                 subtitle_path = subtitle_dir / f"short_{index:02d}.ass"
+                ass_candidate = (
+                    candidate
+                    if burn_subtitles
+                    else candidate.model_copy(update={"hook_text": None})
+                )
                 write_ass_for_candidate(
-                    candidate,
-                    _subtitle_segments_for_candidate(candidate, transcript_segments),
+                    ass_candidate,
+                    (
+                        _subtitle_segments_for_candidate(candidate, transcript_segments)
+                        if burn_subtitles
+                        else []
+                    ),
                     subtitle_path,
                     layout=SubtitleLayout.short(settings=subtitle_settings),
                     top_title=top_title,
@@ -850,6 +995,10 @@ def render_selected_short_candidates(
                     transcript_segments,
                 ),
             }
+            if short_top_banner_enabled:
+                render_kwargs["top_banner_path"] = DEFAULT_SHORT_TOP_BANNER_PATH
+            if short_bottom_banner_enabled:
+                render_kwargs["bottom_banner_path"] = DEFAULT_SHORT_BOTTOM_BANNER_PATH
             if hook_scene_rendered:
                 render_kwargs["hook_scene_start"] = candidate.hook_scene_start
                 render_kwargs["hook_scene_end"] = candidate.hook_scene_end
@@ -903,6 +1052,8 @@ def render_selected_short_candidates(
                 overlay_title_mode=overlay_title_mode,
                 hook_rendered=hook_rendered,
                 hook_scene_rendered=hook_scene_rendered,
+                top_banner_rendered=short_top_banner_enabled,
+                bottom_banner_rendered=short_bottom_banner_enabled,
                 output_duration=output_duration,
             )
 

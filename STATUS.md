@@ -6975,3 +6975,111 @@ pip check: pass
 - 修正前に生成済みの英語transcript artifactは自動変換しない。正しい日本語jobを使うか、修正後に新規処理が必要。
 - 許可済み実動画を修正後に新規文字起こしするE2Eは未実行。
 - ユーザー受入は未確認。
+
+## 2026-08-10 Task 108 ショート上下帯のON/OFF
+
+### 目的
+
+- ショート動画だけに上部タイトル帯と下部ロゴ帯を配置し、各帯を独立してON/OFFできるようにする。
+- 下部帯は提供された完成画像を再描画せず、そのまま使用する。
+
+### 観測事実・原因
+
+- 変更前はショートのタイトル文字をASSで焼き込む設定だけで、帯画像をFFmpegへ入力・合成する経路がなかった。
+- 上下帯の設定field、UI、job保存、worker受け渡し、export metadataがなかった。
+
+### 変更
+
+- `shortTopBannerEnabled` / `shortBottomBannerEnabled`をfrontend/backendのjob設定へ追加し、既定値を`false`にした。新規jobの`shortOverlayTitleMode`も`never`へ統一した。
+- TOP設定のショート欄へ`上: 柄 + タイトル`と`下: ロゴ`の独立checkboxを追加した。
+- 字幕確認・完成動画再編集画面のショート欄にも`帯プレビュー`として同じ2項目を追加した。元jobの値を初期表示し、変更時は即時保存する。
+- ショート選択時は、右側の9:16文字配置プレビューへ選択中の上下帯を即時反映する。両帯は最終renderと同じPNGを3:1のまま上端・下端へ表示し、通常clipのプレビューは変更しない。
+- `GET /api/jobs/{jobId}/subtitle-review/banner-assets/{position}`を追加し、`top` / `bottom`の固定assetをブラウザへ配信する。メイン動画は元の横長表示を維持し、最終shortの`auto` / `blur_background` cropを擬似再現しない。
+- review responseへ`shortOverlayTitleMode`を追加し、旧jobの`auto` / `always` / `high_quality_only`を維持する。`never + 上帯OFF`の時だけ配置プレビューのタイトルを非表示にする。
+- 旧jobで`shortOverlayTitleMode`自体が欠損する場合は、実rendererと同じ`auto`へ補完する。上帯変更時はfrontendも`always` / `never`を即時反映し、保存失敗時は元値へ戻す。
+- 再編集用`PATCH /api/jobs/{jobId}/subtitle-review/settings`を追加し、2つのboolだけを厳格検証して`job.settings_json`、review artifact、summaryへ同期する。帯保存中はclip確認・最終レンダリングを開始できない。
+- 旧review artifactに上下fieldがないjobは、GET時に`job.settings_json`を正としてhydrateし、artifactとsummaryも更新する。
+- 字幕・タイトル・フック・clip確認・帯の保存処理は画面内で直列化し、最終レンダリング開始中も編集を禁止して同じreview artifactへの競合更新を防止した。
+- 上帯の値を変更した時だけ`shortOverlayTitleMode`を`always` / `never`へ同期し、下帯だけの変更では旧jobの値を維持する。
+- 上ON時は和柄画像を上端へ配置し、選定済みショートタイトルをその上へ表示する。会話字幕OFFでも上部タイトル用ASSだけ生成する。
+- 下ON時は提供画像を再描画せず、画像全体を1080幅へ等倍縮尺して下端へ配置する。workspace内コピーと提供画像のSHA-256一致を確認した。
+- 上下帯はショート全時間へ表示し、フック複製ありでもconcat後へ合成する。通常切り抜きは変更しない。
+- 出力metadataへ`top_banner_rendered` / `bottom_banner_rendered`を追加した。
+- 変更ファイル: `backend/app/schemas.py`、`backend/app/jobs/runner.py`、
+  `backend/app/render/render_short.py`、`backend/app/render/assets/short_top_banner.png`、
+  `backend/app/render/assets/short_bottom_banner.png`、`backend/tests/test_api_routes.py`、
+  `backend/tests/test_short_rendering.py`、`frontend/lib/types.ts`、
+  `frontend/components/SettingsPanel.tsx`、`frontend/components/ClipTextStyleEditor.tsx`、
+  `frontend/app/jobs/[jobId]/subtitles/page.tsx`、
+  `frontend/lib/api.ts`、`frontend/lib/types.ts`、`backend/app/api/jobs.py`、
+  `backend/app/jobs/subtitle_review.py`、`backend/tests/test_subtitle_review.py`、
+  `backend/tests/test_real_pipeline.py`、
+  `README.md`、`STATUS.md`。
+
+### 検証
+
+- backend全体: `481 passed, 1 skipped`。既知のStarlette deprecation warning `1`のみ。
+- backend ruff: pass。frontend lint / typecheck / build: pass。
+- API既定OFF・明示ON保存、通常/フックの合成順、asset受け渡し、metadata、字幕OFF時の上部タイトルASS: pass。字幕OFF＋フック文ありでもHook eventを生成しない。
+- 再編集APIのstrict bool・余分field拒否、上下独立保存、旧`auto`維持、上帯変更時のtitle mode同期、再レンダリングへのasset受け渡し: pass。
+- 旧artifact欠損時のDB設定hydrateと永続化、保存中の他編集ロック: pass。
+- banner asset配信のPNG byte一致・不正position拒否・欠損404、9:16配置プレビュー用title mode同期: pass。
+- GPU Composeでbackend / frontend / workerを再build・再作成: pass。backend healthy、frontend`/upload=200`、worker GPU preflight`ok=true`。
+- 稼働コンテナのOpenAPIで再編集設定PATCH、request schema、review responseの上下fieldを確認: pass。
+- Docker worker内の実FFmpegで上下帯＋日本語タイトルを2秒動画へ合成: pass。
+- 実出力: `1080x1920`、`yuv420p`、SAR `1:1`、duration `2.000000`。
+- Compose全image再build・再作成: pass。backend healthy、frontend/worker/redis稼働、`/health=ok`、`/upload=200`。
+- `/upload` HTMLに上下checkboxの表示文言を確認した。
+- backend/worker container内の新規jobタイトル既定値がともに`never`: pass。
+- プレビュー拡張後のGPU Compose最終rebuild・再作成: pass。backend healthy、frontend/worker/redis稼働、`/health=ok`、`/upload=200`、字幕確認URL`200`。
+- 稼働環境の既存jobでreview API`200`、旧mode欠損から`auto`へのhydrate、上下PNG配信`200`を確認。配信byte数は上`587420`、下`1877811`でrender assetと一致。
+- worker GPU preflight: `actual_device=cuda`、GPU`NVIDIA GeForce RTX 5070 Ti`、RQ listeningを確認。
+- 独立再レビュー: P0/P1/P2なし。
+
+### 未解決・制限
+
+- 許可済み実動画を使ったjob全体の`upload -> worker -> ショート書き出し`は未実行。
+- in-app browserのlocalhost URL制限で、再編集画面の実クリック保存と目視確認は未実行。HTTP/API・自動test・production buildまでは確認済み。
+- 9:16文字配置プレビューは帯と文字位置の確認用。最終shortの被写体追従・中央crop・ぼかし背景は最終renderで決定する。
+- ユーザー受入は未確認。
+
+## 2026-08-10 Task 109 上部柄帯OFF時のタイトル保持
+
+### 目的
+
+- 再編集画面で上部の柄帯をOFFにしても、タイトル文字は単独で表示・書き出しできるようにする。
+
+### 観測事実・原因
+
+- 旧実装は上部の柄背景とタイトル表示を同じcheckboxで無効化していたため、柄帯を外すとタイトルも消えていた。
+- プレビュー側の判定と最終rendererのタイトル表示条件が別実装で、`low_cost`や旧jobのmodeによって表示が一致しない経路があった。
+
+### 変更
+
+- checkbox名を`上: 柄帯`へ変更し、上部checkboxは柄背景だけを制御する仕様へ分離した。
+- 上部柄帯をONからOFFへ変更した時は`shortOverlayTitleMode=always`を保存し、柄だけを消してタイトルを残す。
+- 上部柄帯がOFFのまま下部ロゴだけを変更した場合は、明示済みの`never`を含む既存タイトルmodeを変更しない。
+- `overlayTitleExpected`をclip単位でreview responseへ追加し、プレビュー、review artifact、summary、最終rendererを共通の`title_policy.py`で判定するようにした。
+- 上部柄帯OFF・タイトル表示・会話字幕OFFでも、Title eventだけを含むASSを生成する。Hook/Subtitle eventと帯画像は追加しない。
+- 新規jobのタイトルmode既定値をrenderer互換の`auto`へ戻した。
+- 変更ファイル: `backend/app/render/title_policy.py`、`backend/app/render/render_short.py`、
+  `backend/app/api/jobs.py`、`backend/app/jobs/subtitle_review.py`、`backend/app/jobs/runner.py`、
+  `backend/app/schemas.py`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、
+  `frontend/components/SettingsPanel.tsx`、`frontend/lib/types.ts`、関連test、`README.md`、`STATUS.md`。
+
+### 検証
+
+- backend全体: `493 passed, 1 skipped`。既知のStarlette deprecation warning `1`のみ。
+- 最終関連test: `94 passed`。backend ruff: pass。
+- frontend typecheck / lint / production build: pass。
+- 独立再レビュー: P0/P1/P2なし。
+- GPU Composeを再build・再作成: pass。backend healthy、`/health=ok`、`/upload=200`。
+- worker GPU preflight: `actual_device=cuda`、`actual_compute_type=float16`、GPU`NVIDIA GeForce RTX 5070 Ti`、fallbackなし。
+- 稼働中jobのreview API: `shortOverlayTitleMode=auto`、上部柄帯OFF、下部ロゴOFF、shortの`overlayTitleExpected=true`。
+- in-app browserでショートを選択して確認: `上: 柄帯`は未チェック、上部柄画像なし、9:16配置プレビューのタイトル表示あり。job設定は変更していない。
+
+### 未解決・制限
+
+- 既に`上部柄帯OFF + shortOverlayTitleMode=never`で保存済みの旧jobは、明示的なタイトル非表示との区別ができないため自動移行しない。
+- 許可済み実動画を使ったjob全体の`upload -> worker -> ショート書き出し`は未実行。
+- ユーザー受入は未確認。

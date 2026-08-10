@@ -236,6 +236,67 @@ def test_short_render_command_prepends_hook_scene_before_body() -> None:
     assert command.count("-i") == 2
 
 
+def test_short_render_command_overlays_top_and_bottom_banners_before_ass(tmp_path: Path) -> None:
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=10.0,
+        end=25.0,
+        subtitle_path="subtitles.ass",
+        layout="center_crop",
+        top_banner_path=top_banner,
+        bottom_banner_path=bottom_banner,
+    )
+
+    input_paths = [command[index + 1] for index, value in enumerate(command) if value == "-i"]
+    filter_graph = command[command.index("-filter_complex") + 1]
+
+    assert input_paths == ["source.mp4", str(top_banner), str(bottom_banner)]
+    assert command.count("-loop") == 2
+    assert command.count("-vf") == 0
+    assert "[1:v:0]scale=1080:-2" in filter_graph
+    assert "[2:v:0]scale=1080:-2" in filter_graph
+    assert "overlay=0:0" in filter_graph
+    assert "overlay=0:H-h" in filter_graph
+    assert filter_graph.index("overlay=0:0") < filter_graph.index("overlay=0:H-h")
+    assert filter_graph.index("overlay=0:H-h") < filter_graph.index("ass=")
+
+
+def test_short_render_command_overlays_banners_after_hook_concat(tmp_path: Path) -> None:
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=60.0,
+        end=75.0,
+        subtitle_path="subtitles.ass",
+        layout="center_crop",
+        hook_scene_start=68.0,
+        hook_scene_end=70.0,
+        top_banner_path=top_banner,
+        bottom_banner_path=bottom_banner,
+    )
+
+    input_paths = [command[index + 1] for index, value in enumerate(command) if value == "-i"]
+    filter_graph = command[command.index("-filter_complex") + 1]
+
+    assert input_paths == ["source.mp4", "source.mp4", str(top_banner), str(bottom_banner)]
+    assert command.count("-loop") == 2
+    assert "[2:v:0]scale=1080:-2" in filter_graph
+    assert "[3:v:0]scale=1080:-2" in filter_graph
+    assert filter_graph.index("concat=n=2:v=1:a=1") < filter_graph.index("overlay=0:0")
+    assert filter_graph.index("overlay=0:H-h") < filter_graph.index("ass=")
+
+
 def reliable_speaker_detection() -> SpeakerDetection:
     return SpeakerDetection(
         center_x=0.72,
@@ -910,6 +971,8 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
             renderer=fake_renderer,
             source_width=1920,
             source_height=1080,
+            short_top_banner_enabled=True,
+            short_bottom_banner_enabled=True,
         )
 
         exports = db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all()
@@ -923,6 +986,8 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert all(call["source_width"] == 1920 for call in renderer_calls)
     assert renderer_calls[0]["hook_scene_start"] == 5.0
     assert renderer_calls[0]["hook_scene_end"] == 7.0
+    assert all(Path(call["top_banner_path"]).name == "short_top_banner.png" for call in renderer_calls)
+    assert all(Path(call["bottom_banner_path"]).name == "short_bottom_banner.png" for call in renderer_calls)
 
     shorts_dir = storage.outputs / created["jobId"] / "shorts"
     subtitle_dir = storage.outputs / created["jobId"] / "subtitles" / "shorts"
@@ -941,6 +1006,8 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert short_metadata["hook_scene_end"] == 7.0
     assert short_metadata["hook_scene_duration"] == 2.0
     assert short_metadata["hook_scene_rendered"] is True
+    assert short_metadata["top_banner_rendered"] is True
+    assert short_metadata["bottom_banner_rendered"] is True
     assert "original_start" in short_metadata
     assert "refined_start" in short_metadata
     assert "boundary_refined" in short_metadata
@@ -1104,3 +1171,143 @@ def test_render_selected_short_candidates_applies_overlay_title_policy(
     assert short_metadata["overlay_title_rendered"] is expect_title_event
     assert short_metadata["overlay_title_mode"] == overlay_mode
     assert (",Title,," in ass_text) is expect_title_event
+
+
+def test_top_banner_renders_title_when_conversation_subtitles_are_disabled(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    renderer_calls: list[dict[str, Any]] = []
+
+    def fake_renderer(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **kwargs: Any,
+    ) -> ShortRenderResult:
+        renderer_calls.append(kwargs)
+        Path(output_path).write_bytes(b"rendered short")
+        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+
+    candidate = Candidate(
+        id="cand_short_top_banner",
+        type="short",
+        start=0.0,
+        end=45.0,
+        duration=45.0,
+        transcript_text="会話字幕には使わない本文です。",
+        title="上部帯のタイトル",
+        overlay_title="上部帯のタイトル",
+        hook_text="字幕OFF時には表示しないフックです。",
+        final_score=82.0,
+    )
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        result = render_selected_short_candidates(
+            db=db,
+            job=job,
+            input_path=Path(storage.uploads) / "sample.mp4",
+            selected_candidates=[candidate],
+            burn_subtitles=False,
+            paths=storage,
+            renderer=fake_renderer,
+            short_overlay_title_mode="never",
+            short_top_banner_enabled=True,
+            short_bottom_banner_enabled=False,
+        )
+
+    assert len(result.exports) == 1
+    assert len(renderer_calls) == 1
+    assert Path(renderer_calls[0]["top_banner_path"]).name == "short_top_banner.png"
+    assert renderer_calls[0].get("bottom_banner_path") is None
+    subtitle_path = Path(renderer_calls[0]["subtitle_path"])
+    ass_text = subtitle_path.read_text(encoding="utf-8")
+    assert ",Title,," in ass_text
+    assert ",Hook,Hook," not in ass_text
+    assert ",Subtitle,," not in ass_text
+    metadata = json.loads(
+        (storage.outputs / created["jobId"] / "shorts" / "short_01.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert metadata["overlay_title_expected"] is True
+    assert metadata["overlay_title_rendered"] is True
+    assert metadata["top_banner_rendered"] is True
+    assert metadata["bottom_banner_rendered"] is False
+
+
+def test_short_title_remains_when_top_banner_is_disabled(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    renderer_calls: list[dict[str, Any]] = []
+
+    def fake_renderer(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **kwargs: Any,
+    ) -> ShortRenderResult:
+        renderer_calls.append(kwargs)
+        Path(output_path).write_bytes(b"rendered short")
+        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+
+    candidate = Candidate(
+        id="cand_short_title_only",
+        type="short",
+        start=0.0,
+        end=45.0,
+        duration=45.0,
+        transcript_text="タイトルだけを表示する場面です。",
+        title="帯なしで残るタイトル",
+        overlay_title="帯なしで残るタイトル",
+        final_score=82.0,
+    )
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        result = render_selected_short_candidates(
+            db=db,
+            job=job,
+            input_path=Path(storage.uploads) / "sample.mp4",
+            selected_candidates=[candidate],
+            burn_subtitles=False,
+            paths=storage,
+            renderer=fake_renderer,
+            short_overlay_title_mode="always",
+            short_top_banner_enabled=False,
+            short_bottom_banner_enabled=False,
+        )
+
+    assert len(result.exports) == 1
+    assert len(renderer_calls) == 1
+    assert renderer_calls[0].get("top_banner_path") is None
+    assert renderer_calls[0].get("bottom_banner_path") is None
+    subtitle_path = Path(renderer_calls[0]["subtitle_path"])
+    ass_text = subtitle_path.read_text(encoding="utf-8")
+    assert ",Title,," in ass_text
+    assert ",Hook,Hook," not in ass_text
+    assert ",Subtitle,," not in ass_text
+    metadata = json.loads(
+        (storage.outputs / created["jobId"] / "shorts" / "short_01.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert metadata["overlay_title_expected"] is True
+    assert metadata["overlay_title_rendered"] is True
+    assert metadata["overlay_title_mode"] == "always"
+    assert metadata["top_banner_rendered"] is False
+    assert metadata["bottom_banner_rendered"] is False

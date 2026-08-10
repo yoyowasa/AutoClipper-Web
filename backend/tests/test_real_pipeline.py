@@ -830,8 +830,15 @@ def test_pipeline_fails_instead_of_falling_back_when_interval_sidecar_is_tampere
     assert summary["interval_mode_applied"] is False
 
 
+@pytest.mark.parametrize(
+    ("stored_overlay_mode", "expected_overlay_mode"),
+    [(None, "auto"), ("never", "never")],
+    ids=["legacy-missing-mode", "explicit-never"],
+)
 def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     client: TestClient,
+    stored_overlay_mode: str | None,
+    expected_overlay_mode: str,
 ) -> None:
     media = b"fake video bytes"
     sidecar = json.dumps(
@@ -881,10 +888,21 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
                 "burnSubtitles": True,
                 "requireClipPlanReview": True,
                 "requireSubtitleReview": True,
+                "shortOverlayTitleMode": "never",
             },
         },
     ).json()
     storage = app.dependency_overrides[get_storage_paths]()
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        settings = dict(job.settings_json or {})
+        if stored_overlay_mode is None:
+            settings.pop("shortOverlayTitleMode", None)
+        else:
+            settings["shortOverlayTitleMode"] = stored_overlay_mode
+        job.settings_json = settings
+        db.commit()
 
     def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
         Path(output_path).write_bytes(b"fake wav")
@@ -1226,11 +1244,35 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     assert selected_after_hook["shorts"][0]["hook_scene_start"] == 68.0
     assert selected_after_hook["shorts"][0]["hook_scene_end"] == 70.0
 
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        settings = dict(job.settings_json or {})
+        if stored_overlay_mode is None:
+            settings.pop("shortOverlayTitleMode", None)
+        else:
+            settings["shortOverlayTitleMode"] = stored_overlay_mode
+        job.settings_json = settings
+        db.commit()
     approve_response = client.post(
         f"/api/jobs/{created['jobId']}/clip-plan/approve"
     )
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "awaiting_subtitle_review"
+    stored_review = json.loads(
+        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
+    )
+    assert stored_review["shortOverlayTitleMode"] == expected_overlay_mode
+    assert all(
+        clip["overlayTitleExpected"] is False
+        for clip in stored_review["clips"]
+        if clip["type"] == "normal"
+    )
+    assert all(
+        clip["overlayTitleExpected"] is (expected_overlay_mode != "never")
+        for clip in stored_review["clips"]
+        if clip["type"] == "short"
+    )
     review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
     assert [(clip["start"], clip["end"]) for clip in review["clips"]] == [
         (2.0, 58.0),
@@ -1246,7 +1288,20 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     )
 
 
-def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(client: TestClient) -> None:
+@pytest.mark.parametrize(
+    ("stored_overlay_mode", "expected_overlay_mode"),
+    [
+        (None, "auto"),
+        ("never", "never"),
+        ("high_quality_only", "high_quality_only"),
+    ],
+    ids=["legacy-missing-mode", "explicit-never", "high-quality-only"],
+)
+def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
+    client: TestClient,
+    stored_overlay_mode: str | None,
+    expected_overlay_mode: str,
+) -> None:
     upload_response = client.post(
         "/api/videos/upload",
         files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
@@ -1268,10 +1323,22 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
                 "useOpenAIScoring": False,
                 "burnSubtitles": True,
                 "requireSubtitleReview": True,
+                "shortOverlayTitleMode": "never",
             },
         },
     ).json()
     storage = app.dependency_overrides[get_storage_paths]()
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        settings = dict(job.settings_json or {})
+        if stored_overlay_mode is None:
+            settings.pop("shortOverlayTitleMode", None)
+        else:
+            settings["shortOverlayTitleMode"] = stored_overlay_mode
+        job.settings_json = settings
+        db.commit()
+    short_render_kwargs: list[dict[str, Any]] = []
 
     def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
         Path(output_path).write_bytes(b"fake wav")
@@ -1285,6 +1352,14 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
         return Path(output_path)
+
+    def fake_short_render(
+        input_path: str | Path,
+        output_path: str | Path,
+        **kwargs: Any,
+    ) -> Path:
+        short_render_kwargs.append(kwargs)
+        return fake_render(input_path, output_path, **kwargs)
 
     dependencies = AutoClipperPipelineDependencies(
         probe_metadata=lambda _path: VideoMetadata(
@@ -1305,7 +1380,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
         ),
         detect_black_screen=lambda _path: [],
         normal_renderer=fake_render,
-        short_renderer=fake_render,
+        short_renderer=fake_short_render,
         subtitle_review_preview_renderer=fake_render,
     )
 
@@ -1324,8 +1399,35 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
     assert client.get(f"/api/jobs/{created['jobId']}/results").json()["normalClips"] == []
     assert client.get(f"/api/jobs/{created['jobId']}/source-video").content == b"fake video bytes"
 
+    stored_review = json.loads(
+        (
+            storage.job_outputs(created["jobId"]) / "subtitle_review.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert stored_review["shortOverlayTitleMode"] == expected_overlay_mode
+    assert all(
+        clip["overlayTitleExpected"] is False
+        for clip in stored_review["clips"]
+        if clip["type"] == "normal"
+    )
+    assert all(
+        clip["overlayTitleExpected"] is (expected_overlay_mode != "never")
+        for clip in stored_review["clips"]
+        if clip["type"] == "short"
+    )
     review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
+    assert review["shortOverlayTitleMode"] == expected_overlay_mode
     assert all(clip["previewVideoUrl"] for clip in review["clips"])
+    settings_updated = client.patch(
+        f"/api/jobs/{created['jobId']}/subtitle-review/settings",
+        json={
+            "shortTopBannerEnabled": True,
+            "shortBottomBannerEnabled": True,
+        },
+    )
+    assert settings_updated.status_code == 200
+    assert settings_updated.json()["shortTopBannerEnabled"] is True
+    assert settings_updated.json()["shortBottomBannerEnabled"] is True
     preview_response = client.get(review["clips"][0]["previewVideoUrl"])
     assert preview_response.status_code == 200
     assert preview_response.headers["content-type"].startswith("video/mp4")
@@ -1388,6 +1490,9 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(clie
         "packaging_zip",
         "completed",
     ]
+    assert len(short_render_kwargs) == 1
+    assert Path(short_render_kwargs[0]["top_banner_path"]).name == "short_top_banner.png"
+    assert Path(short_render_kwargs[0]["bottom_banner_path"]).name == "short_bottom_banner.png"
     assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == "completed"
     completed_review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
     assert completed_review["state"] == "completed"
