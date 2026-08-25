@@ -17,6 +17,7 @@ type ClipHookSceneEditorProps = {
   saving?: boolean;
   playheadSourceTime: number;
   shortMaxDuration: number;
+  enforceMaximumDuration?: boolean;
   onSave: (start: number | null, end: number | null) => void;
 };
 
@@ -127,6 +128,7 @@ export function ClipHookSceneEditor({
   saving = false,
   playheadSourceTime,
   shortMaxDuration,
+  enforceMaximumDuration = true,
   onSave
 }: ClipHookSceneEditorProps) {
   const clipDuration = Math.max(0, clip.end - clip.start);
@@ -159,7 +161,7 @@ export function ClipHookSceneEditor({
   const projectedDuration =
     duration !== null && duration > 0 ? clip.duration + duration : null;
   const clipAlreadyExceedsMaximum =
-    clip.duration > shortMaxDuration + 0.001;
+    enforceMaximumDuration && clip.duration > shortMaxDuration + 0.001;
   const validation = useMemo(() => {
     if (start === null || end === null) {
       return "分と秒を正しく入力してください";
@@ -171,6 +173,7 @@ export function ClipHookSceneEditor({
       return "冒頭へ複製する場面は0.5〜3秒にしてください";
     }
     if (
+      enforceMaximumDuration &&
       !clipAlreadyExceedsMaximum &&
       clip.duration + duration > shortMaxDuration + 0.001
     ) {
@@ -183,6 +186,7 @@ export function ClipHookSceneEditor({
     clipDuration,
     duration,
     end,
+    enforceMaximumDuration,
     shortMaxDuration,
     start
   ]);
@@ -347,7 +351,7 @@ export function ClipHookSceneEditor({
           <p
             className={`${compact ? "mt-1 leading-4" : "mt-2"} text-xs text-neutral-500`}
           >
-            対象ショートの軽量プレビューだけを作り直します。OpenAI APIは使いません。
+            対象clipの軽量プレビューだけを作り直します。OpenAI APIは使いません。
           </p>
         </>
       )}

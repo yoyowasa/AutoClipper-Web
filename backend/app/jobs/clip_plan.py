@@ -12,7 +12,13 @@ from app.candidates.select_candidates import CandidateSelection
 
 CLIP_PLAN_FILENAME = "clip_plan.json"
 
-ClipPlanState = Literal["preparing", "awaiting_review", "reselecting", "approved"]
+ClipPlanState = Literal[
+    "preparing",
+    "manual_editing",
+    "awaiting_review",
+    "reselecting",
+    "approved",
+]
 
 
 def _utc_iso() -> str:
@@ -65,8 +71,6 @@ class ClipPlanClip(BaseModel):
             raise ValueError("hook scene requires both start and end")
         if hook_start is None or hook_end is None:
             return self
-        if self.type != "short":
-            raise ValueError("hook scene is only supported for short clips")
         if hook_end <= hook_start:
             raise ValueError("hook scene end must be greater than start")
         if not 0.5 <= hook_end - hook_start <= 3.0:
@@ -82,6 +86,7 @@ class ClipPlanDocument(BaseModel):
     state: ClipPlanState = "preparing"
     revision: int = Field(default=1, ge=1)
     source_video_url: str = Field(alias="sourceVideoUrl")
+    editor_video_url: str | None = Field(default=None, alias="editorVideoUrl")
     source_duration: float | None = Field(
         default=None,
         ge=0,
@@ -126,6 +131,7 @@ def build_clip_plan(
     *,
     revision: int = 1,
     source_duration: float | None = None,
+    editor_video_url: str | None = None,
 ) -> ClipPlanDocument:
     type_indices = {"normal": 0, "short": 0}
     clips: list[ClipPlanClip] = []
@@ -161,6 +167,7 @@ def build_clip_plan(
         state="preparing",
         revision=revision,
         sourceVideoUrl=f"/api/jobs/{job_id}/source-video",
+        editorVideoUrl=editor_video_url,
         sourceDuration=source_duration,
         clips=clips,
         settings=settings,
@@ -232,8 +239,6 @@ def update_clip_plan_hook_scene(
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
         raise KeyError(clip_id)
-    if clip.type != "short":
-        raise ValueError("hook scene is only supported for short clips")
     if (start is None) != (end is None):
         raise ValueError("hook scene requires both start and end")
     if start is not None and end is not None:

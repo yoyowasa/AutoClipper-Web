@@ -5,7 +5,7 @@ type UploadActionBarProps = {
   disabled: boolean;
   file: File | null;
   isSubmitting: boolean;
-  mode: "new" | "reedit";
+  mode: "new" | "manual" | "reedit";
   settings: ClipSettings;
 };
 
@@ -24,6 +24,16 @@ function outputSummary(settings: ClipSettings): string {
     settings.shortCount > 0 ? `ショート ${settings.shortCount}本` : null
   ].filter((value): value is string => value !== null);
   return outputs.join(" / ");
+}
+
+function manualSubtitleSummary(settings: ClipSettings): string {
+  if (settings.manualSubtitleMode === "none") {
+    return "字幕なし";
+  }
+  if (settings.manualSubtitleMode === "manual") {
+    return "字幕を手入力";
+  }
+  return "自動字幕";
 }
 
 export function UploadActionBar({
@@ -49,6 +59,8 @@ export function UploadActionBar({
               ? "処理を準備しています。この画面を閉じずにお待ちください。"
               : mode === "reedit"
                 ? `完成MP4を照合して元の編集データを開きます・${formatFileSize(file.size)}`
+                : mode === "manual"
+                  ? `元動画から手動で範囲を作成・${manualSubtitleSummary(settings)}・${formatFileSize(file.size)}`
                 : `${outputSummary(settings)}・${formatFileSize(file.size)}`
             : "左の入力欄で動画を選ぶと処理を開始できます。"}
         </p>

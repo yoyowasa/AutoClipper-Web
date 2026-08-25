@@ -1,12 +1,14 @@
+import hashlib
 import json
 import mimetypes
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audio.openai_transcript_correction import TRANSCRIPT_CORRECTION_PROGRESS_FILENAME
@@ -17,13 +19,22 @@ from app.config import Settings, get_settings
 from app.db import get_db
 from app.ids import make_id
 from app.jobs.clip_plan import (
+    ClipPlanClip,
     ClipPlanDocument,
     clip_plan_output_path,
     load_clip_plan,
     mark_clip_plan_approved,
+    update_clip_plan_boundary,
+    update_clip_plan_hook_scene as update_clip_plan_hook_scene_document,
     write_clip_plan,
 )
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
+from app.jobs.manual_workflow import (
+    is_manual_workflow,
+    manual_plan_settings,
+    touch_manual_document,
+    validate_manual_clip_counts,
+)
 from app.jobs.reedit_upload import (
     UploadSizeLimitExceeded,
     fingerprint_stream,
@@ -35,13 +46,17 @@ from app.jobs.queue import (
     ClipPlanReselectionEnqueue,
     JobEnqueue,
     RenderEnqueue,
+    RetryJobEnqueue,
     SubtitleReviewHookSceneUpdateEnqueue,
+    SubtitleReviewPreviewEnqueue,
     get_enqueue_clip_plan_boundary_update,
     get_enqueue_clip_plan_hook_scene_update,
     get_enqueue_clip_plan_reselection,
     get_enqueue_job,
     get_enqueue_render_job,
+    get_enqueue_retry_job,
     get_enqueue_subtitle_review_hook_scene_update,
+    get_enqueue_subtitle_review_preview,
 )
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP
 from app.jobs.subtitle_review import (
@@ -50,11 +65,10 @@ from app.jobs.subtitle_review import (
     confirm_review_clip,
     load_subtitle_review,
     queue_review_render,
-    refresh_review_overlay_title_expectations,
+    refresh_review_render_contract,
     reopen_completed_review,
     subtitle_review_output_path,
     subtitle_review_preview_path,
-    subtitle_review_preview_url,
     subtitle_review_summary_path,
     update_review_clip_content,
     update_review_hook_scene,
@@ -63,13 +77,25 @@ from app.jobs.subtitle_review import (
     write_subtitle_review,
     write_subtitle_review_summary,
 )
+from app.jobs.subtitle_review_preview import (
+    current_subtitle_review_preview_spec,
+    exact_subtitle_review_preview_is_ready,
+    exact_subtitle_review_preview_error_path,
+    live_subtitle_review_preview_is_ready,
+    refresh_subtitle_review_preview_states,
+    subtitle_review_document_lock,
+)
 from app.models import ExportItem, Job, Video
 from app.models import utc_now
+from app.render.render_exact_review_preview import (
+    exact_subtitle_review_preview_paths,
+    live_subtitle_review_preview_paths,
+)
+from app.render.render_manual_source_proxy import manual_source_proxy_path
 from app.render.render_short import (
     DEFAULT_SHORT_BOTTOM_BANNER_PATH,
     DEFAULT_SHORT_TOP_BANNER_PATH,
 )
-from app.render.title_policy import short_overlay_title_expected
 from app.schemas import (
     ClipPlanActionResponse,
     ClipPlanBoundaryUpdateRequest,
@@ -83,9 +109,12 @@ from app.schemas import (
     JobResultsResponse,
     JobSettings,
     JobStatusResponse,
+    ManualClipCreateRequest,
+    ManualClipUpdateRequest,
     ResultExportItem,
     ShortOverlayTitleMode,
     SubtitleReviewFinalizeResponse,
+    SubtitleReviewClipApplyRequest,
     SubtitleReviewClipContentUpdateRequest,
     SubtitleReviewSettingsUpdateRequest,
     SubtitleReviewSegmentUpdateRequest,
@@ -100,10 +129,16 @@ TERMINAL_STATUSES = {"completed", "failed"}
 NON_WORKER_STATUSES = {
     "uploaded",
     "queued",
+    "awaiting_manual_edit",
     "awaiting_clip_review",
     "awaiting_subtitle_review",
 }
 DEFAULT_STALE_WORKER_SECONDS = 1800
+RETRY_ENQUEUE_PENDING_STEP = "再処理を開始待ち"
+NO_USABLE_SELECTION_ERROR_CODE = "no_usable_selection"
+NO_USABLE_SELECTION_RETRY_EXHAUSTED_ERROR_CODE = "no_usable_selection_retry_exhausted"
+LEGACY_NO_USABLE_OUTPUT_ERROR_CODE = "no_usable_output"
+RETRY_SOURCE_SETTING_KEY = "retryOf"
 
 
 def _get_job_or_404(db: Session, job_id: str) -> Job:
@@ -145,10 +180,152 @@ def _get_clip_plan_or_404(
         ) from exc
 
 
-def _persist_subtitle_review(document: SubtitleReviewDocument, paths: StoragePaths) -> None:
+def _get_manual_edit_context(
+    db: Session,
+    job_id: str,
+    paths: StoragePaths,
+) -> tuple[Job, Video, ClipPlanDocument]:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_manual_edit" or not is_manual_workflow(
+        dict(job.settings_json or {})
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="manual clip plan is not editable",
+        )
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="video not found",
+        )
+    document = _get_clip_plan_or_404(job_id, paths)
+    if document.state != "manual_editing":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="manual clip plan is not editable",
+        )
+    return job, video, document
+
+
+def _validate_manual_clip_range(
+    video: Video,
+    document: ClipPlanDocument,
+    *,
+    start: float,
+    end: float,
+) -> None:
+    if end <= start or end - start < 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="manual clip duration must be at least 1 second",
+        )
+    source_duration = float(video.duration or document.source_duration or 0)
+    if source_duration <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video duration is unavailable",
+        )
+    if end > source_duration + 0.001:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="clip end exceeds source video duration",
+        )
+
+def _write_subtitle_review_unlocked(
+    document: SubtitleReviewDocument,
+    paths: StoragePaths,
+) -> None:
     output_dir = paths.job_outputs(document.job_id)
     write_subtitle_review(document, subtitle_review_output_path(output_dir))
     write_subtitle_review_summary(document, subtitle_review_summary_path(output_dir))
+
+
+def _persist_subtitle_review(document: SubtitleReviewDocument, paths: StoragePaths) -> None:
+    output_dir = paths.job_outputs(document.job_id)
+    with subtitle_review_document_lock(output_dir):
+        _write_subtitle_review_unlocked(document, paths)
+
+
+def _refresh_subtitle_review_previews_unlocked(
+    *,
+    job: Job,
+    video: Video,
+    document: SubtitleReviewDocument,
+    paths: StoragePaths,
+    clip_ids: set[str] | None = None,
+) -> tuple[SubtitleReviewDocument, list[tuple[str, str]]]:
+    document, queued, changed = refresh_subtitle_review_preview_states(
+        job=job,
+        video=video,
+        document=document,
+        paths=paths,
+        clip_ids=clip_ids,
+    )
+    if changed:
+        _write_subtitle_review_unlocked(document, paths)
+    return document, queued
+
+
+def _enqueue_subtitle_review_previews(
+    *,
+    job_id: str,
+    document: SubtitleReviewDocument,
+    queued: list[tuple[str, str]],
+    paths: StoragePaths,
+    enqueue_preview: SubtitleReviewPreviewEnqueue,
+) -> SubtitleReviewDocument:
+    enqueue_failures: list[tuple[str, str]] = []
+    for clip_id, spec_hash in queued:
+        try:
+            enqueue_preview(job_id, clip_id, spec_hash)
+        except Exception:
+            enqueue_failures.append((clip_id, spec_hash))
+    if not enqueue_failures:
+        return document
+
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        latest = _get_subtitle_review_or_404(job_id, paths)
+        changed = False
+        for clip_id, spec_hash in enqueue_failures:
+            clip = next((item for item in latest.clips if item.id == clip_id), None)
+            if clip is None or clip.preview_spec_hash != spec_hash:
+                continue
+            clip.preview_state = "failed"
+            clip.preview_video_url = None
+            clip.preview_error = "could not queue preview rendering"
+            clip.confirmed = False
+            changed = True
+        if changed:
+            latest.confirmed_clip_count = sum(1 for clip in latest.clips if clip.confirmed)
+            _write_subtitle_review_unlocked(latest, paths)
+        return latest
+
+
+def _legacy_subtitle_review_preview_is_available(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _hydrate_legacy_subtitle_review_preview_urls(
+    document: SubtitleReviewDocument,
+    paths: StoragePaths,
+) -> SubtitleReviewDocument:
+    hydrated = document.model_copy(deep=True)
+    output_dir = paths.job_outputs(document.job_id)
+    for clip in hydrated.clips:
+        if clip.preview_spec_hash is not None:
+            continue
+        legacy_path = subtitle_review_preview_path(output_dir, clip.id)
+        if not _legacy_subtitle_review_preview_is_available(legacy_path):
+            continue
+        clip.preview_state = "ready"
+        clip.preview_video_url = f"/api/jobs/{document.job_id}/subtitle-review/clips/{clip.id}/preview-video"
+        clip.preview_error = None
+    return hydrated
 
 
 def _short_overlay_title_mode(settings: dict[str, Any]) -> ShortOverlayTitleMode:
@@ -167,47 +344,29 @@ def _short_overlay_title_mode(settings: dict[str, Any]) -> ShortOverlayTitleMode
 def _hydrate_subtitle_review_render_settings(
     document: SubtitleReviewDocument,
     job: Job,
+    video: Video,
 ) -> tuple[SubtitleReviewDocument, bool]:
     settings = dict(job.settings_json or {})
     render_mode = str(settings.get("mode", "high_quality"))
     short_overlay_title_mode = _short_overlay_title_mode(settings)
-    short_top_banner_enabled = bool(
-        settings.get("shortTopBannerEnabled", False)
-    )
-    short_bottom_banner_enabled = bool(
-        settings.get("shortBottomBannerEnabled", False)
-    )
-    changed = (
+    short_top_banner_enabled = bool(settings.get("shortTopBannerEnabled", False))
+    short_bottom_banner_enabled = bool(settings.get("shortBottomBannerEnabled", False))
+    policy_changed = (
         document.short_overlay_title_mode != short_overlay_title_mode
         or document.short_top_banner_enabled != short_top_banner_enabled
         or document.short_bottom_banner_enabled != short_bottom_banner_enabled
-        or any(
-            "overlay_title_expected" not in clip.model_fields_set
-            or clip.overlay_title_expected
-            != bool(
-                clip.type == "short"
-                and short_overlay_title_expected(
-                    render_mode=render_mode,
-                    stored_mode=short_overlay_title_mode,
-                    top_banner_enabled=short_top_banner_enabled,
-                    title_manually_reviewed=clip.title_edited,
-                )
-            )
-            for clip in document.clips
-        )
     )
-    if not changed:
-        return document, False
-    return (
-        update_review_render_settings(
-            document,
-            render_mode=render_mode,
-            short_overlay_title_mode=short_overlay_title_mode,
-            short_top_banner_enabled=short_top_banner_enabled,
-            short_bottom_banner_enabled=short_bottom_banner_enabled,
-        ),
-        True,
+    document.short_overlay_title_mode = short_overlay_title_mode
+    document.short_top_banner_enabled = short_top_banner_enabled
+    document.short_bottom_banner_enabled = short_bottom_banner_enabled
+    document, contract_changed = refresh_review_render_contract(
+        document,
+        render_mode=render_mode,
+        render_settings=settings,
+        source_width=video.width,
+        source_height=video.height,
     )
+    return document, policy_changed or contract_changed
 
 
 def _reedit_artifacts_available(
@@ -221,10 +380,7 @@ def _reedit_artifacts_available(
         output_dir / "selected_clips.json",
         output_dir / "transcript_segments.json",
     )
-    return (
-        all(path.is_file() for path in required_artifacts)
-        and paths.resolve_stored_file(video.stored_path).is_file()
-    )
+    return all(path.is_file() for path in required_artifacts) and paths.resolve_stored_file(video.stored_path).is_file()
 
 
 def _can_reopen_subtitle_review(
@@ -240,43 +396,44 @@ def _reopen_job_subtitle_review(
     video: Video,
     paths: StoragePaths,
 ) -> SubtitleReviewDocument:
-    document = _get_subtitle_review_or_404(job.id, paths)
-    document.short_max_duration = float(
-        (job.settings_json or {}).get("shortMaxDuration", 75.0)
-    )
-    document, _settings_changed = _hydrate_subtitle_review_render_settings(
-        document,
-        job,
-    )
-    if job.status == "awaiting_subtitle_review" and document.state == "awaiting_review":
-        if not _reedit_artifacts_available(job.id, video, paths):
+    output_dir = paths.job_outputs(job.id)
+    with subtitle_review_document_lock(output_dir):
+        document = _get_subtitle_review_or_404(job.id, paths)
+        document.short_max_duration = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
+        document, _settings_changed = _hydrate_subtitle_review_render_settings(
+            document,
+            job,
+            video,
+        )
+        if job.status == "awaiting_subtitle_review" and document.state == "awaiting_review":
+            if not _reedit_artifacts_available(job.id, video, paths):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="source artifacts are unavailable",
+                )
+            _write_subtitle_review_unlocked(document, paths)
+            return document
+        if not _can_reopen_subtitle_review(job, video, paths):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="source artifacts are unavailable",
+                detail=("completed job cannot be reopened because source artifacts are unavailable"),
             )
-        _persist_subtitle_review(document, paths)
-        return document
-    if not _can_reopen_subtitle_review(job, video, paths):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="completed job cannot be reopened because source artifacts are unavailable",
-        )
-    try:
-        document = reopen_completed_review(document)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
+        try:
+            document = reopen_completed_review(document)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
 
-    _persist_subtitle_review(document, paths)
-    job.status = "awaiting_subtitle_review"
-    job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
-    job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
-    job.error_code = None
-    job.error_message = None
-    job.updated_at = utc_now()
-    return document
+        _write_subtitle_review_unlocked(document, paths)
+        job.status = "awaiting_subtitle_review"
+        job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
+        job.error_code = None
+        job.error_message = None
+        job.updated_at = utc_now()
+        return document
 
 
 def _selected_clips_by_candidate(output_dir: Path) -> dict[str, dict[str, Any]]:
@@ -387,12 +544,8 @@ def _result_item(
     url = f"/api/exports/{export.id}/download"
     metadata_url = f"/api/exports/{export.id}/metadata" if export.metadata_path else None
     subtitle_url = f"/api/exports/{export.id}/subtitle" if export.subtitle_path else None
-    score = _number_or_none(
-        _first_value(selected.get("score"), selected.get("final_score"), metadata.get("score"), export.score)
-    )
-    final_score = _number_or_none(
-        _first_value(selected.get("final_score"), selected.get("score"), audit_clip.get("final_score"), score)
-    )
+    score = _number_or_none(_first_value(selected.get("score"), selected.get("final_score"), metadata.get("score"), export.score))
+    final_score = _number_or_none(_first_value(selected.get("final_score"), selected.get("score"), audit_clip.get("final_score"), score))
     resolution = audit_clip.get("resolution") if isinstance(audit_clip.get("resolution"), dict) else None
     if resolution is None and (metadata.get("width") is not None or metadata.get("height") is not None):
         resolution = {"width": metadata.get("width"), "height": metadata.get("height")}
@@ -441,9 +594,7 @@ def _result_item(
         refinedStart=_number_or_none(
             _first_value(metadata.get("refined_start"), selected.get("refined_start"), audit_clip.get("refined_start"))
         ),
-        refinedEnd=_number_or_none(
-            _first_value(metadata.get("refined_end"), selected.get("refined_end"), audit_clip.get("refined_end"))
-        ),
+        refinedEnd=_number_or_none(_first_value(metadata.get("refined_end"), selected.get("refined_end"), audit_clip.get("refined_end"))),
         resolution=resolution,
         auditWarnings=audit_clip.get("warnings") if isinstance(audit_clip.get("warnings"), list) else [],
         subtitlePath=_first_value(metadata.get("subtitle_path"), export.subtitle_path),
@@ -464,6 +615,55 @@ def _read_json_if_exists(path: Path) -> Any:
         return None
 
 
+def _is_legacy_no_usable_selection(job: Job, paths: StoragePaths) -> bool:
+    if job.error_code != LEGACY_NO_USABLE_OUTPUT_ERROR_CODE:
+        return False
+
+    output_dir = paths.outputs / job.id
+    selected = _read_json_if_exists(output_dir / "selected_clips.json")
+    rejection_summary = _read_json_if_exists(output_dir / "rejection_summary.json")
+    if not isinstance(selected, dict) or not isinstance(rejection_summary, dict):
+        return False
+
+    normal_clips = selected.get("normalClips")
+    shorts = selected.get("shorts")
+    if not isinstance(normal_clips, list) or not isinstance(shorts, list):
+        return False
+    if normal_clips or shorts:
+        return False
+
+    render_failure_count = rejection_summary.get("render_failure_count")
+    if not isinstance(render_failure_count, int) or isinstance(render_failure_count, bool) or render_failure_count != 0:
+        return False
+
+    render_failures_path = output_dir / "render_failures.json"
+    if render_failures_path.is_file():
+        render_failures = _read_json_if_exists(render_failures_path)
+        if not isinstance(render_failures, list) or render_failures:
+            return False
+
+    return not subtitle_review_output_path(output_dir).is_file()
+
+
+def _is_selection_failure(job: Job, paths: StoragePaths) -> bool:
+    if job.status != "failed":
+        return False
+    if job.error_code == NO_USABLE_SELECTION_ERROR_CODE:
+        return True
+    return _is_legacy_no_usable_selection(job, paths)
+
+
+def _is_retryable_selection_failure(job: Job, paths: StoragePaths) -> bool:
+    if not _is_selection_failure(job, paths):
+        return False
+    return RETRY_SOURCE_SETTING_KEY not in (job.settings_json or {})
+
+
+def _has_terminal_retry_child(db: Session, source_job_id: str) -> bool:
+    child_status = db.scalar(select(Job.status).where(Job.id == _retry_job_id(source_job_id)))
+    return child_status in TERMINAL_STATUSES
+
+
 def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
     details: dict[str, Any] = {}
     output_dir = paths.job_outputs(job.id)
@@ -477,26 +677,16 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
     if isinstance(heatmap_summary, dict):
         details["heatmapStatus"] = heatmap_summary.get("status")
         details["heatmapApplied"] = bool(heatmap_summary.get("applied", False))
-        details["heatmapFallbackUsed"] = bool(
-            heatmap_summary.get("fallback_used", False)
-        )
+        details["heatmapFallbackUsed"] = bool(heatmap_summary.get("fallback_used", False))
         details["heatmapFallbackReason"] = heatmap_summary.get("fallback_reason")
         details["heatmapSegmentCount"] = heatmap_summary.get("segment_count", 0)
-        details["heatmapIntervalModeRequested"] = bool(
-            heatmap_summary.get("interval_mode_requested", False)
-        )
-        details["heatmapIntervalModeApplied"] = bool(
-            heatmap_summary.get("interval_mode_applied", False)
-        )
+        details["heatmapIntervalModeRequested"] = bool(heatmap_summary.get("interval_mode_requested", False))
+        details["heatmapIntervalModeApplied"] = bool(heatmap_summary.get("interval_mode_applied", False))
         details["heatmapSelectionBehavior"] = heatmap_summary.get("selection_behavior")
 
     transcript_segments = _read_json_if_exists(output_dir / "transcript_segments.json")
     if isinstance(transcript_segments, list):
-        texts = [
-            str(segment.get("text", "")).strip()
-            for segment in transcript_segments
-            if isinstance(segment, dict)
-        ]
+        texts = [str(segment.get("text", "")).strip() for segment in transcript_segments if isinstance(segment, dict)]
         confidences = [
             float(segment["confidence"])
             for segment in transcript_segments
@@ -624,10 +814,7 @@ def reopen_from_completed_video(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
                 "code": "reedit_source_not_found",
-                "message": (
-                    "このMP4に対応する完成済みjobが見つかりません。"
-                    "同じPCで作成した未変更のAutoClipper出力を選択してください。"
-                ),
+                "message": ("このMP4に対応する完成済みjobが見つかりません。同じPCで作成した未変更のAutoClipper出力を選択してください。"),
             },
         )
 
@@ -663,10 +850,7 @@ def reopen_from_completed_video(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "reedit_source_unavailable",
-                "message": (
-                    "対応するjobは見つかりましたが、元動画または編集データが残っていないため"
-                    "再編集できません。"
-                ),
+                "message": ("対応するjobは見つかりましたが、元動画または編集データが残っていないため再編集できません。"),
             },
         )
     raise HTTPException(
@@ -691,12 +875,14 @@ def create_job(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="video not found")
 
     settings = request.settings
-    automatic_output = (
-        settings.normal_clip_count > 0 and not settings.normal_clip_time_ranges
-    ) or (
+    automatic_output = (settings.normal_clip_count > 0 and not settings.normal_clip_time_ranges) or (
         settings.short_count > 0 and not settings.short_clip_time_ranges
     )
-    if settings.heatmap_interval_mode and automatic_output:
+    if (
+        settings.workflow_mode != "manual"
+        and settings.heatmap_interval_mode
+        and automatic_output
+    ):
         sidecar_path = heatmap_sidecar_path(paths.resolve_stored_file(video.stored_path))
         unavailable_reason = "heatmap_sidecar_not_provided"
         try:
@@ -738,6 +924,128 @@ def create_job(
     return JobCreateResponse(jobId=job.id, status=job.status)
 
 
+def _retry_job_id(source_job_id: str) -> str:
+    digest = hashlib.sha256(f"retry:{source_job_id}".encode("utf-8")).hexdigest()
+    return f"job_{digest[:32]}"
+
+
+@router.post(
+    "/{job_id}/retry",
+    response_model=JobCreateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def retry_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    enqueue_retry_job: RetryJobEnqueue = Depends(get_enqueue_retry_job),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> JobCreateResponse:
+    source_job = _get_job_or_404(db, job_id)
+    if not _is_retryable_selection_failure(
+        source_job,
+        paths,
+    ) or _has_terminal_retry_child(db, source_job.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "job_retry_not_available",
+                "message": "このjobは同じ動画・設定で再処理できません。",
+            },
+        )
+
+    video = db.get(Video, source_job.video_id)
+    if video is None or not paths.resolve_stored_file(video.stored_path).is_file():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "retry_source_unavailable",
+                "message": "元動画が残っていないため再処理できません。",
+            },
+        )
+
+    settings = JobSettings.model_validate(source_job.settings_json or {})
+    automatic_output = (settings.normal_clip_count > 0 and not settings.normal_clip_time_ranges) or (
+        settings.short_count > 0 and not settings.short_clip_time_ranges
+    )
+    if settings.heatmap_interval_mode and automatic_output:
+        sidecar_path = heatmap_sidecar_path(paths.resolve_stored_file(video.stored_path))
+        if not sidecar_path.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "retry_source_unavailable",
+                    "message": "人気区間JSONが残っていないため再処理できません。",
+                },
+            )
+
+    retry_settings = settings.model_dump(by_alias=True, mode="json")
+    retry_settings[RETRY_SOURCE_SETTING_KEY] = source_job.id
+    retry_id = _retry_job_id(source_job.id)
+    retry = db.get(Job, retry_id)
+    if retry is not None:
+        db.refresh(retry)
+        if retry.status in TERMINAL_STATUSES:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "job_retry_not_available",
+                    "message": "このjobの再処理は終了しています。",
+                },
+            )
+    should_enqueue = False
+    if retry is None:
+        retry = Job(
+            id=retry_id,
+            video_id=video.id,
+            status="queued",
+            progress=5,
+            current_step=RETRY_ENQUEUE_PENDING_STEP,
+            settings_json=retry_settings,
+        )
+        db.add(retry)
+        try:
+            db.commit()
+            should_enqueue = True
+        except IntegrityError:
+            db.rollback()
+            retry = db.get(Job, retry_id)
+            if retry is None:
+                raise
+            if retry.status == "queued" and retry.current_step == RETRY_ENQUEUE_PENDING_STEP:
+                should_enqueue = True
+    elif retry.status == "queued" and retry.current_step == RETRY_ENQUEUE_PENDING_STEP:
+        should_enqueue = True
+
+    if should_enqueue:
+
+        def terminal_retry_allowed() -> bool:
+            result = db.execute(
+                update(Job)
+                .where(
+                    Job.id == retry.id,
+                    Job.status == "queued",
+                    Job.current_step == RETRY_ENQUEUE_PENDING_STEP,
+                )
+                .values(updated_at=utc_now())
+            )
+            db.commit()
+            return result.rowcount == 1
+
+        try:
+            enqueue_retry_job(retry.id, terminal_retry_allowed)
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "retry_enqueue_failed",
+                    "message": "再処理を開始できませんでした。もう一度押してください。",
+                },
+            )
+        db.refresh(retry)
+
+    return JobCreateResponse(jobId=retry.id, status=retry.status)
+
+
 @router.get("/{job_id}", response_model=JobStatusResponse)
 def get_job_status(
     job_id: str,
@@ -748,7 +1056,21 @@ def get_job_status(
     _mark_stale_running_job_failed(db, job)
     error = None
     if job.error_code or job.error_message:
-        error = JobError(code=job.error_code or "unknown", message=job.error_message or "")
+        error_code = job.error_code or "unknown"
+        error_message = job.error_message or ""
+        if _is_selection_failure(job, paths):
+            if RETRY_SOURCE_SETTING_KEY in (job.settings_json or {}):
+                error_code = NO_USABLE_SELECTION_RETRY_EXHAUSTED_ERROR_CODE
+                error_message = "再処理でも選定基準を満たす切り抜き候補がありませんでした。"
+            elif _has_terminal_retry_child(db, job.id):
+                error_code = NO_USABLE_SELECTION_RETRY_EXHAUSTED_ERROR_CODE
+                error_message = "このJobの再処理は終了しています。"
+            else:
+                error_code = NO_USABLE_SELECTION_ERROR_CODE
+                error_message = "分析は完了しましたが、選定基準を満たす切り抜き候補がありませんでした。"
+        elif error_code == LEGACY_NO_USABLE_OUTPUT_ERROR_CODE:
+            error_message = "切り抜き動画を生成できませんでした。レンダリング結果を確認してください。"
+        error = JobError(code=error_code, message=error_message)
 
     return JobStatusResponse(
         id=job.id,
@@ -777,6 +1099,22 @@ def get_job_source_video(
     return FileResponse(source_path, media_type=media_type)
 
 
+@router.get("/{job_id}/editor-video")
+def get_job_editor_video(
+    job_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> FileResponse:
+    _get_job_or_404(db, job_id)
+    preview_path = manual_source_proxy_path(paths.job_outputs(job_id))
+    if not preview_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="editor video not found",
+        )
+    return FileResponse(preview_path, media_type="video/mp4")
+
+
 @router.get("/{job_id}/clip-plan", response_model=ClipPlanDocument)
 def get_clip_plan(
     job_id: str,
@@ -785,6 +1123,128 @@ def get_clip_plan(
 ) -> ClipPlanDocument:
     _get_job_or_404(db, job_id)
     return _get_clip_plan_or_404(job_id, paths)
+
+
+@router.post(
+    "/{job_id}/clip-plan/clips",
+    response_model=ClipPlanDocument,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_manual_clip(
+    job_id: str,
+    request: ManualClipCreateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> ClipPlanDocument:
+    job, video, document = _get_manual_edit_context(db, job_id, paths)
+    _validate_manual_clip_range(
+        video,
+        document,
+        start=request.start,
+        end=request.end,
+    )
+    type_index = sum(clip.type == request.type for clip in document.clips) + 1
+    default_title = "通常切り抜き" if request.type == "normal" else "ショート"
+    clip = ClipPlanClip(
+        id=make_id("clip"),
+        type=request.type,
+        title=request.title.strip() or f"{default_title} {type_index:02d}",
+        start=round(request.start, 3),
+        end=round(request.end, 3),
+        duration=round(request.end - request.start, 3),
+        selectionReason="manual_edit",
+        recommendedStart=round(request.start, 3),
+        recommendedEnd=round(request.end, 3),
+        manuallyAdjusted=True,
+    )
+    document.clips.append(clip)
+    try:
+        validate_manual_clip_counts(document.clips)
+    except ValueError as exc:
+        document.clips.pop()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    touch_manual_document(document)
+    write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+    return document
+
+
+@router.patch(
+    "/{job_id}/clip-plan/clips/{clip_id}",
+    response_model=ClipPlanDocument,
+)
+def update_manual_clip(
+    job_id: str,
+    clip_id: str,
+    request: ManualClipUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> ClipPlanDocument:
+    job, video, document = _get_manual_edit_context(db, job_id, paths)
+    clip_index = next(
+        (index for index, clip in enumerate(document.clips) if clip.id == clip_id),
+        None,
+    )
+    if clip_index is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clip plan item not found",
+        )
+    current = document.clips[clip_index]
+    start = current.start if request.start is None else request.start
+    end = current.end if request.end is None else request.end
+    clip_type = request.type or current.type
+    _validate_manual_clip_range(video, document, start=start, end=end)
+    payload = current.model_dump()
+    payload.update(
+        {
+            "type": clip_type,
+            "title": current.title if request.title is None else request.title.strip(),
+            "start": round(start, 3),
+            "end": round(end, 3),
+            "duration": round(end - start, 3),
+            "manually_adjusted": True,
+        }
+    )
+    try:
+        updated = ClipPlanClip.model_validate(payload)
+        proposed = list(document.clips)
+        proposed[clip_index] = updated
+        validate_manual_clip_counts(proposed)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    document.clips = proposed
+    touch_manual_document(document)
+    write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+    return document
+
+
+@router.delete(
+    "/{job_id}/clip-plan/clips/{clip_id}",
+    response_model=ClipPlanDocument,
+)
+def delete_manual_clip(
+    job_id: str,
+    clip_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> ClipPlanDocument:
+    _job, _video, document = _get_manual_edit_context(db, job_id, paths)
+    original_count = len(document.clips)
+    document.clips = [clip for clip in document.clips if clip.id != clip_id]
+    if len(document.clips) == original_count:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clip plan item not found",
+        )
+    touch_manual_document(document)
+    write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+    return document
 
 
 @router.get(
@@ -812,35 +1272,22 @@ def get_clip_plan_transcript_segments(
             detail="invalid clip transcript range",
         )
     video = db.get(Video, job.video_id)
-    source_duration = float(
-        (video.duration if video is not None else None)
-        or document.source_duration
-        or 0
-    )
+    source_duration = float((video.duration if video is not None else None) or document.source_duration or 0)
     if source_duration > 0 and end > source_duration + 0.001:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="clip end exceeds source video duration",
         )
 
-    transcript_payload = _read_json_if_exists(
-        paths.job_outputs(job_id) / "transcript_segments.json"
-    )
+    transcript_payload = _read_json_if_exists(paths.job_outputs(job_id) / "transcript_segments.json")
     if not isinstance(transcript_payload, list):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="transcript segments are unavailable",
         )
-    transcript_segments = [
-        TranscriptSegment.model_validate(item)
-        for item in transcript_payload
-    ]
+    transcript_segments = [TranscriptSegment.model_validate(item) for item in transcript_payload]
     transcript_segments = repair_known_transcript_artifact_segments(transcript_segments)
-    return [
-        segment
-        for segment in transcript_segments
-        if segment.end > start and segment.start < end
-    ]
+    return [segment for segment in transcript_segments if segment.end > start and segment.start < end]
 
 
 @router.get("/{job_id}/clip-plan/clips/{clip_id}/preview-video")
@@ -880,18 +1327,20 @@ def update_clip_plan_clip_boundary(
     request: ClipPlanBoundaryUpdateRequest,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
-    enqueue_boundary_update: ClipPlanBoundaryUpdateEnqueue = Depends(
-        get_enqueue_clip_plan_boundary_update
-    ),
+    enqueue_boundary_update: ClipPlanBoundaryUpdateEnqueue = Depends(get_enqueue_clip_plan_boundary_update),
 ) -> ClipPlanActionResponse:
     job = _get_job_or_404(db, job_id)
-    if job.status != "awaiting_clip_review":
+    manual_edit = job.status == "awaiting_manual_edit" and is_manual_workflow(
+        dict(job.settings_json or {})
+    )
+    if job.status != "awaiting_clip_review" and not manual_edit:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="clip plan is not awaiting boundary adjustment",
         )
     document = _get_clip_plan_or_404(job_id, paths)
-    if document.state != "awaiting_review":
+    expected_state = "manual_editing" if manual_edit else "awaiting_review"
+    if document.state != expected_state:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="clip plan is not awaiting boundary adjustment",
@@ -925,15 +1374,27 @@ def update_clip_plan_clip_boundary(
     if (
         planned_clip.hook_scene_start is not None
         and planned_clip.hook_scene_end is not None
-        and (
-            request.start > planned_clip.hook_scene_start + 0.001
-            or request.end < planned_clip.hook_scene_end - 0.001
-        )
+        and (request.start > planned_clip.hook_scene_start + 0.001 or request.end < planned_clip.hook_scene_end - 0.001)
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="clip boundary must continue to contain the hook scene",
         )
+
+    if manual_edit:
+        update_clip_plan_boundary(
+            document,
+            clip_id,
+            start=request.start,
+            end=request.end,
+            transcript_excerpt=planned_clip.transcript_excerpt,
+        )
+        touch_manual_document(document)
+        write_clip_plan(
+            document,
+            clip_plan_output_path(paths.job_outputs(job_id)),
+        )
+        return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
     job.status = "preparing_clip_review"
     job.progress = PROGRESS_MAP["preparing_clip_review"]
@@ -987,18 +1448,20 @@ def update_clip_plan_hook_scene(
     request: ClipPlanHookSceneUpdateRequest,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
-    enqueue_hook_scene_update: ClipPlanHookSceneUpdateEnqueue = Depends(
-        get_enqueue_clip_plan_hook_scene_update
-    ),
+    enqueue_hook_scene_update: ClipPlanHookSceneUpdateEnqueue = Depends(get_enqueue_clip_plan_hook_scene_update),
 ) -> ClipPlanActionResponse:
     job = _get_job_or_404(db, job_id)
-    if job.status != "awaiting_clip_review":
+    manual_edit = job.status == "awaiting_manual_edit" and is_manual_workflow(
+        dict(job.settings_json or {})
+    )
+    if job.status != "awaiting_clip_review" and not manual_edit:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="clip plan is not awaiting hook scene adjustment",
         )
     document = _get_clip_plan_or_404(job_id, paths)
-    if document.state != "awaiting_review":
+    expected_state = "manual_editing" if manual_edit else "awaiting_review"
+    if document.state != expected_state:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="clip plan is not awaiting hook scene adjustment",
@@ -1012,34 +1475,53 @@ def update_clip_plan_hook_scene(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="clip plan item not found",
         )
-    if planned_clip.type != "short":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="hook scene is only supported for short clips",
-        )
     if request.start is not None and request.end is not None:
-        if (
-            request.start < planned_clip.start - 0.001
-            or request.end > planned_clip.end + 0.001
-        ):
+        video = db.get(Video, job.video_id)
+        if video is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="source video record is unavailable",
+            )
+        if video.has_audio is False:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="hook scene is unavailable for a source video without audio",
+            )
+        if request.start < planned_clip.start - 0.001 or request.end > planned_clip.end + 0.001:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="hook scene must stay within the selected clip",
             )
-        short_max_duration = float(
-            (job.settings_json or {}).get("shortMaxDuration", 75.0)
-        )
-        if hook_scene_newly_exceeds_short_limit(
+        short_max_duration = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
+        if planned_clip.type == "short" and hook_scene_newly_exceeds_short_limit(
             clip_duration=planned_clip.duration,
             hook_duration=request.end - request.start,
             short_max_duration=short_max_duration,
         ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=(
-                    "hook scene would exceed the configured short maximum duration"
-                ),
+                detail=("hook scene would exceed the configured short maximum duration"),
             )
+
+    if manual_edit:
+        try:
+            update_clip_plan_hook_scene_document(
+                document,
+                clip_id,
+                start=request.start,
+                end=request.end,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+        touch_manual_document(document)
+        write_clip_plan(
+            document,
+            clip_plan_output_path(paths.job_outputs(job_id)),
+        )
+        return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
     job.status = "preparing_clip_review"
     job.progress = PROGRESS_MAP["preparing_clip_review"]
@@ -1091,9 +1573,7 @@ def reselect_clip_plan(
     request: ClipPlanReselectionRequest,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
-    enqueue_reselection: ClipPlanReselectionEnqueue = Depends(
-        get_enqueue_clip_plan_reselection
-    ),
+    enqueue_reselection: ClipPlanReselectionEnqueue = Depends(get_enqueue_clip_plan_reselection),
 ) -> ClipPlanActionResponse:
     job = _get_job_or_404(db, job_id)
     if job.status != "awaiting_clip_review":
@@ -1104,7 +1584,13 @@ def reselect_clip_plan(
     document = _get_clip_plan_or_404(job_id, paths)
     previous_settings = dict(job.settings_json or {})
     settings_payload = dict(previous_settings)
-    settings_payload.update(request.model_dump(by_alias=True, mode="json"))
+    settings_payload.update(
+        request.model_dump(
+            by_alias=True,
+            mode="json",
+            exclude_none=True,
+        )
+    )
     validated_settings = JobSettings.model_validate(settings_payload)
     job.settings_json = validated_settings.model_dump(
         by_alias=True,
@@ -1154,8 +1640,80 @@ def approve_clip_plan(
     job_id: str,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_job: JobEnqueue = Depends(get_enqueue_job),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> ClipPlanActionResponse:
     job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
+    if job.status == "awaiting_manual_edit" and is_manual_workflow(
+        dict(job.settings_json or {})
+    ):
+        document = _get_clip_plan_or_404(job_id, paths)
+        if document.state != "manual_editing":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="manual clip plan is not editable",
+            )
+        if not document.clips:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="manual clip plan must contain at least one clip",
+            )
+        for clip in document.clips:
+            _validate_manual_clip_range(
+                video,
+                document,
+                start=clip.start,
+                end=clip.end,
+            )
+        previous_settings = dict(job.settings_json or {})
+        try:
+            next_settings = JobSettings.model_validate(
+                manual_plan_settings(document, previous_settings)
+            ).model_dump(by_alias=True, mode="json")
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+        job.settings_json = next_settings
+        job.status = "queued"
+        job.progress = PROGRESS_MAP["queued"]
+        job.current_step = CURRENT_STEP_MAP["queued"]
+        job.error_code = None
+        job.error_message = None
+        job.updated_at = utc_now()
+        document.state = "preparing"
+        write_clip_plan(
+            document,
+            clip_plan_output_path(paths.job_outputs(job_id)),
+        )
+        db.commit()
+        db.refresh(job)
+        try:
+            enqueue_job(job.id)
+        except Exception as exc:
+            job.settings_json = previous_settings
+            job.status = "awaiting_manual_edit"
+            job.progress = PROGRESS_MAP["awaiting_manual_edit"]
+            job.current_step = CURRENT_STEP_MAP["awaiting_manual_edit"]
+            job.updated_at = utc_now()
+            document.state = "manual_editing"
+            write_clip_plan(
+                document,
+                clip_plan_output_path(paths.job_outputs(job_id)),
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="could not queue manual clip plan",
+            ) from exc
+        return ClipPlanActionResponse(jobId=job.id, status=job.status)
     if job.status != "awaiting_clip_review":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1164,9 +1722,7 @@ def approve_clip_plan(
     document = _get_clip_plan_or_404(job_id, paths)
     output_dir = paths.job_outputs(job_id)
     selected_payload = _read_json_if_exists(output_dir / "selected_clips.json")
-    transcript_payload = _read_json_if_exists(
-        output_dir / "transcript_segments.json"
-    )
+    transcript_payload = _read_json_if_exists(output_dir / "transcript_segments.json")
     if not isinstance(selected_payload, dict) or not isinstance(
         transcript_payload,
         list,
@@ -1176,40 +1732,26 @@ def approve_clip_plan(
             detail="clip plan source artifacts are unavailable",
         )
     selection = CandidateSelection.model_validate(selected_payload)
-    transcript_segments = [
-        TranscriptSegment.model_validate(item)
-        for item in transcript_payload
-    ]
+    transcript_segments = [TranscriptSegment.model_validate(item) for item in transcript_payload]
     transcript_segments = repair_known_transcript_artifact_segments(transcript_segments)
     review_document = build_subtitle_review(
         job.id,
         selection,
         transcript_segments,
-        short_max_duration=float(
-            (job.settings_json or {}).get("shortMaxDuration", 75.0)
-        ),
+        short_max_duration=float((job.settings_json or {}).get("shortMaxDuration", 75.0)),
         render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
-        short_overlay_title_mode=_short_overlay_title_mode(
-            dict(job.settings_json or {})
-        ),
-        short_top_banner_enabled=bool(
-            (job.settings_json or {}).get("shortTopBannerEnabled", False)
-        ),
-        short_bottom_banner_enabled=bool(
-            (job.settings_json or {}).get("shortBottomBannerEnabled", False)
-        ),
+        short_overlay_title_mode=_short_overlay_title_mode(dict(job.settings_json or {})),
+        short_top_banner_enabled=bool((job.settings_json or {}).get("shortTopBannerEnabled", False)),
+        short_bottom_banner_enabled=bool((job.settings_json or {}).get("shortBottomBannerEnabled", False)),
+        render_settings=dict(job.settings_json or {}),
+        source_width=video.width,
+        source_height=video.height,
     )
     planned_titles = {clip.id: clip.title for clip in document.clips}
     for clip in review_document.clips:
         if clip.id in planned_titles:
             clip.title = planned_titles[clip.id]
             clip.original_title = planned_titles[clip.id]
-        preview_path = subtitle_review_preview_path(output_dir, clip.id)
-        if preview_path.is_file():
-            clip.preview_video_url = subtitle_review_preview_url(
-                job.id,
-                clip.id,
-            )
     _persist_subtitle_review(review_document, paths)
     write_clip_plan(
         mark_clip_plan_approved(document),
@@ -1223,6 +1765,21 @@ def approve_clip_plan(
     job.updated_at = utc_now()
     db.commit()
     db.refresh(job)
+    with subtitle_review_document_lock(output_dir):
+        review_document = _get_subtitle_review_or_404(job.id, paths)
+        review_document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+            job=job,
+            video=video,
+            document=review_document,
+            paths=paths,
+        )
+    _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=review_document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
     return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
 
@@ -1231,16 +1788,52 @@ def get_subtitle_review(
     job_id: str,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> SubtitleReviewDocument:
     job = _get_job_or_404(db, job_id)
-    document = _get_subtitle_review_or_404(job_id, paths)
-    document, settings_changed = _hydrate_subtitle_review_render_settings(
-        document,
-        job,
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
+    output_dir = paths.job_outputs(job_id)
+    queued_previews: list[tuple[str, str]] = []
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if job.status == "awaiting_subtitle_review" and document.state == "awaiting_review":
+            document, settings_changed = _hydrate_subtitle_review_render_settings(
+                document,
+                job,
+                video,
+            )
+            document, queued_previews, preview_changed = refresh_subtitle_review_preview_states(
+                job=job,
+                video=video,
+                document=document,
+                paths=paths,
+            )
+            if settings_changed or preview_changed:
+                _write_subtitle_review_unlocked(document, paths)
+        else:
+            document = document.model_copy(deep=True)
+            document, _settings_changed = _hydrate_subtitle_review_render_settings(
+                document,
+                job,
+                video,
+            )
+            document = _hydrate_legacy_subtitle_review_preview_urls(
+                document,
+                paths,
+            )
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
     )
-    if settings_changed:
-        _persist_subtitle_review(document, paths)
-    return document
 
 
 @router.get("/{job_id}/subtitle-review/banner-assets/{position}")
@@ -1250,11 +1843,7 @@ def get_subtitle_review_banner_asset(
     db: Session = Depends(get_db),
 ) -> FileResponse:
     _get_job_or_404(db, job_id)
-    asset_path = (
-        DEFAULT_SHORT_TOP_BANNER_PATH
-        if position == "top"
-        else DEFAULT_SHORT_BOTTOM_BANNER_PATH
-    )
+    asset_path = DEFAULT_SHORT_TOP_BANNER_PATH if position == "top" else DEFAULT_SHORT_BOTTOM_BANNER_PATH
     if not asset_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1272,46 +1861,72 @@ def update_subtitle_review_settings(
     request: SubtitleReviewSettingsUpdateRequest,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> SubtitleReviewDocument:
     job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
     if job.status != "awaiting_subtitle_review":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="subtitle review is not editable",
         )
-    document = _get_subtitle_review_or_404(job_id, paths)
-    if document.state != "awaiting_review":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="subtitle review is not awaiting edits",
-        )
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not editable",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting edits",
+            )
 
-    settings = dict(job.settings_json or {})
-    previous_top_banner_enabled = bool(
-        settings.get("shortTopBannerEnabled", False)
+        settings = dict(job.settings_json or {})
+        previous_top_banner_enabled = bool(settings.get("shortTopBannerEnabled", False))
+        short_overlay_title_mode = _short_overlay_title_mode(settings)
+        if previous_top_banner_enabled and not request.short_top_banner_enabled:
+            short_overlay_title_mode = "always"
+        settings["shortTopBannerEnabled"] = request.short_top_banner_enabled
+        settings["shortBottomBannerEnabled"] = request.short_bottom_banner_enabled
+        settings["shortOverlayTitleMode"] = short_overlay_title_mode
+        document = update_review_render_settings(
+            document,
+            render_mode=str(settings.get("mode", "high_quality")),
+            short_overlay_title_mode=short_overlay_title_mode,
+            short_top_banner_enabled=request.short_top_banner_enabled,
+            short_bottom_banner_enabled=request.short_bottom_banner_enabled,
+            render_settings=settings,
+            source_width=video.width,
+            source_height=video.height,
+        )
+        job.settings_json = settings
+        job.updated_at = utc_now()
+        db.commit()
+        db.refresh(job)
+        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+            job=job,
+            video=video,
+            document=document,
+            paths=paths,
+            clip_ids={clip.id for clip in document.clips if clip.type == "short"},
+        )
+        _write_subtitle_review_unlocked(document, paths)
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
     )
-    short_overlay_title_mode = _short_overlay_title_mode(settings)
-    if (
-        previous_top_banner_enabled
-        and not request.short_top_banner_enabled
-    ):
-        short_overlay_title_mode = "always"
-    settings["shortTopBannerEnabled"] = request.short_top_banner_enabled
-    settings["shortBottomBannerEnabled"] = request.short_bottom_banner_enabled
-    settings["shortOverlayTitleMode"] = short_overlay_title_mode
-    document = update_review_render_settings(
-        document,
-        render_mode=str(settings.get("mode", "high_quality")),
-        short_overlay_title_mode=short_overlay_title_mode,
-        short_top_banner_enabled=request.short_top_banner_enabled,
-        short_bottom_banner_enabled=request.short_bottom_banner_enabled,
-    )
-    job.settings_json = settings
-    job.updated_at = utc_now()
-    _persist_subtitle_review(document, paths)
-    db.commit()
-    db.refresh(job)
-    return document
 
 
 @router.post(
@@ -1339,17 +1954,260 @@ def reopen_subtitle_review(
 def get_subtitle_review_preview_video(
     job_id: str,
     clip_id: str,
+    spec_hash: str | None = Query(default=None, alias="specHash"),
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> FileResponse:
-    _get_job_or_404(db, job_id)
-    document = _get_subtitle_review_or_404(job_id, paths)
-    if not any(clip.id == clip_id for clip in document.clips):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subtitle review clip not found")
-    preview_path = subtitle_review_preview_path(paths.job_outputs(job_id), clip_id)
-    if not preview_path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subtitle review preview not found")
-    return FileResponse(preview_path, media_type="video/mp4")
+    job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
+    output_dir = paths.job_outputs(job_id)
+    queued_previews: list[tuple[str, str]] = []
+    legacy_preview_path: Path | None = None
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        document = _get_subtitle_review_or_404(job_id, paths)
+        clip = next((item for item in document.clips if item.id == clip_id), None)
+        if clip is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            )
+        if document.state != "awaiting_review" and clip.preview_spec_hash is None and spec_hash is None:
+            candidate_legacy_path = subtitle_review_preview_path(
+                output_dir,
+                clip_id,
+            )
+            if _legacy_subtitle_review_preview_is_available(candidate_legacy_path):
+                legacy_preview_path = candidate_legacy_path
+        if job.status == "awaiting_subtitle_review" and document.state == "awaiting_review":
+            document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+                job=job,
+                video=video,
+                document=document,
+                paths=paths,
+                clip_ids={clip_id},
+            )
+    if legacy_preview_path is not None:
+        return FileResponse(
+            legacy_preview_path,
+            media_type="video/mp4",
+            headers={"Cache-Control": "no-store"},
+        )
+    document = _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
+    clip = next(item for item in document.clips if item.id == clip_id)
+    if spec_hash is not None and clip.preview_spec_hash != spec_hash:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="subtitle review preview revision not found",
+        )
+    if clip.preview_state != "ready" or clip.preview_spec_hash is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "subtitle_review_preview_not_ready",
+                "message": "現在の編集内容のプレビューを準備中です。",
+            },
+        )
+    preview_paths = exact_subtitle_review_preview_paths(
+        paths.job_outputs(job_id),
+        clip_id,
+        clip.preview_spec_hash,
+    )
+    if not exact_subtitle_review_preview_is_ready(
+        preview_paths,
+        clip.preview_spec_hash,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "subtitle_review_preview_not_ready",
+                "message": "現在の編集内容のプレビューを準備中です。",
+            },
+        )
+    return FileResponse(
+        preview_paths.video_path,
+        media_type="video/mp4",
+        headers={"Cache-Control": ("public, max-age=31536000, immutable" if spec_hash is not None else "no-store")},
+    )
+
+
+@router.get("/{job_id}/subtitle-review/clips/{clip_id}/live-preview-video")
+def get_subtitle_review_live_preview_video(
+    job_id: str,
+    clip_id: str,
+    spec_hash: str = Query(alias="specHash"),
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+) -> FileResponse:
+    job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
+    output_dir = paths.job_outputs(job_id)
+    queued_previews: list[tuple[str, str]] = []
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        document = _get_subtitle_review_or_404(job_id, paths)
+        clip = next((item for item in document.clips if item.id == clip_id), None)
+        if clip is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            )
+        if job.status == "awaiting_subtitle_review" and document.state == "awaiting_review":
+            document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+                job=job,
+                video=video,
+                document=document,
+                paths=paths,
+                clip_ids={clip_id},
+            )
+    document = _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
+    clip = next(item for item in document.clips if item.id == clip_id)
+    if clip.live_preview_spec_hash != spec_hash:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="subtitle review live preview revision not found",
+        )
+    live_paths = live_subtitle_review_preview_paths(
+        output_dir,
+        clip_id,
+        spec_hash,
+    )
+    if not live_subtitle_review_preview_is_ready(live_paths, spec_hash):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "subtitle_review_live_preview_not_ready",
+                "message": "即時編集用の映像を準備中です。",
+            },
+        )
+    return FileResponse(
+        live_paths.video_path,
+        media_type="video/mp4",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@router.post(
+    "/{job_id}/subtitle-review/clips/{clip_id}/preview/retry",
+    response_model=SubtitleReviewDocument,
+)
+def retry_subtitle_review_preview(
+    job_id: str,
+    clip_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
+    output_dir = paths.job_outputs(job_id)
+    queued_previews: list[tuple[str, str]] = []
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not editable",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting preview retry",
+            )
+        clip = next((item for item in document.clips if item.id == clip_id), None)
+        if clip is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            )
+        try:
+            _spec, current_hash, _inputs = current_subtitle_review_preview_spec(
+                job=job,
+                video=video,
+                document=document,
+                paths=paths,
+                clip_id=clip_id,
+            )
+        except (FileNotFoundError, KeyError, OSError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review preview inputs are unavailable",
+            ) from exc
+
+        if clip.preview_spec_hash == current_hash and clip.preview_state in {
+            "queued",
+            "rendering",
+            "ready",
+        }:
+            return document
+        if clip.preview_spec_hash != current_hash:
+            document, _auto_queued = _refresh_subtitle_review_previews_unlocked(
+                job=job,
+                video=video,
+                document=document,
+                paths=paths,
+                clip_ids={clip_id},
+            )
+            clip = next(item for item in document.clips if item.id == clip_id)
+            if clip.preview_state == "ready":
+                return document
+        try:
+            exact_subtitle_review_preview_error_path(
+                output_dir,
+                clip_id,
+                current_hash,
+            ).unlink(missing_ok=True)
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="could not reset subtitle review preview",
+            ) from exc
+        clip.preview_state = "queued"
+        clip.preview_spec_hash = current_hash
+        clip.preview_video_url = None
+        clip.preview_error = None
+        clip.confirmed = False
+        document.confirmed_clip_count = sum(1 for item in document.clips if item.confirmed)
+        queued_previews = [(clip_id, current_hash)]
+        _write_subtitle_review_unlocked(document, paths)
+
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
 
 
 @router.patch(
@@ -1363,52 +2221,71 @@ def update_subtitle_review_hook_scene(
     request: ClipPlanHookSceneUpdateRequest,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
-    enqueue_hook_scene_update: SubtitleReviewHookSceneUpdateEnqueue = Depends(
-        get_enqueue_subtitle_review_hook_scene_update
-    ),
+    enqueue_hook_scene_update: SubtitleReviewHookSceneUpdateEnqueue = Depends(get_enqueue_subtitle_review_hook_scene_update),
 ) -> ClipPlanActionResponse:
     job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
     if job.status != "awaiting_subtitle_review":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="subtitle review is not editable",
         )
-    document = _get_subtitle_review_or_404(job_id, paths)
-    if document.state != "awaiting_review":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="subtitle review is not awaiting hook scene adjustment",
-        )
-    validation_document = document.model_copy(deep=True)
-    validation_document.short_max_duration = float(
-        (job.settings_json or {}).get("shortMaxDuration", 75.0)
-    )
-    try:
-        update_review_hook_scene(
-            validation_document,
-            clip_id,
-            start=request.start,
-            end=request.end,
-        )
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="subtitle review clip not found",
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from exc
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not editable",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting hook scene adjustment",
+            )
+        if (
+            request.start is not None
+            and request.end is not None
+            and video.has_audio is False
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="hook scene is unavailable for a source video without audio",
+            )
+        validation_document = document.model_copy(deep=True)
+        validation_document.short_max_duration = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
+        try:
+            update_review_hook_scene(
+                validation_document,
+                clip_id,
+                start=request.start,
+                end=request.end,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
 
-    job.status = "preparing_subtitle_review"
-    job.progress = PROGRESS_MAP["preparing_subtitle_review"]
-    job.current_step = "冒頭フック映像の確認動画を準備中"
-    job.error_code = None
-    job.error_message = None
-    job.updated_at = utc_now()
-    db.commit()
-    db.refresh(job)
+        job.status = "preparing_subtitle_review"
+        job.progress = PROGRESS_MAP["preparing_subtitle_review"]
+        job.current_step = "冒頭フック映像の確認動画を準備中"
+        job.error_code = None
+        job.error_message = None
+        job.updated_at = utc_now()
+        db.commit()
+        db.refresh(job)
 
     try:
         enqueue_hook_scene_update(
@@ -1441,46 +2318,205 @@ def update_subtitle_review_clip_content(
     request: SubtitleReviewClipContentUpdateRequest,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> SubtitleReviewDocument:
     job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
     if job.status != "awaiting_subtitle_review":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="subtitle review is not editable",
         )
-    document = _get_subtitle_review_or_404(job_id, paths)
-    try:
-        style_updates: dict[str, object] = {}
-        if "title_style" in request.model_fields_set:
-            style_updates["title_style"] = request.title_style
-        if "hook_style" in request.model_fields_set:
-            style_updates["hook_style"] = request.hook_style
-        if "subtitle_style" in request.model_fields_set:
-            style_updates["subtitle_style"] = request.subtitle_style
-        document = update_review_clip_content(
-            document,
-            clip_id,
-            title=request.title,
-            hook_text=request.hook_text,
-            hook_duration_seconds=request.hook_duration_seconds,
-            **style_updates,
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not editable",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting edits",
+            )
+        try:
+            style_updates: dict[str, object] = {}
+            if "title_style" in request.model_fields_set:
+                style_updates["title_style"] = request.title_style
+            if "hook_style" in request.model_fields_set:
+                style_updates["hook_style"] = request.hook_style
+            if "subtitle_style" in request.model_fields_set:
+                style_updates["subtitle_style"] = request.subtitle_style
+            document = update_review_clip_content(
+                document,
+                clip_id,
+                title=request.title,
+                hook_text=request.hook_text,
+                hook_duration_seconds=request.hook_duration_seconds,
+                **style_updates,
+            )
+            document, _contract_changed = refresh_review_render_contract(
+                document,
+                render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
+                render_settings=dict(job.settings_json or {}),
+                source_width=video.width,
+                source_height=video.height,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+            job=job,
+            video=video,
+            document=document,
+            paths=paths,
+            clip_ids={clip_id},
         )
-        document = refresh_review_overlay_title_expectations(
-            document,
-            render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
+        _write_subtitle_review_unlocked(document, paths)
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
+
+
+@router.post(
+    "/{job_id}/subtitle-review/clips/{clip_id}/apply",
+    response_model=SubtitleReviewDocument,
+)
+def apply_subtitle_review_clip(
+    job_id: str,
+    clip_id: str,
+    request: SubtitleReviewClipApplyRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+) -> SubtitleReviewDocument:
+    """Persist one clip's drafts and accept it without waiting for exact preview rendering."""
+    job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
         )
-    except KeyError as exc:
+    if job.status != "awaiting_subtitle_review":
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="subtitle review clip not found",
-        ) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail=str(exc),
-        ) from exc
-    _persist_subtitle_review(document, paths)
-    return document
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not editable",
+        )
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not editable",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting edits",
+            )
+        clip = next((item for item in document.clips if item.id == clip_id), None)
+        if clip is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            )
+        allowed_segment_ids = set(clip.segment_ids)
+        requested_segment_ids = {segment_update.segment_id for segment_update in request.segments}
+        if not requested_segment_ids.issubset(allowed_segment_ids):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="subtitle segment does not belong to the selected clip",
+            )
+
+        affected_clip_ids = {clip_id}
+        segments_by_id = {segment.id: segment for segment in document.segments}
+        for segment_id in requested_segment_ids:
+            segment = segments_by_id.get(segment_id)
+            if segment is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="subtitle segment not found",
+                )
+            affected_clip_ids.update(segment.affected_clip_ids)
+
+        try:
+            style_updates: dict[str, object] = {}
+            if "title_style" in request.model_fields_set:
+                style_updates["title_style"] = request.title_style
+            if "hook_style" in request.model_fields_set:
+                style_updates["hook_style"] = request.hook_style
+            if "subtitle_style" in request.model_fields_set:
+                style_updates["subtitle_style"] = request.subtitle_style
+            document = update_review_clip_content(
+                document,
+                clip_id,
+                title=request.title,
+                hook_text=request.hook_text,
+                hook_duration_seconds=request.hook_duration_seconds,
+                **style_updates,
+            )
+            for segment_update in request.segments:
+                document = update_review_segment(
+                    document,
+                    segment_update.segment_id,
+                    segment_update.text,
+                )
+            document, _contract_changed = refresh_review_render_contract(
+                document,
+                render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
+                render_settings=dict(job.settings_json or {}),
+                source_width=video.width,
+                source_height=video.height,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip or segment not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+
+        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+            job=job,
+            video=video,
+            document=document,
+            paths=paths,
+            clip_ids=affected_clip_ids,
+        )
+        document = confirm_review_clip(document, clip_id)
+        _write_subtitle_review_unlocked(document, paths)
+
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
 
 
 @router.patch(
@@ -1493,20 +2529,66 @@ def update_subtitle_review_segment(
     request: SubtitleReviewSegmentUpdateRequest,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> SubtitleReviewDocument:
     job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
     if job.status != "awaiting_subtitle_review":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="subtitle review is not editable",
         )
-    document = _get_subtitle_review_or_404(job_id, paths)
-    try:
-        document = update_review_segment(document, segment_id, request.text)
-    except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="subtitle segment not found") from exc
-    _persist_subtitle_review(document, paths)
-    return document
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not editable",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting edits",
+            )
+        segment = next(
+            (item for item in document.segments if item.id == segment_id),
+            None,
+        )
+        if segment is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle segment not found",
+            )
+        affected_clip_ids = set(segment.affected_clip_ids)
+        try:
+            document = update_review_segment(document, segment_id, request.text)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle segment not found",
+            ) from exc
+        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+            job=job,
+            video=video,
+            document=document,
+            paths=paths,
+            clip_ids=affected_clip_ids,
+        )
+        _write_subtitle_review_unlocked(document, paths)
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
 
 
 @router.post(
@@ -1518,19 +2600,72 @@ def confirm_subtitle_review_clip(
     clip_id: str,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> SubtitleReviewDocument:
     job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
     if job.status != "awaiting_subtitle_review":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="subtitle review is not editable",
         )
-    document = _get_subtitle_review_or_404(job_id, paths)
-    try:
-        document = confirm_review_clip(document, clip_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="clip not found") from exc
-    _persist_subtitle_review(document, paths)
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not editable",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting confirmation",
+            )
+        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+            job=job,
+            video=video,
+            document=document,
+            paths=paths,
+            clip_ids={clip_id},
+        )
+        clip = next((item for item in document.clips if item.id == clip_id), None)
+        if clip is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="clip not found",
+            )
+        preview_ready = clip.preview_state == "ready"
+        if preview_ready:
+            try:
+                document = confirm_review_clip(document, clip_id)
+            except KeyError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="clip not found",
+                ) from exc
+            _write_subtitle_review_unlocked(document, paths)
+    document = _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
+    if not preview_ready:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "subtitle_review_preview_not_ready",
+                "message": "現在の編集内容のプレビュー完成後に確認してください。",
+            },
+        )
     return document
 
 
@@ -1544,35 +2679,79 @@ def finalize_subtitle_review(
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
     enqueue_render: RenderEnqueue = Depends(get_enqueue_render_job),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> SubtitleReviewFinalizeResponse:
     job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
     if job.status != "awaiting_subtitle_review":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="subtitle review is not awaiting finalization",
         )
-    document = _get_subtitle_review_or_404(job_id, paths)
-    try:
-        document = queue_review_render(document)
-    except ValueError as exc:
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting finalization",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting finalization",
+            )
+        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+            job=job,
+            video=video,
+            document=document,
+            paths=paths,
+        )
+        previews_ready = all(clip.preview_state == "ready" for clip in document.clips)
+        if previews_ready:
+            try:
+                document = queue_review_render(document)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=str(exc),
+                ) from exc
+            _write_subtitle_review_unlocked(document, paths)
+            job.status = "rendering_normal_clips"
+            job.progress = PROGRESS_MAP["rendering_normal_clips"]
+            job.current_step = CURRENT_STEP_MAP["rendering_normal_clips"]
+            job.updated_at = utc_now()
+            db.commit()
+            db.refresh(job)
+    document = _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
+    if not previews_ready:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-
-    _persist_subtitle_review(document, paths)
-    job.status = "rendering_normal_clips"
-    job.progress = PROGRESS_MAP["rendering_normal_clips"]
-    job.current_step = CURRENT_STEP_MAP["rendering_normal_clips"]
-    job.updated_at = utc_now()
-    db.commit()
-    db.refresh(job)
-
+            detail={
+                "code": "subtitle_review_preview_not_ready",
+                "message": "現在の編集内容のプレビュー完成後に書き出してください。",
+            },
+        )
     try:
         enqueue_render(job.id)
     except Exception as exc:
-        document.state = "awaiting_review"
-        _persist_subtitle_review(document, paths)
+        with subtitle_review_document_lock(output_dir):
+            latest = _get_subtitle_review_or_404(job_id, paths)
+            if latest.state == "render_queued":
+                latest.state = "awaiting_review"
+                _write_subtitle_review_unlocked(latest, paths)
         job.status = "awaiting_subtitle_review"
         job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
         job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]

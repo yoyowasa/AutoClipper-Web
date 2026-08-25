@@ -10,15 +10,19 @@ import {
 } from "../../../../components/ClipBoundaryEditor";
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
 import { ClipSelectionEditor } from "../../../../components/ClipSelectionEditor";
+import { ManualClipPlanEditor } from "../../../../components/ManualClipPlanEditor";
 import {
   approveClipPlan,
+  createClipPlanClip,
+  deleteClipPlanClip,
   getClipPlan,
   getClipPlanTranscriptSegments,
   getJobStatus,
   reselectClipPlan,
   toApiUrl,
   updateClipPlanBoundary,
-  updateClipPlanHookScene
+  updateClipPlanHookScene,
+  updateManualClipPlanClip
 } from "../../../../lib/api";
 import type {
   ClipPlanClip,
@@ -26,6 +30,7 @@ import type {
   ClipPlanReselectionRequest,
   ClipPlanTranscriptSegment,
   ClipSettings,
+  ExportType,
   JobStatusResponse
 } from "../../../../lib/types";
 
@@ -66,6 +71,7 @@ function reselectionPayload(settings: ClipSettings): ClipPlanReselectionRequest 
     excludeIntroOutro: settings.excludeIntroOutro,
     excludePromotionalContent: settings.excludePromotionalContent,
     selectionPolicy: settings.selectionPolicy,
+    heatmapIntervalMode: settings.heatmapIntervalMode,
     useOpenAIScoring: settings.useOpenAIScoring
   };
 }
@@ -80,6 +86,8 @@ export default function ClipPlanReviewPage() {
   const [job, setJob] = useState<JobStatusResponse | null>(null);
   const [isReselecting, setIsReselecting] = useState(false);
   const [isAdjusting, setIsAdjusting] = useState(false);
+  const [isCreatingManualClip, setIsCreatingManualClip] = useState(false);
+  const [isDeletingManualClip, setIsDeletingManualClip] = useState(false);
   const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [previewPlayheadSourceTime, setPreviewPlayheadSourceTime] = useState(0);
@@ -119,8 +127,31 @@ export default function ClipPlanReviewPage() {
       return;
     }
     let active = true;
-    void Promise.all([getClipPlan(jobId), getJobStatus(jobId)])
-      .then(([document, status]) => {
+    let timeoutId = 0;
+    async function refresh() {
+      try {
+        const status = await getJobStatus(jobId);
+        if (!active) {
+          return;
+        }
+        setJob(status);
+        if (status.status === "failed") {
+          setError(status.error?.message ?? "手動切り抜きの準備に失敗しました");
+          return;
+        }
+        let document: ClipPlanDocument;
+        try {
+          document = await getClipPlan(jobId);
+        } catch (caught) {
+          if (
+            status.status === "awaiting_clip_review" ||
+            status.status === "awaiting_manual_edit"
+          ) {
+            throw caught;
+          }
+          timeoutId = window.setTimeout(refresh, 1500);
+          return;
+        }
         if (!active) {
           return;
         }
@@ -130,9 +161,28 @@ export default function ClipPlanReviewPage() {
         setPreviewPlayheadSourceTime(
           document.clips[0]?.hookSceneStart ?? document.clips[0]?.start ?? 0
         );
-        setJob(status);
-      })
-      .catch((caught) => {
+        setError(null);
+        const documentWorkflowMode =
+          document.workflowMode ?? document.settings.workflowMode ?? "automatic";
+        if (
+          documentWorkflowMode === "manual" &&
+          status.status === "awaiting_subtitle_review"
+        ) {
+          router.push(`/jobs/${jobId}/subtitles`);
+          return;
+        }
+        if (
+          documentWorkflowMode === "manual" &&
+          document.state === "approved" &&
+          status.status !== "awaiting_manual_edit"
+        ) {
+          router.push(`/jobs/${jobId}`);
+          return;
+        }
+        if (document.state === "preparing" || document.state === "reselecting") {
+          timeoutId = window.setTimeout(refresh, 1500);
+        }
+      } catch (caught) {
         if (active) {
           setError(
             caught instanceof Error
@@ -140,14 +190,24 @@ export default function ClipPlanReviewPage() {
               : "切り抜き予定を読み込めませんでした"
           );
         }
-      });
+      }
+    }
+    void refresh();
     return () => {
       active = false;
+      window.clearTimeout(timeoutId);
     };
-  }, [jobId]);
+  }, [jobId, router]);
 
   useEffect(() => {
-    if ((!isReselecting && !isAdjusting && !isUpdatingHookScene) || !jobId) {
+    if (
+      (!isReselecting &&
+        !isAdjusting &&
+        !isCreatingManualClip &&
+        !isDeletingManualClip &&
+        !isUpdatingHookScene) ||
+      !jobId
+    ) {
       return;
     }
     let active = true;
@@ -158,11 +218,16 @@ export default function ClipPlanReviewPage() {
             return;
           }
           setJob(status);
-          if (status.status === "awaiting_clip_review") {
+          if (
+            status.status === "awaiting_clip_review" ||
+            status.status === "awaiting_manual_edit"
+          ) {
             window.clearInterval(intervalId);
             await loadPlan();
             setIsReselecting(false);
             setIsAdjusting(false);
+            setIsCreatingManualClip(false);
+            setIsDeletingManualClip(false);
             setIsUpdatingHookScene(false);
             if (status.error) {
               setError(status.error.message);
@@ -171,6 +236,8 @@ export default function ClipPlanReviewPage() {
             window.clearInterval(intervalId);
             setIsReselecting(false);
             setIsAdjusting(false);
+            setIsCreatingManualClip(false);
+            setIsDeletingManualClip(false);
             setIsUpdatingHookScene(false);
             setError(
               status.error?.message ??
@@ -187,6 +254,8 @@ export default function ClipPlanReviewPage() {
             window.clearInterval(intervalId);
             setIsReselecting(false);
             setIsAdjusting(false);
+            setIsCreatingManualClip(false);
+            setIsDeletingManualClip(false);
             setIsUpdatingHookScene(false);
             setError(
               caught instanceof Error ? caught.message : "再選定の状態を取得できませんでした"
@@ -200,6 +269,8 @@ export default function ClipPlanReviewPage() {
     };
   }, [
     isAdjusting,
+    isCreatingManualClip,
+    isDeletingManualClip,
     isReselecting,
     isUpdatingHookScene,
     jobId,
@@ -274,12 +345,62 @@ export default function ClipPlanReviewPage() {
     boundaryDraft?.clipId === selectedClipId ? boundaryDraft : null;
   const selectedTranscriptPreview =
     transcriptPreview?.clipId === selectedClipId ? transcriptPreview : null;
+  const workflowMode =
+    plan?.workflowMode ?? plan?.settings.workflowMode ?? "automatic";
+  const isManualWorkflow = workflowMode === "manual";
+  const planIsEditable =
+    plan?.state === "awaiting_review" ||
+    (isManualWorkflow && plan?.state === "manual_editing");
   const controlsDisabled =
     isReselecting ||
     isAdjusting ||
+    isCreatingManualClip ||
+    isDeletingManualClip ||
     isUpdatingHookScene ||
     isApproving ||
-    plan?.state !== "awaiting_review";
+    !planIsEditable;
+
+  useEffect(() => {
+    if (!isManualWorkflow || !isApproving || !jobId) {
+      return;
+    }
+    let active = true;
+    const intervalId = window.setInterval(() => {
+      void getJobStatus(jobId)
+        .then((status) => {
+          if (!active) {
+            return;
+          }
+          setJob(status);
+          if (status.status === "awaiting_subtitle_review") {
+            window.clearInterval(intervalId);
+            router.push(`/jobs/${jobId}/subtitles`);
+          } else if (status.status === "failed") {
+            window.clearInterval(intervalId);
+            setIsApproving(false);
+            setError(
+              status.error?.message ?? "手動切り抜きの字幕準備に失敗しました"
+            );
+          }
+        })
+        .catch((caught) => {
+          if (!active) {
+            return;
+          }
+          window.clearInterval(intervalId);
+          setIsApproving(false);
+          setError(
+            caught instanceof Error
+              ? caught.message
+              : "字幕準備の状態を取得できませんでした"
+          );
+        });
+    }, 1500);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [isApproving, isManualWorkflow, jobId, router]);
 
   async function handleBoundaryUpdate(start: number, end: number) {
     if (!selectedClip) {
@@ -308,6 +429,58 @@ export default function ClipPlanReviewPage() {
     }
   }
 
+  async function handleManualClipCreate(type: ExportType, start: number, end: number) {
+    setError(null);
+    setIsCreatingManualClip(true);
+    try {
+      const document = await createClipPlanClip(jobId, { type, start, end });
+      setPlan(document);
+      setDraftSettings(document.settings);
+      setSelectedClipId(document.clips.at(-1)?.id ?? "");
+      setIsCreatingManualClip(false);
+    } catch (caught) {
+      setIsCreatingManualClip(false);
+      setError(caught instanceof Error ? caught.message : "clipを追加できませんでした");
+    }
+  }
+
+  async function handleManualBoundaryUpdate(start: number, end: number) {
+    if (!selectedClip) {
+      return;
+    }
+    setError(null);
+    setIsAdjusting(true);
+    try {
+      const document = await updateManualClipPlanClip(jobId, selectedClip.id, {
+        start,
+        end
+      });
+      setPlan(document);
+      setDraftSettings(document.settings);
+      setIsAdjusting(false);
+    } catch (caught) {
+      setIsAdjusting(false);
+      setError(
+        caught instanceof Error ? caught.message : "切り抜き範囲を更新できませんでした"
+      );
+    }
+  }
+
+  async function handleManualClipDelete(clipId: string) {
+    setError(null);
+    setIsDeletingManualClip(true);
+    try {
+      const document = await deleteClipPlanClip(jobId, clipId);
+      setPlan(document);
+      setDraftSettings(document.settings);
+      setSelectedClipId(document.clips[0]?.id ?? "");
+      setIsDeletingManualClip(false);
+    } catch (caught) {
+      setIsDeletingManualClip(false);
+      setError(caught instanceof Error ? caught.message : "clipを削除できませんでした");
+    }
+  }
+
   async function handleHookSceneUpdate(
     start: number | null,
     end: number | null
@@ -318,7 +491,15 @@ export default function ClipPlanReviewPage() {
     setError(null);
     setIsUpdatingHookScene(true);
     try {
-      await updateClipPlanHookScene(jobId, selectedClip.id, { start, end });
+      const action = await updateClipPlanHookScene(jobId, selectedClip.id, { start, end });
+      if (isManualWorkflow && action.status === "awaiting_manual_edit") {
+        await loadPlan();
+        setJob((current) =>
+          current ? { ...current, status: action.status } : current
+        );
+        setIsUpdatingHookScene(false);
+        return;
+      }
       setJob((current) =>
         current
           ? {
@@ -395,7 +576,19 @@ export default function ClipPlanReviewPage() {
     setError(null);
     setIsApproving(true);
     try {
-      await approveClipPlan(jobId);
+      const action = await approveClipPlan(jobId);
+      if (isManualWorkflow) {
+        setJob((current) =>
+          current
+            ? {
+                ...current,
+                status: action.status,
+                currentStep: "文字起こしと字幕確認を準備中"
+              }
+            : current
+        );
+        return;
+      }
       router.push(`/jobs/${jobId}/subtitles`);
     } catch (caught) {
       setIsApproving(false);
@@ -421,9 +614,13 @@ export default function ClipPlanReviewPage() {
         <div className="flex w-full flex-wrap items-center justify-between gap-4">
           <div>
             <p className="text-xs font-semibold text-blue-700">工程 2 / 4</p>
-            <h1 className="mt-1 text-2xl font-semibold">切り抜き予定の確認</h1>
+            <h1 className="mt-1 text-2xl font-semibold">
+              {isManualWorkflow ? "元動画から手動で切り抜く" : "切り抜き予定の確認"}
+            </h1>
             <p className="mt-1 text-sm text-neutral-600">
-              字幕作成・焼き込み前です。選ばれた範囲だけを軽量動画で確認できます。
+              {isManualWorkflow
+                ? "元動画を再生し、通常切り抜きとショートの開始・終了を指定します。"
+                : "字幕作成・焼き込み前です。選ばれた範囲だけを軽量動画で確認できます。"}
             </p>
           </div>
           <Link
@@ -438,7 +635,7 @@ export default function ClipPlanReviewPage() {
       <div className="border-b border-neutral-300 bg-neutral-100 px-5 py-3">
         <div className="grid w-full grid-cols-2 gap-2 text-xs sm:grid-cols-4">
           <div className="border-l-4 border-emerald-500 px-3 py-2 text-emerald-900">
-            1. 解析・選定済み
+            {isManualWorkflow ? "1. 動画準備済み" : "1. 解析・選定済み"}
           </div>
           <div className="border-l-4 border-blue-600 bg-blue-50 px-3 py-2 font-semibold text-blue-900">
             2. 予定確認
@@ -459,6 +656,26 @@ export default function ClipPlanReviewPage() {
           </div>
         </div>
       ) : null}
+
+      {isManualWorkflow ? (
+        <ManualClipPlanEditor
+          approvalProgressLabel={job?.currentStep}
+          disabled={controlsDisabled}
+          isApproving={isApproving}
+          isDeleting={isDeletingManualClip}
+          isSaving={isAdjusting || isCreatingManualClip}
+          isUpdatingHookScene={isUpdatingHookScene}
+          key={plan.updatedAt}
+          plan={plan}
+          selectedClipId={selectedClipId}
+          onApprove={() => void handleApprove()}
+          onCreate={(type, start, end) => void handleManualClipCreate(type, start, end)}
+          onDelete={(clipId) => void handleManualClipDelete(clipId)}
+          onHookSceneUpdate={(start, end) => void handleHookSceneUpdate(start, end)}
+          onSelect={setSelectedClipId}
+          onUpdate={(start, end) => void handleManualBoundaryUpdate(start, end)}
+        />
+      ) : (
 
       <div className="grid w-full lg:grid-cols-[280px_minmax(0,1fr)_390px]">
         <aside className="border-r border-neutral-300 bg-white lg:row-span-2 lg:min-h-[calc(100vh-145px)]">
@@ -548,11 +765,12 @@ export default function ClipPlanReviewPage() {
                     }
                   />
 
-                  {selectedClip.type === "short" ? (
+                  <>
                     <ClipHookSceneEditor
                       clip={selectedClip}
                       compact
                       disabled={controlsDisabled}
+                      enforceMaximumDuration={selectedClip.type === "short"}
                       key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
                       playheadSourceTime={
                         previewPlayheadSourceTime >= selectedClip.start &&
@@ -566,7 +784,10 @@ export default function ClipPlanReviewPage() {
                         void handleHookSceneUpdate(start, end)
                       }
                     />
-                  ) : null}
+                    <p className="border-b border-neutral-300 bg-sky-50 px-5 py-2 text-xs font-medium text-sky-900">
+                      タイトルと冒頭フック文字は、次の「字幕確認」で編集できます。
+                    </p>
+                  </>
                 </div>
               </div>
             </>
@@ -638,11 +859,62 @@ export default function ClipPlanReviewPage() {
             <p className="text-xs font-semibold text-neutral-500">再選定</p>
             <h2 className="mt-1 text-lg font-semibold">狙う場面を調整</h2>
             <p className="mt-2 text-sm leading-6 text-neutral-600">
-              保存済みの文字起こし・候補を使うため、動画の再アップロードや再文字起こしは行いません。
+              保存済みの文字起こし・音声・映像解析を使うため、動画の再アップロードや再文字起こしは行いません。
             </p>
           </div>
 
-          <div className="mt-4">
+          <div className="mt-4 flex flex-col gap-3 border border-neutral-300 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-neutral-900">候補基準</p>
+              <p className="mt-1 text-xs leading-5 text-neutral-600">
+                {draftSettings.heatmapIntervalMode
+                  ? "人気区間JSONを起点に候補を作り、既存の品質条件で絞ります。"
+                  : "字幕・音声・映像で候補を作り、有効なJSON値は最大+10点の補助評価として使います。"}
+              </p>
+            </div>
+            <div
+              aria-label="再選定の候補基準"
+              className="grid shrink-0 grid-cols-2 border border-neutral-300"
+              role="group"
+            >
+              <button
+                aria-pressed={!draftSettings.heatmapIntervalMode}
+                className={`min-h-9 px-3 text-xs font-semibold ${
+                  !draftSettings.heatmapIntervalMode
+                    ? "bg-neutral-950 text-white"
+                    : "bg-white text-neutral-600 hover:bg-neutral-50"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+                disabled={controlsDisabled}
+                type="button"
+                onClick={() =>
+                  setDraftSettings((current) =>
+                    current ? { ...current, heatmapIntervalMode: false } : current
+                  )
+                }
+              >
+                従来評価
+              </button>
+              <button
+                aria-pressed={draftSettings.heatmapIntervalMode}
+                className={`min-h-9 px-3 text-xs font-semibold ${
+                  draftSettings.heatmapIntervalMode
+                    ? "bg-emerald-700 text-white"
+                    : "bg-white text-neutral-600 hover:bg-neutral-50"
+                } disabled:cursor-not-allowed disabled:opacity-50`}
+                disabled={controlsDisabled}
+                type="button"
+                onClick={() =>
+                  setDraftSettings((current) =>
+                    current ? { ...current, heatmapIntervalMode: true } : current
+                  )
+                }
+              >
+                JSON区間
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3">
             <ClipSelectionEditor
               disabled={controlsDisabled}
               settings={draftSettings}
@@ -689,6 +961,7 @@ export default function ClipPlanReviewPage() {
           </button>
         </section>
       </div>
+      )}
     </main>
   );
 }

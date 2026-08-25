@@ -160,7 +160,24 @@ def test_short_hook_can_render_when_overlay_title_is_disabled() -> None:
     assert "Dialogue: 1," not in ass
 
 
-def test_hook_scene_duplicates_subtitles_and_shifts_body_timeline() -> None:
+def test_hook_text_without_cloned_scene_suppresses_overlapping_subtitles() -> None:
+    candidate = make_candidate("short_1", "short", 10.0, 20.0).model_copy(
+        update={"hook_text": "冒頭フック", "hook_duration_seconds": 3.0}
+    )
+    segments = [
+        TranscriptSegment(start=10.0, end=12.0, text="重ねない字幕"),
+        TranscriptSegment(start=12.0, end=14.0, text="境界をまたぐ字幕"),
+    ]
+
+    ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
+
+    assert "Dialogue: 2,0:00:00.00,0:00:03.00,Hook,Hook" in ass
+    assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle" not in ass
+    assert "Dialogue: 0,0:00:02.00,0:00:04.00,Subtitle" not in ass
+    assert "Dialogue: 0,0:00:03.00,0:00:04.00,Subtitle" in ass
+
+
+def test_hook_scene_suppresses_regular_subtitles_and_shifts_body_timeline() -> None:
     candidate = make_candidate(
         "short_1",
         "short",
@@ -184,10 +201,145 @@ def test_hook_scene_duplicates_subtitles_and_shifts_body_timeline() -> None:
         layout=SubtitleLayout.short(),
     )
 
-    assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle,,0,0,0,,見せ場" in ass
+    assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle" not in ass
     assert "Dialogue: 0,0:00:02.00,0:00:04.00,Subtitle,,0,0,0,,本編冒頭" in ass
     assert "Dialogue: 0,0:00:06.00,0:00:08.00,Subtitle,,0,0,0,,見せ場" in ass
     assert "Dialogue: 1,0:00:00.00,0:00:12.00,Title,," in ass
+
+
+def test_hook_scene_keeps_hook_text_while_regular_subtitles_start_with_body() -> None:
+    candidate = make_candidate(
+        "short_1",
+        "short",
+        10.0,
+        20.0,
+        overlay_title="タイトル",
+    ).model_copy(
+        update={
+            "hook_text": "冒頭だけに出すフック文字",
+            "hook_duration_seconds": 2.0,
+            "hook_scene_start": 14.0,
+            "hook_scene_end": 16.0,
+        }
+    )
+    segments = [
+        TranscriptSegment(start=10.0, end=12.0, text="本編冒頭"),
+        TranscriptSegment(start=14.0, end=16.0, text="見せ場"),
+    ]
+
+    ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
+
+    assert "Dialogue: 2,0:00:00.00,0:00:02.00,Hook,Hook" in ass
+    assert "冒頭だけに出すフック文字" in ass
+    subtitle_dialogues = [
+        line for line in ass.splitlines() if line.startswith("Dialogue: 0,")
+    ]
+    assert subtitle_dialogues
+    assert all(
+        not line.startswith("Dialogue: 0,0:00:00.")
+        for line in subtitle_dialogues
+    )
+    assert subtitle_dialogues[0].startswith(
+        "Dialogue: 0,0:00:02.00,0:00:04.00,Subtitle"
+    )
+
+
+def test_normal_hook_scene_renders_hook_text_and_shifts_body_subtitles() -> None:
+    candidate = make_candidate("normal_1", "normal", 10.0, 20.0).model_copy(
+        update={
+            "hook_text": "通常切り抜きの冒頭フック",
+            "hook_duration_seconds": 2.0,
+            "hook_scene_start": 14.0,
+            "hook_scene_end": 16.0,
+        }
+    )
+    segments = [TranscriptSegment(start=10.0, end=12.0, text="本編冒頭")]
+
+    ass = build_ass_document(candidate, segments, layout=SubtitleLayout.normal())
+
+    assert "Dialogue: 2,0:00:00.00,0:00:02.00,Hook,Hook" in ass
+    assert "通常切り抜きの冒頭フック" in ass
+    assert "Dialogue: 0,0:00:02.00,0:00:04.00,Subtitle" in ass
+    assert "Dialogue: 1," not in ass
+
+
+def test_normal_title_starts_after_cloned_hook_scene_without_hook_text() -> None:
+    candidate = make_candidate("normal_1", "normal", 10.0, 20.0).model_copy(
+        update={
+            "title": "通常切り抜きの表示タイトル",
+            "hook_scene_start": 14.0,
+            "hook_scene_end": 16.5,
+        }
+    )
+
+    ass = build_ass_document(
+        candidate,
+        [],
+        layout=SubtitleLayout.normal(),
+        top_title=candidate.title,
+    )
+
+    assert "Dialogue: 1,0:00:02.50,0:00:12.50,Title" in ass
+    assert "Dialogue: 1,0:00:00.00,0:00:12.50,Title" not in ass
+
+
+def test_hook_scene_boundary_does_not_hide_first_body_subtitle() -> None:
+    candidate = make_candidate("short_1", "short", 10.0, 20.0).model_copy(
+        update={
+            "hook_scene_start": 10.0,
+            "hook_scene_end": 10.5,
+        }
+    )
+    segments = [TranscriptSegment(start=10.0, end=10.5, text="本編先頭")]
+
+    ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
+
+    assert "Dialogue: 0,0:00:00.00,0:00:00.50,Subtitle" not in ass
+    assert "Dialogue: 0,0:00:00.50,0:00:01.60,Subtitle" in ass
+
+
+def test_hook_text_and_regular_subtitles_never_overlap_when_hook_scene_is_shorter() -> None:
+    candidate = make_candidate("short_1", "short", 10.0, 20.0).model_copy(
+        update={
+            "hook_text": "冒頭フック",
+            "hook_duration_seconds": 3.0,
+            "hook_scene_start": 14.0,
+            "hook_scene_end": 16.54,
+        }
+    )
+    segments = [TranscriptSegment(start=10.0, end=12.0, text="本編先頭")]
+
+    ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
+
+    assert "Dialogue: 2,0:00:00.00,0:00:03.00,Hook,Hook" in ass
+    assert "Dialogue: 0,0:00:02.54,0:00:04.54,Subtitle" not in ass
+    assert "Dialogue: 0,0:00:03.00,0:00:04.54,Subtitle" in ass
+
+    def timestamp_seconds(value: str) -> float:
+        hours, minutes, seconds = value.split(":")
+        return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+    hook_line = next(
+        line for line in ass.splitlines() if line.startswith("Dialogue: 2,")
+    )
+    hook_parts = hook_line.split(",", 4)
+    hook_interval = (
+        timestamp_seconds(hook_parts[1]),
+        timestamp_seconds(hook_parts[2]),
+    )
+    subtitle_intervals = []
+    for line in ass.splitlines():
+        if not line.startswith("Dialogue: 0,"):
+            continue
+        parts = line.split(",", 4)
+        subtitle_intervals.append(
+            (timestamp_seconds(parts[1]), timestamp_seconds(parts[2]))
+        )
+    assert subtitle_intervals
+    assert all(
+        subtitle_end <= hook_interval[0] or subtitle_start >= hook_interval[1]
+        for subtitle_start, subtitle_end in subtitle_intervals
+    )
 
 
 def test_short_subtitle_style_defaults_remain_stable() -> None:
@@ -332,6 +484,102 @@ def test_clip_subtitle_position_takes_priority_over_job_position() -> None:
 
     assert r"{\an5\pos(648,1100)}ツッコミ" in ass
     assert r"{\an5\pos(432,1320)}" not in ass
+
+
+def test_clip_style_preserves_arbitrary_font_and_can_inherit_layout_position() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 4.0).model_copy(
+        update={
+            "subtitle_style": ClipTextStyle(
+                fontPreset=None,
+                fontName="ユーザー指定の任意フォント",
+                bold=False,
+                fontSize=70,
+                primaryColor="#12AB34",
+                outlineColor="#102030",
+                outlineWidth=4,
+                xPercent=90,
+                yPercent=10,
+                positionMode="layout",
+            )
+        }
+    )
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="任意書体を保持")]
+    layout = SubtitleLayout.short(
+        settings={
+            "shortSubtitleAlignment": 2,
+            "shortSubtitleMarginX": 86,
+            "shortSubtitleLowerMargin": 250,
+        }
+    )
+
+    ass = build_ass_document(candidate, segments, layout=layout)
+
+    assert "Style: Subtitle,ユーザー指定の任意フォント,70" in ass
+    assert ",0,0,0,0,100,100,0,0,1,4,2,2,86,86,250,1" in ass
+    subtitle_line = next(
+        line for line in ass.splitlines() if line.startswith("Dialogue: 0,")
+    )
+    assert r"\pos(" not in subtitle_line
+    assert "任意書体を保持" in subtitle_line
+
+
+def test_layout_position_mode_uses_job_percent_instead_of_stored_coordinates() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 4.0).model_copy(
+        update={
+            "subtitle_style": ClipTextStyle(
+                primaryColor="#12AB34",
+                xPercent=90,
+                yPercent=10,
+                positionMode="layout",
+            )
+        }
+    )
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="位置を保持")]
+    layout = SubtitleLayout.short(
+        settings={
+            "shortSubtitleXPercent": 40,
+            "shortSubtitleYPercent": 68.75,
+        }
+    )
+
+    ass = build_ass_document(candidate, segments, layout=layout)
+
+    assert r"{\an5\pos(432,1320)}位置を保持" in ass
+    assert r"{\an5\pos(972,192)}" not in ass
+
+
+def test_normal_twelve_pixel_layout_style_can_round_trip_as_clip_override() -> None:
+    layout = SubtitleLayout.normal(
+        width=640,
+        height=360,
+        settings={
+            "normalSubtitleFontName": "小さい任意フォント",
+            "normalSubtitleFontSize": 12,
+        },
+    )
+    candidate = make_candidate("normal_1", "normal", 0.0, 4.0).model_copy(
+        update={
+            "subtitle_style": ClipTextStyle(
+                fontPreset=None,
+                fontName=layout.font_name,
+                bold=True,
+                fontSize=layout.font_size,
+                primaryColor="#12AB34",
+                outlineColor=layout.outline_color,
+                outlineWidth=layout.outline,
+                xPercent=50,
+                yPercent=85,
+                positionMode="layout",
+            )
+        }
+    )
+    segments = [TranscriptSegment(start=0.0, end=4.0, text="12pxを維持")]
+
+    ass = build_ass_document(candidate, segments, layout=layout)
+
+    assert layout.font_size == 12
+    assert "Style: Subtitle,小さい任意フォント,12" in ass
+    assert "12pxを維持" in ass
 
 
 def test_bundled_normal_and_emphasis_font_presets_map_to_ass_names() -> None:

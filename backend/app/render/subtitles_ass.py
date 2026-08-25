@@ -1,10 +1,10 @@
 import math
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Literal, Sequence
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate, ClipTextStyle
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
 
 
@@ -34,7 +34,7 @@ DEFAULT_SUBTITLE_ALIGNMENT = 2
 DEFAULT_TITLE_ALIGNMENT = 8
 DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFFFFF"
 DEFAULT_SUBTITLE_OUTLINE_COLOR = "#000000"
-TEXT_FONT_PRESETS: dict[str, tuple[str, bool]] = {
+TEXT_FONT_PRESETS: dict[TextFontPreset, tuple[str, bool]] = {
     "sans": ("Noto Sans CJK JP", False),
     "sans_bold": ("Noto Sans CJK JP", True),
     "noto_black": ("Noto Sans JP Black", False),
@@ -213,6 +213,30 @@ class SubtitleLayout:
             max_subtitle_duration=parsed_settings.max_subtitle_duration,
             min_gap_between_subtitles=parsed_settings.min_gap_between_subtitles,
         )
+
+
+TextStyleRole = Literal["subtitle", "title", "hook"]
+TextStylePositionMode = Literal["explicit", "layout"]
+
+
+@dataclass(frozen=True)
+class ResolvedTextStyle:
+    font_preset: TextFontPreset | None
+    font_name: str
+    font_size: int
+    primary_color: str
+    outline_color: str
+    outline_width: int
+    shadow: int
+    bold: bool
+    alignment: int
+    style_alignment: int
+    margin_x: int
+    margin_v: int
+    x_percent: float
+    y_percent: float
+    position_mode: TextStylePositionMode
+    position_override: bool
 
 
 def _coerce_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
@@ -627,6 +651,8 @@ def _escape_ass_text(text: str) -> str:
 
 
 def _clip_segment_to_candidate(segment: TranscriptSegment, candidate: Candidate) -> TranscriptSegment | None:
+    if segment.clip_id is not None and segment.clip_id != candidate.id:
+        return None
     start = max(segment.start, candidate.start)
     end = min(segment.end, candidate.end)
     text = _normalize_text(segment.text)
@@ -637,6 +663,7 @@ def _clip_segment_to_candidate(segment: TranscriptSegment, candidate: Candidate)
         end=round(end - candidate.start, 3),
         text=text,
         confidence=segment.confidence,
+        clipId=segment.clip_id,
     )
 
 
@@ -778,38 +805,40 @@ def _subtitle_events_with_hook_scene(
     candidate: Candidate,
     layout: SubtitleLayout,
 ) -> tuple[list[SubtitleEvent], float]:
-    hook_duration = _hook_scene_duration(candidate)
+    hook_scene_duration = _hook_scene_duration(candidate)
     body_events = subtitle_events_for_candidate(
         transcript_segments,
         candidate,
         layout,
     )
-    if hook_duration <= 0:
+    hook_text_duration = 0.0
+    if _normalize_text(candidate.hook_text or ""):
+        hook_text_duration = candidate.hook_duration_seconds or 3.0
+    if hook_scene_duration <= 0 and hook_text_duration <= 0:
         return body_events, candidate.duration
 
-    hook_candidate = candidate.model_copy(
-        update={
-            "start": candidate.hook_scene_start,
-            "end": candidate.hook_scene_end,
-            "duration": hook_duration,
-            "hook_scene_start": None,
-            "hook_scene_end": None,
-        }
+    output_duration = candidate.duration + hook_scene_duration
+    suppression_end = round(
+        min(
+            output_duration,
+            max(hook_scene_duration, hook_text_duration),
+        ),
+        3,
     )
-    hook_events = subtitle_events_for_candidate(
-        transcript_segments,
-        hook_candidate,
-        layout,
-    )
-    shifted_body_events = [
-        SubtitleEvent(
-            start=round(event.start + hook_duration, 3),
-            end=round(event.end + hook_duration, 3),
-            text=event.text,
+    shifted_body_events: list[SubtitleEvent] = []
+    for event in body_events:
+        shifted_start = round(event.start + hook_scene_duration, 3)
+        shifted_end = round(event.end + hook_scene_duration, 3)
+        if shifted_end <= suppression_end:
+            continue
+        shifted_body_events.append(
+            SubtitleEvent(
+                start=round(max(shifted_start, suppression_end), 3),
+                end=shifted_end,
+                text=event.text,
+            )
         )
-        for event in body_events
-    ]
-    return [*hook_events, *shifted_body_events], candidate.duration + hook_duration
+    return shifted_body_events, output_duration
 
 
 def _ass_color(color: str, default: str) -> str:
@@ -849,8 +878,34 @@ def _style_line(
     )
 
 
-def _style_font(style: ClipTextStyle) -> tuple[str, bool]:
-    return TEXT_FONT_PRESETS[style.font_preset]
+def _font_preset_for(font_name: str, bold: bool) -> TextFontPreset | None:
+    return next(
+        (
+            preset
+            for preset, (preset_font_name, preset_bold) in TEXT_FONT_PRESETS.items()
+            if preset_font_name == font_name and preset_bold is bold
+        ),
+        None,
+    )
+
+
+def _style_font(
+    style: ClipTextStyle,
+    *,
+    fallback_font_name: str,
+) -> tuple[str, bool]:
+    preset_font = (
+        TEXT_FONT_PRESETS.get(style.font_preset)
+        if style.font_preset is not None
+        else None
+    )
+    font_name = style.font_name or (
+        preset_font[0] if preset_font is not None else fallback_font_name
+    )
+    bold = style.bold
+    if bold is None:
+        bold = preset_font[1] if preset_font is not None else True
+    return font_name, bold
 
 
 def _position_tag(
@@ -863,21 +918,142 @@ def _position_tag(
     return rf"{{\an5\pos({x},{y})}}"
 
 
-def _style_position_tag(style: ClipTextStyle, layout: SubtitleLayout) -> str:
-    return _position_tag(style.x_percent, style.y_percent, layout)
+def _alignment_position(
+    alignment: int,
+    *,
+    margin_x: int,
+    margin_v: int,
+    layout: SubtitleLayout,
+) -> tuple[float, float]:
+    if alignment in {1, 4, 7}:
+        x = margin_x
+    elif alignment in {3, 6, 9}:
+        x = layout.width - margin_x
+    else:
+        x = layout.width / 2
+
+    if alignment in {1, 2, 3}:
+        y = layout.height - margin_v
+    elif alignment in {7, 8, 9}:
+        y = margin_v
+    else:
+        y = layout.height / 2
+    return x * 100 / layout.width, y * 100 / layout.height
+
+
+def resolve_clip_text_style(
+    style: ClipTextStyle | None,
+    layout: SubtitleLayout,
+    *,
+    role: TextStyleRole,
+) -> ResolvedTextStyle:
+    is_subtitle = role == "subtitle"
+    fallback_font_name = layout.font_name if is_subtitle else layout.title_font_name
+    fallback_font_size = layout.font_size if is_subtitle else layout.title_font_size
+    fallback_alignment = (
+        layout.subtitle_alignment if is_subtitle else layout.title_alignment
+    )
+    fallback_margin_v = layout.lower_margin if is_subtitle else layout.top_margin
+    fallback_primary_color = (
+        layout.primary_color if is_subtitle else DEFAULT_SUBTITLE_PRIMARY_COLOR
+    )
+    fallback_outline_color = (
+        layout.outline_color if is_subtitle else DEFAULT_SUBTITLE_OUTLINE_COLOR
+    )
+
+    if style is None:
+        font_name = fallback_font_name
+        bold = True
+        font_size = fallback_font_size
+        primary_color = fallback_primary_color
+        outline_color = fallback_outline_color
+        outline_width = layout.outline
+        position_mode: TextStylePositionMode = "layout"
+    else:
+        font_name, bold = _style_font(
+            style,
+            fallback_font_name=fallback_font_name,
+        )
+        font_size = style.font_size
+        primary_color = style.primary_color
+        outline_color = style.outline_color
+        outline_width = style.outline_width
+        position_mode = style.position_mode
+
+    if position_mode == "explicit" and style is not None:
+        x_percent = style.x_percent
+        y_percent = style.y_percent
+        position_override = True
+        style_alignment = 5
+        alignment = 5
+        margin_x = 0
+        margin_v = 0
+    else:
+        style_alignment = fallback_alignment
+        margin_x = layout.margin_x
+        margin_v = fallback_margin_v
+        if (
+            is_subtitle
+            and layout.subtitle_x_percent is not None
+            and layout.subtitle_y_percent is not None
+        ):
+            x_percent = layout.subtitle_x_percent
+            y_percent = layout.subtitle_y_percent
+            position_override = True
+            alignment = 5
+        elif not is_subtitle and layout.subtitle_y_percent is not None:
+            x_percent = (
+                DEFAULT_SHORT_TITLE_X_PERCENT
+                if role == "title"
+                else DEFAULT_SHORT_HOOK_X_PERCENT
+            )
+            y_percent = (
+                DEFAULT_SHORT_TITLE_Y_PERCENT
+                if role == "title"
+                else DEFAULT_SHORT_HOOK_Y_PERCENT
+            )
+            position_override = True
+            alignment = 5
+        else:
+            x_percent, y_percent = _alignment_position(
+                fallback_alignment,
+                margin_x=layout.margin_x,
+                margin_v=fallback_margin_v,
+                layout=layout,
+            )
+            position_override = False
+            alignment = fallback_alignment
+
+    return ResolvedTextStyle(
+        font_preset=_font_preset_for(font_name, bold),
+        font_name=font_name,
+        font_size=font_size,
+        primary_color=primary_color,
+        outline_color=outline_color,
+        outline_width=outline_width,
+        shadow=layout.shadow,
+        bold=bold,
+        alignment=alignment,
+        style_alignment=style_alignment,
+        margin_x=margin_x,
+        margin_v=margin_v,
+        x_percent=x_percent,
+        y_percent=y_percent,
+        position_mode=position_mode,
+        position_override=position_override,
+    )
 
 
 def _subtitle_position_tag(
     style: ClipTextStyle | None,
     layout: SubtitleLayout,
 ) -> str:
-    if style is not None:
-        return _style_position_tag(style, layout)
-    if layout.subtitle_x_percent is None or layout.subtitle_y_percent is None:
+    resolved = resolve_clip_text_style(style, layout, role="subtitle")
+    if not resolved.position_override:
         return ""
     return _position_tag(
-        layout.subtitle_x_percent,
-        layout.subtitle_y_percent,
+        resolved.x_percent,
+        resolved.y_percent,
         layout,
     )
 
@@ -886,39 +1062,23 @@ def _clip_style_line(
     name: str,
     style: ClipTextStyle | None,
     layout: SubtitleLayout,
-    *,
-    fallback_font_name: str,
-    fallback_font_size: int,
-    fallback_alignment: int,
-    fallback_margin_v: int,
-    fallback_primary_color: str = DEFAULT_SUBTITLE_PRIMARY_COLOR,
-    fallback_outline_color: str = DEFAULT_SUBTITLE_OUTLINE_COLOR,
 ) -> str:
-    if style is None:
-        return _style_line(
-            name,
-            fallback_font_name,
-            fallback_font_size,
-            layout,
-            alignment=fallback_alignment,
-            margin_v=fallback_margin_v,
-            primary_color=fallback_primary_color,
-            outline_color=fallback_outline_color,
-        )
-
-    font_name, bold = _style_font(style)
+    role: TextStyleRole = (
+        "subtitle" if name == "Subtitle" else "title" if name == "Title" else "hook"
+    )
+    resolved = resolve_clip_text_style(style, layout, role=role)
     return _style_line(
         name,
-        font_name,
-        style.font_size,
+        resolved.font_name,
+        resolved.font_size,
         layout,
-        alignment=5,
-        margin_v=0,
-        primary_color=style.primary_color,
-        outline_color=style.outline_color,
-        outline=style.outline_width,
-        margin_x=0,
-        bold=bold,
+        alignment=resolved.style_alignment,
+        margin_v=resolved.margin_v,
+        primary_color=resolved.primary_color,
+        outline_color=resolved.outline_color,
+        outline=resolved.outline_width,
+        margin_x=resolved.margin_x,
+        bold=resolved.bold,
     )
 
 
@@ -937,9 +1097,9 @@ def build_ass_document(
         active_layout,
     )
     title_text = _normalize_text(top_title if top_title is not None else (candidate.overlay_title or ""))
-    include_title = candidate.type == "short" and bool(title_text)
+    include_title = bool(title_text)
     hook_text = _normalize_text(candidate.hook_text or "")
-    include_hook = candidate.type == "short" and bool(hook_text)
+    include_hook = bool(hook_text)
     hook_end = min(
         output_duration,
         candidate.hook_duration_seconds or 3.0,
@@ -964,30 +1124,16 @@ def build_ass_document(
             "Subtitle",
             candidate.subtitle_style,
             active_layout,
-            fallback_font_name=active_layout.font_name,
-            fallback_font_size=active_layout.font_size,
-            fallback_alignment=active_layout.subtitle_alignment,
-            fallback_margin_v=active_layout.lower_margin,
-            fallback_primary_color=active_layout.primary_color,
-            fallback_outline_color=active_layout.outline_color,
         ),
         _clip_style_line(
             "Title",
             candidate.title_style,
             active_layout,
-            fallback_font_name=active_layout.title_font_name,
-            fallback_font_size=active_layout.title_font_size,
-            fallback_alignment=active_layout.title_alignment,
-            fallback_margin_v=active_layout.top_margin,
         ),
         _clip_style_line(
             "Hook",
             candidate.hook_style,
             active_layout,
-            fallback_font_name=active_layout.title_font_name,
-            fallback_font_size=active_layout.title_font_size,
-            fallback_alignment=active_layout.title_alignment,
-            fallback_margin_v=active_layout.top_margin,
         ),
         "",
         "[Events]",
@@ -996,19 +1142,22 @@ def build_ass_document(
 
     if include_title:
         title_start = hook_end if include_hook else 0.0
+        if candidate.type == "normal":
+            title_start = max(title_start, _hook_scene_duration(candidate))
         if title_start < output_duration:
+            resolved_title_style = resolve_clip_text_style(
+                candidate.title_style,
+                active_layout,
+                role="title",
+            )
             title_position = (
-                _style_position_tag(candidate.title_style, active_layout)
-                if candidate.title_style is not None
-                else (
-                    _position_tag(
-                        DEFAULT_SHORT_TITLE_X_PERCENT,
-                        DEFAULT_SHORT_TITLE_Y_PERCENT,
-                        active_layout,
-                    )
-                    if active_layout.subtitle_y_percent is not None
-                    else ""
+                _position_tag(
+                    resolved_title_style.x_percent,
+                    resolved_title_style.y_percent,
+                    active_layout,
                 )
+                if resolved_title_style.position_override
+                else ""
             )
             lines.append(
                 "Dialogue: "
@@ -1019,18 +1168,19 @@ def build_ass_document(
             )
 
     if include_hook:
+        resolved_hook_style = resolve_clip_text_style(
+            candidate.hook_style,
+            active_layout,
+            role="hook",
+        )
         hook_position = (
-            _style_position_tag(candidate.hook_style, active_layout)
-            if candidate.hook_style is not None
-            else (
-                _position_tag(
-                    DEFAULT_SHORT_HOOK_X_PERCENT,
-                    DEFAULT_SHORT_HOOK_Y_PERCENT,
-                    active_layout,
-                )
-                if active_layout.subtitle_y_percent is not None
-                else ""
+            _position_tag(
+                resolved_hook_style.x_percent,
+                resolved_hook_style.y_percent,
+                active_layout,
             )
+            if resolved_hook_style.position_override
+            else ""
         )
         lines.append(
             "Dialogue: "

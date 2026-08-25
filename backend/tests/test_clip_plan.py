@@ -3,7 +3,7 @@ from pathlib import Path
 
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
-from app.jobs.clip_plan import build_clip_plan, load_clip_plan
+from app.jobs.clip_plan import build_clip_plan, load_clip_plan, update_clip_plan_hook_scene
 
 
 def test_build_clip_plan_does_not_emit_known_mixed_script_error() -> None:
@@ -138,3 +138,30 @@ def test_load_clip_plan_does_not_reapply_custom_transcript_replacements(
     assert first_load.clips[0].title == "NewsPicks公式で能面を紹介"
     assert first_load.clips[0].transcript_excerpt == "NewsPicks公式で能面を紹介"
     assert second_load.clips[0].title == first_load.clips[0].title
+
+
+def test_normal_clip_plan_accepts_hook_scene() -> None:
+    selection = CandidateSelection(
+        normalClips=[
+            Candidate(
+                id="normal_01",
+                type="normal",
+                start=10.0,
+                end=130.0,
+                duration=120.0,
+                transcript_text="通常切り抜き",
+                boundary_refined=False,
+            )
+        ]
+    )
+    document = build_clip_plan("job_normal_hook", selection, {})
+
+    updated = update_clip_plan_hook_scene(
+        document,
+        "normal_01",
+        start=40.0,
+        end=42.5,
+    )
+
+    assert updated.clips[0].hook_scene_start == 40.0
+    assert updated.clips[0].hook_scene_end == 42.5

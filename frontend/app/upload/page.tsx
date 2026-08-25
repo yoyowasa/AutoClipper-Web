@@ -13,7 +13,7 @@ import { createJob, reopenCompletedVideo, uploadVideo } from "../../lib/api";
 import { manualRangeValidationError } from "../../lib/manualClipRanges";
 import type { ClipSettings } from "../../lib/types";
 
-type UploadMode = "new" | "reedit";
+type UploadMode = "new" | "manual" | "reedit";
 type SubmissionStage = "idle" | "uploading" | "creating_job" | "opening_reedit";
 
 function actionLabelForStage(
@@ -32,9 +32,17 @@ function actionLabelForStage(
     return "再編集画面を開いています";
   }
   if (hasFile) {
-    return mode === "reedit" ? "この完成MP4を再編集" : "この動画で処理を開始";
+    return mode === "reedit"
+      ? "この完成MP4を再編集"
+      : mode === "manual"
+        ? "アップロードして手動切り抜きへ"
+        : "この動画で処理を開始";
   }
-  return mode === "reedit" ? "完成MP4を選択してください" : "動画を選択してください";
+  return mode === "reedit"
+    ? "完成MP4を選択してください"
+    : mode === "manual"
+      ? "手動で切り抜く動画を選択してください"
+      : "動画を選択してください";
 }
 
 function UploadForm() {
@@ -76,7 +84,7 @@ function UploadForm() {
         setManualRangeRevealKey((current) => current + 1);
         return;
       }
-    } else if (!file.name.toLowerCase().endsWith(".mp4")) {
+    } else if (uploadMode === "reedit" && !file.name.toLowerCase().endsWith(".mp4")) {
       setError("再編集にはAutoClipperで書き出したMP4を選択してください。");
       return;
     }
@@ -97,10 +105,33 @@ function UploadForm() {
         router.push(`/jobs/${reopened.jobId}/subtitles?${query.toString()}`);
         return;
       }
-      const uploaded = await uploadVideo(file, setUploadProgress, heatmapFile);
+      const uploaded = await uploadVideo(
+        file,
+        setUploadProgress,
+        uploadMode === "new" ? heatmapFile : null
+      );
       setSubmissionStage("creating_job");
-      const job = await createJob(uploaded.videoId, settings);
-      router.push(`/jobs/${job.jobId}`);
+      const jobSettings: ClipSettings =
+        uploadMode === "manual"
+          ? {
+              ...settings,
+              workflowMode: "manual",
+              normalClipCount: 0,
+              shortCount: 0,
+              normalClipTimeRanges: [],
+              shortClipTimeRanges: [],
+              heatmapIntervalMode: false,
+              useOpenAIScoring: false,
+              enableBoundaryRefinement: false,
+              requireClipPlanReview: true,
+              burnSubtitles: settings.manualSubtitleMode !== "none",
+              requireSubtitleReview: true
+            }
+          : { ...settings, workflowMode: "automatic" };
+      const job = await createJob(uploaded.videoId, jobSettings);
+      router.push(
+        uploadMode === "manual" ? `/jobs/${job.jobId}/clips` : `/jobs/${job.jobId}`
+      );
     } catch (caught) {
       setError(
         caught instanceof Error
@@ -121,7 +152,11 @@ function UploadForm() {
     setUploadMode(nextMode);
     setFile(null);
     setHeatmapFile(null);
-    setSettings((current) => ({ ...current, heatmapIntervalMode: false }));
+    setSettings((current) => ({
+      ...current,
+      workflowMode: nextMode === "manual" ? "manual" : "automatic",
+      heatmapIntervalMode: false
+    }));
     setSubmissionStage("idle");
     setUploadProgress(0);
     setError(null);
@@ -200,13 +235,17 @@ function UploadForm() {
                 <p className="mt-0.5 text-[11px] text-[#6d6d68]">処理する動画の用途を選択</p>
               </div>
               <span className="border border-[#d5d5d2] bg-[#f5f5f3] px-2 py-1 text-[10px] font-bold text-[#686863]">
-                {uploadMode === "reedit" ? "再編集" : "新規作成"}
+                {uploadMode === "reedit"
+                  ? "再編集"
+                  : uploadMode === "manual"
+                    ? "手動作成"
+                    : "自動作成"}
               </span>
             </div>
 
             <div
               aria-label="動画の利用方法"
-              className="grid grid-cols-2 border-b border-[#d5d5d2] bg-white p-1"
+              className="grid grid-cols-3 border-b border-[#d5d5d2] bg-white p-1"
               role="group"
             >
               <button
@@ -219,7 +258,20 @@ function UploadForm() {
                 type="button"
                 onClick={() => changeUploadMode("new")}
               >
-                新しい動画を作成
+                自動作成
+              </button>
+              <button
+                aria-label="元動画から手動作成"
+                aria-pressed={uploadMode === "manual"}
+                className={`min-h-10 px-2 text-xs font-bold ${
+                  uploadMode === "manual"
+                    ? "bg-[#161614] text-white"
+                    : "bg-white text-[#5e5e59] hover:bg-[#f1f1ef]"
+                }`}
+                type="button"
+                onClick={() => changeUploadMode("manual")}
+              >
+                手動作成
               </button>
               <button
                 aria-pressed={uploadMode === "reedit"}
@@ -398,16 +450,26 @@ function UploadForm() {
             <div className="flex min-h-12 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#d5d5d2] bg-[#fbfbfa] px-3">
               <div>
                 <h2 className="text-sm font-bold text-[#1b1b1b]">
-                  {uploadMode === "new" ? "生成設定" : "再編集データの復元"}
+                  {uploadMode === "new"
+                    ? "自動生成設定"
+                    : uploadMode === "manual"
+                      ? "手動切り抜き"
+                      : "再編集データの復元"}
                 </h2>
                 <p className="mt-0.5 text-[11px] text-[#6d6d68]">
                   {uploadMode === "new"
                     ? "出力本数・切り抜き方針・字幕を設定"
-                    : "完成MP4から元jobを照合して編集画面を開きます"}
+                    : uploadMode === "manual"
+                      ? "アップロード後に元動画を再生して範囲を作成"
+                      : "完成MP4から元jobを照合して編集画面を開きます"}
                 </p>
               </div>
               <span className="text-[10px] font-semibold text-sky-700">
-                {uploadMode === "new" ? "必要な項目だけ調整" : "元データを変更せず復元"}
+                {uploadMode === "new"
+                  ? "必要な項目だけ調整"
+                  : uploadMode === "manual"
+                    ? "自動選定なし"
+                    : "元データを変更せず復元"}
               </span>
             </div>
 
@@ -420,6 +482,81 @@ function UploadForm() {
                   workspace
                   onChange={setSettings}
                 />
+              ) : uploadMode === "manual" ? (
+                <div className="grid gap-3 p-3 lg:grid-cols-2">
+                  <section className="border border-[#cfcfcb] bg-white p-4 lg:col-span-2">
+                    <h3 className="text-sm font-bold text-[#20201e]">字幕の作り方</h3>
+                    <p className="mt-1 text-xs leading-5 text-[#666661]">
+                      切り抜き範囲を確定した後の会話字幕を選びます。タイトル・フック設定とは別です。
+                    </p>
+                    <div
+                      aria-label="手動作成の字幕モード"
+                      className="mt-3 grid border border-[#cfcfcb] sm:grid-cols-3"
+                      role="group"
+                    >
+                      {(
+                        [
+                          ["auto", "自動字幕", "音声を文字起こしして確認"],
+                          ["none", "字幕なし", "会話字幕を生成・焼き込みしない"],
+                          ["manual", "手入力", "clipごとに字幕を空欄から入力"]
+                        ] as const
+                      ).map(([value, label, description]) => {
+                        const selected = settings.manualSubtitleMode === value;
+                        return (
+                          <button
+                            aria-pressed={selected}
+                            className={`min-h-16 border-b px-3 py-2 text-left last:border-b-0 sm:border-b-0 sm:border-r sm:last:border-r-0 ${
+                              selected
+                                ? "bg-[#161614] text-white"
+                                : "bg-white text-[#20201e] hover:bg-[#f1f1ef]"
+                            }`}
+                            disabled={isSubmitting}
+                            key={value}
+                            type="button"
+                            onClick={() =>
+                              setSettings((current) => ({
+                                ...current,
+                                manualSubtitleMode: value
+                              }))
+                            }
+                          >
+                            <span className="block text-sm font-bold">{label}</span>
+                            <span
+                              className={`mt-1 block text-[11px] leading-4 ${
+                                selected ? "text-neutral-300" : "text-[#666661]"
+                              }`}
+                            >
+                              {description}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+                  <section className="border border-sky-200 bg-sky-50 p-4">
+                    <h3 className="text-sm font-bold text-sky-950">
+                      元動画を見ながら範囲を決めます
+                    </h3>
+                    <p className="mt-2 text-xs leading-6 text-sky-900">
+                      自動候補・人気区間JSON・AI評価は使いません。アップロード後の画面で、
+                      再生位置を開始・終了に設定して通常切り抜きとショートを追加します。
+                    </p>
+                  </section>
+                  <section className="border border-[#cfcfcb] bg-white p-4">
+                    <h3 className="text-sm font-bold text-[#20201e]">この後の流れ</h3>
+                    <ol className="mt-2 space-y-2 text-xs leading-5 text-[#555550]">
+                      <li>1. 元動画を再生して切り抜く範囲を追加</li>
+                      <li>
+                        2. {settings.manualSubtitleMode === "none"
+                          ? "タイトル・フックと見た目を確認"
+                          : settings.manualSubtitleMode === "manual"
+                            ? "字幕を入力して見た目を確認"
+                            : "自動字幕と見た目を確認"}
+                      </li>
+                      <li>3. 確定してレンダリング</li>
+                    </ol>
+                  </section>
+                </div>
               ) : (
                 <div className="grid gap-3 p-3 lg:grid-cols-2">
                   <section className="border border-[#cfcfcb] bg-white p-4">

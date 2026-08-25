@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.db import Base, get_db
 from app.jobs.queue import get_enqueue_job
 from app.main import app
@@ -99,7 +99,19 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
         return Path(output_path)
 
     candidates = [
-        make_candidate("cand_normal_1", 0.0, 120.0, "First normal", 91.0),
+        make_candidate("cand_normal_1", 0.0, 120.0, "First normal", 91.0).model_copy(
+            update={
+                "hook_text": "通常切り抜きのフック",
+                "hook_duration_seconds": 2.0,
+                "hook_scene_start": 60.0,
+                "hook_scene_end": 62.0,
+                "title_style": ClipTextStyle(
+                    fontPreset="sans_bold",
+                    fontSize=76,
+                    yPercent=8,
+                ),
+            }
+        ),
         make_candidate("cand_normal_fail", 130.0, 250.0, "Broken normal", 90.0),
         make_candidate("cand_normal_2", 260.0, 380.0, "Second normal", 82.0),
         Candidate(
@@ -141,6 +153,9 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     assert len(renderer_calls) == 3
     assert all(call["subtitle_path"] is not None for call in renderer_calls)
     assert all(call["normalize_audio"] is True for call in renderer_calls)
+    assert renderer_calls[0]["hook_scene_start"] == 60.0
+    assert renderer_calls[0]["hook_scene_end"] == 62.0
+    assert result.exports[0].duration == 122.0
 
     normal_dir = storage.outputs / created["jobId"] / "normal"
     subtitle_dir = storage.outputs / created["jobId"] / "subtitles" / "normal"
@@ -152,10 +167,23 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     normal_metadata = json.loads((normal_dir / "normal_01.json").read_text(encoding="utf-8"))
     assert normal_metadata["title"] == "First normal"
     assert normal_metadata["title_source"] == "existing"
+    assert normal_metadata["title_rendered"] is True
+    assert normal_metadata["overlay_title_expected"] is True
+    assert normal_metadata["overlay_title_rendered"] is True
+    assert normal_metadata["title_style"]["fontSize"] == 76
+    assert normal_metadata["duration"] == 122.0
+    assert normal_metadata["body_duration"] == 120.0
+    assert normal_metadata["hook_text"] == "通常切り抜きのフック"
+    assert normal_metadata["hook_scene_start"] == 60.0
+    assert normal_metadata["hook_scene_end"] == 62.0
+    assert normal_metadata["hook_scene_rendered"] is True
     assert "original_start" in normal_metadata
     assert "refined_start" in normal_metadata
     assert "boundary_refined" in normal_metadata
     assert normal_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/normal/normal_01.ass")
+    normal_ass = (subtitle_dir / "normal_01.ass").read_text(encoding="utf-8-sig")
+    assert ",Title,,0,0,0,," in normal_ass
+    assert "First normal" in normal_ass
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200

@@ -1,16 +1,17 @@
 # AutoClipper Web
 
-AutoClipper Web is a full-auto video clipping web app.
+AutoClipper Web is a video clipping web app with automatic and manual creation flows.
 
 The v1 flow is:
 
 - upload a long video
 - create a background job
-- analyze/transcribe/score/select clip candidates
+- either analyze/transcribe/score/select clip candidates automatically, or set normal/short ranges manually from the uploaded source
+- choose automatic subtitles, no conversation subtitles, or one editable manual subtitle per clip in the manual flow
 - render normal clips and 9:16 shorts with subtitles
 - download generated MP4 files or a ZIP
 
-Manual editing, approve/reject review flows, auth, billing, and social posting are out of scope for v1.
+Full timeline editing, approve/reject workflow management, auth, billing, and social posting are out of scope for v1.
 
 ## Stack
 
@@ -246,6 +247,15 @@ instead of falling back. Manual time ranges still take priority for their output
 type. The value is not a view count and cannot bypass existing quality gates.
 Validation and mode decisions are recorded in
 `heatmap_validation_summary.json`.
+
+During clip-plan review, `候補基準` can switch reselection between `従来評価`
+and `JSON区間`. Changing the mode rebuilds the candidate pool from the saved
+transcript, audio, scene, and visual analysis; it does not upload or transcribe
+the video again. Switching OFF returns to the legacy candidate generators while
+keeping a valid heatmap value as the bounded supporting score described above.
+Reselection remains deterministic, so OFF changes the candidate source but does
+not promise a different scene when the resulting evidence still ranks the same
+range highest.
 
 Create a job:
 
@@ -1077,11 +1087,15 @@ Title fallback behavior:
 - In `auto`, high-quality runs expect a burned-in overlay title; low-cost runs keep overlay titles as metadata and do not force title burn-in.
 - `shortTopBannerEnabled` and `shortBottomBannerEnabled` independently control the full-duration short-video banners. Both default to `false` and do not affect normal clips.
 - The top switch controls the bundled Japanese-pattern background. After the pattern has been enabled, turning it off keeps the displayed title as a title-only overlay and removes only the background.
-- Each subtitle-review clip exposes `overlayTitleExpected`, calculated by the same policy used by the renderer, so the 9:16 preview matches `high_quality`, low-cost, manual-title, and banner settings.
+- Each subtitle-review clip exposes `overlayTitleExpected`, calculated by the same policy used by the renderer.
 - The bottom banner uses `backend/app/render/assets/short_bottom_banner.png` as supplied, without redrawing its logo or text, and scales the complete image uniformly to the short-video width.
 - The subtitle review and completed-video re-edit screen exposes the same two switches for short clips. Changes are saved immediately to the original job and used by the next re-render.
-- The subtitle review and re-edit screen immediately shows the enabled banners in the 9:16 text-placement preview, using the same PNG bytes as the renderer. Normal-clip previews remain unchanged.
-- The main review player keeps the source aspect ratio. The 9:16 panel previews banner and text placement; it does not simulate the final `auto` / `blur_background` crop strategy.
+- The subtitle review and re-edit screen separates `Normal edit` and `Short edit`. Normal previews play at `16:9`; short previews play at `9:16`.
+- The main review player defaults to an editable live view: a textless base video generated with the same normal/short renderer, crop strategy, hook-scene composition, and bundled banner bytes as the final export, with the unsaved title, hook, or subtitle style drawn immediately on the same canvas.
+- `Saved final view` switches the same player to the exact MP4 generated with the final ASS/libass path. Browser glyph rasterization can differ slightly, so this saved view remains the final output reference.
+- Exact preview artifacts are keyed by the reviewed text/style and full render settings. The textless live base has an independent visual hash, so title, hook, subtitle text, color, size, and position drafts update immediately without writing the review artifact or re-rendering video.
+- `OK` batches the selected clip's content, text styles, and edited subtitle segments into one atomic update, marks that clip reviewed, and queues the exact preview once. Editing can continue on the next clip while that preview renders; finalization still waits for every current exact preview revision.
+- While a short hook is displayed, regular subtitle events are suppressed. This applies both to duplicated hook scenes and to text-only hooks, so hook text and conversation subtitles do not overlap.
 - Audit treats an empty title as `missing_title`; deterministic labels are reported as the weaker `generic_fallback_title`.
 - Audit only reports `missing_ass_title_event` when overlay title burn-in is expected but the ASS title event is missing.
 
@@ -1387,3 +1401,17 @@ OpenAI scoring failures:
 
 - Set `OPENAI_API_KEY` in `.env` for OpenAI scoring.
 - If OpenAI scoring fails, the worker falls back to rule scoring where possible.
+
+Long-form transcription recovery:
+
+- For CUDA jobs at least 30 minutes long, the worker checks transcript coverage, text density, confidence, and repeated low-information segments after the normal whole-file transcription.
+- When that quality check fails, recovery is automatic: the same model retries in 90-second chunks with 5-second overlap, then `small + ja` retries in chunks only if the result is still unusable.
+- Chunk timestamps are merged and overlapping duplicate segments are removed. The quality threshold is not lowered.
+- Recovery details are written to `transcription_recovery_summary.json`.
+
+No usable clips after selection:
+
+- `no_usable_selection` means analysis completed but selection produced zero clips. The failed-job screen offers `同じ動画・設定で再処理`.
+- The retry reuses the stored video, heatmap sidecar, and settings in a new job. No re-upload or setting re-entry is required.
+- A source job can create only one retry. A second deterministic failure does not offer another retry.
+- Render failures remain `no_usable_output` and do not use this full-pipeline retry path.

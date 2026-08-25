@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+import app.jobs.runner as runner_module
 from app.audio.openai_transcript_correction import OpenAITranscriptCorrector
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
@@ -22,21 +23,24 @@ from app.jobs.queue import (
     get_enqueue_job,
     get_enqueue_render_job,
     get_enqueue_subtitle_review_hook_scene_update,
+    get_enqueue_subtitle_review_preview,
 )
 from app.candidates.merge_boundaries import Candidate
-from app.candidates.select_candidates import select_candidates
+from app.candidates.select_candidates import CandidateSelection, select_candidates
 from app.jobs.runner import (
     AutoClipperPipelineDependencies,
     PipelineExpectedError,
     _build_openai_scoring_pool,
     _ensure_selected_candidates_openai_scored,
     _score_candidate_list,
+    _transcript_quality_diagnostics,
     _transcription_language_setting,
     run_autoclipper_job,
     run_clip_plan_boundary_update,
     run_clip_plan_hook_scene_update,
     run_clip_plan_reselection,
     run_subtitle_review_hook_scene_update,
+    run_subtitle_review_preview,
     run_subtitle_review_render,
 )
 from app.jobs.status import SUCCESS_STATUSES
@@ -69,6 +73,114 @@ SUMMARY_FILENAMES = [
 )
 def test_transcription_language_setting_forces_japanese(settings: dict[str, Any]) -> None:
     assert _transcription_language_setting(settings) == "ja"
+
+
+def test_clip_plan_selection_empty_uses_dedicated_failure_code(tmp_path: Path) -> None:
+    with pytest.raises(PipelineExpectedError) as exc_info:
+        runner_module._prepare_clip_plan_review(
+            db=None,
+            job=None,
+            input_path=tmp_path / "input.mp4",
+            selection=CandidateSelection(),
+            settings={},
+            job_dir=tmp_path,
+            preview_renderer=lambda *_args, **_kwargs: tmp_path / "unused.mp4",
+            source_duration=60.0,
+        )
+
+    assert exc_info.value.code == "no_usable_selection"
+    assert exc_info.value.message == (
+        "Pipeline completed analysis but selection produced no usable clips."
+    )
+
+
+def test_long_form_quality_detects_clustered_japanese_repetition_and_sparse_coverage() -> None:
+    repeated_segments = [
+        TranscriptSegment(
+            start=float(index * 10),
+            end=float(index * 10 + 4),
+            text="えー",
+            confidence=0.32,
+        )
+        for index in range(25)
+    ]
+    repeated_segments.extend(
+        TranscriptSegment(
+            start=float((index + 25) * 10),
+            end=float((index + 25) * 10 + 4),
+            text="ご視聴ありがとうございました",
+            confidence=0.33,
+        )
+        for index in range(20)
+    )
+    repeated_segments.extend(
+        TranscriptSegment(
+            start=float((index + 45) * 10),
+            end=float((index + 45) * 10 + 4),
+            text=f"固有の発話内容{index}",
+            confidence=0.4,
+        )
+        for index in range(16)
+    )
+
+    quality = _transcript_quality_diagnostics(
+        repeated_segments,
+        timeline_duration=9312.0,
+        expected_speech_seconds=9000.0,
+    )
+
+    assert quality["clustered_repeated_segment_count"] == 45
+    assert quality["clustered_repeated_segment_ratio"] == pytest.approx(45 / 61)
+    assert quality["clustered_repeated_segment_text"] is True
+    assert quality["transcript_audio_coverage"] < 0.08
+    assert quality["characters_per_minute"] < 12
+    assert "clustered_repeated_segment_text" in quality["reasons"]
+    assert "long_form_transcript_too_sparse" in quality["reasons"]
+
+
+def test_clustered_repetition_is_not_a_hard_failure_for_short_high_confidence_audio() -> None:
+    segments = [
+        TranscriptSegment(
+            start=float(index * 3),
+            end=float(index * 3 + 2.5),
+            text="はい、そうです" if index % 2 == 0 else "その通りです",
+            confidence=0.95,
+        )
+        for index in range(24)
+    ]
+
+    quality = _transcript_quality_diagnostics(
+        segments,
+        timeline_duration=75.0,
+        expected_speech_seconds=60.0,
+    )
+
+    assert quality["clustered_repeated_segment_text"] is True
+    assert "clustered_repeated_segment_text" not in quality["reasons"]
+
+
+def test_clustered_repetition_is_not_a_hard_failure_when_long_audio_has_good_coverage() -> None:
+    phrases = ("司会の定型案内です", "出演者の定型返答です", "次の話題へ移ります")
+    segments = [
+        TranscriptSegment(
+            start=float(index * 100),
+            end=float(index * 100 + 20),
+            text=phrases[index % len(phrases)],
+            confidence=0.95,
+        )
+        for index in range(30)
+    ]
+
+    quality = _transcript_quality_diagnostics(
+        segments,
+        timeline_duration=3600.0,
+        expected_speech_seconds=600.0,
+    )
+
+    assert quality["clustered_repeated_segment_text"] is True
+    assert quality["characters_per_minute"] < 12
+    assert quality["transcript_audio_coverage"] == 1.0
+    assert quality["reasons"] == []
 
 
 class EchoCorrectionResponse:
@@ -134,6 +246,9 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_storage_paths] = override_get_storage_paths
     app.dependency_overrides[get_enqueue_job] = override_get_enqueue_job
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = (
+        lambda: lambda job_id, clip_id, spec_hash: None
+    )
 
     try:
         yield TestClient(app)
@@ -757,6 +872,283 @@ def test_pipeline_uses_heatmap_intervals_as_candidate_source_when_mode_is_on(
     assert status["details"]["heatmapIntervalModeApplied"] is True
 
 
+def test_stale_clip_plan_preview_cleanup_ignores_file_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preview_dir = tmp_path / "previews"
+    preview_dir.mkdir()
+    current_path = preview_dir / "current.mp4"
+    failing_stale_path = preview_dir / "a-failing-stale.mp4"
+    removable_stale_path = preview_dir / "b-removable-stale.mp4"
+    for path in (current_path, failing_stale_path, removable_stale_path):
+        path.write_bytes(b"preview")
+
+    original_unlink = Path.unlink
+
+    def fail_one_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path == failing_stale_path:
+            raise OSError("preview is locked")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_one_unlink)
+
+    runner_module._cleanup_stale_clip_plan_previews(
+        preview_dir,
+        {current_path.resolve()},
+    )
+
+    assert current_path.is_file()
+    assert failing_stale_path.is_file()
+    assert not removable_stale_path.exists()
+
+
+def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candidates(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    media = b"fake reselection mode video"
+    sidecar = json.dumps(
+        {
+            "schema_version": 1,
+            "source": {
+                "name": "youtube_most_replayed",
+                "video_id": "reselection-mode-video",
+                "fetched_at": "2026-08-02T03:30:00Z",
+                "extractor": "yt-dlp",
+                "extractor_version": "2026.07.04",
+            },
+            "media": {
+                "filename": "sample.mp4",
+                "sha256": hashlib.sha256(media).hexdigest(),
+                "size_bytes": len(media),
+            },
+            "duration_seconds": 240.0,
+            "heatmap_available": True,
+            "heatmap": [
+                {"start_time": 20.0, "end_time": 38.0, "value": 0.2},
+                {"start_time": 150.0, "end_time": 168.0, "value": 1.0},
+            ],
+        }
+    ).encode("utf-8")
+    upload = client.post(
+        "/api/videos/upload",
+        files={
+            "file": ("sample.mp4", media, "video/mp4"),
+            "heatmap": ("sample.mp4.heatmap.json", sidecar, "application/json"),
+        },
+    ).json()
+    created_response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 90,
+                "shortMinDuration": 20,
+                "shortMaxDuration": 20,
+                "heatmapIntervalMode": True,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+                "enableBoundaryRefinement": False,
+                "useOpenAIScoring": False,
+                "burnSubtitles": True,
+                "requireClipPlanReview": True,
+                "requireSubtitleReview": True,
+            },
+        },
+    )
+    assert created_response.status_code == 201
+    created = created_response.json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fake_preview(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(Path(output_path).name.encode("utf-8"))
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=240.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=lambda _path: fake_transcript(),
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        subtitle_review_preview_renderer=fake_preview,
+    )
+    run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    job_dir = storage.job_outputs(created["jobId"])
+    initial_candidates = json.loads(
+        (job_dir / "candidates.json").read_text(encoding="utf-8")
+    )
+    assert initial_candidates
+    assert all(
+        candidate["generation_source"] == "heatmap_interval"
+        for candidate in initial_candidates
+    )
+    initial_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
+    initial_clip_ids = {clip["id"] for clip in initial_plan["clips"]}
+    initial_preview_payloads = {
+        clip["previewVideoUrl"]: client.get(clip["previewVideoUrl"]).content
+        for clip in initial_plan["clips"]
+    }
+    rollback_names = [
+        "normal_candidates.json",
+        "short_candidates.json",
+        "candidates.json",
+        "candidate_generation_summary.json",
+    ]
+    initial_artifacts = {
+        name: (job_dir / name).read_bytes()
+        for name in rollback_names
+    }
+
+    queued_reselections: list[str] = []
+    app.dependency_overrides[get_enqueue_clip_plan_reselection] = (
+        lambda: queued_reselections.append
+    )
+
+    def reselection_payload(mode: bool | str) -> dict[str, Any]:
+        return {
+            "normalClipSelectionPreset": "auto",
+            "shortClipSelectionPreset": "auto",
+            "normalClipGuidance": "",
+            "shortClipGuidance": "",
+            "excludeIntroOutro": True,
+            "excludePromotionalContent": False,
+            "selectionPolicy": "fill_requested",
+            "useOpenAIScoring": False,
+            "heatmapIntervalMode": mode,
+        }
+
+    invalid_response = client.post(
+        f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+        json=reselection_payload("false"),
+    )
+    assert invalid_response.status_code == 422
+    assert queued_reselections == []
+
+    first_reselect_response = client.post(
+        f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+        json=reselection_payload(False),
+    )
+    assert first_reselect_response.status_code == 202
+    with next(app.dependency_overrides[get_db]()) as db:
+        stored_job = db.get(Job, created["jobId"])
+        assert stored_job is not None
+        assert stored_job.settings_json["heatmapIntervalMode"] is False
+
+    original_write_clip_plan = runner_module.write_clip_plan
+    write_attempt_count = 0
+    attempted_clip_ids: set[str] = set()
+
+    def fail_final_clip_plan_write(document: Any, output_path: str | Path) -> Path:
+        nonlocal write_attempt_count
+        write_attempt_count += 1
+        if write_attempt_count == 2:
+            attempted_clip_ids.update(clip.id for clip in document.clips)
+            raise OSError("final clip plan write failed")
+        return original_write_clip_plan(document, output_path)
+
+    monkeypatch.setattr(
+        runner_module,
+        "write_clip_plan",
+        fail_final_clip_plan_write,
+    )
+    with pytest.raises(OSError, match="final clip plan write failed"):
+        run_clip_plan_reselection(
+            created["jobId"],
+            session_factory=lambda: next(app.dependency_overrides[get_db]()),
+            paths=storage,
+            dependencies=dependencies,
+        )
+    monkeypatch.undo()
+
+    for name, initial_payload in initial_artifacts.items():
+        assert (job_dir / name).read_bytes() == initial_payload
+    rolled_back_plan = client.get(
+        f"/api/jobs/{created['jobId']}/clip-plan"
+    ).json()
+    assert rolled_back_plan["settings"]["heatmapIntervalMode"] is True
+    assert {clip["id"] for clip in rolled_back_plan["clips"]} == initial_clip_ids
+    assert initial_clip_ids - attempted_clip_ids
+    for preview_url, expected_payload in initial_preview_payloads.items():
+        preview_response = client.get(preview_url)
+        assert preview_response.status_code == 200
+        assert preview_response.content == expected_payload
+    with next(app.dependency_overrides[get_db]()) as db:
+        stored_job = db.get(Job, created["jobId"])
+        assert stored_job is not None
+        assert stored_job.settings_json["heatmapIntervalMode"] is True
+
+    second_reselect_response = client.post(
+        f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+        json=reselection_payload(False),
+    )
+    assert second_reselect_response.status_code == 202
+    statuses = run_clip_plan_reselection(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+    assert statuses[-1] == "awaiting_clip_review"
+
+    legacy_candidates = json.loads(
+        (job_dir / "candidates.json").read_text(encoding="utf-8")
+    )
+    assert legacy_candidates
+    assert all(
+        candidate.get("generation_source") != "heatmap_interval"
+        for candidate in legacy_candidates
+    )
+    generation_summary = json.loads(
+        (job_dir / "candidate_generation_summary.json").read_text(encoding="utf-8")
+    )
+    assert generation_summary["by_type"]["normal"].get("strategy") != "heatmap_intervals"
+    assert generation_summary["by_type"]["short"].get("strategy") != "heatmap_intervals"
+    heatmap_summary = json.loads(
+        (job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8")
+    )
+    assert heatmap_summary["interval_mode_requested"] is False
+    assert heatmap_summary["interval_mode_applied"] is False
+    assert heatmap_summary["selection_behavior"] == "supporting_score"
+    revised_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
+    assert revised_plan["revision"] == 2
+    assert revised_plan["settings"]["heatmapIntervalMode"] is False
+    with next(app.dependency_overrides[get_db]()) as db:
+        stored_job = db.get(Job, created["jobId"])
+        assert stored_job is not None
+        assert stored_job.settings_json["heatmapIntervalMode"] is False
+
+
 def test_pipeline_fails_instead_of_falling_back_when_interval_sidecar_is_tampered(
     client: TestClient,
 ) -> None:
@@ -1264,7 +1656,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     )
     assert stored_review["shortOverlayTitleMode"] == expected_overlay_mode
     assert all(
-        clip["overlayTitleExpected"] is False
+        clip["overlayTitleExpected"] is True
         for clip in stored_review["clips"]
         if clip["type"] == "normal"
     )
@@ -1384,6 +1776,31 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         subtitle_review_preview_renderer=fake_render,
     )
 
+    def render_queued_previews(review_payload: dict[str, Any]) -> dict[str, Any]:
+        queued_clips = [
+            clip
+            for clip in review_payload["clips"]
+            if clip["previewState"] != "ready"
+        ]
+        for clip in queued_clips:
+            assert run_subtitle_review_preview(
+                created["jobId"],
+                clip["id"],
+                clip["previewSpecHash"],
+                session_factory=lambda: next(app.dependency_overrides[get_db]()),
+                paths=storage,
+                dependencies=dependencies,
+            ) == ["ready"]
+        refreshed = client.get(
+            f"/api/jobs/{created['jobId']}/subtitle-review"
+        )
+        assert refreshed.status_code == 200
+        assert all(
+            clip["previewState"] == "ready"
+            for clip in refreshed.json()["clips"]
+        )
+        return refreshed.json()
+
     visited_statuses = run_autoclipper_job(
         created["jobId"],
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
@@ -1406,7 +1823,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     )
     assert stored_review["shortOverlayTitleMode"] == expected_overlay_mode
     assert all(
-        clip["overlayTitleExpected"] is False
+        clip["overlayTitleExpected"] is True
         for clip in stored_review["clips"]
         if clip["type"] == "normal"
     )
@@ -1418,6 +1835,8 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
     assert review["shortOverlayTitleMode"] == expected_overlay_mode
     assert all(clip["previewVideoUrl"] for clip in review["clips"])
+    assert all(clip["livePreviewVideoUrl"] for clip in review["clips"])
+    assert all(clip["livePreviewSpecHash"] for clip in review["clips"])
     settings_updated = client.patch(
         f"/api/jobs/{created['jobId']}/subtitle-review/settings",
         json={
@@ -1432,6 +1851,12 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert preview_response.status_code == 200
     assert preview_response.headers["content-type"].startswith("video/mp4")
     assert preview_response.content.startswith(b"rendered")
+    live_preview_response = client.get(
+        review["clips"][0]["livePreviewVideoUrl"]
+    )
+    assert live_preview_response.status_code == 200
+    assert live_preview_response.headers["content-type"].startswith("video/mp4")
+    assert live_preview_response.content.startswith(b"rendered")
     short_clip = next(clip for clip in review["clips"] if clip["type"] == "short")
     content_updated = client.patch(
         f"/api/jobs/{created['jobId']}/subtitle-review/clips/{short_clip['id']}/content",
@@ -1462,6 +1887,20 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert blocked.status_code == 409
 
     review = updated.json()
+    queued_clip = next(
+        clip for clip in review["clips"] if clip["previewState"] != "ready"
+    )
+    preview_blocked = client.post(
+        (
+            f"/api/jobs/{created['jobId']}/subtitle-review/clips/"
+            f"{queued_clip['id']}/confirm"
+        )
+    )
+    assert preview_blocked.status_code == 409
+    assert preview_blocked.json()["detail"]["code"] == (
+        "subtitle_review_preview_not_ready"
+    )
+    review = render_queued_previews(review)
     for clip in review["clips"]:
         response = client.post(
             f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm"
@@ -1477,6 +1916,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert finalized.json()["status"] == "rendering_normal_clips"
     assert queued_jobs == [created["jobId"]]
 
+    preview_short_render_count = len(short_render_kwargs)
     resume_statuses = run_subtitle_review_render(
         created["jobId"],
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
@@ -1490,9 +1930,9 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         "packaging_zip",
         "completed",
     ]
-    assert len(short_render_kwargs) == 1
-    assert Path(short_render_kwargs[0]["top_banner_path"]).name == "short_top_banner.png"
-    assert Path(short_render_kwargs[0]["bottom_banner_path"]).name == "short_bottom_banner.png"
+    assert len(short_render_kwargs) == preview_short_render_count + 1
+    assert Path(short_render_kwargs[-1]["top_banner_path"]).name == "short_top_banner.png"
+    assert Path(short_render_kwargs[-1]["bottom_banner_path"]).name == "short_bottom_banner.png"
     assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == "completed"
     completed_review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
     assert completed_review["state"] == "completed"
@@ -1577,18 +2017,6 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         (created["jobId"], reopened_short["id"], hook_start, hook_end)
     ]
 
-    hook_preview_calls: list[dict[str, Any]] = []
-
-    def fake_hook_preview(
-        _input_path: str | Path,
-        output_path: str | Path,
-        **kwargs: Any,
-    ) -> Path:
-        hook_preview_calls.append(kwargs)
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        Path(output_path).write_bytes(b"updated hook preview")
-        return Path(output_path)
-
     hook_statuses = run_subtitle_review_hook_scene_update(
         created["jobId"],
         reopened_short["id"],
@@ -1596,21 +2024,11 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         hook_end,
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
-            subtitle_review_preview_renderer=fake_hook_preview,
-        ),
+        dependencies=dependencies,
     )
     assert hook_statuses == [
         "preparing_subtitle_review",
         "awaiting_subtitle_review",
-    ]
-    assert hook_preview_calls == [
-        {
-            "start": reopened_short["start"],
-            "duration": reopened_short["duration"],
-            "hook_start": hook_start,
-            "hook_duration": 2.0,
-        }
     ]
     reopened_review = client.get(
         f"/api/jobs/{created['jobId']}/subtitle-review"
@@ -1626,6 +2044,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         hook_end,
     )
     assert updated_short["confirmed"] is False
+    assert updated_short["previewState"] == "ready"
 
     for clip in reopened_review["clips"]:
         response = client.post(
@@ -1673,6 +2092,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     reopened_again = client.post(
         f"/api/jobs/{created['jobId']}/subtitle-review/reopen"
     ).json()
+    reopened_again = render_queued_previews(reopened_again)
     for clip in reopened_again["clips"]:
         client.post(
             f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm"
@@ -2045,6 +2465,84 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
     assert not (storage.temp / created["jobId"]).exists()
 
 
+def test_real_pipeline_reports_selection_failure_before_rendering(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    render_calls: list[str] = []
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def unexpected_render(
+        _input_path: str | Path,
+        _output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        render_calls.append("called")
+        raise AssertionError("render must not run when selection is empty")
+
+    monkeypatch.setattr(
+        runner_module,
+        "select_candidates",
+        lambda *_args, **_kwargs: CandidateSelection(),
+    )
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=240.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcribe_audio=lambda _path: fake_transcript(),
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        normal_renderer=unexpected_render,
+        short_renderer=unexpected_render,
+    )
+
+    run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    payload = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert payload["status"] == "failed"
+    assert payload["error"] == {
+        "code": "no_usable_selection",
+        "message": "分析は完了しましたが、選定基準を満たす切り抜き候補がありませんでした。",
+    }
+    assert render_calls == []
+
+
 def test_real_pipeline_marks_failed_without_unhandled_exception_when_no_output_is_usable(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",
@@ -2115,7 +2613,7 @@ def test_real_pipeline_marks_failed_without_unhandled_exception_when_no_output_i
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, created["jobId"])
         assert job is not None
-        assert job.error_message == "Pipeline completed analysis but produced no usable clips."
+        assert job.error_message == "Selected clips did not produce usable rendered output."
     job_dir = storage.outputs / created["jobId"]
     for name in SUMMARY_FILENAMES:
         assert (job_dir / name).is_file()
@@ -2504,6 +3002,204 @@ def test_real_pipeline_retries_repeated_turbo_transcript_with_small_on_cuda(
     assert runtime["fallback_transcript_quality"]["reasons"] == []
     assert runtime["transcription_seconds"] == 4.0
     assert runtime["peak_vram_mb"] == 6100
+
+
+@pytest.mark.parametrize("small_fallback_fails", [False, True])
+def test_real_pipeline_recovers_long_form_transcript_without_user_action(
+    client: TestClient,
+    small_fallback_fails: bool,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake long video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 1,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 180,
+                "shortMinDuration": 20,
+                "shortMaxDuration": 75,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+                "heatmapIntervalMode": False,
+                "useOpenAIScoring": False,
+                "subtitleCorrectionMode": "off",
+                "whisperModelSize": "turbo",
+                "transcriptionDevice": "cuda",
+                "transcriptionComputeType": "float16",
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    engine_calls: list[tuple[str, str]] = []
+
+    broken_segments = [
+        TranscriptSegment(
+            start=float(index * 10),
+            end=float(index * 10 + 4),
+            text="えー" if index < 25 else "ご視聴ありがとうございました",
+            confidence=0.32,
+        )
+        for index in range(45)
+    ]
+    broken_segments.extend(
+        TranscriptSegment(
+            start=float((index + 45) * 10),
+            end=float((index + 45) * 10 + 4),
+            text=f"短い固有発話{index}",
+            confidence=0.4,
+        )
+        for index in range(16)
+    )
+    recovered_segments = [
+        TranscriptSegment(
+            start=float(index * 55),
+            end=float(index * 55 + 45),
+            text=f"第{index}区間では長尺動画の具体的な話題と結論を十分な長さで説明します",
+            confidence=0.9,
+        )
+        for index in range(60)
+    ]
+
+    class FakeEngine:
+        def __init__(self, **kwargs: Any) -> None:
+            self.options = kwargs
+            self.chunked = False
+
+        @property
+        def diagnostics(self) -> dict[str, Any]:
+            return {
+                "requested_device": self.options["device"],
+                "actual_device": "cuda",
+                "requested_compute_type": self.options["compute_type"],
+                "actual_compute_type": "float16",
+                "model": self.options["model_size"],
+                "language": self.options["language"],
+                "model_load_seconds": 1.0,
+                "transcription_seconds": 2.0,
+                "peak_vram_mb": 6100,
+                "fallback_used": False,
+                "fallback_reason": None,
+                "chunked": self.chunked,
+                "chunk_count": 43 if self.chunked else None,
+            }
+
+        def transcribe(self, _path: str | Path) -> list[TranscriptSegment]:
+            engine_calls.append(("whole", self.options["model_size"]))
+            return broken_segments
+
+        def transcribe_chunked(
+            self,
+            _path: str | Path,
+            **kwargs: Any,
+        ) -> list[TranscriptSegment]:
+            self.chunked = True
+            engine_calls.append(("chunked", self.options["model_size"]))
+            progress_callback = kwargs.get("progress_callback")
+            if progress_callback is not None:
+                progress_callback(1, 2)
+                progress_callback(2, 2)
+            if self.options["model_size"] == "small" and small_fallback_fails:
+                raise RuntimeError("small chunk transcription failed")
+            return (
+                broken_segments
+                if self.options["model_size"] == "turbo"
+                else recovered_segments
+            )
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).write_bytes(b"rendered")
+        return Path(output_path)
+
+    dependencies = AutoClipperPipelineDependencies(
+        probe_metadata=lambda _path: VideoMetadata(
+            duration=3600.0,
+            width=1920,
+            height=1080,
+            fps=30.0,
+            has_audio=True,
+        ),
+        extract_audio=fake_extract,
+        transcription_engine_factory=FakeEngine,
+        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=3600.0)],
+        detect_silence=lambda _path, _duration: [],
+        compute_audio_features=lambda _path, duration, segments: build_audio_features(
+            duration=duration,
+            silence_segments=segments,
+            volume_peak=0.5,
+        ),
+        detect_black_screen=lambda _path: [],
+        normal_renderer=fake_render,
+        short_renderer=fake_render,
+    )
+
+    visited_statuses = run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=dependencies,
+    )
+
+    assert engine_calls == [
+        ("whole", "turbo"),
+        ("chunked", "turbo"),
+        ("chunked", "small"),
+    ]
+    job_dir = storage.outputs / created["jobId"]
+    assert (job_dir / "primary_raw_transcript_segments.json").is_file()
+    assert (job_dir / "chunked_raw_transcript_segments.json").is_file()
+    recovery_summary = json.loads(
+        (job_dir / "transcription_recovery_summary.json").read_text(encoding="utf-8")
+    )
+    if small_fallback_fails:
+        payload = client.get(f"/api/jobs/{created['jobId']}").json()
+        assert payload["status"] == "failed"
+        assert payload["error"]["code"] == "transcription_quality_fallback_failed"
+        assert recovery_summary["recovery_failed"] is True
+        assert recovery_summary["runtime"]["selected_attempt"] is None
+        assert recovery_summary["runtime"]["failed_attempt"] == "small_ja_chunked"
+        assert [attempt["name"] for attempt in recovery_summary["attempts"]] == [
+            "primary_whole_file",
+            "chunked_same_model",
+            "small_ja_chunked",
+        ]
+        assert [attempt["status"] for attempt in recovery_summary["attempts"]] == [
+            "completed_unusable",
+            "completed_unusable",
+            "failed",
+        ]
+        assert recovery_summary["attempts"][-1]["error_type"] == "RuntimeError"
+        assert "transcription_recovery_summary.json" in payload["error"]["message"]
+        return
+
+    assert visited_statuses == SUCCESS_STATUSES[1:]
+    assert recovery_summary["runtime"]["selected_attempt"] == "small_ja_chunked"
+    assert recovery_summary["selected_quality"]["reasons"] == []
+    transcript_summary = json.loads(
+        (job_dir / "transcript_summary.json").read_text(encoding="utf-8")
+    )
+    runtime = transcript_summary["transcription_runtime"]
+    assert transcript_summary["transcription_model"] == "small"
+    assert runtime["requested_model"] == "turbo"
+    assert runtime["actual_model"] == "small"
+    assert runtime["fallback_transcription"]["chunked"] is True
+    assert runtime["primary_transcription"]["chunked_quality_fallback_used"] is True
+    assert "clustered_repeated_segment_text" in runtime["primary_transcript_quality"]["reasons"]
+    assert "long_form_transcript_too_sparse" in runtime["primary_transcript_quality"]["reasons"]
+    assert runtime["fallback_transcript_quality"]["reasons"] == []
 
 
 def test_real_pipeline_rejects_repeated_japanese_transcript_without_cuda_fallback(

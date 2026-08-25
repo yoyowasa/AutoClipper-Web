@@ -11,6 +11,7 @@ export type JobStatus =
   | "selecting_clips"
   | "reselecting_clips"
   | "preparing_clip_review"
+  | "awaiting_manual_edit"
   | "awaiting_clip_review"
   | "preparing_subtitle_review"
   | "awaiting_subtitle_review"
@@ -21,6 +22,8 @@ export type JobStatus =
   | "failed";
 
 export type ExportType = "normal" | "short";
+export type WorkflowMode = "automatic" | "manual";
+export type ManualSubtitleMode = "auto" | "none" | "manual";
 
 export type ClipSelectionPreset =
   | "auto"
@@ -36,6 +39,8 @@ export type ClipTimeRange = {
 };
 
 export type ClipSettings = {
+  workflowMode: WorkflowMode;
+  manualSubtitleMode: ManualSubtitleMode;
   mode: "fast" | "high_quality";
   profile: "auto" | "talk" | "gameplay" | "lecture";
   normalClipCount: number;
@@ -249,13 +254,34 @@ export type ClipTextFontPreset =
   | "mono";
 
 export type ClipTextStyle = {
-  fontPreset: ClipTextFontPreset;
+  fontPreset: ClipTextFontPreset | null;
+  fontName: string | null;
+  bold: boolean | null;
   fontSize: number;
   primaryColor: string;
   outlineColor: string;
   outlineWidth: number;
   xPercent: number;
   yPercent: number;
+  positionMode: "explicit" | "layout";
+};
+
+export type ResolvedClipTextStyle = {
+  fontPreset: ClipTextFontPreset | null;
+  fontName: string;
+  fontSize: number;
+  primaryColor: string;
+  outlineColor: string;
+  outlineWidth: number;
+  shadow: number;
+  bold: boolean;
+  alignment: number;
+  marginX: number;
+  marginV: number;
+  xPercent: number;
+  yPercent: number;
+  positionMode: "explicit" | "layout";
+  positionOverride: boolean;
 };
 
 export type SubtitleReviewClip = {
@@ -272,10 +298,28 @@ export type SubtitleReviewClip = {
   titleStyle: ClipTextStyle | null;
   hookStyle: ClipTextStyle | null;
   subtitleStyle: ClipTextStyle | null;
+  resolvedTitleStyle: ResolvedClipTextStyle | null;
+  resolvedHookStyle: ResolvedClipTextStyle | null;
+  resolvedSubtitleStyle: ResolvedClipTextStyle | null;
+  resolvedDefaultTitleStyle: ResolvedClipTextStyle | null;
+  resolvedDefaultHookStyle: ResolvedClipTextStyle | null;
+  resolvedDefaultSubtitleStyle: ResolvedClipTextStyle | null;
+  subtitleMaxCharsPerLine: number | null;
+  subtitleMaxLines: number | null;
+  subtitleMinDurationSeconds: number | null;
+  subtitleMaxDurationSeconds: number | null;
+  subtitleMinGapSeconds: number | null;
+  previewWidth: number | null;
+  previewHeight: number | null;
   start: number;
   end: number;
   duration: number;
+  previewState: "queued" | "rendering" | "ready" | "failed";
+  previewSpecHash: string | null;
+  previewError: string | null;
   previewVideoUrl: string | null;
+  livePreviewSpecHash: string | null;
+  livePreviewVideoUrl: string | null;
   segmentIds: string[];
   confirmed: boolean;
   editedSegmentCount: number;
@@ -288,6 +332,7 @@ export type SubtitleReviewDocument = {
   renderRevision: number;
   reopenedAt: string | null;
   sourceVideoUrl: string;
+  renderMode: string;
   shortMaxDuration: number;
   shortOverlayTitleMode: "auto" | "always" | "high_quality_only" | "never";
   shortTopBannerEnabled: boolean;
@@ -335,10 +380,12 @@ export type ClipPlanClip = {
 export type ClipPlanDocument = {
   version: number;
   jobId: string;
-  state: "preparing" | "awaiting_review" | "reselecting" | "approved";
+  state: "preparing" | "manual_editing" | "awaiting_review" | "reselecting" | "approved";
   revision: number;
   sourceVideoUrl: string;
+  editorVideoUrl?: string | null;
   sourceDuration: number | null;
+  workflowMode?: WorkflowMode;
   clips: ClipPlanClip[];
   settings: ClipSettings;
   createdAt: string;
@@ -354,6 +401,7 @@ export type ClipPlanReselectionRequest = Pick<
   | "excludeIntroOutro"
   | "excludePromotionalContent"
   | "selectionPolicy"
+  | "heatmapIntervalMode"
   | "useOpenAIScoring"
 >;
 
@@ -365,6 +413,10 @@ export type ClipPlanActionResponse = {
 export type ClipPlanBoundaryUpdateRequest = {
   start: number;
   end: number;
+};
+
+export type ClipPlanClipCreateRequest = ClipPlanBoundaryUpdateRequest & {
+  type: ExportType;
 };
 
 export type ClipPlanHookSceneUpdateRequest = {

@@ -1,6 +1,9 @@
 "use client";
 
-import { subtitleFontFamily } from "../lib/clipTextStyle";
+import {
+  assPreviewFontMetrics,
+  subtitleFontFamily
+} from "../lib/clipTextStyle";
 import {
   legacySubtitleYPercent,
   matchingPositionPreset,
@@ -91,8 +94,12 @@ export function SubtitleStylePreview({
   const verticalPresets = verticalPositionPresets(mode);
   const selectedPosition = matchingPositionPreset(verticalPresets, yPercent);
   const position = positionPixels(mode, xPercent, yPercent);
-  const fontSizePercent = Math.min(12, Math.max(3.2, (fontSize / defaults.height) * 100));
-  const strokeWidth = Math.min(4, Math.max(0, outline * 0.22));
+  const outputWidth = isShort ? 1080 : 1920;
+  const fontMetrics = assPreviewFontMetrics(fontName);
+  const fontSizePercent =
+    ((fontSize * fontMetrics.fontSizeScale) / outputWidth) * 100;
+  const outlinePercent = (outline / outputWidth) * 100;
+  const shadowPercent = (2 / outputWidth) * 100;
 
   return (
     <div
@@ -113,7 +120,7 @@ export function SubtitleStylePreview({
                 ? "max-w-[300px] aspect-video"
                 : "max-w-[560px] aspect-video"
           }`}
-          style={{ containerType: "size" }}
+          style={{ containerType: "inline-size" }}
         >
           <div className="absolute inset-y-0 right-0 w-[38%] bg-[#8fa3a8]" />
           <div className="absolute left-[9%] top-[12%] h-[38%] w-[42%] border border-white/25 bg-[#42565d]" />
@@ -142,13 +149,13 @@ export function SubtitleStylePreview({
             style={{
               color: primaryColor,
               fontFamily: subtitleFontFamily(fontName),
-              fontSize: `clamp(12px, ${fontSizePercent}cqh, 38px)`,
+              fontSize: `${fontSizePercent}cqw`,
               left: `${xPercent}%`,
-              lineHeight: 1.28,
-              textShadow: `0 2px 2px ${outlineColor}`,
+              lineHeight: fontMetrics.lineHeight,
+              textShadow: `${shadowPercent}cqw ${shadowPercent}cqw 0 rgba(0, 0, 0, 0.5)`,
               top: `${yPercent}%`,
               transform: "translate(-50%, -50%)",
-              WebkitTextStroke: `${strokeWidth}px ${outlineColor}`
+              WebkitTextStroke: `${outlinePercent}cqw ${outlineColor}`
             }}
           >
             {"この瞬間が一番おもしろい！\n切り抜き字幕のプレビュー"}

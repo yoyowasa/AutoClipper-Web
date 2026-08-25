@@ -2,6 +2,7 @@ import type {
   ClipTextStyle,
   ClipPlanActionResponse,
   ClipPlanBoundaryUpdateRequest,
+  ClipPlanClipCreateRequest,
   ClipPlanDocument,
   ClipPlanHookSceneUpdateRequest,
   ClipPlanReselectionRequest,
@@ -351,6 +352,71 @@ export async function updateSubtitleReviewClipContent(
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
+export async function createClipPlanClip(
+  jobId: string,
+  clip: ClipPlanClipCreateRequest
+): Promise<ClipPlanDocument> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/clip-plan/clips`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(clip)
+  });
+  return parseJsonResponse<ClipPlanDocument>(response);
+}
+
+export async function updateManualClipPlanClip(
+  jobId: string,
+  clipId: string,
+  boundary: ClipPlanBoundaryUpdateRequest
+): Promise<ClipPlanDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/clip-plan/clips/${clipId}`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(boundary)
+    }
+  );
+  return parseJsonResponse<ClipPlanDocument>(response);
+}
+
+export async function deleteClipPlanClip(
+  jobId: string,
+  clipId: string
+): Promise<ClipPlanDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/clip-plan/clips/${clipId}`,
+    {
+      method: "DELETE"
+    }
+  );
+  return parseJsonResponse<ClipPlanDocument>(response);
+}
+
+export async function retrySubtitleReviewPreview(
+  jobId: string,
+  clipId: string
+): Promise<SubtitleReviewDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/preview/retry`,
+    {
+      method: "POST"
+    }
+  );
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function retryJob(jobId: string): Promise<JobCreateResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/retry`, {
+    method: "POST"
+  });
+  return parseJsonResponse<JobCreateResponse>(response);
+}
+
 export async function updateSubtitleReviewShortBannerSettings(
   jobId: string,
   settings: SubtitleReviewShortBannerSettings
@@ -363,6 +429,32 @@ export async function updateSubtitleReviewShortBannerSettings(
         "Content-Type": "application/json"
       },
       body: JSON.stringify(settings)
+    }
+  );
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function applySubtitleReviewClip(
+  jobId: string,
+  clipId: string,
+  content: {
+    title: string;
+    hookText: string;
+    hookDurationSeconds: number;
+    titleStyle: ClipTextStyle | null;
+    hookStyle: ClipTextStyle | null;
+    subtitleStyle: ClipTextStyle | null;
+    segments: Array<{ segmentId: string; text: string }>;
+  }
+): Promise<SubtitleReviewDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/apply`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(content)
     }
   );
   return parseJsonResponse<SubtitleReviewDocument>(response);

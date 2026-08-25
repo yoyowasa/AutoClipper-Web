@@ -2,14 +2,22 @@ import json
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal, Sequence
+from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate, ClipTextStyle
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
+from app.render.subtitles_ass import (
+    DEFAULT_NORMAL_HEIGHT,
+    DEFAULT_NORMAL_WIDTH,
+    ResolvedTextStyle,
+    SubtitleLayout,
+    SubtitleRenderSettings,
+    resolve_clip_text_style,
+)
 from app.render.title_policy import short_overlay_title_expected
 from app.schemas import ShortOverlayTitleMode
 
@@ -21,6 +29,7 @@ SUBTITLE_REVIEW_PREVIEW_DIRNAME = "subtitle_review_previews"
 _STYLE_UNSET = object()
 
 SubtitleReviewState = Literal["awaiting_review", "render_queued", "rendering", "completed"]
+SubtitleReviewPreviewState = Literal["queued", "rendering", "ready", "failed"]
 
 
 def _utc_iso() -> str:
@@ -41,6 +50,32 @@ class SubtitleReviewSegment(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class ResolvedClipTextStyle(BaseModel):
+    font_preset: TextFontPreset | None = Field(alias="fontPreset")
+    font_name: str = Field(alias="fontName")
+    font_size: int = Field(ge=1, alias="fontSize")
+    primary_color: str = Field(
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="primaryColor",
+    )
+    outline_color: str = Field(
+        pattern=r"^#[0-9A-Fa-f]{6}$",
+        alias="outlineColor",
+    )
+    outline_width: int = Field(ge=0, alias="outlineWidth")
+    shadow: int = Field(ge=0)
+    bold: bool
+    alignment: int = Field(ge=1, le=9)
+    margin_x: int = Field(ge=0, alias="marginX")
+    margin_v: int = Field(ge=0, alias="marginV")
+    x_percent: float = Field(alias="xPercent")
+    y_percent: float = Field(alias="yPercent")
+    position_mode: Literal["explicit", "layout"] = Field(alias="positionMode")
+    position_override: bool = Field(alias="positionOverride")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class SubtitleReviewClip(BaseModel):
     id: str
     type: Literal["normal", "short"]
@@ -54,11 +89,73 @@ class SubtitleReviewClip(BaseModel):
     title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
+    resolved_title_style: ResolvedClipTextStyle | None = Field(
+        default=None,
+        alias="resolvedTitleStyle",
+    )
+    resolved_hook_style: ResolvedClipTextStyle | None = Field(
+        default=None,
+        alias="resolvedHookStyle",
+    )
+    resolved_subtitle_style: ResolvedClipTextStyle | None = Field(
+        default=None,
+        alias="resolvedSubtitleStyle",
+    )
+    resolved_default_title_style: ResolvedClipTextStyle | None = Field(
+        default=None,
+        alias="resolvedDefaultTitleStyle",
+    )
+    resolved_default_hook_style: ResolvedClipTextStyle | None = Field(
+        default=None,
+        alias="resolvedDefaultHookStyle",
+    )
+    resolved_default_subtitle_style: ResolvedClipTextStyle | None = Field(
+        default=None,
+        alias="resolvedDefaultSubtitleStyle",
+    )
+    subtitle_max_chars_per_line: int | None = Field(
+        default=None,
+        ge=1,
+        alias="subtitleMaxCharsPerLine",
+    )
+    subtitle_max_lines: int | None = Field(
+        default=None,
+        ge=1,
+        alias="subtitleMaxLines",
+    )
+    subtitle_min_duration_seconds: float | None = Field(
+        default=None,
+        ge=0,
+        alias="subtitleMinDurationSeconds",
+    )
+    subtitle_max_duration_seconds: float | None = Field(
+        default=None,
+        gt=0,
+        alias="subtitleMaxDurationSeconds",
+    )
+    subtitle_min_gap_seconds: float | None = Field(
+        default=None,
+        ge=0,
+        alias="subtitleMinGapSeconds",
+    )
+    preview_width: int | None = Field(default=None, ge=1, alias="previewWidth")
+    preview_height: int | None = Field(default=None, ge=1, alias="previewHeight")
     overlay_title_expected: bool = Field(default=False, alias="overlayTitleExpected")
     start: float = Field(ge=0)
     end: float = Field(ge=0)
     duration: float = Field(ge=0)
     preview_video_url: str | None = Field(default=None, alias="previewVideoUrl")
+    preview_state: SubtitleReviewPreviewState = Field(default="queued", alias="previewState")
+    preview_spec_hash: str | None = Field(default=None, alias="previewSpecHash")
+    preview_error: str | None = Field(default=None, alias="previewError")
+    live_preview_video_url: str | None = Field(
+        default=None,
+        alias="livePreviewVideoUrl",
+    )
+    live_preview_spec_hash: str | None = Field(
+        default=None,
+        alias="livePreviewSpecHash",
+    )
     segment_ids: list[str] = Field(default_factory=list, alias="segmentIds")
     confirmed: bool = False
     edited_segment_count: int = Field(default=0, ge=0, alias="editedSegmentCount")
@@ -73,8 +170,6 @@ class SubtitleReviewClip(BaseModel):
             raise ValueError("hook scene requires both start and end")
         if hook_start is None or hook_end is None:
             return self
-        if self.type != "short":
-            raise ValueError("hook scene is only supported for short clips")
         if not 0.5 <= hook_end - hook_start <= 3.0:
             raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
         if hook_start < self.start - 0.001 or hook_end > self.end + 0.001:
@@ -89,6 +184,7 @@ class SubtitleReviewDocument(BaseModel):
     render_revision: int = Field(default=1, ge=1, alias="renderRevision")
     reopened_at: str | None = Field(default=None, alias="reopenedAt")
     source_video_url: str = Field(alias="sourceVideoUrl")
+    render_mode: str = Field(default="high_quality", alias="renderMode")
     short_max_duration: float = Field(default=75.0, gt=0, alias="shortMaxDuration")
     short_overlay_title_mode: ShortOverlayTitleMode = Field(
         default="auto",
@@ -138,7 +234,25 @@ def _segment_id(index: int) -> str:
 
 
 def _overlaps(segment: TranscriptSegment, candidate: Candidate) -> bool:
+    if segment.clip_id is not None and segment.clip_id != candidate.id:
+        return False
     return segment.end > candidate.start and segment.start < candidate.end
+
+
+def build_manual_subtitle_segments(
+    selection: CandidateSelection,
+) -> list[TranscriptSegment]:
+    """Create one independent editable segment for every manually selected clip."""
+    return [
+        TranscriptSegment(
+            start=candidate.start,
+            end=candidate.end,
+            text="",
+            confidence=1.0,
+            clipId=candidate.id,
+        )
+        for candidate in [*selection.normal_clips, *selection.shorts]
+    ]
 
 
 def _refresh_counts(document: SubtitleReviewDocument) -> SubtitleReviewDocument:
@@ -159,15 +273,126 @@ def refresh_review_overlay_title_expectations(
 ) -> SubtitleReviewDocument:
     for clip in document.clips:
         clip.overlay_title_expected = bool(
-            clip.type == "short"
-            and short_overlay_title_expected(
-                render_mode=render_mode,
-                stored_mode=document.short_overlay_title_mode,
-                top_banner_enabled=document.short_top_banner_enabled,
-                title_manually_reviewed=clip.title_edited,
+            clip.type == "normal"
+            or (
+                clip.type == "short"
+                and short_overlay_title_expected(
+                    render_mode=render_mode,
+                    stored_mode=document.short_overlay_title_mode,
+                    top_banner_enabled=document.short_top_banner_enabled,
+                    title_manually_reviewed=clip.title_edited,
+                )
             )
         )
     return document
+
+
+def _resolved_style_model(style: ResolvedTextStyle) -> ResolvedClipTextStyle:
+    return ResolvedClipTextStyle(
+        fontPreset=style.font_preset,
+        fontName=style.font_name,
+        fontSize=style.font_size,
+        primaryColor=style.primary_color,
+        outlineColor=style.outline_color,
+        outlineWidth=style.outline_width,
+        shadow=style.shadow,
+        bold=style.bold,
+        alignment=style.alignment,
+        marginX=style.margin_x,
+        marginV=style.margin_v,
+        xPercent=style.x_percent,
+        yPercent=style.y_percent,
+        positionMode=style.position_mode,
+        positionOverride=style.position_override,
+    )
+
+
+def refresh_review_render_contract(
+    document: SubtitleReviewDocument,
+    *,
+    render_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
+    source_width: int | None = None,
+    source_height: int | None = None,
+    render_mode: str | None = None,
+) -> tuple[SubtitleReviewDocument, bool]:
+    normalized_render_mode = str(render_mode or "high_quality")
+    changed = (
+        "render_mode" not in document.model_fields_set
+        or document.render_mode != normalized_render_mode
+    )
+    document.render_mode = normalized_render_mode
+
+    for clip in document.clips:
+        layout = (
+            SubtitleLayout.short(render_settings)
+            if clip.type == "short"
+            else SubtitleLayout.normal(
+                width=source_width or DEFAULT_NORMAL_WIDTH,
+                height=source_height or DEFAULT_NORMAL_HEIGHT,
+                settings=render_settings,
+            )
+        )
+        resolved_subtitle_style = _resolved_style_model(
+            resolve_clip_text_style(
+                clip.subtitle_style,
+                layout,
+                role="subtitle",
+            )
+        )
+        resolved_default_subtitle_style = _resolved_style_model(
+            resolve_clip_text_style(None, layout, role="subtitle")
+        )
+        resolved_title_style = _resolved_style_model(
+            resolve_clip_text_style(
+                clip.title_style,
+                layout,
+                role="title",
+            )
+        )
+        resolved_hook_style = _resolved_style_model(
+            resolve_clip_text_style(
+                clip.hook_style,
+                layout,
+                role="hook",
+            )
+        )
+        resolved_default_title_style = _resolved_style_model(
+            resolve_clip_text_style(None, layout, role="title")
+        )
+        resolved_default_hook_style = _resolved_style_model(
+            resolve_clip_text_style(None, layout, role="hook")
+        )
+        next_values = {
+            "resolved_title_style": resolved_title_style,
+            "resolved_hook_style": resolved_hook_style,
+            "resolved_subtitle_style": resolved_subtitle_style,
+            "resolved_default_title_style": resolved_default_title_style,
+            "resolved_default_hook_style": resolved_default_hook_style,
+            "resolved_default_subtitle_style": resolved_default_subtitle_style,
+            "subtitle_max_chars_per_line": layout.max_chars_per_line,
+            "subtitle_max_lines": layout.max_lines,
+            "subtitle_min_duration_seconds": layout.min_subtitle_duration,
+            "subtitle_max_duration_seconds": layout.max_subtitle_duration,
+            "subtitle_min_gap_seconds": layout.min_gap_between_subtitles,
+            "preview_width": layout.width,
+            "preview_height": layout.height,
+        }
+        for field_name, value in next_values.items():
+            if (
+                field_name not in clip.model_fields_set
+                or getattr(clip, field_name) != value
+            ):
+                changed = True
+            setattr(clip, field_name, value)
+
+    expected_before = [clip.overlay_title_expected for clip in document.clips]
+    refresh_review_overlay_title_expectations(
+        document,
+        render_mode=normalized_render_mode,
+    )
+    if expected_before != [clip.overlay_title_expected for clip in document.clips]:
+        changed = True
+    return document, changed
 
 
 def build_subtitle_review(
@@ -180,6 +405,9 @@ def build_subtitle_review(
     short_overlay_title_mode: ShortOverlayTitleMode = "auto",
     short_top_banner_enabled: bool = False,
     short_bottom_banner_enabled: bool = False,
+    render_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
+    source_width: int | None = None,
+    source_height: int | None = None,
 ) -> SubtitleReviewDocument:
     selected_candidates = [*selection.normal_clips, *selection.shorts]
     clip_segment_indices: dict[str, list[int]] = {}
@@ -240,6 +468,7 @@ def build_subtitle_review(
         SubtitleReviewDocument(
             jobId=job_id,
             sourceVideoUrl=f"/api/jobs/{job_id}/source-video",
+            renderMode=str(render_mode or "high_quality"),
             shortMaxDuration=short_max_duration,
             shortOverlayTitleMode=short_overlay_title_mode,
             shortTopBannerEnabled=short_top_banner_enabled,
@@ -250,10 +479,14 @@ def build_subtitle_review(
             updatedAt=now,
         )
     )
-    return refresh_review_overlay_title_expectations(
+    document, _changed = refresh_review_render_contract(
         document,
         render_mode=render_mode,
+        render_settings=render_settings,
+        source_width=source_width,
+        source_height=source_height,
     )
+    return document
 
 
 def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | Path) -> Path:
@@ -300,13 +533,19 @@ def update_review_render_settings(
     short_overlay_title_mode: ShortOverlayTitleMode,
     short_top_banner_enabled: bool,
     short_bottom_banner_enabled: bool,
+    render_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
+    source_width: int | None = None,
+    source_height: int | None = None,
 ) -> SubtitleReviewDocument:
     document.short_overlay_title_mode = short_overlay_title_mode
     document.short_top_banner_enabled = short_top_banner_enabled
     document.short_bottom_banner_enabled = short_bottom_banner_enabled
-    document = refresh_review_overlay_title_expectations(
+    document, _changed = refresh_review_render_contract(
         document,
         render_mode=render_mode,
+        render_settings=render_settings,
+        source_width=source_width,
+        source_height=source_height,
     )
     return _refresh_counts(document)
 
@@ -336,14 +575,6 @@ def update_review_clip_content(
         raise ValueError("hook text must be 120 characters or fewer")
     if not 1 <= hook_duration_seconds <= 8:
         raise ValueError("hook duration must be between 1 and 8 seconds")
-    if clip.type != "short" and normalized_hook:
-        raise ValueError("hook text is only supported for short clips")
-    if clip.type != "short" and (
-        (title_style is not _STYLE_UNSET and title_style is not None)
-        or (hook_style is not _STYLE_UNSET and hook_style is not None)
-    ):
-        raise ValueError("title and hook styles are only supported for short clips")
-
     next_title_style = clip.title_style if title_style is _STYLE_UNSET else title_style
     next_hook_style = clip.hook_style if hook_style is _STYLE_UNSET else hook_style
     next_subtitle_style = (
@@ -365,7 +596,7 @@ def update_review_clip_content(
     clip.original_title = original_title
     clip.title = normalized_title
     clip.title_edited = normalized_title != original_title
-    clip.hook_text = normalized_hook if clip.type == "short" else ""
+    clip.hook_text = normalized_hook
     clip.hook_duration_seconds = round(hook_duration_seconds, 3)
     clip.title_style = next_title_style if isinstance(next_title_style, ClipTextStyle) else None
     clip.hook_style = next_hook_style if isinstance(next_hook_style, ClipTextStyle) else None
@@ -386,8 +617,6 @@ def update_review_hook_scene(
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
         raise KeyError(clip_id)
-    if clip.type != "short":
-        raise ValueError("hook scene is only supported for short clips")
     if (start is None) != (end is None):
         raise ValueError("hook scene requires both start and end")
     if start is not None and end is not None:
@@ -396,7 +625,7 @@ def update_review_hook_scene(
             raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
         if start < clip.start - 0.001 or end > clip.end + 0.001:
             raise ValueError("hook scene must stay within the selected clip")
-        if hook_scene_newly_exceeds_short_limit(
+        if clip.type == "short" and hook_scene_newly_exceeds_short_limit(
             clip_duration=clip.duration,
             hook_duration=hook_duration,
             short_max_duration=document.short_max_duration,
@@ -484,13 +713,12 @@ def apply_reviewed_clip_content(
             updates["title_source"] = "manual_review"
             if candidate.type == "short":
                 updates["overlay_title"] = clip.title
-        if candidate.type == "short":
-            updates["hook_text"] = clip.hook_text or None
-            updates["hook_duration_seconds"] = clip.hook_duration_seconds
-            updates["hook_scene_start"] = clip.hook_scene_start
-            updates["hook_scene_end"] = clip.hook_scene_end
-            updates["title_style"] = clip.title_style
-            updates["hook_style"] = clip.hook_style
+        updates["hook_text"] = clip.hook_text or None
+        updates["hook_duration_seconds"] = clip.hook_duration_seconds
+        updates["hook_scene_start"] = clip.hook_scene_start
+        updates["hook_scene_end"] = clip.hook_scene_end
+        updates["hook_style"] = clip.hook_style
+        updates["title_style"] = clip.title_style
         updates["subtitle_style"] = clip.subtitle_style
         return candidate.model_copy(update=updates)
 

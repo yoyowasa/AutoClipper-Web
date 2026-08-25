@@ -7083,3 +7083,536 @@ pip check: pass
 - 既に`上部柄帯OFF + shortOverlayTitleMode=never`で保存済みの旧jobは、明示的なタイトル非表示との区別ができないため自動移行しない。
 - 許可済み実動画を使ったjob全体の`upload -> worker -> ショート書き出し`は未実行。
 - ユーザー受入は未確認。
+
+## 2026-08-11 Task 110 再選定時のJSON区間モード切替
+
+### 目的
+
+- 切り抜き予定の確認画面で、初回にJSON区間モードをONにしたjobでも、再選定時だけ従来評価へ切り替えられるようにする。
+- OFF時は初回のJSON区間候補を再利用せず、保存済み解析結果から従来候補を作り直す。
+
+### 観測事実・原因
+
+- 変更前の再選定requestには`heatmapIntervalMode`がなく、初回job設定のONが常に引き継がれていた。
+- 再選定workerは初回に保存した`candidates.json`を再採点するだけだった。初回ONでは候補母集団自体がJSON区間由来で、同じ条件の選定は決定的なため同じ場面になっていた。
+
+### 変更
+
+- 再選定画面へ`候補基準`の`従来評価 / JSON区間`切替を追加し、現在のplan設定を初期表示する。
+- 再選定APIへoptional strict boolの`heatmapIntervalMode`を追加した。旧clientがfieldを省略した場合は保存済みmodeを維持する。
+- mode変更時だけ保存済みの文字起こし・無音・シーン解析から候補母集団を再生成する。ONはJSON区間seed、OFFは従来generatorへ戻し、有効なJSON値は最大`+10`点の補助評価として使う。
+- 同じmodeでの再選定は保存済み候補を再利用し、再生成コストを増やさない。手動時間指定はmodeより優先する。
+- mode変更失敗時はjob設定、clip plan、候補4artifactを旧状態へ戻す。旧previewはfinal planとDB statusの確定後だけ削除し、cleanup失敗はjob失敗にしない。
+- READMEへ再選定時の切替、候補再生成、決定的選定の制限を追記した。
+- 変更ファイル: `frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/lib/types.ts`、
+  `backend/app/schemas.py`、`backend/app/api/jobs.py`、`backend/app/jobs/runner.py`、
+  `backend/tests/test_api_routes.py`、`backend/tests/test_real_pipeline.py`、`README.md`、`STATUS.md`。
+
+### 検証
+
+- backend全体: `496 passed, 1 skipped`。backend ruff: pass。
+- frontend typecheck / lint / production build: pass。
+- 自動testで初回ONから再選定OFFへ切り替え、候補sourceが`heatmap_interval`から従来generatorへ変わり、`heatmapSelectionBehavior=supporting_score`になることを確認: pass。
+- APIの省略互換、strict bool、modeと4候補artifactのworker失敗rollback、旧preview内容の保全: pass。
+- GPU Composeを最終差分で全image再build・再作成: pass。`/health=ok`、切り抜き予定URL`200`、worker GPU preflight `actual_device=cuda`、`float16`、fallbackなし。
+- in-app browserでJSON区間ONの既存jobを確認し、`従来評価`選択で説明と`aria-pressed`が即時切替、`JSON区間`へ戻せることを確認。再選定POSTは送信せず、job設定がONのまま変わらないことを確認した。
+- 独立再レビュー: P0/P1/P2なし。
+
+### 未解決・制限
+
+- OFFは候補母集団を従来generatorへ戻す機能。同じ場面の評価が高い場合まで、必ず別場面になることは保証しない。
+- 許可済み実動画で実際に再選定POSTを送り、workerでpreviewを再生成する実E2Eは未実行。自動E2E、Docker起動、実画面の切替表示までは確認済み。
+- ユーザー受入は未確認。
+
+## 2026-08-17 Task 111 長尺文字起こし自動復旧と1クリック再処理
+
+### 目的
+
+- 長尺動画の文字起こしが崩れて候補0件になった場合も、再アップロードや設定のやり直しなしで復旧できるようにする。
+- 新規jobは操作なしで自動復旧し、既に失敗した対象jobはボタン1回で再処理できるようにする。
+
+### 観測事実・原因
+
+- 対象jobの人気区間JSONは正常適用され、100区間中99区間が正値だった。
+- JSON区間からショート候補68件を生成したが、全件が`strict_quality`の最低点60を下回り、最高点54.119、選定0件、render失敗0件だった。
+- 155分12秒の動画に対して文字起こしは61segment、437文字、平均confidence 0.324、音声coverage 2.84%だった。同じ低情報文が反復し、候補320件中247件が文字起こし不足で除外された。
+- 同じ動画の90秒区間は同じ`turbo / cuda / float16`で連続した日本語会話を認識できた。入力音声・GPU・モデル単体ではなく、長尺音声の一括認識結果と旧品質判定が原因だった。
+
+### 変更
+
+- CUDAで30分以上の動画は、通常の一括文字起こし後にcoverage、文字密度、confidence、反復を検査する。異常時だけ同モデルの90秒chunk・5秒overlapへ自動切替し、なお異常なら`small + ja`のchunk認識へ自動切替する。
+- chunkごとにheartbeatを更新し、一時WAVは処理後すぐ削除する。全chunkのtimestampを元動画時刻へ戻し、境界の重複・両落ちを避けて統合する。品質閾値は緩和しない。
+- primary、同モデルchunk、`small + ja`の各試行状態を`transcription_recovery_summary.json`へ保存する。最終試行が例外でも失敗型とruntime診断を残す。
+- 選定0件を`no_usable_selection`、render全滅を`no_usable_output`へ分離した。旧jobは空の`selected_clips.json`、render失敗0件、字幕確認artifactなしを満たす場合だけ選定失敗として扱う。
+- `POST /api/jobs/{jobId}/retry`を追加した。元動画・人気区間JSON・設定を再利用し、新しいjob/output領域で再処理する。再アップロードと設定入力は不要。
+- 再処理は1回まで。queue投入前後の二重送信、DB commit直後の停止、RQ jobのactive/terminal競合を回収し、同じjobを重複実行しない。
+- 失敗画面へ`同じ動画・設定で再処理`を追加した。候補0件だけに表示し、処理中の緑bannerは失敗時に表示しない。再処理後も失敗した場合とrender失敗では表示しない。
+- 候補0件の旧100%表示を選定工程72%へ補正し、到達済み工程を緑、停止した`clip選定`を赤で表示する。
+- RQ依存下限を実装で使うAPIに合わせて`>=2.10.0`へ更新した。
+- 変更ファイル: `backend/app/audio/transcribe_faster_whisper.py`、`backend/app/jobs/runner.py`、
+  `backend/app/jobs/queue.py`、`backend/app/api/jobs.py`、`backend/app/schemas.py`、
+  `backend/pyproject.toml`、`frontend/app/jobs/[jobId]/page.tsx`、
+  `frontend/components/JobProgress.tsx`、`frontend/components/ProgressTimeline.tsx`、
+  `frontend/lib/api.ts`、関連test、`README.md`、`STATUS.md`。
+
+### 検証
+
+- backend全体: `526 passed, 1 skipped`。既知のStarlette `TestClient` deprecation warning 1件のみ。
+- backend ruff、frontend typecheck / lint / production build、pip依存整合、`git diff --check`: pass。
+- chunk境界のtimestamp揺れによる二重採用・両落ち、長い区間を挟む重複、3重重複、正常な長尺反復の誤検出を自動testで確認: pass。
+- 選定失敗とrender失敗の分離、旧job判定、retry 1回上限、二重送信・enqueue失敗・terminal競合を自動testで確認: pass。
+- 対象jobの稼働API応答が`no_usable_selection`へ正規化され、再処理対象になることを確認: pass。
+- GPU Composeで全imageをbuild・再作成し、backend healthy、worker GPU preflight`ok=true`、`actual_device=cuda`、`float16`、GPU`NVIDIA GeForce RTX 5070 Ti`、RQ`2.11.0`を確認: pass。
+- in-app browserで対象jobを確認し、進捗`72%`、到達済み工程`OK`、`clip選定`の赤表示、失敗内容直下の再処理button表示・有効化、失敗時の緑banner非表示を確認: pass。再処理POSTは送信していない。
+
+### 未解決・制限
+
+- 対象の155分動画で再処理ボタンは押していない。実CUDAの一括認識からchunk復旧、候補選定、書き出しまでの実E2Eは未確認。
+- 3段階の文字起こしを含む155分動画がRQ timeout 3600秒以内に完了するかは未確認。
+- chunk境界で文字列が大きく言い換わる認識差は、安全側で両segmentを残す場合がある。
+- ユーザー受入は未確認。
+
+## 2026-08-17 Task 112 完成表示一致プレビューと通常・ショート編集分離
+
+### 目的
+
+- 冒頭フック中に通常字幕を重ねない。
+- 字幕確認画面を通常編集とショート編集に分け、ショート選択時は実際の9:16映像を再生する。
+- タイトル、フック、字幕、crop、上下帯を完成動画と同じ見た目で確認できるようにする。
+
+### 観測事実・原因
+
+- 旧中央プレイヤーは通常・ショートとも固定16:9の元動画切出しで、右側の9:16表示はブラウザCSSによる静止モックだった。再生映像、文字折返し、最終FFmpeg出力が別実装だった。
+- CSSモックはブラウザ幅で自動改行し、完成ASSは20文字・最大2行へ整形していたため、タイトルがプレビュー5行、完成動画2行になる差があった。
+- ASS生成はフック文字と通常字幕を独立生成しており、冒頭複製の有無にかかわらずフック表示中へ通常字幕が入る経路があった。
+
+### 変更
+
+- 字幕確認画面を`通常編集`と`ショート編集`のタブへ分離し、種類ごとの選択状態を保持する。通常は16:9、ショートは9:16の動画プレイヤーを表示する。
+- ブラウザCSSの文字モックを出力確認から外し、完成書出しと同じASS、normal/short renderer、crop、フック複製、上下帯assetでMP4プレビューを生成する。
+- source、clip範囲、修正字幕、文字style、render設定、帯画像byteを含むSHA-256でプレビュー版を管理する。変更clipだけ非同期再生成し、現在版と直前版だけを保持する。
+- `queued / rendering / ready / failed`をAPIへ追加した。生成失敗時は画面から再試行でき、現在版がreadyになるまでclip確認・最終レンダリングを開始しない。
+- RQ preview job IDをRQ 2.11の許可文字`[A-Za-z0-9_-]`だけで構成する。実Redisで失敗したpreviewも同じspecの再試行で復旧する。
+- hook文字の表示終了と冒頭複製終了の遅い方まで通常字幕を抑止する。画面の再生中字幕表示と字幕行seekも同じ境界を使う。
+- review APIのread-modify-writeをjob単位lockで直列化し、hook workerはsnapshot/CASで後着更新を保護する。frontendもGET世代管理とhook更新中poll停止で古い応答を破棄する。
+- 旧completed reviewは保存内容や確認済み状態を変更せず、既存raw previewが残る場合だけ履歴表示へ一時利用する。
+- 変更ファイル: `backend/app/render/subtitles_ass.py`、`backend/app/render/render_exact_review_preview.py`、
+  `backend/app/jobs/subtitle_review_preview.py`、`backend/app/jobs/subtitle_review.py`、
+  `backend/app/jobs/queue.py`、`backend/app/jobs/runner.py`、`backend/app/api/jobs.py`、
+  `frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/lib/api.ts`、`frontend/lib/types.ts`、
+  関連test、`README.md`、`STATUS.md`。
+
+### 検証
+
+- backend全体: `556 passed, 1 skipped`。既知のStarlette deprecation warning 1件のみ。
+- backend ruff、compileall、pip依存整合、frontend typecheck / lint / production build、`git diff --check`: pass。
+- GPU Composeでbackend / frontend / workerをbuild・再作成: pass。backend healthy、`/health=ok`、字幕確認URL`200`、worker GPU preflight`cuda / float16 / NVIDIA GeForce RTX 5070 Ti`。
+- 実Redis/RQでpreview enqueueの許可文字エラーを再現し、job ID修正後にfailedからretryして2本とも`ready`まで完了: pass。
+- 実job `job_95119645acb356865e436016d9896e0b`のshort preview: 2本とも`1080x1920`、SAR`1:1`、`yuv420p`。durationは`209.450000` / `23.166667`。
+- 1本目の実ASS: Hook`0:00-0:03`、Title`0:03-3:29.44`、最初のSubtitle`0:04`。フック終了前のSubtitle`0件`、Hook / Title / Subtitleはいずれも最大2行。
+- 抽出frameを目視し、フック中はHook文字だけ、フック後は2行タイトルと会話字幕になることを確認: pass。
+- in-app browserで`通常編集（0本） / ショート編集（2本）`、short 1/2切替、実video`1080x1920`、spec hash付きURLを確認。再生でcurrentTimeが`0 -> 2.41秒`へ進み、フック中`1.42秒`の字幕現在位置表示は`0件`、最初の字幕行移動は`4.00秒`。
+- 独立最終レビュー: P0/P1/P2なし。
+
+### 未解決・制限
+
+- 実jobはshortのみのため、通常clipの実ブラウザ再生は未確認。通常16:9の共通renderer経路とAPIは自動testで確認済み。
+- 3分26秒のshort preview生成は実環境で約2分34秒。正確な完成表示を優先した動作で、生成中は旧版を確定対象にしない。
+- ユーザー受入は未確認。
+
+## 2026-08-17 Task 113 Chrome低高さ表示のプレイヤー操作列修正
+
+### 目的
+
+- Chromeの1870x937表示でも、字幕確認画面の`再生`、`先頭`、前後移動、音量、速度、全画面を初期表示から操作できるようにする。
+- ショート9:16と通常16:9の両方で、下段の文字設定が動画操作列へ重ならないようにする。
+
+### 観測事実・原因
+
+- `2xl`表示の上段は`62vh`、画面高937pxでは約581pxだった。
+- 変更前のショートは動画だけで360x640px、操作列を含むplayer shellは約821pxだった。通常も1024x576pxの動画と操作列で上段高を超えていた。
+- root gridが固定高かつ`overflow-hidden`のため、後続の文字設定行が操作列の上へ描画されていた。`再生`と`先頭`の中心点には書体選択欄が載り、クリック不能だった。
+
+### 変更
+
+- player shellを中央カラム幅へ広げ、操作列が狭い縦動画幅で多段折返ししないようにした。
+- ショート9:16は`2xl`時に上段高から利用可能な動画高を算出し、幅を`clamp(210px, ..., 360px)`で追従させる。
+- 通常16:9も同じ上段高へ追従し、幅を`clamp(640px, ..., 1024px)`へ制限する。縦長画面では`max-width: 100%`を併用し、中央カラムより横へはみ出さない。
+- Backend、preview生成、字幕描画、API契約は変更していない。
+- 変更ファイル: `frontend/app/jobs/[jobId]/subtitles/page.tsx`、`STATUS.md`。
+
+### 検証
+
+- Chrome 1870x937、short job `job_95119645acb356865e436016d9896e0b`: 動画`261.52x464.91`、操作ボタン下端`677.91px`、下段設定開始`704.94px`、重なりなし。`再生`でcurrentTime増加、`先頭`で0秒付近へ復帰: pass。
+- Chrome 1870x937、normal job `job_46dcde5c8b1a40f1af54029fab4d0ea3`: 動画`826.55x464.92`、操作ボタン下端`677.92px`、下段設定開始`704.94px`、重なりなし。`再生`と`先頭`の通常click: pass。
+- Chrome 1536x864でshort / normalとも操作ボタンが下段設定より上にあり、中心点hit test: pass。
+- Chrome 1536x1080 / 1600x1200でnormal動画が中央カラム内へ収まり、左右の映像欠けなし: pass。
+- frontend typecheck / lint / production build、`git diff --check`: pass。
+
+### 未解決・制限
+
+- 1536px未満では従来どおり縦スクロール型レイアウトになる。
+- ユーザー受入は未確認。
+
+## 2026-08-17 Task 114 字幕スタイルの即時プレビュー復旧
+
+### 目的
+
+- 字幕確認画面で、保存前の文字色、縁取り色、文字サイズ、書体、X/Y位置、表示文言を操作直後に確認できるようにする。
+- 完成書出しと同じMP4確認と、編集中の即時確認を混同しないようにする。
+
+### 観測事実・原因
+
+- 文字設定の入力値はfrontend draftへ更新され、保存buttonも有効化されていた。
+- Task 112でCSS表示を完成確認から外した際、即時プレビュー自体も非表示になり、中央には保存済みexact MP4だけが残っていた。
+- 保存後のstyle保存、spec hash更新、RQ再生成、ready後の動画URL更新経路は維持されていた。
+
+### 変更
+
+- 中央MP4を`保存済み・完成表示`と明示し、完成書出しと同じASS/rendererによる確認として維持する。
+- 文字色欄の右へ`編集中プレビュー（即時反映）`を復活し、現在のdraftへ直接追従させる。`2xl`では色操作と横並び、狭幅では縦積みにする。
+- review APIへ、clipごとの実効title/hook/subtitle style、既定style、preview寸法、改行上限、表示時間設定を追加する。個別styleが未設定でもjobの書体・サイズ・色・配置を即時表示へ使う。
+- 最初に色だけを変更しても、実効書体・サイズ・縁・配置を維持する。任意`fontName`と`bold`を失わず保存し、位置変更時だけ`positionMode=explicit`、それ以外はjob layoutを継承する。
+- タイトル/フックと字幕をbackend ASSと同じ改行規則で分割する。字幕はevent分割、隣接結合、最小表示時間補正、フック時間shiftまで同じ処理にし、現在時刻のeventだけ表示する。
+- 1080x1920 / 1920x1080またはclip固有preview寸法を基準に、文字サイズ、縁取り、影、ASS alignment、X/Y位置を縮尺表示する。ショートの上下帯とdraftを含むタイトル出力状態も反映する。
+- 個別設定解除時は保存済みoverrideではなくjob/layout既定値へ即時復帰し、その後の編集も既定値から開始する。
+- 表示用layout座標は画面外値も保持し、書込override座標の既存制約は維持する。通常字幕の有効範囲に合わせ、個別styleの文字サイズ下限を12pxへ整合する。
+- 保存buttonを`保存して完成表示を更新`へ変更した。
+- 変更ファイル: `backend/app/candidates/merge_boundaries.py`、`backend/app/render/subtitles_ass.py`、
+  `backend/app/jobs/subtitle_review.py`、`backend/app/api/jobs.py`、`backend/app/jobs/runner.py`、
+  `frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/components/ClipTextStyleEditor.tsx`、
+  `frontend/lib/clipTextStyle.ts`、`frontend/lib/subtitlePreview.ts`、`frontend/lib/types.ts`、関連test、`STATUS.md`。
+
+### 検証
+
+- backend全体: `564 passed, 1 skipped`。関連3ファイル: `116 passed`。backend ruff: pass。
+- frontend typecheck / lint / production build、`git diff --check`: pass。
+- `x=187.5 / y=-150`のlayout座標、12px通常字幕のcontent PATCHとASS維持、個別設定解除後の既定値seedを自動testで確認: pass。
+- 33文字字幕はfrontend/backendともevent長`[32, 1]`、改行`[16, 16]`で一致。split、merge、表示時間補正、hook shiftのfixture比較: pass。
+- style変更でexact preview spec hashが変わり、保存後に完成表示が再生成されることを確認: pass。
+- GPU Composeでbackend / worker / frontendをbuild・再作成: pass。`/health=ok`、worker GPU preflightは`cuda / float16 / NVIDIA GeForce RTX 5070 Ti`。
+- 実job `job_95119645acb356865e436016d9896e0b`で、フック文字サイズ`88 -> 100`、文字色`白 -> 黄`、Y位置`650 -> 960`が保存前に即時反映されることを目視確認: pass。
+- 同画面で個別設定解除後に`Noto Sans CJK JP Bold / 88px / 黒縁3 / Y360`へ即時復帰し、次の色変更でも旧overrideが復活しないことを確認: pass。
+- 検証後、ユーザー画面の未保存フック設定（851チカラヅヨク、白文字・白縁、88px、縁5、中央、Y650）を保存せず復元した。
+- 独立最終レビュー: P0/P1/P2なし。
+
+### 未解決・制限
+
+- 即時側はブラウザ描画、中央MP4はlibass/FFmpeg描画。改行、基準解像度、書体、サイズ、縁、影、位置を同じ値へ揃えたが、glyph rasterizationの微差は中央の`保存済み・完成表示`を正とする。
+- 保存後にexact MP4が再生成されるまでの所要時間はclip長に依存する。
+- ユーザー受入は未確認。
+
+## 2026-08-18 Task 115 メインプレイヤーへの即時文字編集統合
+
+### 目的
+
+- 小さい別枠の即時プレビューを廃止し、メインプレイヤー内で文字色、サイズ、位置、文言の未保存変更を即時確認できるようにする。
+- 即時表示と保存済み完成表示で同じ9:16 / 16:9の表示枠を使い、見切れ方と画面サイズの比較を直接行えるようにする。
+
+### 観測事実・原因
+
+- 変更前のメインプレイヤーは文字焼込済みexact MP4、即時側は小さいCSSプレビューだったため、表示枠と縮尺が異なっていた。
+- exact MP4へCSS文字を重ねると保存済み文字と二重表示になる。入力ごとに全編MP4を再生成すると、長いclipでは即時編集にならない。
+- 即時側の枠が小さく、出力フレーム外を隠す境界もメインと異なったため、添付比較では即時側だけ大きく見切れていた。
+
+### 変更
+
+- exact完成MP4とは別に、同じnormal/short renderer、crop、フック複製、上下帯を使い、文字だけ焼かないlive base MP4を生成する。
+- メインプレイヤーの既定表示を`編集中・即時反映`とし、live base上へ未保存draftのタイトル、フック、字幕を描画する。
+- 同じメインプレイヤーの`保存済み表示`でexact完成MP4へ切り替え、`編集表示へ戻る`で即時表示へ戻す。
+- title / hookは最大20文字・最大2行、字幕はclip固有の改行・event分割・表示時間・フック抑止規則を使う。文字サイズ、縁、影、ASS alignment、X/Yを出力解像度基準で縮尺する。
+- 9:16 / 16:9の実フレームへ`overflow-hidden`を適用し、即時文字も完成表示と同じ映像境界で見切れるようにする。
+- live baseは文字・style変更ではhashを変えず、crop、layout、フック映像、帯など映像構成の変更時だけ再生成する。
+- 字幕確認APIへlive preview URL / spec hashと固定hash版MP4配信routeを追加する。既存exact previewは確認・最終レンダリングの正として維持する。
+- 変更ファイル: `backend/app/render/render_exact_review_preview.py`、`backend/app/jobs/subtitle_review.py`、
+  `backend/app/jobs/subtitle_review_preview.py`、`backend/app/jobs/runner.py`、`backend/app/api/jobs.py`、
+  `frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/components/ClipTextStyleEditor.tsx`、
+  `frontend/lib/types.ts`、関連test、`README.md`、`STATUS.md`。
+
+### 検証
+
+- backend対象test: `19 passed`。backend全体: `565 passed, 1 skipped`。backend ruff: pass。
+- frontend typecheck / lint / production build、`git diff --check`: pass。
+- GPU Composeでbackend / worker / frontendをbuild・再作成: pass。`/health=ok`、worker GPU preflightは`cuda / float16 / NVIDIA GeForce RTX 5070 Ti`。
+- 実job `job_95119645acb356865e436016d9896e0b`のshort 2本でlive base生成完了、`LIVE_READY=2/2`。
+- Chrome実画面でメインの動画sourceがlive endpointになり、別枠即時プレビューが0件であることを確認: pass。
+- title文字サイズ`52 -> 80`でメイン表示が`17.33px -> 26.67px`へ即時変化し、live動画URLが変わらないことを確認: pass。
+- titleはメインの9:16枠内で2行、字幕も2行で表示し、枠外を隠すことを確認: pass。
+- `保存済み表示`でexact endpoint、`編集表示へ戻る`でlive endpointへ切り替わることを確認: pass。
+- メイン再生でcurrentTimeが`0 -> 1.107秒`へ進むことを確認: pass。
+- 検証後、ユーザーの未保存title設定（Dela Gothic One、52px、縁1、X50%、Y9%）を保存せず復元した。
+
+### 未解決・制限
+
+- 即時表示はブラウザ描画、保存済み完成表示はFFmpeg/libass描画のため、glyph rasterizationには微差が残る。最終出力の正は`保存済み・完成表示`。
+- 旧jobを初めて開く際はlive baseを1回生成するため待機が発生する。
+- ユーザー受入は未確認。
+
+## 2026-08-18 Task 116 即時確認後の一括OK保存
+
+### 目的
+
+- 文字調整の途中で保存・完成プレビュー生成を挟まず、メインの即時表示を見ながら連続編集できるようにする。
+- 選択clipの確認が終わった時だけ`OK`を押し、タイトル、フック、文字設定、修正字幕を1回で保存する。
+
+### 観測事実・原因
+
+- 変更前はclip内容の保存と各字幕の保存が別操作で、それぞれexact完成プレビューを再生成した。
+- clip確認にはexact完成プレビューの生成完了が必要だったため、`保存 -> 動画生成待ち -> 確認`の2段階になっていた。
+- メインのlive表示で未保存draftを確認できても、操作導線が従来の個別保存・待機を要求していた。
+
+### 変更
+
+- `POST /api/jobs/{jobId}/subtitle-review/clips/{clipId}/apply`を追加した。
+- 選択clipのtitle、hook、3種の文字style、修正された字幕segmentをdocument lock内で一括更新し、render contract再計算、preview refresh、clip確認を1 transactionで行う。
+- 複数segment変更でもaffected clipを集約し、clipごとのexact previewを最後に1回だけqueueする。対象clip外のsegment IDと重複IDは拒否する。
+- 画面から`保存して完成表示を更新`と各行の`この字幕を保存`を削除した。編集中はfrontend draftだけを変更し、メインlive表示へ即時反映する。
+- 右下を`この内容でOK（保存して次へ）`へ変更した。OK後は次の未確認clipへ進み、exact完成プレビューはバックグラウンド更新する。
+- clipはOK時点で確認済みにし、最終レンダリングだけは従来どおり全exact previewのreadyを待つ。
+- saved exact表示中に文字・字幕を変更した場合は自動でlive編集表示へ戻す。
+- 変更ファイル: `backend/app/schemas.py`、`backend/app/api/jobs.py`、
+  `backend/tests/test_api_routes.py`、`frontend/lib/api.ts`、
+  `frontend/app/jobs/[jobId]/subtitles/page.tsx`、`README.md`、`STATUS.md`。
+
+### 検証
+
+- 新APIの一括内容・字幕保存、即時確認済み化、preview queue 1回、artifact永続化、対象外segment拒否: pass。
+- backend API test: `72 passed`。backend全体: `567 passed, 1 skipped`。既知のStarlette deprecation warning 1件のみ。
+- backend ruff、frontend typecheck / lint / production build、`git diff --check`: pass。
+- Docker backend / worker / frontendをbuild・再作成し、backend healthy、`/health=ok`: pass。
+- 実画面で個別字幕保存button`0件`、個別完成表示更新button`0件`、一括OK button`1件`: pass。
+- 実画面で文字サイズを変更しても`subtitle_review.json`の更新時刻・サイズとpreview artifact数が変わらないことを確認: pass。
+- 実画面の一括OKはユーザーdraftを保存するため押していない。検証後、未保存title文字サイズを`52`、再生位置を`0`へ戻した。
+
+### 未解決・制限
+
+- フック映像の変更は映像構成自体が変わるため、従来どおり専用preview更新が必要。
+- 上下帯はjob全体の映像構成設定のため、従来どおり設定変更時に保存・live base更新する。
+- ユーザー受入は未確認。
+
+## 2026-08-22 Task 117 即時文字プレビューのlibass寸法補正
+
+### 目的
+
+- メインの即時プレビューとFFmpeg/libass完成動画で、タイトル、冒頭フック、通常字幕の文字サイズ・改行間隔・位置を揃える。
+- 保存や動画再生成を挟まず、3種の文字設定を同じ基準で即時確認できる状態を維持する。
+
+### 観測事実・原因
+
+- 同じフォントファイルとASS `Fontsize`を使っても、CSSはem square、libassはフォントのWindows ascent/descentを基準に文字を拡大するため、Dela Gothic Oneと源ノ角ゴシックは即時側が約1.45倍に見えていた。
+- 851チカラヅヨクはemとWindows ascent/descentが同寸法のため、Dela等と同じ一律係数を掛けると逆に小さくなる。
+- X/Y位置、ASS alignment、改行条件は既に一致しており、主因はフォントごとの文字寸法と行ピッチだった。
+
+### 変更
+
+- `frontend/lib/clipTextStyle.ts`へ、`unitsPerEm / (usWinAscent + usWinDescent)`からCSS文字サイズ係数と行高を返す共通ASSプレビューメトリクスを追加した。
+- `frontend/components/ClipTextStyleEditor.tsx`のメイン即時overlayと小型style preview、`frontend/components/SubtitleStylePreview.tsx`のアップロード設定previewが同じ補正を使用するよう変更した。
+- 共通overlayを使うタイトル、フック、字幕の全targetへ同じ変換を適用した。
+- 縁取り幅と影はPlayResピクセル基準のため補正せず、従来の出力幅連動を維持した。
+- 変更ファイル: `frontend/lib/clipTextStyle.ts`、`frontend/components/ClipTextStyleEditor.tsx`、`frontend/components/SubtitleStylePreview.tsx`、`STATUS.md`。
+
+### 検証
+
+- frontend typecheck / lint / production build: pass。
+- Docker frontendをbuild・再作成し、実画面へ反映: pass。
+- 同一テキストの完成ASS / 補正後CSSの画素bbox比較:
+  - Delaタイトル: `724x62 / 719x62`。
+  - 源ノ角ゴシック字幕: `628x102 / 625x101`。
+  - 851フック: `978x181 / 978x179`。
+- 実job `job_f2edbd8dc3e842b8ac9119b51ad2427e`の360x640メイン枠で、DelaタイトルのCSS幅`241.06px`=`723.19/1080px`、タイトル中心`X180/Y80`、字幕中心`X180/Y320`を確認した。完成側の基準位置`X540/Y240`、`X540/Y960`と一致。
+- `/upload`の旧字幕style previewでも固定clampを使わず、ASS補正後の`font-size 10.14px / line-height 14.68px / stroke 0.97px`が適用されることを確認した。
+- 独立監査と再照合で、3書体とも幅・高さ誤差`1.1%以下`、位置誤差`1px以下`。一律係数ではなくフォント別補正が必要との結論で一致した。
+
+### 未解決・制限
+
+- workerのシステムフォントを使う`Noto Sans CJK JP`、`Noto Serif CJK JP`、`Noto Sans Mono CJK JP`は同一ファイルをfrontendへ同梱していないため、ブラウザ環境によってfallback差が残る。今回使用中のDela、851、源ノ角は同一ファイルで確認済み。
+- その他の同梱font presetはメトリクス値を反映したが、全presetの実画像一対一回帰は未確認。
+- ユーザー受入は未確認。
+
+## 2026-08-23 Task 118 通常切り抜きのタイトル・冒頭フック編集
+
+### 目的
+
+- 通常切り抜きでも、結果タイトル、冒頭フック文字、フック文字スタイル、冒頭へ複製する見せ場を編集し、プレビューと最終MP4へ反映する。
+
+### 観測事実・原因
+
+- 通常タイトルは字幕確認画面で編集可能だったが、結果画面・JSON用であり、通常動画内へは焼き込まない仕様だった。
+- 冒頭フック文字と複製映像は、UI、保存model、API、worker、ASS、normal rendererの全層でshort限定だった。
+- 起動中のbackend / worker / frontendはソースのbind mountがない旧imageで、ソース変更だけでは画面へ反映されなかった。
+
+### 変更
+
+- Candidate、clip plan、subtitle reviewでnormalの`hookText`、`hookStyle`、`hookSceneStart/End`を許可した。0.5〜3秒・clip内の検証は維持し、`shortMaxDuration`はshortだけに適用する。
+- clip plan / subtitle review workerがclip typeに応じて`normalClips`または`shorts`を更新するよう変更した。
+- normal rendererへフック映像・音声と本編のconcatを追加し、ASS字幕をフック映像尺だけ後方へ移動する。フック文字表示中は通常字幕を抑制する。
+- normal exact/live previewへフック映像時刻を渡し、renderer versionをv2へ更新した。
+- clip選定画面と字幕確認画面でnormalにもフック映像editorを表示した。字幕確認ではタイトル、フック文字、表示秒数、フック文字styleを編集できる。
+- normalタイトル欄を`タイトル（結果画面・JSON用）`とし、通常動画内へ焼き込まないことを明記した。
+- normal用フックの初期styleを1920x1080基準の76px・Y8%へ揃え、内蔵style previewの対象もeditorと一致させた。
+- normal export metadataへ完成尺、本編尺、フック文字・時刻・尺・render有無を追加した。
+- 変更ファイル: `backend/app/candidates/merge_boundaries.py`、`backend/app/jobs/clip_plan.py`、`backend/app/jobs/subtitle_review.py`、`backend/app/jobs/runner.py`、`backend/app/api/jobs.py`、`backend/app/render/subtitles_ass.py`、`backend/app/render/render_normal.py`、`backend/app/render/render_exact_review_preview.py`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/components/ClipHookSceneEditor.tsx`、`frontend/components/ClipTextStyleEditor.tsx`、`frontend/lib/clipTextStyle.ts`、関連test、`STATUS.md`。
+
+### 検証
+
+- backend対象test: `82 passed, 1 skipped`。backend全体: `572 passed, 1 skipped`。既知のStarlette deprecation warning 1件のみ。
+- backend ruff、frontend typecheck / lint / production build: pass。
+- 実`normal_02.mp4`を入力にnormal rendererを実行し、1秒フック＋5秒本編が`6.000秒`、映像H.264・音声AACで生成されることを`ffprobe`で確認: pass。確認用artifactは削除した。
+- GPU Composeでbackend / worker / frontendをbuild・再作成し、backend healthy、`/health=ok`: pass。
+- 実job `job_91fb0c58f74443348b0653fe33fb051b`の通常編集画面で、タイトル欄、冒頭フック欄、表示秒数、フックstyle対象、通常用76px styleを確認: pass。
+- 冒頭フック文字を未保存draftへ入力し、メイン即時表示へ反映されることを確認した。検証後はreloadし、保存せず破棄した。
+
+### 未解決・制限
+
+- 通常タイトルは結果画面・JSON用。通常動画内へは焼き込まない。
+- 実jobでフック映像を保存して最終出力へ昇格する操作は、ユーザーの編集中jobを変更するため未実施。domain、API/worker、実FFmpegを分離して検証済み。
+- ユーザー受入は未確認。
+
+## 2026-08-24 Task 119 通常切り抜きの動画内タイトル編集
+
+### 目的
+
+- 通常切り抜きのタイトル本文と文字設定を編集し、メインプレビュー、完成プレビュー、最終MP4へ同じ内容で反映する。
+- Task 118で残っていた「結果画面・JSON用のみ」の制限を解消する。
+
+### 観測事実・原因
+
+- 通常タイトル本文の入力欄は存在したが、`titleStyle`の保存、タイトルstyle対象、ライブ表示、ASS生成、normal rendererの動画内描画がshort限定だった。
+- そのためタイトル文字列だけ編集でき、通常動画上のタイトルの書体・サイズ・色・位置は編集できなかった。
+
+### 変更
+
+- 通常編集にも`タイトル / フック / 字幕`の3つの文字style対象を表示し、初期対象をタイトルへ変更した。
+- 通常タイトルの既定styleを1920x1080基準の76px・Y8%とし、個別の書体・サイズ・色・縁・X/Y位置を保存する。
+- 通常タイトルをメインの即時表示、exact完成プレビュー、最終normal MP4のASSへ反映する。
+- normal exact previewは古い`overlay_title`ではなく、字幕確認で編集した`title`を使用する。shortの`overlay_title`方針は維持する。
+- タイトルはフック文字または複製フック映像の終了後から表示し、冒頭要素との重なりを防止する。
+- review contractとnormal export metadataへタイトル表示予定・描画済み・styleを記録し、結果画面でも状態を表示する。
+- 変更ファイル: `backend/app/jobs/subtitle_review.py`、`backend/app/render/subtitles_ass.py`、`backend/app/render/render_exact_review_preview.py`、`backend/app/render/render_normal.py`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/components/ClipTextStyleEditor.tsx`、`frontend/components/ResultVideoCard.tsx`、`frontend/lib/clipTextStyle.ts`、関連test、`STATUS.md`。
+
+### 検証
+
+- backend対象test: `135 passed`。backend全体: `573 passed, 1 skipped`。既知のStarlette deprecation warning 1件のみ。
+- backend ruff、frontend typecheck / lint / production build: pass。
+- GPU Composeでbackend / worker / frontendをbuild・再作成し、backend healthy、`/health=ok`: pass。
+- 実job `job_91fb0c58f74443348b0653fe33fb051b`の通常編集画面で、`表示タイトル`、`タイトル / フック / 字幕`、通常タイトル76pxを確認: pass。
+- 通常タイトルを未保存draftへ変更し、一覧・編集状態へ即時反映されることを確認した。reload後に元へ戻り、ユーザーjobは未変更。
+- 実`normal_02.mp4`から5秒を再書き出しし、日本語タイトルが1920x1080 MP4上部へ焼き込まれることをASS、`ffprobe`、抽出フレームで確認: pass。確認用artifactは削除した。
+
+### 未解決・制限
+
+- 実jobのOK保存はユーザーの編集中データを変更するため未実施。保存contract、API、renderer、実FFmpegを分離して検証済み。
+- ユーザー受入は未確認。
+
+## 2026-08-24 Task 120 通常切り抜き用YouTubeサムネ2枚
+
+### 目的
+
+- `normal_01.mp4`と`normal_02.mp4`の内容に合うYouTubeサムネを各1枚作成する。
+
+### 変更
+
+- 実動画から表情候補を抽出し、`normal_01`は「まだ本編／始まってない」、`normal_02`は「痛風／オールバック」を主見出しにした。
+- 儒烏風亭らでんの髪色・衣装・表情を参照し、和風の濃緑・黒・金を基調に人物右、文字左で構成した。
+- 追加ファイル: `youtube/thumbnails/normal_01_youtube_thumbnail.jpg`、`youtube/thumbnails/normal_02_youtube_thumbnail.jpg`。
+
+### 検証
+
+- 2枚とも`1280x720`、JPEG。容量は`269327 bytes`、`297993 bytes`。
+- 指定文字の誤字なし、人物の顔を文字が覆わないこと、スマホ向けの文字サイズと安全余白を目視確認: pass。
+
+### 未解決・制限
+
+- ユーザー受入は未確認。
+
+## 2026-08-24 Task 121 normal_01の縦型ショート切り出し
+
+### 目的
+
+- 通常切り抜き`normal_01.mp4`から、休肝日スパチャと「本編始まってないね」のオチを縦型ショートへ再編集する。
+
+### 変更
+
+- 元クリップ内`99.55〜122.90秒`を採用し、23.35秒へ圧縮した。
+- 9:16人物寄せcrop、冒頭フック「肝臓からの圧が強い。」、発言同期の大字幕、旧横字幕を隠す下部字幕帯を追加した。
+- 音声速度`1.0`、音量正規化なし。元音声の間とテンポを維持した。
+- 追加ファイル: `youtube/shorts/normal_01_main_not_started_short.mp4`、`normal_01_main_not_started_short.ass`、`normal_01_main_not_started_short_storyboard.json`、`normal_01_main_not_started_short_preview_frames/*.png`。
+
+### 検証
+
+- MP4: H.264/AAC、`1080x1920`、`30fps`、`23.366667秒`、音声`48kHz stereo`、`9753709 bytes`。
+- 字幕bbox: 全11場面pass。最大幅`920px`、安全幅`940px`以内。
+- 冒頭、2行字幕、最長字幕、オチの4 PNGを抽出し、文字見切れ、顔被り、旧字幕重複なしを目視確認: pass。
+- blackdetect: 該当なし。
+
+### 未解決・制限
+
+- ユーザー受入は未確認。
+
+## 2026-08-25 Task 122 元動画から手動作成
+
+### 目的
+
+- アップロードした元動画を自動選定せず、そのまま確認しながら通常切り抜きとショートを手作業で作成する。
+- 自動作成・完成動画の再編集とは独立した入口にし、字幕も自動・なし・手入力から選べるようにする。
+
+### 観測事実・原因
+
+- 変更前は新規作成jobが必ず文字起こし、候補生成、自動選定を通り、元動画だけを編集画面へ渡す経路がなかった。
+- 既存の任意時間指定は自動処理への補助条件であり、元動画からclipを追加・削除する手動編集契約ではなかった。
+- 元動画をそのままvideo要素へ渡すと、MKVやH.265 MP4などブラウザ非対応形式を再生できない。
+
+### 変更
+
+- `/upload`へ`手動作成`を追加した。動画選択後は自動候補生成を行わず、手動編集用jobを作成する。
+- 初回workerは動画情報を確認し、元形式に関係なくH.264/yuv420p/AACの編集用MP4を生成する。無音源は`-an`で生成する。
+- 切り抜き予定画面へ手動editorを追加した。元動画の再生位置から開始・終了を取得し、分・秒入力、±1秒/±5秒、範囲再生で調整できる。
+- 通常・ショートの追加、更新、削除、タイトル、冒頭フック文字、0.5〜3秒の見せ場複製を同じ画面で編集できる。通常12本、ショート24本を上限とする。
+- 確定後は同じjobを再queueし、手動のclip ID・範囲・タイトル・フックを保持したまま既存の字幕確認・書き出しへ接続する。
+- 手動字幕は`自動字幕 / 字幕なし / 手入力`を追加した。手入力はclipごとに独立した1件の字幕欄を字幕確認画面へ作る。字幕なしでもタイトル、フック、上下帯の確認は維持する。
+- 音声なし動画は自動文字起こしを要求しない。音声なしでフック映像を複製する操作は、現行concat仕様に合わせて422で明示的に拒否する。
+- 自動作成と完成動画の再編集は従来経路を維持した。
+- 主な変更ファイル: `backend/app/schemas.py`、`backend/app/api/jobs.py`、`backend/app/jobs/manual_workflow.py`、`backend/app/jobs/runner.py`、`backend/app/jobs/clip_plan.py`、`backend/app/jobs/subtitle_review.py`、`backend/app/render/render_manual_source_proxy.py`、`backend/app/render/render_review_preview.py`、`frontend/app/upload/page.tsx`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/components/ManualClipPlanEditor.tsx`、`frontend/lib/api.ts`、`frontend/lib/types.ts`、関連test、`README.md`、`STATUS.md`。
+
+### 検証
+
+- backend全体: `582 passed, 1 skipped`。backend ruff、compile/import: pass。
+- frontend typecheck、lint、production build: pass。
+- `git diff --check`: pass。改行コード変換のwarningのみ。
+- in-app browserのローカル開発画面で`新しい動画を作成 / 手動作成 / 完成動画を再編集`の3入口、手動時の自動設定非表示、`自動字幕 / 字幕なし / 手入力`の切替と説明変更を確認: pass。
+- GPU Composeでbackend / worker / frontendをbuild・再作成: pass。4 service running、`/health=ok`、workerは`cuda / float16 / NVIDIA GeForce RTX 5070 Ti`、fallbackなし。
+- Docker内の実FFmpegでMKV入力から編集用MP4を生成し、H.264、`960x540`、yuv420p、30fps、AAC、2.000秒を`ffprobe`で確認: pass。さらに`1000x777`の無音MKVを`694x540`の偶数寸法H.264へ変換できることを確認した。確認用artifactは一時領域から削除済み。
+- 再作成後の`http://localhost:3000/upload`で手動作成画面を目視確認し、3入口と3字幕modeのpressed状態・説明切替を再確認: pass。
+- 独立レビューで指摘されたブラウザ非対応元動画と字幕mode不足を、常時H.264編集用MP4生成と3字幕modeで補完した。最終再レビュー: P0/P1なし、focused test `9 passed`。
+
+### 未解決・制限
+
+- 手入力字幕はclip全体に対応する1件から開始する。複数区間へ分割する場合は字幕確認画面で既存の字幕編集単位を拡張する必要がある。
+- 音声なし動画のフック映像複製は未対応。通常・ショート本編とタイトル・字幕なし書き出しは対象内。
+- 許可済み実動画による`upload -> worker -> 手動clip作成 -> 字幕確認 -> 最終MP4/ZIP`の全実E2Eは未確認。
+- ユーザー受入は未確認。
+
+## 2026-08-25 Task 123 派生ショート専用実装の撤回
+
+### 目的
+
+- 直前に追加した「完成済み通常clipから専用の手動ショート子jobを作る」実装だけを撤回し、Task 122の元動画手動作成を維持する。
+
+### 変更
+
+- 結果画面の手動ショート化ボタン、専用API、子job生成、元clip基準の時刻offset、字幕seed、ショート限定制約を削除した。
+- 手動作成editorは、元動画から通常clipとショートの両方を追加できるTask 122の状態へ戻した。
+- 派生ショート専用のtestとREADME記述を削除した。
+
+### 検証
+
+- backend全体: `582 passed, 1 skipped`。backend ruff、compile/import: pass。
+- frontend typecheck、lint、production build: pass。
+- 派生ショート専用識別子の実装コード残存: 0件。`git diff --check`: pass。改行コード変換のwarningのみ。
+- GPU Composeでbackend / worker / frontendをbuild・再作成: pass。4 service running、`/health=ok`、frontend HTTP 200。
+- worker GPU preflight: `cuda / float16 / NVIDIA GeForce RTX 5070 Ti`、fallbackなし。
+
+### 未解決・制限
+
+- 完成動画の手動再編集で、焼き込み済み字幕を除去できない問題は未解決。代替仕様は未実装。
+- Task 122の許可済み実動画による全実E2Eとユーザー受入は未確認。

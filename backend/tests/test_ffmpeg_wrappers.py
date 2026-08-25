@@ -147,6 +147,32 @@ def test_build_render_normal_command_with_subtitles_and_loudnorm() -> None:
     ]
 
 
+def test_build_render_normal_command_prepends_hook_scene() -> None:
+    command = build_render_normal_command(
+        "input.mp4",
+        "normal.mp4",
+        start=10.0,
+        end=20.0,
+        subtitle_path="subtitles.ass",
+        normalize_audio=True,
+        hook_scene_start=14.0,
+        hook_scene_end=16.0,
+    )
+
+    assert command.count("input.mp4") == 2
+    assert command[command.index("-filter_complex") + 1] == (
+        "[0:v:0]setpts=PTS-STARTPTS[hook_v];"
+        "[1:v:0]setpts=PTS-STARTPTS[main_v];"
+        "[0:a:0]aresample=48000,asetpts=PTS-STARTPTS[hook_a];"
+        "[1:a:0]aresample=48000,asetpts=PTS-STARTPTS[main_a];"
+        "[hook_v][hook_a][main_v][main_a]concat=n=2:v=1:a=1[concat_v][concat_a];"
+        "[concat_v]ass='subtitles.ass'[video_out];"
+        "[concat_a]loudnorm=I=-16:TP=-1.5:LRA=11[audio_out]"
+    )
+    assert command[command.index("-map") + 1] == "[video_out]"
+    assert "[audio_out]" in command
+
+
 def test_ass_filter_uses_configured_fonts_directory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -36,6 +36,8 @@ from app.audio.transcript_postprocess import (
     write_transcript_postprocess_summary,
 )
 from app.audio.transcribe_faster_whisper import (
+    DEFAULT_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS,
+    DEFAULT_TRANSCRIPTION_CHUNK_SECONDS,
     FasterWhisperTranscriptionEngine,
     TranscriptSegment,
     transcript_output_path,
@@ -52,7 +54,13 @@ from app.audio.transcript_suspicion import (
     write_suspicion_artifacts,
     write_suspicion_failure_summary,
 )
-from app.audio.volume_features import AudioFeatures, audio_features_output_path, compute_audio_features, write_audio_features
+from app.audio.volume_features import (
+    AudioFeatures,
+    audio_features_output_path,
+    build_audio_features,
+    compute_audio_features,
+    write_audio_features,
+)
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.boundary_refinement import refine_selected_candidates
 from app.candidates.generate_normal_candidates import generate_normal_candidates_with_summary
@@ -88,18 +96,27 @@ from app.jobs.clip_plan import (
     build_clip_plan,
     clip_plan_output_path,
     load_clip_plan,
+    mark_clip_plan_approved,
     mark_clip_plan_awaiting_review,
     update_clip_plan_boundary,
     update_clip_plan_hook_scene,
     write_clip_plan,
 )
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
+from app.jobs.manual_workflow import (
+    apply_manual_clip_metadata,
+    build_manual_selection,
+    is_manual_workflow,
+    manual_edit_is_finalized,
+    manual_subtitle_mode,
+)
 from app.jobs.summaries import write_generation_summaries
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
 from app.jobs.subtitle_review import (
     SubtitleReviewDocument,
     apply_reviewed_clip_content,
     apply_reviewed_text,
+    build_manual_subtitle_segments,
     build_subtitle_review,
     load_subtitle_review,
     mark_review_completed,
@@ -108,14 +125,36 @@ from app.jobs.subtitle_review import (
     restore_review_after_render_failure,
     subtitle_review_output_path,
     subtitle_review_preview_path,
-    subtitle_review_preview_url,
     subtitle_review_summary_path,
     update_review_hook_scene,
     write_subtitle_review,
     write_subtitle_review_summary,
 )
+from app.jobs.subtitle_review_preview import (
+    current_subtitle_review_preview_spec,
+    exact_subtitle_review_preview_is_ready,
+    exact_subtitle_review_preview_error_path,
+    live_subtitle_review_preview_is_ready,
+    live_subtitle_review_preview_url,
+    subtitle_review_document_lock,
+    subtitle_review_preview_url as exact_subtitle_review_preview_url,
+    write_subtitle_review_preview_error,
+)
 from app.models import ExportItem, Job, Video, utc_now
 from app.render.render_normal import NormalRenderBatchResult, render_normal_clip, render_selected_normal_candidates
+from app.render.render_exact_review_preview import (
+    ExactPreviewResult,
+    build_live_subtitle_review_preview_spec,
+    exact_subtitle_review_preview_paths,
+    live_subtitle_review_preview_paths,
+    render_exact_subtitle_review_preview,
+    subtitle_review_preview_spec_hash,
+)
+from app.render.render_manual_source_proxy import (
+    manual_source_proxy_path,
+    manual_source_proxy_url,
+    render_manual_source_proxy,
+)
 from app.render.render_review_preview import render_review_preview
 from app.render.render_short import ShortRenderBatchResult, render_selected_short_candidates, render_short_clip
 from app.scoring.openai_score import OpenAICandidateScorer, score_candidate_batch
@@ -161,6 +200,14 @@ MIN_AVERAGE_TRANSCRIPT_CONFIDENCE = 0.25
 MIN_REPEATED_SEGMENT_COUNT = 5
 MIN_REPEATED_SEGMENT_RATIO = 0.6
 MIN_REPEATED_SEGMENT_TEXT_LENGTH = 6
+MIN_CLUSTERED_REPEATED_SEGMENT_COUNT = 20
+MIN_CLUSTERED_REPEATED_SEGMENT_RATIO = 0.65
+MAX_CLUSTERED_REPEATED_UNIQUE_RATIO = 0.35
+LONG_FORM_TRANSCRIPTION_SECONDS = 30 * 60
+MIN_LONG_FORM_EXPECTED_SPEECH_SECONDS = 5 * 60
+MIN_LONG_FORM_TRANSCRIPT_AUDIO_COVERAGE = 0.08
+MIN_LONG_FORM_TRANSCRIPT_CHARACTERS_PER_MINUTE = 12.0
+TRANSCRIPTION_RECOVERY_SUMMARY_FILENAME = "transcription_recovery_summary.json"
 LOW_INFORMATION_WORDS = {
     "ah",
     "hmm",
@@ -195,7 +242,11 @@ class AutoClipperPipelineDependencies:
     detect_black_screen: DetectBlackScreen = detect_black_screen
     normal_renderer: Callable[..., Path] = render_normal_clip
     short_renderer: Callable[..., Any] = render_short_clip
+    manual_source_proxy_renderer: Callable[..., Path] = render_manual_source_proxy
     subtitle_review_preview_renderer: Callable[..., Path] = render_review_preview
+    subtitle_review_exact_preview_renderer: Callable[..., ExactPreviewResult] = (
+        render_exact_subtitle_review_preview
+    )
     openai_scorer: OpenAICandidateScorer | None = None
     transcript_corrector: OpenAITranscriptCorrector | None = None
 
@@ -427,6 +478,126 @@ def _int_setting(settings: dict[str, Any], key: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return max(0, parsed)
+
+
+def _generate_candidates_for_reselection_mode(
+    *,
+    settings: dict[str, Any],
+    transcript_segments: list[TranscriptSegment],
+    scene_segments: list[SceneSegment],
+    silence_segments: list[SilenceSegment],
+    heatmap_segments: Sequence[HeatmapSegment],
+    video_duration: float,
+    heartbeat: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[list[Candidate], list[Candidate], dict[str, Any]]:
+    normal_manual_ranges = manual_ranges_for_type(settings, "normal")
+    short_manual_ranges = manual_ranges_for_type(settings, "short")
+    heatmap_interval_mode = _bool_setting(settings, "heatmapIntervalMode", False)
+
+    normal_generation_result = (
+        build_manual_candidates(
+            "normal",
+            normal_manual_ranges,
+            transcript_segments,
+        )
+        if normal_manual_ranges
+        else generate_heatmap_candidates_with_summary(
+            "normal",
+            heatmap_segments=heatmap_segments,
+            transcript_segments=transcript_segments,
+            video_duration=video_duration,
+            requested_count=_int_setting(settings, "normalClipCount", 2),
+            settings=settings,
+            heartbeat=heartbeat,
+        )
+        if heatmap_interval_mode
+        else generate_normal_candidates_with_summary(
+            transcript_segments,
+            scene_segments,
+            silence_segments,
+            settings=settings,
+            heartbeat=heartbeat,
+        )
+    )
+    short_generation_result = (
+        build_manual_candidates(
+            "short",
+            short_manual_ranges,
+            transcript_segments,
+        )
+        if short_manual_ranges
+        else generate_heatmap_candidates_with_summary(
+            "short",
+            heatmap_segments=heatmap_segments,
+            transcript_segments=transcript_segments,
+            video_duration=video_duration,
+            requested_count=_int_setting(settings, "shortCount", 3),
+            settings=settings,
+            heartbeat=heartbeat,
+        )
+        if heatmap_interval_mode
+        else generate_short_candidates_with_summary(
+            transcript_segments,
+            scene_segments,
+            silence_segments,
+            settings=settings,
+            heartbeat=heartbeat,
+        )
+    )
+    normal_candidates = annotate_candidates_with_heatmap(
+        normal_generation_result.candidates,
+        heatmap_segments,
+    )
+    short_candidates = annotate_candidates_with_heatmap(
+        short_generation_result.candidates,
+        heatmap_segments,
+    )
+    summary = merge_candidate_generation_summaries(
+        [normal_generation_result.summary, short_generation_result.summary],
+        video_duration=video_duration,
+        transcript_segment_count=len(transcript_segments),
+    )
+
+    if heatmap_interval_mode:
+        missing_candidate_types = [
+            candidate_type
+            for candidate_type, requested_count, manual_ranges, candidates in (
+                (
+                    "normal",
+                    _int_setting(settings, "normalClipCount", 2),
+                    normal_manual_ranges,
+                    normal_candidates,
+                ),
+                (
+                    "short",
+                    _int_setting(settings, "shortCount", 3),
+                    short_manual_ranges,
+                    short_candidates,
+                ),
+            )
+            if requested_count > 0 and not manual_ranges and not candidates
+        ]
+        if missing_candidate_types:
+            raise PipelineExpectedError(
+                "heatmap_interval_mode_no_candidates",
+                "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。",
+                details={"candidateTypes": missing_candidate_types},
+            )
+
+    if not normal_candidates and not short_candidates:
+        raise PipelineExpectedError(
+            (
+                "heatmap_interval_mode_no_candidates"
+                if heatmap_interval_mode
+                else "no_candidates_found"
+            ),
+            (
+                "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。"
+                if heatmap_interval_mode
+                else "No clip candidates were found for the selected settings."
+            ),
+        )
+    return normal_candidates, short_candidates, summary
 
 
 def _openai_model_setting(settings: dict[str, Any]) -> str:
@@ -786,39 +957,84 @@ def _repeated_segment_diagnostics(segments: Sequence[TranscriptSegment]) -> dict
             "dominant_segment_ratio": 0.0,
             "unique_segment_text_ratio": 0.0,
             "repeated_segment_text": False,
+            "clustered_repeated_segment_count": 0,
+            "clustered_repeated_segment_ratio": 0.0,
+            "clustered_repeated_segment_text": False,
         }
 
     counts = Counter(normalized_texts)
     dominant_text, dominant_count = counts.most_common(1)[0]
     dominant_ratio = dominant_count / len(normalized_texts)
+    unique_ratio = len(counts) / len(normalized_texts)
+    clustered_count = sum(
+        count
+        for _text, count in counts.most_common(3)
+        if count >= MIN_REPEATED_SEGMENT_COUNT
+    )
+    clustered_ratio = clustered_count / len(normalized_texts)
     return {
         "dominant_segment_count": dominant_count,
         "dominant_segment_ratio": round(dominant_ratio, 6),
-        "unique_segment_text_ratio": round(len(counts) / len(normalized_texts), 6),
+        "unique_segment_text_ratio": round(unique_ratio, 6),
         "repeated_segment_text": (
             len(dominant_text) >= MIN_REPEATED_SEGMENT_TEXT_LENGTH
             and dominant_count >= MIN_REPEATED_SEGMENT_COUNT
             and dominant_ratio >= MIN_REPEATED_SEGMENT_RATIO
         ),
+        "clustered_repeated_segment_count": clustered_count,
+        "clustered_repeated_segment_ratio": round(clustered_ratio, 6),
+        "clustered_repeated_segment_text": (
+            len(normalized_texts) >= MIN_CLUSTERED_REPEATED_SEGMENT_COUNT
+            and clustered_count >= MIN_CLUSTERED_REPEATED_SEGMENT_COUNT
+            and clustered_ratio >= MIN_CLUSTERED_REPEATED_SEGMENT_RATIO
+            and unique_ratio <= MAX_CLUSTERED_REPEATED_UNIQUE_RATIO
+        ),
     }
 
 
-def _transcript_diagnostics(segments: Sequence[TranscriptSegment]) -> dict[str, Any]:
+def _transcript_diagnostics(
+    segments: Sequence[TranscriptSegment],
+    *,
+    timeline_duration: float | None = None,
+    expected_speech_seconds: float | None = None,
+) -> dict[str, Any]:
     text = _transcript_text(segments)
     average_confidence = _average_transcript_confidence(segments)
+    transcript_speech_duration = _transcript_speech_duration(segments)
     details: dict[str, Any] = {
         "segment_count": len(segments),
         "total_text_length": len(text),
-        "total_speech_duration": round(_transcript_speech_duration(segments), 6),
+        "total_speech_duration": round(transcript_speech_duration, 6),
         **_repeated_segment_diagnostics(segments),
     }
+    if timeline_duration is not None and timeline_duration > 0:
+        details["timeline_duration"] = round(timeline_duration, 6)
+        details["characters_per_minute"] = round(
+            len(text) / (timeline_duration / 60),
+            6,
+        )
+    if expected_speech_seconds is not None and expected_speech_seconds > 0:
+        details["expected_speech_seconds"] = round(expected_speech_seconds, 6)
+        details["transcript_audio_coverage"] = round(
+            transcript_speech_duration / expected_speech_seconds,
+            6,
+        )
     if average_confidence is not None:
         details["average_confidence"] = round(average_confidence, 6)
     return details
 
 
-def _transcript_unusable_reasons(segments: Sequence[TranscriptSegment]) -> list[str]:
-    details = _transcript_diagnostics(segments)
+def _transcript_unusable_reasons(
+    segments: Sequence[TranscriptSegment],
+    *,
+    timeline_duration: float | None = None,
+    expected_speech_seconds: float | None = None,
+) -> list[str]:
+    details = _transcript_diagnostics(
+        segments,
+        timeline_duration=timeline_duration,
+        expected_speech_seconds=expected_speech_seconds,
+    )
     text = _transcript_text(segments)
     average_confidence = _average_transcript_confidence(segments)
     reasons: list[str] = []
@@ -835,17 +1051,61 @@ def _transcript_unusable_reasons(segments: Sequence[TranscriptSegment]) -> list[
         reasons.append("repeated_low_information_text")
     if details["repeated_segment_text"]:
         reasons.append("repeated_segment_text")
+    if (
+        details["clustered_repeated_segment_text"]
+        and timeline_duration is not None
+        and timeline_duration >= LONG_FORM_TRANSCRIPTION_SECONDS
+        and average_confidence is not None
+        and average_confidence < 0.5
+        and details.get("transcript_audio_coverage", 1.0)
+        < MIN_LONG_FORM_TRANSCRIPT_AUDIO_COVERAGE
+        and details.get("characters_per_minute", MIN_LONG_FORM_TRANSCRIPT_CHARACTERS_PER_MINUTE)
+        < MIN_LONG_FORM_TRANSCRIPT_CHARACTERS_PER_MINUTE
+    ):
+        reasons.append("clustered_repeated_segment_text")
+    if (
+        timeline_duration is not None
+        and timeline_duration >= LONG_FORM_TRANSCRIPTION_SECONDS
+        and expected_speech_seconds is not None
+        and expected_speech_seconds >= MIN_LONG_FORM_EXPECTED_SPEECH_SECONDS
+        and details.get("transcript_audio_coverage", 1.0) < MIN_LONG_FORM_TRANSCRIPT_AUDIO_COVERAGE
+        and details.get("characters_per_minute", MIN_LONG_FORM_TRANSCRIPT_CHARACTERS_PER_MINUTE)
+        < MIN_LONG_FORM_TRANSCRIPT_CHARACTERS_PER_MINUTE
+    ):
+        reasons.append("long_form_transcript_too_sparse")
     return reasons
 
 
-def _transcript_quality_diagnostics(segments: Sequence[TranscriptSegment]) -> dict[str, Any]:
-    details = _transcript_diagnostics(segments)
-    details["reasons"] = _transcript_unusable_reasons(segments)
+def _transcript_quality_diagnostics(
+    segments: Sequence[TranscriptSegment],
+    *,
+    timeline_duration: float | None = None,
+    expected_speech_seconds: float | None = None,
+) -> dict[str, Any]:
+    details = _transcript_diagnostics(
+        segments,
+        timeline_duration=timeline_duration,
+        expected_speech_seconds=expected_speech_seconds,
+    )
+    details["reasons"] = _transcript_unusable_reasons(
+        segments,
+        timeline_duration=timeline_duration,
+        expected_speech_seconds=expected_speech_seconds,
+    )
     return details
 
 
-def _raise_if_transcript_unusable(segments: Sequence[TranscriptSegment]) -> None:
-    details = _transcript_quality_diagnostics(segments)
+def _raise_if_transcript_unusable(
+    segments: Sequence[TranscriptSegment],
+    *,
+    timeline_duration: float | None = None,
+    expected_speech_seconds: float | None = None,
+) -> None:
+    details = _transcript_quality_diagnostics(
+        segments,
+        timeline_duration=timeline_duration,
+        expected_speech_seconds=expected_speech_seconds,
+    )
     reasons = details["reasons"]
 
     if not reasons:
@@ -876,6 +1136,19 @@ def _should_retry_transcription_with_small(
     )
 
 
+def _should_retry_long_form_transcription_in_chunks(
+    *,
+    duration: float,
+    diagnostics: dict[str, Any],
+    reasons: Sequence[str],
+) -> bool:
+    return bool(
+        duration >= LONG_FORM_TRANSCRIPTION_SECONDS
+        and reasons
+        and diagnostics.get("actual_device") == "cuda"
+    )
+
+
 def _transcribe_with_faster_whisper(
     factory: TranscriptionEngineFactory,
     audio_path: Path,
@@ -893,6 +1166,69 @@ def _transcribe_with_faster_whisper(
     )
     segments = engine.transcribe(audio_path)
     return segments, dict(engine.diagnostics)
+
+
+def _transcribe_with_faster_whisper_in_chunks(
+    factory: TranscriptionEngineFactory,
+    audio_path: Path,
+    *,
+    model: str,
+    language: str,
+    device: str,
+    compute_type: str,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> tuple[list[TranscriptSegment], dict[str, Any]]:
+    engine = factory(
+        model_size=model,
+        device=device,
+        compute_type=compute_type,
+        language=language,
+    )
+    segments = engine.transcribe_chunked(
+        audio_path,
+        chunk_seconds=DEFAULT_TRANSCRIPTION_CHUNK_SECONDS,
+        overlap_seconds=DEFAULT_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS,
+        progress_callback=progress_callback,
+    )
+    return segments, dict(engine.diagnostics)
+
+
+def _chunked_transcription_diagnostics(
+    *,
+    primary: dict[str, Any],
+    primary_quality: dict[str, Any],
+    chunked: dict[str, Any],
+    chunked_quality: dict[str, Any],
+) -> dict[str, Any]:
+    primary_load_seconds = float(primary.get("model_load_seconds") or 0.0)
+    primary_transcription_seconds = float(primary.get("transcription_seconds") or 0.0)
+    chunked_load_seconds = float(chunked.get("model_load_seconds") or 0.0)
+    chunked_transcription_seconds = float(chunked.get("transcription_seconds") or 0.0)
+    peak_values = [
+        int(value)
+        for value in (primary.get("peak_vram_mb"), chunked.get("peak_vram_mb"))
+        if isinstance(value, (int, float))
+    ]
+    return {
+        **chunked,
+        "requested_model": primary.get("model"),
+        "actual_model": chunked.get("model"),
+        "model_load_seconds": round(primary_load_seconds + chunked_load_seconds, 3),
+        "transcription_seconds": round(
+            primary_transcription_seconds + chunked_transcription_seconds,
+            3,
+        ),
+        "peak_vram_mb": max(peak_values) if peak_values else None,
+        "quality_fallback_used": True,
+        "quality_fallback_reason": "primary_transcript_unusable",
+        "chunked_quality_fallback_used": True,
+        "selected_attempt": "chunked_same_model",
+        "selected_attempt_reason": "primary_transcript_unusable",
+        "primary_transcription": primary,
+        "primary_transcript_quality": primary_quality,
+        "chunked_transcription": chunked,
+        "chunked_transcript_quality": chunked_quality,
+    }
 
 
 def _fallback_transcription_diagnostics(
@@ -923,11 +1259,96 @@ def _fallback_transcription_diagnostics(
         "peak_vram_mb": max(peak_values) if peak_values else None,
         "quality_fallback_used": True,
         "quality_fallback_reason": "primary_transcript_unusable",
+        "selected_attempt": (
+            "small_ja_chunked"
+            if fallback.get("chunked")
+            else "small_ja_whole_file"
+        ),
+        "selected_attempt_reason": "previous_transcript_unusable",
         "primary_transcription": primary,
         "primary_transcript_quality": primary_quality,
         "fallback_transcription": fallback,
         "fallback_transcript_quality": fallback_quality,
     }
+
+
+def _write_transcription_recovery_failure_summary(
+    output_dir: Path,
+    *,
+    prior: dict[str, Any],
+    prior_quality: dict[str, Any],
+    fallback_chunked: bool,
+    exc: Exception,
+) -> Path:
+    attempts: list[dict[str, Any]] = []
+    if prior.get("chunked_quality_fallback_used") is True:
+        attempts.extend(
+            [
+                {
+                    "name": "primary_whole_file",
+                    "status": "completed_unusable",
+                    "runtime": prior.get("primary_transcription", {}),
+                    "quality": prior.get("primary_transcript_quality", {}),
+                },
+                {
+                    "name": "chunked_same_model",
+                    "status": "completed_unusable",
+                    "runtime": prior.get("chunked_transcription", {}),
+                    "quality": prior.get("chunked_transcript_quality", prior_quality),
+                },
+            ]
+        )
+    else:
+        attempts.append(
+            {
+                "name": "primary_whole_file",
+                "status": "completed_unusable",
+                "runtime": prior.get("primary_transcription", prior),
+                "quality": prior.get("primary_transcript_quality", prior_quality),
+            }
+        )
+        if "chunked_quality_fallback_used" in prior:
+            attempts.append(
+                {
+                    "name": "chunked_same_model",
+                    "status": "failed",
+                    "error_type": prior.get("chunked_quality_fallback_error_type"),
+                }
+            )
+
+    failed_attempt = "small_ja_chunked" if fallback_chunked else "small_ja_whole_file"
+    failure: dict[str, Any] = {
+        "name": failed_attempt,
+        "status": "failed",
+        "error_type": type(exc).__name__,
+    }
+    if isinstance(exc, TranscriptionRuntimeError):
+        failure["error_code"] = exc.code
+        failure["error_details"] = exc.details
+    attempts.append(failure)
+
+    runtime = {
+        **prior,
+        "quality_fallback_used": True,
+        "quality_fallback_reason": "previous_transcript_unusable",
+        "selected_attempt": None,
+        "failed_attempt": failed_attempt,
+        "fallback_error_type": type(exc).__name__,
+    }
+    if isinstance(exc, TranscriptionRuntimeError):
+        runtime["fallback_error_code"] = exc.code
+        runtime["fallback_error_details"] = exc.details
+    return _write_json(
+        output_dir / TRANSCRIPTION_RECOVERY_SUMMARY_FILENAME,
+        {
+            "recovery_failed": True,
+            "selected_model": None,
+            "selected_language": None,
+            "selected_quality": prior_quality,
+            "attempts": attempts,
+            "runtime": runtime,
+        },
+    )
 
 
 def _safe_visual_quality(
@@ -2018,6 +2439,118 @@ def _render_candidate_review_preview(
     )
 
 
+def _render_exact_subtitle_review_preview_for_clip(
+    *,
+    dependencies: AutoClipperPipelineDependencies,
+    input_path: Path,
+    job_dir: Path,
+    job: Job,
+    video: Video,
+    document: SubtitleReviewDocument,
+    paths: StoragePaths,
+    clip_id: str,
+) -> ExactPreviewResult:
+    spec, expected_hash, inputs = current_subtitle_review_preview_spec(
+        job=job,
+        video=video,
+        document=document,
+        paths=paths,
+        clip_id=clip_id,
+    )
+    result = dependencies.subtitle_review_exact_preview_renderer(
+        input_path,
+        job_dir,
+        candidate=inputs.candidate,
+        transcript_segments=inputs.transcript_segments,
+        settings=inputs.settings,
+        source_fingerprint=inputs.source_fingerprint,
+        source_width=inputs.source_width,
+        source_height=inputs.source_height,
+        candidate_index=inputs.candidate_index,
+        overlay_title_expected=inputs.overlay_title_expected,
+        normal_renderer=dependencies.normal_renderer,
+        short_renderer=dependencies.short_renderer,
+    )
+    if result.spec_hash != expected_hash:
+        raise RuntimeError("subtitle review preview renderer returned a stale spec")
+    expected_paths = exact_subtitle_review_preview_paths(
+        job_dir,
+        clip_id,
+        expected_hash,
+    )
+    if (
+        result.path != expected_paths.video_path
+        or result.subtitle_path != expected_paths.subtitle_path
+        or result.spec_path != expected_paths.spec_path
+    ):
+        raise RuntimeError("subtitle review preview renderer returned unexpected paths")
+    if not exact_subtitle_review_preview_is_ready(expected_paths, expected_hash):
+        raise RuntimeError("subtitle review preview renderer returned invalid artifacts")
+    expected_live_spec = build_live_subtitle_review_preview_spec(spec)
+    expected_live_hash = subtitle_review_preview_spec_hash(expected_live_spec)
+    expected_live_paths = live_subtitle_review_preview_paths(
+        job_dir,
+        clip_id,
+        expected_live_hash,
+    )
+    if (
+        result.live_spec_hash != expected_live_hash
+        or result.live_path != expected_live_paths.video_path
+        or result.live_spec_path != expected_live_paths.spec_path
+        or not live_subtitle_review_preview_is_ready(
+            expected_live_paths,
+            expected_live_hash,
+        )
+    ):
+        raise RuntimeError("subtitle review live preview renderer returned invalid artifacts")
+    return result
+
+
+def _mark_subtitle_review_preview_ready(
+    document: SubtitleReviewDocument,
+    *,
+    clip_id: str,
+    spec_hash: str,
+    live_spec_hash: str,
+) -> None:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+    clip.preview_state = "ready"
+    clip.preview_spec_hash = spec_hash
+    clip.preview_video_url = exact_subtitle_review_preview_url(
+        document.job_id,
+        clip_id,
+        spec_hash,
+    )
+    clip.live_preview_spec_hash = live_spec_hash
+    clip.live_preview_video_url = live_subtitle_review_preview_url(
+        document.job_id,
+        clip_id,
+        live_spec_hash,
+    )
+    clip.preview_error = None
+
+
+def _cleanup_stale_clip_plan_previews(
+    preview_dir: Path,
+    current_preview_paths: set[Path],
+) -> None:
+    try:
+        if not preview_dir.is_dir():
+            return
+        stale_candidates = list(preview_dir.glob("*.mp4"))
+    except OSError:
+        return
+
+    for stale_path in stale_candidates:
+        try:
+            if stale_path.resolve() not in current_preview_paths:
+                stale_path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
 def _prepare_clip_plan_review(
     *,
     db: Session,
@@ -2032,8 +2565,8 @@ def _prepare_clip_plan_review(
     selected = [*selection.normal_clips, *selection.shorts]
     if not selected:
         raise PipelineExpectedError(
-            "no_usable_output",
-            "Pipeline completed analysis but produced no usable clips.",
+            "no_usable_selection",
+            "Pipeline completed analysis but selection produced no usable clips.",
         )
 
     document = build_clip_plan(
@@ -2077,18 +2610,14 @@ def _prepare_clip_plan_review(
             total=total,
         )
 
-    preview_dir = subtitle_review_preview_path(job_dir, "placeholder").parent
-    if preview_dir.is_dir():
-        for stale_path in preview_dir.glob("*.mp4"):
-            if stale_path.resolve() not in current_preview_paths:
-                stale_path.unlink(missing_ok=True)
-
     document = mark_clip_plan_awaiting_review(
         document,
         preview_clip_ids=available_clip_ids,
     )
     write_clip_plan(document, output_path)
     _set_status(db, job, "awaiting_clip_review")
+    preview_dir = subtitle_review_preview_path(job_dir, "placeholder").parent
+    _cleanup_stale_clip_plan_previews(preview_dir, current_preview_paths)
     return output_path
 
 
@@ -2134,6 +2663,13 @@ def run_autoclipper_job(
             raise ValueError(f"video not found for job: {job_id}")
 
         settings = dict(job.settings_json or {})
+        manual_workflow = is_manual_workflow(settings)
+        active_manual_subtitle_mode = manual_subtitle_mode(settings)
+        skip_automatic_transcription = (
+            manual_workflow
+            and active_manual_subtitle_mode in {"none", "manual"}
+        )
+        skip_automatic_audio_analysis = skip_automatic_transcription
         configured_transcription_model = _whisper_model_size_setting(settings)
         configured_transcription_language = _transcription_language_setting(settings)
         configured_transcription_device = _transcription_device_setting(settings)
@@ -2194,37 +2730,71 @@ def run_autoclipper_job(
             _update_video_metadata(db, video, metadata)
             metadata_files.append(_write_json(job_dir / "video_metadata.json", _metadata_to_jsonable(metadata)))
             duration = float(metadata.duration or 0.0)
-            heatmap_result = load_heatmap_for_video(
-                input_path,
-                original_filename=video.original_filename,
-                actual_duration=duration,
-                max_sidecar_size_bytes=get_settings().max_heatmap_sidecar_size_bytes,
-            )
-            heatmap_segments = heatmap_result.segments
-            heatmap_summary, heatmap_mode_unavailable = _heatmap_summary_for_selection_mode(
-                heatmap_result.summary,
-                heatmap_segments,
-                settings,
-                video_duration=duration,
-            )
-            metadata_files.append(
-                _write_json(
-                    job_dir / "heatmap_validation_summary.json",
-                    heatmap_summary,
+            if manual_workflow and not manual_edit_is_finalized(settings):
+                job.current_step = "手動編集用の動画を準備中"
+                _heartbeat_job(db, job)
+                proxy_path = manual_source_proxy_path(job_dir)
+                try:
+                    proxy_path = deps.manual_source_proxy_renderer(
+                        input_path,
+                        proxy_path,
+                        duration=duration,
+                        has_audio=metadata.has_audio,
+                    )
+                except Exception as exc:
+                    raise PipelineExpectedError(
+                        "manual_source_proxy_failed",
+                        f"Could not create the manual editor video: {exc}",
+                    ) from exc
+                metadata_files.append(proxy_path)
+                document = build_clip_plan(
+                    job.id,
+                    CandidateSelection(),
+                    settings,
+                    source_duration=duration,
+                    editor_video_url=manual_source_proxy_url(job.id),
                 )
-            )
-            if heatmap_mode_unavailable:
-                raise PipelineExpectedError(
-                    "heatmap_interval_mode_unavailable",
-                    "JSON区間モードには有効な人気区間JSONが必要です。",
-                    details=heatmap_summary,
+                document.state = "manual_editing"
+                metadata_files.append(
+                    write_clip_plan(document, clip_plan_output_path(job_dir))
                 )
-            if not metadata.has_audio:
+                _set_status(db, job, "awaiting_manual_edit")
+                visited_statuses.append("awaiting_manual_edit")
+                return visited_statuses
+
+            if not manual_workflow:
+                heatmap_result = load_heatmap_for_video(
+                    input_path,
+                    original_filename=video.original_filename,
+                    actual_duration=duration,
+                    max_sidecar_size_bytes=get_settings().max_heatmap_sidecar_size_bytes,
+                )
+                heatmap_segments = heatmap_result.segments
+                heatmap_summary, heatmap_mode_unavailable = _heatmap_summary_for_selection_mode(
+                    heatmap_result.summary,
+                    heatmap_segments,
+                    settings,
+                    video_duration=duration,
+                )
+                metadata_files.append(
+                    _write_json(
+                        job_dir / "heatmap_validation_summary.json",
+                        heatmap_summary,
+                    )
+                )
+                if heatmap_mode_unavailable:
+                    raise PipelineExpectedError(
+                        "heatmap_interval_mode_unavailable",
+                        "JSON区間モードには有効な人気区間JSONが必要です。",
+                        details=heatmap_summary,
+                    )
+            if not skip_automatic_audio_analysis and not metadata.has_audio:
                 raise PipelineExpectedError(
                     "missing_audio",
                     "Video has no audio track. AutoClipper needs audio for transcription.",
                 )
-            _raise_if_stream_durations_mismatch(metadata)
+            if not skip_automatic_audio_analysis:
+                _raise_if_stream_durations_mismatch(metadata)
             try:
                 validate_manual_ranges_for_duration(
                     settings,
@@ -2236,301 +2806,468 @@ def run_autoclipper_job(
                     f"Manual clip time range is invalid: {exc}",
                 ) from exc
 
-            _set_status(db, job, "extracting_audio")
-            visited_statuses.append("extracting_audio")
-            try:
-                deps.extract_audio(input_path, audio_path)
-            except Exception as exc:
-                raise PipelineExpectedError(
-                    "audio_extraction_failed",
-                    f"Could not extract audio: {exc}",
-                ) from exc
-
-            silence_segments = _safe_silence_detection(audio_path, duration, detect_silence_for_audio)
-            silence_path = write_silence_segments(silence_segments, silence_output_path(job_dir))
-            metadata_files.append(silence_path)
-            audio_features = _safe_audio_features(
-                audio_path,
-                duration,
-                silence_segments,
-                deps.compute_audio_features,
-            )
-            audio_features_path = write_audio_features(audio_features, audio_features_output_path(job_dir))
-            metadata_files.append(audio_features_path)
-            _raise_if_audio_unusable(audio_features)
-
-            _set_status(db, job, "transcribing")
-            visited_statuses.append("transcribing")
-            if used_fixture_transcript:
-                transcription_engine = "e2e_fixture"
-                transcription_model = "fixture"
-                transcription_language = "fixture"
-                transcription_diagnostics = {
-                    "requested_device": configured_transcription_device,
-                    "actual_device": "fixture",
-                    "requested_compute_type": configured_transcription_compute_type,
-                    "actual_compute_type": "fixture",
-                    "model": "fixture",
-                    "language": "fixture",
-                    "gpu_name": None,
-                    "gpu_memory_total_mb": None,
-                    "model_load_seconds": 0.0,
-                    "transcription_seconds": 0.0,
-                    "peak_vram_mb": None,
-                    "fallback_used": False,
-                    "fallback_reason": None,
-                }
-                transcript_segments = _e2e_fixture_transcript(duration)
+            if skip_automatic_audio_analysis:
+                silence_segments = []
+                metadata_files.append(
+                    write_silence_segments(
+                        silence_segments,
+                        silence_output_path(job_dir),
+                    )
+                )
+                audio_features = build_audio_features(duration, [], 0.0)
+                metadata_files.append(
+                    write_audio_features(
+                        audio_features,
+                        audio_features_output_path(job_dir),
+                    )
+                )
+                transcript_segments = []
+                metadata_files.append(
+                    write_transcript_segments(
+                        transcript_segments,
+                        transcript_output_path(job_dir),
+                    )
+                )
+                transcription_engine = f"manual_{active_manual_subtitle_mode}"
+                transcription_model = None
+                transcription_language = None
+                transcription_diagnostics = None
             else:
-                transcription_engine = "faster_whisper"
-                transcription_model = configured_transcription_model
-                transcription_language = configured_transcription_language
+                _set_status(db, job, "extracting_audio")
+                visited_statuses.append("extracting_audio")
                 try:
-                    if transcribe_audio is not None:
-                        transcript_segments = transcribe_audio(audio_path)
-                        transcription_diagnostics = {
-                            **(transcription_diagnostics or {}),
-                            "actual_device": "injected",
-                            "actual_compute_type": "injected",
-                        }
-                    else:
-                        transcript_segments, transcription_diagnostics = _transcribe_with_faster_whisper(
-                            deps.transcription_engine_factory,
-                            audio_path,
-                            model=configured_transcription_model,
-                            language=configured_transcription_language,
-                            device=configured_transcription_device,
-                            compute_type=configured_transcription_compute_type,
-                        )
-                except TranscriptionRuntimeError as exc:
-                    transcription_diagnostics = {
-                        **(transcription_diagnostics or {}),
-                        **exc.details,
-                        "error_code": exc.code,
-                    }
-                    raise PipelineExpectedError(
-                        exc.code,
-                        str(exc),
-                        details=transcription_diagnostics,
-                    ) from exc
+                    deps.extract_audio(input_path, audio_path)
                 except Exception as exc:
                     raise PipelineExpectedError(
-                        "transcription_failed",
-                        f"Could not transcribe audio: {exc}",
+                        "audio_extraction_failed",
+                        f"Could not extract audio: {exc}",
                     ) from exc
 
-                primary_quality = _transcript_quality_diagnostics(transcript_segments)
-                if (
-                    transcribe_audio is None
-                    and transcription_diagnostics is not None
-                    and _should_retry_transcription_with_small(
-                        model=configured_transcription_model,
-                        language=configured_transcription_language,
-                        diagnostics=transcription_diagnostics,
-                        reasons=primary_quality["reasons"],
-                    )
-                ):
-                    primary_transcript_path = write_transcript_segments(
-                        transcript_segments,
-                        job_dir / "primary_raw_transcript_segments.json",
-                    )
-                    metadata_files.append(primary_transcript_path)
-                    job.current_step = "文字起こし品質が低いため small + ja で再試行中"
-                    job.updated_at = utc_now()
-                    db.commit()
-                    db.refresh(job)
-                    primary_diagnostics = dict(transcription_diagnostics)
+                silence_segments = _safe_silence_detection(audio_path, duration, detect_silence_for_audio)
+                silence_path = write_silence_segments(silence_segments, silence_output_path(job_dir))
+                metadata_files.append(silence_path)
+                audio_features = _safe_audio_features(
+                    audio_path,
+                    duration,
+                    silence_segments,
+                    deps.compute_audio_features,
+                )
+                audio_features_path = write_audio_features(audio_features, audio_features_output_path(job_dir))
+                metadata_files.append(audio_features_path)
+                _raise_if_audio_unusable(audio_features)
+
+                _set_status(db, job, "transcribing")
+                visited_statuses.append("transcribing")
+                if used_fixture_transcript:
+                    transcription_engine = "e2e_fixture"
+                    transcription_model = "fixture"
+                    transcription_language = "fixture"
+                    transcription_diagnostics = {
+                        "requested_device": configured_transcription_device,
+                        "actual_device": "fixture",
+                        "requested_compute_type": configured_transcription_compute_type,
+                        "actual_compute_type": "fixture",
+                        "model": "fixture",
+                        "language": "fixture",
+                        "gpu_name": None,
+                        "gpu_memory_total_mb": None,
+                        "model_load_seconds": 0.0,
+                        "transcription_seconds": 0.0,
+                        "peak_vram_mb": None,
+                        "fallback_used": False,
+                        "fallback_reason": None,
+                    }
+                    transcript_segments = _e2e_fixture_transcript(duration)
+                else:
+                    transcription_engine = "faster_whisper"
+                    transcription_model = configured_transcription_model
+                    transcription_language = configured_transcription_language
                     try:
-                        fallback_segments, fallback_diagnostics = _transcribe_with_faster_whisper(
-                            deps.transcription_engine_factory,
-                            audio_path,
-                            model="small",
-                            language="ja",
-                            device=configured_transcription_device,
-                            compute_type=configured_transcription_compute_type,
-                        )
+                        if transcribe_audio is not None:
+                            transcript_segments = transcribe_audio(audio_path)
+                            transcription_diagnostics = {
+                                **(transcription_diagnostics or {}),
+                                "actual_device": "injected",
+                                "actual_compute_type": "injected",
+                            }
+                        else:
+                            transcript_segments, transcription_diagnostics = _transcribe_with_faster_whisper(
+                                deps.transcription_engine_factory,
+                                audio_path,
+                                model=configured_transcription_model,
+                                language=configured_transcription_language,
+                                device=configured_transcription_device,
+                                compute_type=configured_transcription_compute_type,
+                            )
                     except TranscriptionRuntimeError as exc:
+                        transcription_diagnostics = {
+                            **(transcription_diagnostics or {}),
+                            **exc.details,
+                            "error_code": exc.code,
+                        }
                         raise PipelineExpectedError(
-                            "transcription_quality_fallback_failed",
-                            "高精度モデルによる文字起こしの再試行に失敗しました。",
-                            details={
-                                "primary_transcript_quality": primary_quality,
-                                "fallback_error_code": exc.code,
-                                **exc.details,
-                            },
+                            exc.code,
+                            str(exc),
+                            details=transcription_diagnostics,
                         ) from exc
                     except Exception as exc:
                         raise PipelineExpectedError(
-                            "transcription_quality_fallback_failed",
-                            "高精度モデルによる文字起こしの再試行に失敗しました。",
-                            details={
-                                "primary_transcript_quality": primary_quality,
-                                "fallback_error_type": type(exc).__name__,
-                            },
+                            "transcription_failed",
+                            f"Could not transcribe audio: {exc}",
                         ) from exc
 
-                    fallback_quality = _transcript_quality_diagnostics(fallback_segments)
-                    transcript_segments = fallback_segments
-                    transcription_model = "small"
-                    transcription_language = "ja"
-                    transcription_diagnostics = _fallback_transcription_diagnostics(
-                        primary=primary_diagnostics,
-                        primary_quality=primary_quality,
-                        fallback=fallback_diagnostics,
-                        fallback_quality=fallback_quality,
+                    quality_context = {
+                        "timeline_duration": duration,
+                        "expected_speech_seconds": audio_features.speech_seconds,
+                    }
+                    primary_quality = _transcript_quality_diagnostics(
+                        transcript_segments,
+                        **quality_context,
                     )
-            raw_transcript_path = write_transcript_segments(transcript_segments, raw_transcript_output_path(job_dir))
-            metadata_files.append(raw_transcript_path)
-            postprocess_result = postprocess_transcript_segments(transcript_segments, settings)
-            transcript_segments = postprocess_result.segments
-            postprocess_summary_path = write_transcript_postprocess_summary(
-                postprocess_result.summary,
-                transcript_postprocess_summary_path(job_dir),
-            )
-            metadata_files.append(postprocess_summary_path)
-            deterministic_path = write_transcript_segments(
-                transcript_segments,
-                deterministic_transcript_output_path(job_dir),
-            )
-            metadata_files.append(deterministic_path)
+                    active_quality = primary_quality
+                    primary_transcript_path: Path | None = None
+                    chunk_progress_label = "長尺音声を分割して文字起こしを再試行中"
 
-            correction_mode = _subtitle_correction_mode_setting(settings)
-            correction_scope = _subtitle_correction_scope_setting(settings)
-            correction_progress_path = correction_progress_output_path(job_dir)
-            correction_progress_state = {"completed": 0, "total": 0, "retries": 0}
-            correction_progress_callback: Callable[[int, int, int], None] | None = None
-            correction_target_indices: list[int] | None = None
-            suspicion_result: TranscriptSuspicionResult | None = None
-            suspicion_filter_error: Exception | None = None
-            if correction_mode == "openai":
-                if correction_scope == "suspicious":
-                    try:
-                        suspicion_result = analyze_transcript_suspicion(
-                            transcript_segments,
-                            threshold=max(
-                                0.0,
-                                min(1.0, _float_setting(settings, "subtitleCorrectionSuspicionThreshold", 0.40)),
-                            ),
-                            context_segments=min(10, _int_setting(settings, "subtitleCorrectionContextSegments", 2)),
-                            batch_size=_subtitle_correction_batch_size_setting(settings),
-                            glossary=_transcript_correction_glossary(settings),
-                            replacements=(
-                                settings.get("transcriptReplacements")
-                                if isinstance(settings.get("transcriptReplacements"), dict)
-                                else None
-                            ),
+                    def transcription_chunk_progress(completed: int, total: int) -> None:
+                        job.current_step = f"{chunk_progress_label} ({completed}/{total})"
+                        _heartbeat_job(db, job)
+
+                    if (
+                        transcribe_audio is None
+                        and transcription_diagnostics is not None
+                        and _should_retry_long_form_transcription_in_chunks(
+                            duration=duration,
+                            diagnostics=transcription_diagnostics,
+                            reasons=primary_quality["reasons"],
                         )
-                        correction_target_indices = suspicion_result.target_indices
-                        metadata_files.extend(write_suspicion_artifacts(suspicion_result, job_dir))
-                    except Exception as exc:
-                        suspicion_filter_error = exc
-                        correction_target_indices = []
-                        metadata_files.append(
-                            write_suspicion_failure_summary(
+                    ):
+                        primary_transcript_path = write_transcript_segments(
+                            transcript_segments,
+                            job_dir / "primary_raw_transcript_segments.json",
+                        )
+                        metadata_files.append(primary_transcript_path)
+                        job.current_step = chunk_progress_label
+                        _heartbeat_job(db, job)
+                        primary_diagnostics = dict(transcription_diagnostics)
+                        try:
+                            chunked_segments, chunked_diagnostics = (
+                                _transcribe_with_faster_whisper_in_chunks(
+                                    deps.transcription_engine_factory,
+                                    audio_path,
+                                    model=configured_transcription_model,
+                                    language=configured_transcription_language,
+                                    device=configured_transcription_device,
+                                    compute_type=configured_transcription_compute_type,
+                                    progress_callback=transcription_chunk_progress,
+                                )
+                            )
+                        except Exception as exc:
+                            transcription_diagnostics = {
+                                **primary_diagnostics,
+                                "chunked_quality_fallback_used": False,
+                                "chunked_quality_fallback_error_type": type(exc).__name__,
+                                "primary_transcript_quality": primary_quality,
+                            }
+                        else:
+                            chunked_quality = _transcript_quality_diagnostics(
+                                chunked_segments,
+                                **quality_context,
+                            )
+                            transcript_segments = chunked_segments
+                            active_quality = chunked_quality
+                            transcription_diagnostics = _chunked_transcription_diagnostics(
+                                primary=primary_diagnostics,
+                                primary_quality=primary_quality,
+                                chunked=chunked_diagnostics,
+                                chunked_quality=chunked_quality,
+                            )
+
+                    if (
+                        transcribe_audio is None
+                        and transcription_diagnostics is not None
+                        and _should_retry_transcription_with_small(
+                            model=configured_transcription_model,
+                            language=configured_transcription_language,
+                            diagnostics=transcription_diagnostics,
+                            reasons=active_quality["reasons"],
+                        )
+                    ):
+                        if primary_transcript_path is None:
+                            primary_transcript_path = write_transcript_segments(
+                                transcript_segments,
+                                job_dir / "primary_raw_transcript_segments.json",
+                            )
+                            metadata_files.append(primary_transcript_path)
+                        elif transcription_diagnostics.get("chunked_quality_fallback_used"):
+                            chunked_transcript_path = write_transcript_segments(
+                                transcript_segments,
+                                job_dir / "chunked_raw_transcript_segments.json",
+                            )
+                            metadata_files.append(chunked_transcript_path)
+                        job.current_step = "文字起こし品質が低いため small + ja で再試行中"
+                        _heartbeat_job(db, job)
+                        primary_diagnostics = dict(transcription_diagnostics)
+                        fallback_is_chunked = duration >= LONG_FORM_TRANSCRIPTION_SECONDS
+                        try:
+                            if fallback_is_chunked:
+                                chunk_progress_label = "small + ja で分割文字起こしを再試行中"
+                                fallback_segments, fallback_diagnostics = (
+                                    _transcribe_with_faster_whisper_in_chunks(
+                                        deps.transcription_engine_factory,
+                                        audio_path,
+                                        model="small",
+                                        language="ja",
+                                        device=configured_transcription_device,
+                                        compute_type=configured_transcription_compute_type,
+                                        progress_callback=transcription_chunk_progress,
+                                    )
+                                )
+                            else:
+                                fallback_segments, fallback_diagnostics = _transcribe_with_faster_whisper(
+                                    deps.transcription_engine_factory,
+                                    audio_path,
+                                    model="small",
+                                    language="ja",
+                                    device=configured_transcription_device,
+                                    compute_type=configured_transcription_compute_type,
+                                )
+                        except TranscriptionRuntimeError as exc:
+                            recovery_summary_path = _write_transcription_recovery_failure_summary(
                                 job_dir,
-                                segment_count=len(transcript_segments),
-                                threshold=max(
-                                    0.0,
-                                    min(
-                                        1.0,
-                                        _float_setting(settings, "subtitleCorrectionSuspicionThreshold", 0.40),
-                                    ),
-                                ),
+                                prior=primary_diagnostics,
+                                prior_quality=active_quality,
+                                fallback_chunked=fallback_is_chunked,
                                 exc=exc,
                             )
-                        )
-                _set_status(db, job, "correcting_subtitles")
-                visited_statuses.append("correcting_subtitles")
-                batch_size = _subtitle_correction_batch_size_setting(settings)
-                target_segment_count = (
-                    len(correction_target_indices)
-                    if correction_target_indices is not None
-                    else len(transcript_segments)
-                )
-                total_batches = (target_segment_count + batch_size - 1) // batch_size
-                _record_subtitle_correction_progress(
-                    db,
-                    job,
-                    correction_progress_path,
-                    completed_batches=0,
-                    total_batches=total_batches,
-                    retry_count=0,
-                    target_segments_total=target_segment_count,
-                    transcript_segment_count=len(transcript_segments),
-                )
-                metadata_files.append(correction_progress_path)
+                            metadata_files.append(recovery_summary_path)
+                            raise PipelineExpectedError(
+                                "transcription_quality_fallback_failed",
+                                "高精度モデルによる文字起こしの再試行に失敗しました。",
+                                details={
+                                    "primary_transcript_quality": active_quality,
+                                    "fallback_error_code": exc.code,
+                                    "recovery_summary_file": recovery_summary_path.name,
+                                    **exc.details,
+                                },
+                            ) from exc
+                        except Exception as exc:
+                            recovery_summary_path = _write_transcription_recovery_failure_summary(
+                                job_dir,
+                                prior=primary_diagnostics,
+                                prior_quality=active_quality,
+                                fallback_chunked=fallback_is_chunked,
+                                exc=exc,
+                            )
+                            metadata_files.append(recovery_summary_path)
+                            raise PipelineExpectedError(
+                                "transcription_quality_fallback_failed",
+                                "高精度モデルによる文字起こしの再試行に失敗しました。",
+                                details={
+                                    "primary_transcript_quality": active_quality,
+                                    "fallback_error_type": type(exc).__name__,
+                                    "recovery_summary_file": recovery_summary_path.name,
+                                },
+                            ) from exc
 
-                def correction_progress_callback(completed: int, total: int, retries: int) -> None:
-                    correction_progress_state.update(completed=completed, total=total, retries=retries)
-                    completed_targets = min(completed * batch_size, target_segment_count)
+                        fallback_quality = _transcript_quality_diagnostics(
+                            fallback_segments,
+                            **quality_context,
+                        )
+                        transcript_segments = fallback_segments
+                        transcription_model = "small"
+                        transcription_language = "ja"
+                        transcription_diagnostics = _fallback_transcription_diagnostics(
+                            primary=primary_diagnostics,
+                            primary_quality=active_quality,
+                            fallback=fallback_diagnostics,
+                            fallback_quality=fallback_quality,
+                        )
+                    if transcription_diagnostics is not None and (
+                        transcription_diagnostics.get("quality_fallback_used")
+                        or "chunked_quality_fallback_used" in transcription_diagnostics
+                    ):
+                        recovery_summary_path = _write_json(
+                            job_dir / TRANSCRIPTION_RECOVERY_SUMMARY_FILENAME,
+                            {
+                                "selected_model": transcription_model,
+                                "selected_language": transcription_language,
+                                "selected_quality": _transcript_quality_diagnostics(
+                                    transcript_segments,
+                                    **quality_context,
+                                ),
+                                "runtime": transcription_diagnostics,
+                            },
+                        )
+                        metadata_files.append(recovery_summary_path)
+                raw_transcript_path = write_transcript_segments(transcript_segments, raw_transcript_output_path(job_dir))
+                metadata_files.append(raw_transcript_path)
+                postprocess_result = postprocess_transcript_segments(transcript_segments, settings)
+                transcript_segments = postprocess_result.segments
+                postprocess_summary_path = write_transcript_postprocess_summary(
+                    postprocess_result.summary,
+                    transcript_postprocess_summary_path(job_dir),
+                )
+                metadata_files.append(postprocess_summary_path)
+                deterministic_path = write_transcript_segments(
+                    transcript_segments,
+                    deterministic_transcript_output_path(job_dir),
+                )
+                metadata_files.append(deterministic_path)
+
+                correction_mode = _subtitle_correction_mode_setting(settings)
+                correction_scope = _subtitle_correction_scope_setting(settings)
+                correction_progress_path = correction_progress_output_path(job_dir)
+                correction_progress_state = {"completed": 0, "total": 0, "retries": 0}
+                correction_progress_callback: Callable[[int, int, int], None] | None = None
+                correction_target_indices: list[int] | None = None
+                suspicion_result: TranscriptSuspicionResult | None = None
+                suspicion_filter_error: Exception | None = None
+                if correction_mode == "openai":
+                    if correction_scope == "suspicious":
+                        try:
+                            suspicion_result = analyze_transcript_suspicion(
+                                transcript_segments,
+                                threshold=max(
+                                    0.0,
+                                    min(1.0, _float_setting(settings, "subtitleCorrectionSuspicionThreshold", 0.40)),
+                                ),
+                                context_segments=min(10, _int_setting(settings, "subtitleCorrectionContextSegments", 2)),
+                                batch_size=_subtitle_correction_batch_size_setting(settings),
+                                glossary=_transcript_correction_glossary(settings),
+                                replacements=(
+                                    settings.get("transcriptReplacements")
+                                    if isinstance(settings.get("transcriptReplacements"), dict)
+                                    else None
+                                ),
+                            )
+                            correction_target_indices = suspicion_result.target_indices
+                            metadata_files.extend(write_suspicion_artifacts(suspicion_result, job_dir))
+                        except Exception as exc:
+                            suspicion_filter_error = exc
+                            correction_target_indices = []
+                            metadata_files.append(
+                                write_suspicion_failure_summary(
+                                    job_dir,
+                                    segment_count=len(transcript_segments),
+                                    threshold=max(
+                                        0.0,
+                                        min(
+                                            1.0,
+                                            _float_setting(settings, "subtitleCorrectionSuspicionThreshold", 0.40),
+                                        ),
+                                    ),
+                                    exc=exc,
+                                )
+                            )
+                    _set_status(db, job, "correcting_subtitles")
+                    visited_statuses.append("correcting_subtitles")
+                    batch_size = _subtitle_correction_batch_size_setting(settings)
+                    target_segment_count = (
+                        len(correction_target_indices)
+                        if correction_target_indices is not None
+                        else len(transcript_segments)
+                    )
+                    total_batches = (target_segment_count + batch_size - 1) // batch_size
                     _record_subtitle_correction_progress(
                         db,
                         job,
                         correction_progress_path,
-                        completed_batches=completed,
-                        total_batches=total,
-                        retry_count=retries,
-                        target_segments_completed=completed_targets,
+                        completed_batches=0,
+                        total_batches=total_batches,
+                        retry_count=0,
                         target_segments_total=target_segment_count,
                         transcript_segment_count=len(transcript_segments),
                     )
+                    metadata_files.append(correction_progress_path)
 
-            if suspicion_filter_error is not None:
-                correction_result = filter_failed_correction_result(
+                    def correction_progress_callback(completed: int, total: int, retries: int) -> None:
+                        correction_progress_state.update(completed=completed, total=total, retries=retries)
+                        completed_targets = min(completed * batch_size, target_segment_count)
+                        _record_subtitle_correction_progress(
+                            db,
+                            job,
+                            correction_progress_path,
+                            completed_batches=completed,
+                            total_batches=total,
+                            retry_count=retries,
+                            target_segments_completed=completed_targets,
+                            target_segments_total=target_segment_count,
+                            transcript_segment_count=len(transcript_segments),
+                        )
+
+                if suspicion_filter_error is not None:
+                    correction_result = filter_failed_correction_result(
+                        transcript_segments,
+                        _subtitle_correction_model_setting(settings),
+                        suspicion_filter_error,
+                    )
+                else:
+                    correction_result = _apply_transcript_correction(
+                        transcript_segments,
+                        settings,
+                        corrector=deps.transcript_corrector,
+                        target_indices=correction_target_indices,
+                        progress_callback=correction_progress_callback,
+                    )
+                if correction_mode == "openai":
+                    final_target_total = int(correction_result.summary.get("target_segment_count", 0))
+                    _record_subtitle_correction_progress(
+                        db,
+                        job,
+                        correction_progress_path,
+                        completed_batches=correction_progress_state["completed"],
+                        total_batches=correction_progress_state["total"],
+                        retry_count=correction_progress_state["retries"],
+                        target_segments_completed=(
+                            0 if correction_result.summary.get("fallback_used") else final_target_total
+                        ),
+                        target_segments_total=final_target_total,
+                        transcript_segment_count=len(transcript_segments),
+                        finished=True,
+                        fallback_used=bool(correction_result.summary.get("fallback_used")),
+                    )
+                correction_summary_path = write_correction_summary(
+                    correction_result.summary,
+                    correction_summary_output_path(job_dir),
+                )
+                correction_diff_path = write_correction_diff(
+                    correction_result,
+                    correction_diff_output_path(job_dir),
+                )
+                metadata_files.extend([correction_summary_path, correction_diff_path])
+                if correction_mode == "openai":
+                    metadata_files.append(write_corrected_transcript(correction_result, job_dir))
+
+                transcript_segments = correction_result.segments
+                transcript_path = write_transcript_segments(transcript_segments, transcript_output_path(job_dir))
+                metadata_files.append(transcript_path)
+                _raise_if_transcript_unusable(
                     transcript_segments,
-                    _subtitle_correction_model_setting(settings),
-                    suspicion_filter_error,
+                    timeline_duration=duration,
+                    expected_speech_seconds=audio_features.speech_seconds,
+                )
+
+            if manual_workflow:
+                scene_segments = []
+                metadata_files.append(
+                    write_scene_segments(scene_segments, scene_output_path(job_dir))
+                )
+                visual_quality = build_visual_quality(duration, [])
+                metadata_files.append(
+                    write_visual_quality(
+                        visual_quality,
+                        visual_quality_output_path(job_dir),
+                    )
                 )
             else:
-                correction_result = _apply_transcript_correction(
-                    transcript_segments,
-                    settings,
-                    corrector=deps.transcript_corrector,
-                    target_indices=correction_target_indices,
-                    progress_callback=correction_progress_callback,
-                )
-            if correction_mode == "openai":
-                final_target_total = int(correction_result.summary.get("target_segment_count", 0))
-                _record_subtitle_correction_progress(
-                    db,
-                    job,
-                    correction_progress_path,
-                    completed_batches=correction_progress_state["completed"],
-                    total_batches=correction_progress_state["total"],
-                    retry_count=correction_progress_state["retries"],
-                    target_segments_completed=(
-                        0 if correction_result.summary.get("fallback_used") else final_target_total
-                    ),
-                    target_segments_total=final_target_total,
-                    transcript_segment_count=len(transcript_segments),
-                    finished=True,
-                    fallback_used=bool(correction_result.summary.get("fallback_used")),
-                )
-            correction_summary_path = write_correction_summary(
-                correction_result.summary,
-                correction_summary_output_path(job_dir),
-            )
-            correction_diff_path = write_correction_diff(
-                correction_result,
-                correction_diff_output_path(job_dir),
-            )
-            metadata_files.extend([correction_summary_path, correction_diff_path])
-            if correction_mode == "openai":
-                metadata_files.append(write_corrected_transcript(correction_result, job_dir))
-
-            transcript_segments = correction_result.segments
-            transcript_path = write_transcript_segments(transcript_segments, transcript_output_path(job_dir))
-            metadata_files.append(transcript_path)
-            _raise_if_transcript_unusable(transcript_segments)
-
-            _set_status(db, job, "detecting_scenes")
-            visited_statuses.append("detecting_scenes")
-            scene_segments = _safe_scene_detection(input_path, duration, deps.detect_scenes)
-            scene_path = write_scene_segments(scene_segments, scene_output_path(job_dir))
-            metadata_files.append(scene_path)
-            visual_quality = _safe_visual_quality(input_path, duration, deps.detect_black_screen)
-            visual_quality_path = write_visual_quality(visual_quality, visual_quality_output_path(job_dir))
-            metadata_files.append(visual_quality_path)
+                _set_status(db, job, "detecting_scenes")
+                visited_statuses.append("detecting_scenes")
+                scene_segments = _safe_scene_detection(input_path, duration, deps.detect_scenes)
+                scene_path = write_scene_segments(scene_segments, scene_output_path(job_dir))
+                metadata_files.append(scene_path)
+                visual_quality = _safe_visual_quality(input_path, duration, deps.detect_black_screen)
+                visual_quality_path = write_visual_quality(visual_quality, visual_quality_output_path(job_dir))
+                metadata_files.append(visual_quality_path)
 
             _set_status(db, job, "generating_candidates")
             visited_statuses.append("generating_candidates")
@@ -2557,7 +3294,7 @@ def run_autoclipper_job(
                         normal_manual_ranges,
                         transcript_segments,
                     )
-                    if normal_manual_ranges
+                    if manual_workflow or normal_manual_ranges
                     else generate_heatmap_candidates_with_summary(
                         "normal",
                         heatmap_segments=heatmap_segments,
@@ -2576,9 +3313,13 @@ def run_autoclipper_job(
                         heartbeat=candidate_generation_heartbeat,
                     )
                 )
-                normal_candidates = annotate_candidates_with_heatmap(
-                    normal_generation_result.candidates,
-                    heatmap_segments,
+                normal_candidates = (
+                    list(normal_generation_result.candidates)
+                    if manual_workflow
+                    else annotate_candidates_with_heatmap(
+                        normal_generation_result.candidates,
+                        heatmap_segments,
+                    )
                 )
                 short_generation_result = (
                     build_manual_candidates(
@@ -2586,7 +3327,7 @@ def run_autoclipper_job(
                         short_manual_ranges,
                         transcript_segments,
                     )
-                    if short_manual_ranges
+                    if manual_workflow or short_manual_ranges
                     else generate_heatmap_candidates_with_summary(
                         "short",
                         heatmap_segments=heatmap_segments,
@@ -2605,9 +3346,13 @@ def run_autoclipper_job(
                         heartbeat=candidate_generation_heartbeat,
                     )
                 )
-                short_candidates = annotate_candidates_with_heatmap(
-                    short_generation_result.candidates,
-                    heatmap_segments,
+                short_candidates = (
+                    list(short_generation_result.candidates)
+                    if manual_workflow
+                    else annotate_candidates_with_heatmap(
+                        short_generation_result.candidates,
+                        heatmap_segments,
+                    )
                 )
                 candidate_generation_summary = merge_candidate_generation_summaries(
                     [normal_generation_result.summary, short_generation_result.summary],
@@ -2628,6 +3373,15 @@ def run_autoclipper_job(
                     "candidate_generation_failed",
                     f"Could not generate clip candidates: {exc}",
                 ) from exc
+            if manual_workflow:
+                normal_candidates = apply_manual_clip_metadata(
+                    normal_candidates,
+                    settings,
+                )
+                short_candidates = apply_manual_clip_metadata(
+                    short_candidates,
+                    settings,
+                )
             if heatmap_interval_mode:
                 missing_candidate_types = [
                     candidate_type
@@ -2683,71 +3437,113 @@ def run_autoclipper_job(
                 *(normal_candidates if not normal_manual_ranges else []),
                 *(short_candidates if not short_manual_ranges else []),
             ]
-            _set_status(db, job, "scoring_candidates")
-            visited_statuses.append("scoring_candidates")
-            scoring_result = (
-                _score_candidate_list(
-                    automatic_candidates,
-                    settings=automatic_settings,
-                    audio_features=audio_features,
-                    silence_segments=silence_segments,
-                    visual_quality=visual_quality,
-                    scorer=deps.openai_scorer,
+            if manual_workflow:
+                scored_candidates = list(manual_candidates)
+                selection = build_manual_selection(
+                    normal_candidates,
+                    short_candidates,
                 )
-                if automatic_candidates
-                else ScoringResult(candidates=[])
-            )
-            scored_candidates = [*scoring_result.candidates, *manual_candidates]
-            openai_scoring_summary = scoring_result.openai_summary
+            else:
+                _set_status(db, job, "scoring_candidates")
+                visited_statuses.append("scoring_candidates")
+                scoring_result = (
+                    _score_candidate_list(
+                        automatic_candidates,
+                        settings=automatic_settings,
+                        audio_features=audio_features,
+                        silence_segments=silence_segments,
+                        visual_quality=visual_quality,
+                        scorer=deps.openai_scorer,
+                    )
+                    if automatic_candidates
+                    else ScoringResult(candidates=[])
+                )
+                scored_candidates = [*scoring_result.candidates, *manual_candidates]
+                openai_scoring_summary = scoring_result.openai_summary
 
-            _set_status(db, job, "selecting_clips")
-            visited_statuses.append("selecting_clips")
-            automatic_selection = select_candidates(
-                scoring_result.candidates,
-                settings=automatic_settings,
-                audio_features=audio_features,
-                silence_segments=silence_segments,
-            )
-            automatic_selection, automatic_scored, openai_scoring_summary = (
-                _ensure_selected_candidates_openai_scored(
-                    automatic_selection,
+                _set_status(db, job, "selecting_clips")
+                visited_statuses.append("selecting_clips")
+                automatic_selection = select_candidates(
                     scoring_result.candidates,
                     settings=automatic_settings,
                     audio_features=audio_features,
-                    visual_quality=visual_quality,
-                    scorer=scoring_result.openai_scorer,
-                    openai_summary=openai_scoring_summary,
+                    silence_segments=silence_segments,
                 )
-            )
-            scored_candidates = [*automatic_scored, *manual_candidates]
-            selection = merge_manual_candidates_into_selection(
-                automatic_selection,
-                settings=settings,
-                manual_normal_candidates=(
-                    normal_candidates if normal_manual_ranges else []
-                ),
-                manual_short_candidates=(
-                    short_candidates if short_manual_ranges else []
-                ),
-            )
-            selection, scored_candidates = _selection_with_refined_boundaries(
-                selection,
-                scored_candidates,
-                transcript_segments=transcript_segments,
-                silence_segments=silence_segments,
-                scene_segments=scene_segments,
-                settings=settings,
-                timeline_duration=duration,
-                heatmap_segments=heatmap_segments,
-            )
+                automatic_selection, automatic_scored, openai_scoring_summary = (
+                    _ensure_selected_candidates_openai_scored(
+                        automatic_selection,
+                        scoring_result.candidates,
+                        settings=automatic_settings,
+                        audio_features=audio_features,
+                        visual_quality=visual_quality,
+                        scorer=scoring_result.openai_scorer,
+                        openai_summary=openai_scoring_summary,
+                    )
+                )
+                scored_candidates = [*automatic_scored, *manual_candidates]
+                selection = merge_manual_candidates_into_selection(
+                    automatic_selection,
+                    settings=settings,
+                    manual_normal_candidates=(
+                        normal_candidates if normal_manual_ranges else []
+                    ),
+                    manual_short_candidates=(
+                        short_candidates if short_manual_ranges else []
+                    ),
+                )
+                selection, scored_candidates = _selection_with_refined_boundaries(
+                    selection,
+                    scored_candidates,
+                    transcript_segments=transcript_segments,
+                    silence_segments=silence_segments,
+                    scene_segments=scene_segments,
+                    settings=settings,
+                    timeline_duration=duration,
+                    heatmap_segments=heatmap_segments,
+                )
             selection, scored_candidates = _selection_with_fallback_titles(
                 selection,
                 scored_candidates,
                 transcript_segments,
             )
+            if (
+                manual_workflow
+                and active_manual_subtitle_mode == "manual"
+            ):
+                transcript_segments = build_manual_subtitle_segments(selection)
+                transcript_path = write_transcript_segments(
+                    transcript_segments,
+                    transcript_output_path(job_dir),
+                )
+                if transcript_path not in metadata_files:
+                    metadata_files.append(transcript_path)
             metadata_files.append(write_candidates(scored_candidates, job_dir / "scored_candidates.json"))
             selected_path = write_selected_clips(selection, job_dir / "selected_clips.json")
             metadata_files.append(selected_path)
+
+            if not selection.normal_clips and not selection.shorts:
+                raise PipelineExpectedError(
+                    "no_usable_selection",
+                    "Pipeline completed analysis but selection produced no usable clips.",
+                )
+
+            if manual_workflow:
+                manual_plan_path = clip_plan_output_path(job_dir)
+                manual_document = (
+                    load_clip_plan(manual_plan_path)
+                    if manual_plan_path.is_file()
+                    else build_clip_plan(
+                        job.id,
+                        selection,
+                        settings,
+                        source_duration=duration,
+                    )
+                )
+                manual_document.settings = settings
+                write_clip_plan(
+                    mark_clip_plan_approved(manual_document),
+                    manual_plan_path,
+                )
 
             if (
                 bool(settings.get("requireClipPlanReview", False))
@@ -2774,12 +3570,16 @@ def run_autoclipper_job(
                 )
                 return visited_statuses
 
-            if bool(settings.get("requireSubtitleReview", False)) and bool(settings.get("burnSubtitles", True)):
-                if not selection.normal_clips and not selection.shorts:
-                    raise PipelineExpectedError(
-                        "no_usable_output",
-                        "Pipeline completed analysis but produced no usable clips.",
-                    )
+            subtitle_review_requested = bool(
+                settings.get("requireSubtitleReview", False)
+            ) and (
+                bool(settings.get("burnSubtitles", True))
+                or (
+                    manual_workflow
+                    and active_manual_subtitle_mode in {"none", "manual"}
+                )
+            )
+            if subtitle_review_requested:
                 review_document = build_subtitle_review(
                     job.id,
                     selection,
@@ -2798,6 +3598,9 @@ def run_autoclipper_job(
                     short_bottom_banner_enabled=bool(
                         settings.get("shortBottomBannerEnabled", False)
                     ),
+                    render_settings=settings,
+                    source_width=video.width,
+                    source_height=video.height,
                 )
                 preview_total = len(review_document.clips)
                 _set_subtitle_review_preview_progress(
@@ -2809,18 +3612,27 @@ def run_autoclipper_job(
                 visited_statuses.append("preparing_subtitle_review")
                 for preview_index, clip in enumerate(review_document.clips, start=1):
                     try:
-                        _render_candidate_review_preview(
-                            deps.subtitle_review_preview_renderer,
-                            input_path,
-                            subtitle_review_preview_path(job_dir, clip.id),
-                            clip,
+                        result = _render_exact_subtitle_review_preview_for_clip(
+                            dependencies=deps,
+                            input_path=input_path,
+                            job_dir=job_dir,
+                            job=job,
+                            video=video,
+                            document=review_document,
+                            paths=storage_paths,
+                            clip_id=clip.id,
                         )
                     except Exception as exc:
                         raise PipelineExpectedError(
                             "subtitle_review_preview_failed",
                             f"Could not prepare subtitle review video for clip {preview_index}/{preview_total}: {exc}",
                         ) from exc
-                    clip.preview_video_url = subtitle_review_preview_url(job.id, clip.id)
+                    _mark_subtitle_review_preview_ready(
+                        review_document,
+                        clip_id=clip.id,
+                        spec_hash=result.spec_hash,
+                        live_spec_hash=result.live_spec_hash,
+                    )
                     _set_subtitle_review_preview_progress(
                         db,
                         job,
@@ -2860,7 +3672,7 @@ def run_autoclipper_job(
             if not exports:
                 raise PipelineExpectedError(
                     "no_usable_output",
-                    "Pipeline completed analysis but produced no usable clips.",
+                    "Selected clips did not produce usable rendered output.",
                 )
 
             _set_status(db, job, "packaging_zip")
@@ -3193,15 +4005,17 @@ def run_clip_plan_hook_scene_update(
             )
             if planned_clip is None:
                 raise ValueError(f"clip plan item not found: {clip_id}")
-            if planned_clip.type != "short":
-                raise ValueError("hook scene is only supported for short clips")
-
+            target_candidates = (
+                selection.shorts
+                if planned_clip.type == "short"
+                else selection.normal_clips
+            )
             candidate = next(
-                (item for item in selection.shorts if item.id == clip_id),
+                (item for item in target_candidates if item.id == clip_id),
                 None,
             )
             if candidate is None:
-                raise ValueError(f"selected short not found: {clip_id}")
+                raise ValueError(f"selected clip not found: {clip_id}")
             if (start is None) != (end is None):
                 raise ValueError("hook scene requires both start and end")
             if start is not None and end is not None:
@@ -3220,7 +4034,7 @@ def run_clip_plan_hook_scene_update(
                 short_max_duration = float(
                     (job.settings_json or {}).get("shortMaxDuration", 75.0)
                 )
-                if hook_scene_newly_exceeds_short_limit(
+                if candidate.type == "short" and hook_scene_newly_exceeds_short_limit(
                     clip_duration=candidate.duration,
                     hook_duration=hook_duration,
                     short_max_duration=short_max_duration,
@@ -3253,10 +4067,10 @@ def run_clip_plan_hook_scene_update(
             )
             target_index = next(
                 index
-                for index, item in enumerate(selection.shorts)
+                for index, item in enumerate(target_candidates)
                 if item.id == clip_id
             )
-            selection.shorts[target_index] = updated_candidate
+            target_candidates[target_index] = updated_candidate
             write_selected_clips(selection, selected_path)
 
             update_clip_plan_hook_scene(
@@ -3303,6 +4117,94 @@ def run_clip_plan_hook_scene_update(
     return visited_statuses
 
 
+def run_subtitle_review_preview(
+    job_id: str,
+    clip_id: str,
+    spec_hash: str,
+    session_factory: SessionFactory = SessionLocal,
+    paths: StoragePaths | None = None,
+    dependencies: AutoClipperPipelineDependencies | None = None,
+) -> list[str]:
+    storage_paths = paths or get_storage_paths()
+    deps = dependencies or AutoClipperPipelineDependencies()
+
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"job not found: {job_id}")
+        video = db.get(Video, job.video_id)
+        if video is None:
+            raise ValueError(f"video not found for job: {job_id}")
+        job_dir = storage_paths.job_outputs(job.id)
+        review_path = subtitle_review_output_path(job_dir)
+        document = load_subtitle_review(review_path)
+        clip = next((item for item in document.clips if item.id == clip_id), None)
+        if clip is None:
+            raise ValueError(f"subtitle review clip not found: {clip_id}")
+        if clip.preview_spec_hash != spec_hash:
+            return ["superseded"]
+
+        current_spec, current_hash, _inputs = current_subtitle_review_preview_spec(
+            job=job,
+            video=video,
+            document=document,
+            paths=storage_paths,
+            clip_id=clip_id,
+        )
+        if current_hash != spec_hash:
+            return ["superseded"]
+
+        artifacts = exact_subtitle_review_preview_paths(
+            job_dir,
+            clip_id,
+            spec_hash,
+        )
+        live_spec = build_live_subtitle_review_preview_spec(current_spec)
+        live_hash = subtitle_review_preview_spec_hash(live_spec)
+        live_artifacts = live_subtitle_review_preview_paths(
+            job_dir,
+            clip_id,
+            live_hash,
+        )
+        if exact_subtitle_review_preview_is_ready(
+            artifacts,
+            spec_hash,
+        ) and live_subtitle_review_preview_is_ready(live_artifacts, live_hash):
+            return ["ready"]
+
+        try:
+            result = _render_exact_subtitle_review_preview_for_clip(
+                dependencies=deps,
+                input_path=storage_paths.resolve_stored_file(video.stored_path),
+                job_dir=job_dir,
+                job=job,
+                video=video,
+                document=document,
+                paths=storage_paths,
+                clip_id=clip_id,
+            )
+        except Exception as exc:
+            write_subtitle_review_preview_error(
+                job_dir,
+                clip_id,
+                spec_hash,
+                str(exc),
+            )
+            raise
+
+        if result.spec_hash != spec_hash:
+            raise RuntimeError("subtitle review preview renderer returned a stale spec")
+        try:
+            exact_subtitle_review_preview_error_path(
+                job_dir,
+                clip_id,
+                spec_hash,
+            ).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return ["ready"]
+
+
 def run_subtitle_review_hook_scene_update(
     job_id: str,
     clip_id: str,
@@ -3328,39 +4230,50 @@ def run_subtitle_review_hook_scene_update(
         review_path = subtitle_review_output_path(job_dir)
         summary_path = subtitle_review_summary_path(job_dir)
         selected_path = job_dir / "selected_clips.json"
-        preview_path = subtitle_review_preview_path(job_dir, clip_id)
-        stored_payloads = {
-            path: path.read_bytes() if path.is_file() else None
-            for path in (review_path, summary_path, selected_path, preview_path)
-        }
 
         try:
-            document = load_subtitle_review(review_path)
-            selection = CandidateSelection.model_validate(
-                _read_json_file(selected_path)
-            )
-            candidate = next(
-                (item for item in selection.shorts if item.id == clip_id),
-                None,
-            )
-            if candidate is None:
-                raise ValueError(f"selected short not found: {clip_id}")
+            with subtitle_review_document_lock(job_dir):
+                stored_payloads = {
+                    path: path.read_bytes() if path.is_file() else None
+                    for path in (review_path, summary_path, selected_path)
+                }
+                document = load_subtitle_review(review_path)
+                selection = CandidateSelection.model_validate(
+                    _read_json_file(selected_path)
+                )
+                reviewed_clip = next(
+                    (item for item in document.clips if item.id == clip_id),
+                    None,
+                )
+                if reviewed_clip is None:
+                    raise ValueError(f"subtitle review clip not found: {clip_id}")
+                target_candidates = (
+                    selection.shorts
+                    if reviewed_clip.type == "short"
+                    else selection.normal_clips
+                )
+                candidate = next(
+                    (item for item in target_candidates if item.id == clip_id),
+                    None,
+                )
+                if candidate is None:
+                    raise ValueError(f"selected clip not found: {clip_id}")
 
-            next_document = document.model_copy(deep=True)
-            next_document.short_max_duration = float(
-                (job.settings_json or {}).get("shortMaxDuration", 75.0)
-            )
-            update_review_hook_scene(
-                next_document,
-                clip_id,
-                start=start,
-                end=end,
-            )
+                next_document = document.model_copy(deep=True)
+                next_document.short_max_duration = float(
+                    (job.settings_json or {}).get("shortMaxDuration", 75.0)
+                )
+                update_review_hook_scene(
+                    next_document,
+                    clip_id,
+                    start=start,
+                    end=end,
+                )
 
-            candidate_payload = candidate.model_dump(mode="python")
-            candidate_payload["hook_scene_start"] = start
-            candidate_payload["hook_scene_end"] = end
-            updated_candidate = Candidate.model_validate(candidate_payload)
+                candidate_payload = candidate.model_dump(mode="python")
+                candidate_payload["hook_scene_start"] = start
+                candidate_payload["hook_scene_end"] = end
+                updated_candidate = Candidate.model_validate(candidate_payload)
 
             _set_status(db, job, "preparing_subtitle_review")
             job.current_step = "冒頭フック映像の確認動画を準備中"
@@ -3369,31 +4282,58 @@ def run_subtitle_review_hook_scene_update(
             db.refresh(job)
             visited_statuses.append("preparing_subtitle_review")
 
-            _render_candidate_review_preview(
-                deps.subtitle_review_preview_renderer,
-                storage_paths.resolve_stored_file(video.stored_path),
-                preview_path,
-                updated_candidate,
+            result = _render_exact_subtitle_review_preview_for_clip(
+                dependencies=deps,
+                input_path=storage_paths.resolve_stored_file(video.stored_path),
+                job_dir=job_dir,
+                job=job,
+                video=video,
+                document=next_document,
+                paths=storage_paths,
+                clip_id=clip_id,
+            )
+            _mark_subtitle_review_preview_ready(
+                next_document,
+                clip_id=clip_id,
+                spec_hash=result.spec_hash,
+                live_spec_hash=result.live_spec_hash,
             )
             target_index = next(
                 index
-                for index, item in enumerate(selection.shorts)
+                for index, item in enumerate(target_candidates)
                 if item.id == clip_id
             )
-            selection.shorts[target_index] = updated_candidate
-            write_selected_clips(selection, selected_path)
-            write_subtitle_review(next_document, review_path)
-            write_subtitle_review_summary(next_document, summary_path)
+            target_candidates[target_index] = updated_candidate
+            with subtitle_review_document_lock(job_dir):
+                current_review_payload = (
+                    review_path.read_bytes() if review_path.is_file() else None
+                )
+                current_selected_payload = (
+                    selected_path.read_bytes() if selected_path.is_file() else None
+                )
+                if (
+                    current_review_payload != stored_payloads[review_path]
+                    or current_selected_payload != stored_payloads[selected_path]
+                ):
+                    raise RuntimeError(
+                        "subtitle review changed while hook preview was rendering"
+                    )
+                try:
+                    write_selected_clips(selection, selected_path)
+                    write_subtitle_review(next_document, review_path)
+                    write_subtitle_review_summary(next_document, summary_path)
+                except Exception:
+                    for path, payload in stored_payloads.items():
+                        if payload is None:
+                            path.unlink(missing_ok=True)
+                        else:
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            path.write_bytes(payload)
+                    raise
 
             _set_status(db, job, "awaiting_subtitle_review")
             visited_statuses.append("awaiting_subtitle_review")
         except Exception as exc:
-            for path, payload in stored_payloads.items():
-                if payload is None:
-                    path.unlink(missing_ok=True)
-                else:
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_bytes(payload)
             job.status = "awaiting_subtitle_review"
             job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
             job.current_step = (
@@ -3438,6 +4378,10 @@ def run_clip_plan_reselection(
             else None
         )
         previous_artifact_paths = [
+            job_dir / "normal_candidates.json",
+            job_dir / "short_candidates.json",
+            job_dir / "candidates.json",
+            job_dir / "candidate_generation_summary.json",
             job_dir / "selected_clips.json",
             job_dir / "scored_candidates.json",
             job_dir / "openai_scoring_summary.json",
@@ -3493,16 +4437,6 @@ def run_clip_plan_reselection(
                     "JSON区間モードには有効な人気区間JSONが必要です。",
                     details=heatmap_summary,
                 )
-            base_candidates = _read_model_list(
-                job_dir / "candidates.json",
-                Candidate,
-            )
-            if not base_candidates:
-                raise PipelineExpectedError(
-                    "clip_plan_candidates_missing",
-                    "Saved clip candidates are unavailable for reselection.",
-                )
-
             normal_manual_ranges = manual_ranges_for_type(settings, "normal")
             short_manual_ranges = manual_ranges_for_type(settings, "short")
             automatic_settings = automatic_selection_settings(
@@ -3510,40 +4444,125 @@ def run_clip_plan_reselection(
                 manual_normal=bool(normal_manual_ranges),
                 manual_short=bool(short_manual_ranges),
             )
-            normal_candidates = (
-                build_manual_candidates(
-                    "normal",
-                    normal_manual_ranges,
-                    transcript_segments,
-                ).candidates
-                if normal_manual_ranges
-                else [
-                    candidate
-                    for candidate in base_candidates
-                    if candidate.type == "normal"
-                ]
+            previous_settings = (
+                dict(previous_plan.settings)
+                if previous_plan is not None
+                else {}
             )
-            short_candidates = (
-                build_manual_candidates(
-                    "short",
-                    short_manual_ranges,
-                    transcript_segments,
-                ).candidates
-                if short_manual_ranges
-                else [
-                    candidate
-                    for candidate in base_candidates
-                    if candidate.type == "short"
-                ]
+            previous_heatmap_interval_mode = _bool_setting(
+                previous_settings,
+                "heatmapIntervalMode",
+                False,
             )
-            normal_candidates = annotate_candidates_with_heatmap(
-                normal_candidates,
-                heatmap_result.segments,
+            heatmap_interval_mode = _bool_setting(
+                settings,
+                "heatmapIntervalMode",
+                False,
             )
-            short_candidates = annotate_candidates_with_heatmap(
-                short_candidates,
-                heatmap_result.segments,
+            heatmap_interval_mode_changed = (
+                heatmap_interval_mode != previous_heatmap_interval_mode
             )
+
+            if heatmap_interval_mode_changed:
+                candidate_generation_summary_path = (
+                    job_dir / "candidate_generation_summary.json"
+                )
+
+                def candidate_generation_heartbeat(summary: dict[str, Any]) -> None:
+                    _write_json(candidate_generation_summary_path, summary)
+                    _heartbeat_job(db, job)
+
+                try:
+                    (
+                        normal_candidates,
+                        short_candidates,
+                        candidate_generation_summary,
+                    ) = _generate_candidates_for_reselection_mode(
+                        settings=settings,
+                        transcript_segments=transcript_segments,
+                        scene_segments=scene_segments,
+                        silence_segments=silence_segments,
+                        heatmap_segments=heatmap_result.segments,
+                        video_duration=float(
+                            video.duration or visual_quality.duration
+                        ),
+                        heartbeat=candidate_generation_heartbeat,
+                    )
+                except CandidateGenerationMemoryLimitError as exc:
+                    _write_json(candidate_generation_summary_path, exc.summary)
+                    raise PipelineExpectedError(
+                        "candidate_generation_memory_limit",
+                        "Candidate generation exceeded the configured memory limit.",
+                        details=exc.summary,
+                    ) from exc
+                except PipelineExpectedError:
+                    raise
+                except Exception as exc:
+                    raise PipelineExpectedError(
+                        "candidate_generation_failed",
+                        f"Could not generate clip candidates: {exc}",
+                    ) from exc
+
+                write_candidates(
+                    normal_candidates,
+                    job_dir / "normal_candidates.json",
+                )
+                write_candidates(
+                    short_candidates,
+                    job_dir / "short_candidates.json",
+                )
+                write_candidates(
+                    [*normal_candidates, *short_candidates],
+                    job_dir / "candidates.json",
+                )
+                _write_json(
+                    candidate_generation_summary_path,
+                    candidate_generation_summary,
+                )
+            else:
+                base_candidates = _read_model_list(
+                    job_dir / "candidates.json",
+                    Candidate,
+                )
+                if not base_candidates:
+                    raise PipelineExpectedError(
+                        "clip_plan_candidates_missing",
+                        "Saved clip candidates are unavailable for reselection.",
+                    )
+                normal_candidates = (
+                    build_manual_candidates(
+                        "normal",
+                        normal_manual_ranges,
+                        transcript_segments,
+                    ).candidates
+                    if normal_manual_ranges
+                    else [
+                        candidate
+                        for candidate in base_candidates
+                        if candidate.type == "normal"
+                    ]
+                )
+                short_candidates = (
+                    build_manual_candidates(
+                        "short",
+                        short_manual_ranges,
+                        transcript_segments,
+                    ).candidates
+                    if short_manual_ranges
+                    else [
+                        candidate
+                        for candidate in base_candidates
+                        if candidate.type == "short"
+                    ]
+                )
+                normal_candidates = annotate_candidates_with_heatmap(
+                    normal_candidates,
+                    heatmap_result.segments,
+                )
+                short_candidates = annotate_candidates_with_heatmap(
+                    short_candidates,
+                    heatmap_result.segments,
+                )
             manual_candidates = [
                 *(normal_candidates if normal_manual_ranges else []),
                 *(short_candidates if short_manual_ranges else []),
@@ -3779,7 +4798,7 @@ def run_subtitle_review_render(
             if not exports:
                 raise PipelineExpectedError(
                     "no_usable_output",
-                    "Pipeline completed analysis but produced no usable clips.",
+                    "Selected clips did not produce usable rendered output.",
                 )
             if rerender_staging_paths is not None and (
                 normal_result.failures or short_result.failures

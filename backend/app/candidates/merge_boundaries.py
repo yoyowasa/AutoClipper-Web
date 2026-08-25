@@ -43,8 +43,16 @@ TextFontPreset = Literal[
 
 
 class ClipTextStyle(BaseModel):
-    font_preset: TextFontPreset = Field(default="sans_bold", alias="fontPreset")
-    font_size: int = Field(default=76, ge=20, le=220, alias="fontSize")
+    font_preset: TextFontPreset | None = Field(default="sans_bold", alias="fontPreset")
+    font_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[^,\r\n]+$",
+        alias="fontName",
+    )
+    bold: bool | None = None
+    font_size: int = Field(default=76, ge=12, le=220, alias="fontSize")
     primary_color: str = Field(
         default="#FFFFFF",
         pattern=r"^#[0-9A-Fa-f]{6}$",
@@ -58,8 +66,12 @@ class ClipTextStyle(BaseModel):
     outline_width: int = Field(default=5, ge=0, le=20, alias="outlineWidth")
     x_percent: float = Field(default=50, ge=5, le=95, alias="xPercent")
     y_percent: float = Field(default=85, ge=5, le=95, alias="yPercent")
+    position_mode: Literal["explicit", "layout"] = Field(
+        default="explicit",
+        alias="positionMode",
+    )
 
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
 
 class Candidate(BaseModel):
@@ -133,8 +145,6 @@ class Candidate(BaseModel):
         if (hook_start is None) != (hook_end is None):
             raise ValueError("hook scene requires both start and end")
         if hook_start is not None and hook_end is not None:
-            if self.type != "short":
-                raise ValueError("hook scene is only supported for short clips")
             if hook_end <= hook_start:
                 raise ValueError("hook scene end must be greater than start")
             if not 0.5 <= hook_end - hook_start <= 3.0:

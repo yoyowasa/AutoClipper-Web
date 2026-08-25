@@ -1,7 +1,8 @@
 import type {
   ClipTextFontPreset,
   ClipTextStyle,
-  ExportType
+  ExportType,
+  ResolvedClipTextStyle
 } from "./types";
 
 export type ClipTextTarget = "title" | "hook" | "subtitle";
@@ -120,44 +121,127 @@ export const SUBTITLE_FONT_GROUPS = CLIP_TEXT_FONT_GROUPS.map((group) => ({
     }))
 }));
 
+export type AssPreviewFontMetrics = {
+  fontSizeScale: number;
+  lineHeight: number;
+};
+
+const DEFAULT_ASS_PREVIEW_FONT_METRICS: AssPreviewFontMetrics = {
+  fontSizeScale: 1000 / 1448,
+  lineHeight: 1448 / 1000
+};
+
+// libass normalizes ASS Fontsize against the font's Windows ascent/descent,
+// while CSS font-size uses the em square. Keep these metrics paired so the
+// live browser overlay has the same glyph size and line pitch as FFmpeg.
+const ASS_PREVIEW_FONT_METRICS = new Map<string, AssPreviewFontMetrics>([
+  ["Noto Sans CJK JP", DEFAULT_ASS_PREVIEW_FONT_METRICS],
+  ["Noto Sans Mono CJK JP", DEFAULT_ASS_PREVIEW_FONT_METRICS],
+  ["Noto Sans JP Black", DEFAULT_ASS_PREVIEW_FONT_METRICS],
+  ["Source Han Sans JP Heavy", DEFAULT_ASS_PREVIEW_FONT_METRICS],
+  ["M PLUS 1 ExtraBold", DEFAULT_ASS_PREVIEW_FONT_METRICS],
+  ["Dela Gothic One", DEFAULT_ASS_PREVIEW_FONT_METRICS],
+  [
+    "Noto Serif CJK JP",
+    { fontSizeScale: 1000 / 1437, lineHeight: 1437 / 1000 }
+  ],
+  [
+    "Rounded Mplus 1c ExtraBold",
+    { fontSizeScale: 1000 / 1395, lineHeight: 1395 / 1000 }
+  ],
+  [
+    "Corporate-Logo-Bold-ver3",
+    { fontSizeScale: 1000 / 1400, lineHeight: 1400 / 1000 }
+  ],
+  [
+    "851CHIKARA-DZUYOKU-KANA-A",
+    { fontSizeScale: 1, lineHeight: 1 }
+  ]
+]);
+
+export function assPreviewFontMetrics(
+  fontName: string | undefined
+): AssPreviewFontMetrics {
+  const metrics = ASS_PREVIEW_FONT_METRICS.get(fontName?.trim() ?? "");
+  return metrics ?? DEFAULT_ASS_PREVIEW_FONT_METRICS;
+}
+
 const SHORT_DEFAULTS: Record<ClipTextTarget, ClipTextStyle> = {
   title: {
     fontPreset: "sans_bold",
+    fontName: null,
+    bold: null,
     fontSize: 88,
     primaryColor: "#FFFFFF",
     outlineColor: "#000000",
     outlineWidth: 5,
     xPercent: 50,
-    yPercent: 12.5
+    yPercent: 12.5,
+    positionMode: "explicit"
   },
   hook: {
     fontPreset: "sans_bold",
+    fontName: null,
+    bold: null,
     fontSize: 88,
     primaryColor: "#FFFFFF",
     outlineColor: "#000000",
     outlineWidth: 5,
     xPercent: 50,
-    yPercent: 18.75
+    yPercent: 18.75,
+    positionMode: "explicit"
   },
   subtitle: {
     fontPreset: "sans_bold",
+    fontName: null,
+    bold: null,
     fontSize: 76,
     primaryColor: "#FFFFFF",
     outlineColor: "#000000",
     outlineWidth: 5,
     xPercent: 50,
-    yPercent: 68.75
+    yPercent: 68.75,
+    positionMode: "explicit"
   }
 };
 
 const NORMAL_SUBTITLE_DEFAULT: ClipTextStyle = {
   fontPreset: "sans_bold",
+  fontName: null,
+  bold: null,
   fontSize: 65,
   primaryColor: "#FFFFFF",
   outlineColor: "#000000",
   outlineWidth: 4,
   xPercent: 50,
-  yPercent: 84
+  yPercent: 84,
+  positionMode: "explicit"
+};
+
+const NORMAL_TITLE_DEFAULT: ClipTextStyle = {
+  fontPreset: "sans_bold",
+  fontName: null,
+  bold: null,
+  fontSize: 76,
+  primaryColor: "#FFFFFF",
+  outlineColor: "#000000",
+  outlineWidth: 4,
+  xPercent: 50,
+  yPercent: 8,
+  positionMode: "explicit"
+};
+
+const NORMAL_HOOK_DEFAULT: ClipTextStyle = {
+  fontPreset: "sans_bold",
+  fontName: null,
+  bold: null,
+  fontSize: 76,
+  primaryColor: "#FFFFFF",
+  outlineColor: "#000000",
+  outlineWidth: 4,
+  xPercent: 50,
+  yPercent: 8,
+  positionMode: "explicit"
 };
 
 export function defaultClipTextStyle(
@@ -167,16 +251,66 @@ export function defaultClipTextStyle(
   const source =
     clipType === "normal" && target === "subtitle"
       ? NORMAL_SUBTITLE_DEFAULT
+      : clipType === "normal" && target === "title"
+        ? NORMAL_TITLE_DEFAULT
+      : clipType === "normal" && target === "hook"
+        ? NORMAL_HOOK_DEFAULT
       : SHORT_DEFAULTS[target];
   return { ...source };
 }
 
 export function resolvedClipTextStyle(
   style: ClipTextStyle | null | undefined,
+  effectiveStyle: ResolvedClipTextStyle | null | undefined,
   target: ClipTextTarget,
   clipType: ExportType
-): ClipTextStyle {
-  return style ? { ...style } : defaultClipTextStyle(target, clipType);
+): ResolvedClipTextStyle {
+  const defaultStyle = defaultClipTextStyle(target, clipType);
+  const defaultPreset = defaultStyle.fontPreset ?? "sans_bold";
+  const fallback: ResolvedClipTextStyle = effectiveStyle
+    ? { ...effectiveStyle }
+    : {
+        ...defaultStyle,
+        fontPreset: defaultPreset,
+        fontName: clipTextFontName(defaultPreset),
+        bold: clipTextFontWeight(defaultPreset) >= 700,
+        shadow: 2,
+        alignment: 5,
+        marginX: 0,
+        marginV: 0,
+        positionOverride: true
+      };
+  if (!style) {
+    return fallback;
+  }
+
+  const preset = style.fontPreset;
+  const explicitPosition = style.positionMode === "explicit";
+  return {
+    ...fallback,
+    fontPreset: preset,
+    fontName:
+      style.fontName?.trim() ||
+      (preset ? clipTextFontName(preset) : fallback.fontName),
+    bold:
+      style.bold ??
+      (preset ? clipTextFontWeight(preset) >= 700 : fallback.bold),
+    fontSize: style.fontSize,
+    primaryColor: style.primaryColor,
+    outlineColor: style.outlineColor,
+    outlineWidth: style.outlineWidth,
+    xPercent: explicitPosition ? style.xPercent : fallback.xPercent,
+    yPercent: explicitPosition ? style.yPercent : fallback.yPercent,
+    alignment: explicitPosition ? 5 : fallback.alignment,
+    marginX: explicitPosition ? 0 : fallback.marginX,
+    marginV: explicitPosition ? 0 : fallback.marginV,
+    positionMode: style.positionMode,
+    positionOverride: explicitPosition ? true : fallback.positionOverride
+  };
+}
+
+export function clipTextFontName(fontPreset: ClipTextFontPreset): string {
+  return CLIP_TEXT_FONT_BY_PRESET.get(fontPreset)?.fontName ?? "Noto Sans CJK JP";
 }
 
 export function clipTextFontFamily(fontPreset: ClipTextFontPreset): string {
@@ -189,17 +323,24 @@ export function clipTextFontWeight(fontPreset: ClipTextFontPreset): number {
 }
 
 export function subtitleFontFamily(fontName: string | undefined): string {
-  if (fontName === "Noto Serif CJK JP") {
+  const normalizedFontName = fontName?.trim();
+  if (normalizedFontName === "Noto Serif CJK JP") {
     return '"Noto Serif CJK JP", "Yu Mincho", YuMincho, serif';
   }
-  if (fontName === "Noto Sans Mono CJK JP") {
+  if (normalizedFontName === "Noto Sans Mono CJK JP") {
     return '"Noto Sans Mono CJK JP", "MS Gothic", monospace';
   }
   const bundledFont = CLIP_TEXT_FONT_OPTIONS.find(
-    (option) => option.fontName === fontName
+    (option) => option.fontName === normalizedFontName
   );
   if (bundledFont) {
     return `"${bundledFont.fontName}", "Noto Sans CJK JP", "Yu Gothic", Meiryo, sans-serif`;
+  }
+  if (normalizedFontName) {
+    const escapedFontName = normalizedFontName
+      .replaceAll("\\", "\\\\")
+      .replaceAll('"', '\\"');
+    return `"${escapedFontName}", "Noto Sans CJK JP", "Yu Gothic", Meiryo, sans-serif`;
   }
   return '"Noto Sans CJK JP", "Yu Gothic", Meiryo, sans-serif';
 }

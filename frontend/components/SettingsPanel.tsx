@@ -18,6 +18,8 @@ type SettingsPanelProps = {
 };
 
 export const DEFAULT_SETTINGS: ClipSettings = {
+  workflowMode: "automatic",
+  manualSubtitleMode: "auto",
   mode: "high_quality",
   profile: "auto",
   normalClipCount: 2,

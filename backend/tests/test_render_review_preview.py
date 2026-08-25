@@ -18,7 +18,8 @@ def test_review_preview_command_builds_small_browser_ready_mp4(tmp_path: Path) -
     assert command[command.index("-ss") + 1] == "123.456000"
     assert command[command.index("-t") + 1] == "42.000000"
     assert command[command.index("-vf") + 1] == (
-        "fps=30,scale=960:540:force_original_aspect_ratio=decrease"
+        "fps=30,scale=960:540:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        "setsar=1"
     )
     assert command[command.index("-preset") + 1] == "ultrafast"
     assert command[command.index("-movflags") + 1] == "+faststart"

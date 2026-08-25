@@ -10,6 +10,7 @@ def build_review_preview_command(
     duration: float,
     hook_start: float | None = None,
     hook_duration: float | None = None,
+    include_audio: bool = True,
     ffmpeg_bin: str = "ffmpeg",
 ) -> list[str]:
     if (hook_start is None) != (hook_duration is None):
@@ -18,9 +19,11 @@ def build_review_preview_command(
         if hook_duration < 0.5 or hook_duration > 3:
             raise ValueError("hook preview duration must be between 0.5 and 3 seconds")
         video_filter = (
-            "[0:v:0]fps=30,scale=960:540:force_original_aspect_ratio=decrease,"
+            "[0:v:0]fps=30,scale=960:540:force_original_aspect_ratio=decrease:"
+            "force_divisible_by=2,"
             "setsar=1,setpts=PTS-STARTPTS[hook_v];"
-            "[1:v:0]fps=30,scale=960:540:force_original_aspect_ratio=decrease,"
+            "[1:v:0]fps=30,scale=960:540:force_original_aspect_ratio=decrease:"
+            "force_divisible_by=2,"
             "setsar=1,setpts=PTS-STARTPTS[main_v];"
             "[0:a:0]aresample=48000,asetpts=PTS-STARTPTS[hook_a];"
             "[1:a:0]aresample=48000,asetpts=PTS-STARTPTS[main_a];"
@@ -69,7 +72,7 @@ def build_review_preview_command(
             "+faststart",
             str(output_path),
         ]
-    return [
+    command = [
         ffmpeg_bin,
         "-hide_banner",
         "-loglevel",
@@ -82,7 +85,8 @@ def build_review_preview_command(
         "-t",
         f"{max(0.05, duration):.6f}",
         "-vf",
-        "fps=30,scale=960:540:force_original_aspect_ratio=decrease",
+        "fps=30,scale=960:540:force_original_aspect_ratio=decrease:force_divisible_by=2,"
+        "setsar=1",
         "-c:v",
         "libx264",
         "-preset",
@@ -91,16 +95,22 @@ def build_review_preview_command(
         "30",
         "-pix_fmt",
         "yuv420p",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "96k",
-        "-ac",
-        "2",
-        "-movflags",
-        "+faststart",
-        str(output_path),
     ]
+    if include_audio:
+        command.extend(
+            [
+                "-c:a",
+                "aac",
+                "-b:a",
+                "96k",
+                "-ac",
+                "2",
+            ]
+        )
+    else:
+        command.append("-an")
+    command.extend(["-movflags", "+faststart", str(output_path)])
+    return command
 
 
 def render_review_preview(
@@ -111,6 +121,7 @@ def render_review_preview(
     duration: float,
     hook_start: float | None = None,
     hook_duration: float | None = None,
+    include_audio: bool = True,
     ffmpeg_bin: str = "ffmpeg",
 ) -> Path:
     target = Path(output_path)
@@ -123,6 +134,7 @@ def render_review_preview(
         duration=duration,
         hook_start=hook_start,
         hook_duration=hook_duration,
+        include_audio=include_audio,
         ffmpeg_bin=ffmpeg_bin,
     )
     try:

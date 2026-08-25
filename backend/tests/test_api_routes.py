@@ -1,24 +1,32 @@
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
 import hashlib
 import json
 from pathlib import Path
+from threading import Event
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
+import app.api.jobs as jobs_api
 from app.config import Settings, get_settings
 from app.db import Base, get_db
 from app.jobs.queue import (
     get_enqueue_job,
+    get_enqueue_retry_job,
     get_enqueue_subtitle_review_hook_scene_update,
+    get_enqueue_subtitle_review_preview,
 )
 from app.jobs.runner import run_dummy_autoclipper_job
 from app.jobs.status import SUCCESS_STATUSES
+from app.jobs.subtitle_review import subtitle_review_preview_path
 from app.main import app
 from app.models import AppPreference, ExportItem, Job, Video, utc_now
+from app.jobs.subtitle_review_preview import write_subtitle_review_preview_error
 from app.render.render_short import (
     DEFAULT_SHORT_BOTTOM_BANNER_PATH,
     DEFAULT_SHORT_TOP_BANNER_PATH,
@@ -53,9 +61,14 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     def override_get_enqueue_job() -> None:
         return lambda job_id: None
 
+    def override_get_enqueue_retry_job() -> None:
+        return lambda job_id, terminal_retry_allowed: None
+
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_storage_paths] = override_get_storage_paths
     app.dependency_overrides[get_enqueue_job] = override_get_enqueue_job
+    app.dependency_overrides[get_enqueue_retry_job] = override_get_enqueue_retry_job
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: lambda job_id, clip_id, spec_hash: None
 
     try:
         yield TestClient(app)
@@ -107,11 +120,7 @@ def _heatmap_upload_payload(
             },
             "duration_seconds": 120.0,
             "heatmap_available": available,
-            "heatmap": (
-                [{"start_time": 10.0, "end_time": 15.0, "value": 0.8}]
-                if available
-                else []
-            ),
+            "heatmap": ([{"start_time": 10.0, "end_time": 15.0, "value": 0.8}] if available else []),
         },
         ensure_ascii=False,
     ).encode("utf-8")
@@ -162,9 +171,7 @@ def test_upload_video_accepts_unavailable_heatmap_for_existing_fallback(
     with next(app.dependency_overrides[get_db]()) as db:
         video = db.get(Video, response.json()["videoId"])
         assert video is not None
-        payload = json.loads(
-            heatmap_sidecar_path(Path(video.stored_path)).read_text(encoding="utf-8")
-        )
+        payload = json.loads(heatmap_sidecar_path(Path(video.stored_path)).read_text(encoding="utf-8"))
     assert payload["heatmap_available"] is False
     assert payload["heatmap"] == []
 
@@ -408,6 +415,108 @@ def _seed_reeditable_export() -> tuple[str, str, bytes]:
     return job_id, candidate_id, rendered_bytes
 
 
+def _write_reeditable_preview_inputs(job_id: str, candidate_id: str) -> None:
+    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    (output_dir / "selected_clips.json").write_text(
+        json.dumps(
+            {
+                "normalClips": [],
+                "shorts": [
+                    {
+                        "id": candidate_id,
+                        "type": "short",
+                        "start": 0,
+                        "end": 10,
+                        "duration": 10,
+                        "transcript_text": "字幕",
+                        "title": "完成したショート",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (output_dir / "transcript_segments.json").write_text(
+        json.dumps(
+            [{"start": 0, "end": 2, "text": "字幕", "confidence": 0.9}],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    queued: list[tuple[str, str, str]] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
+        lambda queued_job_id, clip_id, spec_hash: queued.append((queued_job_id, clip_id, spec_hash))
+    )
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+    segment_id = reopened.json()["clips"][0]["segmentIds"][0]
+    queued.clear()
+
+    applied = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
+        json={
+            "title": "即時確認後のタイトル",
+            "hookText": "即時確認後のフック",
+            "hookDurationSeconds": 4,
+            "titleStyle": None,
+            "hookStyle": None,
+            "subtitleStyle": None,
+            "segments": [
+                {
+                    "segmentId": segment_id,
+                    "text": "OKでまとめて保存した字幕",
+                }
+            ],
+        },
+    )
+
+    assert applied.status_code == 200
+    payload = applied.json()
+    clip = payload["clips"][0]
+    assert clip["title"] == "即時確認後のタイトル"
+    assert clip["hookText"] == "即時確認後のフック"
+    assert clip["hookDurationSeconds"] == 4
+    assert clip["confirmed"] is True
+    assert clip["previewState"] == "queued"
+    assert payload["confirmedClipCount"] == 1
+    assert payload["segments"][0]["text"] == "OKでまとめて保存した字幕"
+    assert len(queued) == 1
+    assert queued[0][0:2] == (job_id, candidate_id)
+
+    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    persisted = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
+    assert persisted["clips"][0]["confirmed"] is True
+    assert persisted["segments"][0]["text"] == "OKでまとめて保存した字幕"
+
+
+def test_apply_subtitle_review_clip_rejects_segment_from_another_clip(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+
+    rejected = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
+        json={
+            "title": "変更しないタイトル",
+            "segments": [{"segmentId": "segment_from_other_clip", "text": "不可"}],
+        },
+    )
+
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"] == ("subtitle segment does not belong to the selected clip")
+
+
 def test_get_subtitle_review_hydrates_banner_settings_from_job(
     client: TestClient,
 ) -> None:
@@ -422,6 +531,7 @@ def test_get_subtitle_review_hydrates_banner_settings_from_job(
         }
         db.commit()
 
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
     response = client.get(f"/api/jobs/{job_id}/subtitle-review")
 
     assert response.status_code == 200
@@ -431,12 +541,8 @@ def test_get_subtitle_review_hydrates_banner_settings_from_job(
     assert response.json()["clips"][0]["overlayTitleExpected"] is True
     storage = app.dependency_overrides[get_storage_paths]()
     output_dir = storage.job_outputs(job_id)
-    artifact = json.loads(
-        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
-    )
-    summary = json.loads(
-        (output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8")
-    )
+    artifact = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
+    summary = json.loads((output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8"))
     assert artifact["shortOverlayTitleMode"] == "auto"
     assert artifact["shortTopBannerEnabled"] is False
     assert artifact["shortBottomBannerEnabled"] is True
@@ -444,9 +550,7 @@ def test_get_subtitle_review_hydrates_banner_settings_from_job(
     assert summary["short_overlay_title_mode"] == "auto"
     assert summary["short_top_banner_enabled"] is False
     assert summary["short_bottom_banner_enabled"] is True
-    assert summary["overlay_title_expected_by_clip"] == {
-        "candidate_short_reedit": True
-    }
+    assert summary["overlay_title_expected_by_clip"] == {"candidate_short_reedit": True}
 
 
 def test_get_subtitle_review_preserves_explicit_never_mode(
@@ -470,6 +574,7 @@ def test_get_subtitle_review_preserves_explicit_never_mode(
         }
         db.commit()
 
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
     response = client.get(f"/api/jobs/{job_id}/subtitle-review")
 
     assert response.status_code == 200
@@ -495,22 +600,346 @@ def test_get_subtitle_review_persists_missing_false_title_expectation(
         }
         db.commit()
 
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
     response = client.get(f"/api/jobs/{job_id}/subtitle-review")
 
     assert response.status_code == 200
     assert response.json()["clips"][0]["overlayTitleExpected"] is False
     storage = app.dependency_overrides[get_storage_paths]()
     output_dir = storage.job_outputs(job_id)
-    artifact = json.loads(
-        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
-    )
-    summary = json.loads(
-        (output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8")
-    )
+    artifact = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
+    summary = json.loads((output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8"))
     assert artifact["clips"][0]["overlayTitleExpected"] is False
-    assert summary["overlay_title_expected_by_clip"] == {
-        "candidate_short_reedit": False
-    }
+    assert summary["overlay_title_expected_by_clip"] == {"candidate_short_reedit": False}
+
+
+def test_get_subtitle_review_does_not_requeue_failed_current_spec(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    (output_dir / "selected_clips.json").write_text(
+        json.dumps(
+            {
+                "normalClips": [],
+                "shorts": [
+                    {
+                        "id": candidate_id,
+                        "type": "short",
+                        "start": 0,
+                        "end": 10,
+                        "duration": 10,
+                        "transcript_text": "字幕",
+                        "title": "完成したショート",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (output_dir / "transcript_segments.json").write_text(
+        json.dumps(
+            [
+                {
+                    "start": 0,
+                    "end": 2,
+                    "text": "字幕",
+                    "confidence": 0.9,
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    queued: list[tuple[str, str, str]] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
+        lambda queued_job_id, clip_id, spec_hash: queued.append((queued_job_id, clip_id, spec_hash))
+    )
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+
+    first = client.get(f"/api/jobs/{job_id}/subtitle-review")
+
+    assert first.status_code == 200
+    first_clip = first.json()["clips"][0]
+    assert first_clip["previewState"] == "queued"
+    spec_hash = first_clip["previewSpecHash"]
+    assert queued == [(job_id, candidate_id, spec_hash)]
+    write_subtitle_review_preview_error(
+        output_dir,
+        candidate_id,
+        spec_hash,
+        "preview failed",
+    )
+
+    second = client.get(f"/api/jobs/{job_id}/subtitle-review")
+    third = client.get(f"/api/jobs/{job_id}/subtitle-review")
+
+    assert second.status_code == 200
+    assert second.json()["clips"][0]["previewState"] == "failed"
+    assert second.json()["clips"][0]["previewError"] == "preview failed"
+    assert third.status_code == 200
+    assert third.json()["clips"][0]["previewState"] == "failed"
+    assert queued == [(job_id, candidate_id, spec_hash)]
+
+
+def test_failed_subtitle_review_preview_can_be_retried_once(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    queued: list[tuple[str, str, str]] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
+        lambda queued_job_id, clip_id, spec_hash: queued.append((queued_job_id, clip_id, spec_hash))
+    )
+    first = client.get(f"/api/jobs/{job_id}/subtitle-review")
+    assert first.status_code == 200
+    spec_hash = first.json()["clips"][0]["previewSpecHash"]
+    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    error_path = write_subtitle_review_preview_error(
+        output_dir,
+        candidate_id,
+        spec_hash,
+        "preview failed",
+    )
+    failed = client.get(f"/api/jobs/{job_id}/subtitle-review")
+    assert failed.json()["clips"][0]["previewState"] == "failed"
+    queued.clear()
+
+    retried = client.post((f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/preview/retry"))
+    duplicate = client.post((f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/preview/retry"))
+
+    assert retried.status_code == 200
+    assert retried.json()["clips"][0]["previewState"] == "queued"
+    assert retried.json()["clips"][0]["previewError"] is None
+    assert duplicate.status_code == 200
+    assert duplicate.json()["clips"][0]["previewState"] == "queued"
+    assert queued == [(job_id, candidate_id, spec_hash)]
+    assert not error_path.exists()
+
+
+def test_completed_subtitle_review_get_preserves_confirmation_without_preview_queue(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    artifact_path = storage.job_outputs(job_id) / "subtitle_review.json"
+    queued: list[tuple[str, str, str]] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
+        lambda queued_job_id, clip_id, spec_hash: queued.append((queued_job_id, clip_id, spec_hash))
+    )
+
+    response = client.get(f"/api/jobs/{job_id}/subtitle-review")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "completed"
+    assert payload["confirmedClipCount"] == 1
+    assert payload["clips"][0]["id"] == candidate_id
+    assert payload["clips"][0]["confirmed"] is True
+    assert payload["clips"][0]["previewSpecHash"] is None
+    assert queued == []
+    persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert persisted["state"] == "completed"
+    assert persisted["confirmedClipCount"] == 1
+    assert persisted["clips"][0]["confirmed"] is True
+    assert persisted["clips"][0].get("previewSpecHash") is None
+
+
+def test_completed_legacy_preview_is_transiently_playable_until_reopen(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    artifact_path = output_dir / "subtitle_review.json"
+    legacy_preview = subtitle_review_preview_path(output_dir, candidate_id)
+    legacy_preview.parent.mkdir(parents=True, exist_ok=True)
+    legacy_preview.write_bytes(b"legacy preview")
+    stored_before = artifact_path.read_bytes()
+    queued: list[tuple[str, str, str]] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
+        lambda queued_job_id, clip_id, spec_hash: queued.append((queued_job_id, clip_id, spec_hash))
+    )
+
+    completed = client.get(f"/api/jobs/{job_id}/subtitle-review")
+
+    assert completed.status_code == 200
+    completed_clip = completed.json()["clips"][0]
+    assert completed_clip["confirmed"] is True
+    assert completed_clip["previewState"] == "ready"
+    assert completed_clip["previewSpecHash"] is None
+    assert completed_clip["previewVideoUrl"]
+    legacy_response = client.get(completed_clip["previewVideoUrl"])
+    assert legacy_response.status_code == 200
+    assert legacy_response.content == b"legacy preview"
+    assert artifact_path.read_bytes() == stored_before
+    assert queued == []
+
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+    active = client.get(f"/api/jobs/{job_id}/subtitle-review")
+    active_clip = active.json()["clips"][0]
+    assert active_clip["previewState"] == "queued"
+    assert active_clip["previewSpecHash"] is not None
+    assert active_clip["previewVideoUrl"] is None
+    assert queued == [(job_id, candidate_id, active_clip["previewSpecHash"])]
+
+
+def test_subtitle_review_get_poll_cannot_overwrite_concurrent_content_patch(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    refresh_entered = Event()
+    release_refresh = Event()
+    original_refresh = jobs_api.refresh_subtitle_review_preview_states
+    first_refresh = True
+
+    def blocking_refresh(*args: object, **kwargs: object) -> object:
+        nonlocal first_refresh
+        should_block = first_refresh
+        first_refresh = False
+        if should_block:
+            refresh_entered.set()
+            assert release_refresh.wait(timeout=3)
+        return original_refresh(*args, **kwargs)
+
+    monkeypatch.setattr(
+        jobs_api,
+        "refresh_subtitle_review_preview_states",
+        blocking_refresh,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        poll_future = executor.submit(
+            client.get,
+            f"/api/jobs/{job_id}/subtitle-review",
+        )
+        assert refresh_entered.wait(timeout=3)
+        patch_future = executor.submit(
+            client.patch,
+            f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+            json={
+                "title": "並行更新後のタイトル",
+                "hookText": "",
+                "hookDurationSeconds": 3,
+            },
+        )
+        assert not patch_future.done()
+        release_refresh.set()
+        assert poll_future.result(timeout=3).status_code == 200
+        patch_response = patch_future.result(timeout=3)
+
+    assert patch_response.status_code == 200
+    persisted = json.loads(
+        (app.dependency_overrides[get_storage_paths]().job_outputs(job_id) / "subtitle_review.json").read_text(encoding="utf-8")
+    )
+    clip = next(item for item in persisted["clips"] if item["id"] == candidate_id)
+    assert clip["title"] == "並行更新後のタイトル"
+
+
+def test_hook_scene_status_transition_blocks_concurrent_settings_patch(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = lambda: lambda job_id, clip_id, start, end: None
+    validation_entered = Event()
+    release_validation = Event()
+    original_update = jobs_api.update_review_hook_scene
+
+    def blocking_update(*args: object, **kwargs: object) -> object:
+        validation_entered.set()
+        assert release_validation.wait(timeout=3)
+        return original_update(*args, **kwargs)
+
+    monkeypatch.setattr(jobs_api, "update_review_hook_scene", blocking_update)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        hook_future = executor.submit(
+            client.patch,
+            (f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/hook-scene"),
+            json={"start": 1, "end": 3},
+        )
+        assert validation_entered.wait(timeout=3)
+        settings_future = executor.submit(
+            client.patch,
+            f"/api/jobs/{job_id}/subtitle-review/settings",
+            json={
+                "shortTopBannerEnabled": True,
+                "shortBottomBannerEnabled": True,
+            },
+        )
+        assert not settings_future.done()
+        release_validation.set()
+        hook_response = hook_future.result(timeout=3)
+        settings_response = settings_future.result(timeout=3)
+
+    assert hook_response.status_code == 202
+    assert settings_response.status_code == 409
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.status == "preparing_subtitle_review"
+        assert job.settings_json.get("shortTopBannerEnabled") is not True
+
+
+@pytest.mark.parametrize("poll_target", ["review", "preview-video"])
+def test_subtitle_review_poll_refreshes_job_status_after_waiting_for_hook_lock(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    poll_target: str,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = lambda: lambda job_id, clip_id, start, end: None
+    poll_waiting = Event()
+    release_poll = Event()
+    original_lock = jobs_api.subtitle_review_document_lock
+    delay_first_lock = True
+
+    @contextmanager
+    def delayed_first_lock(*args: object, **kwargs: object) -> Generator[None, None, None]:
+        nonlocal delay_first_lock
+        should_delay = delay_first_lock
+        delay_first_lock = False
+        if should_delay:
+            poll_waiting.set()
+            assert release_poll.wait(timeout=3)
+        with original_lock(*args, **kwargs):
+            yield
+
+    monkeypatch.setattr(jobs_api, "subtitle_review_document_lock", delayed_first_lock)
+    poll_path = (
+        f"/api/jobs/{job_id}/subtitle-review"
+        if poll_target == "review"
+        else (f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/preview-video")
+    )
+    artifact_path = app.dependency_overrides[get_storage_paths]().job_outputs(job_id) / "subtitle_review.json"
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        poll_future = executor.submit(client.get, poll_path)
+        assert poll_waiting.wait(timeout=3)
+        try:
+            hook_response = client.patch(
+                (f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/hook-scene"),
+                json={"start": 1, "end": 3},
+            )
+            stored_after_hook_snapshot = artifact_path.read_bytes()
+        finally:
+            release_poll.set()
+        poll_response = poll_future.result(timeout=3)
+
+    assert hook_response.status_code == 202
+    assert poll_response.status_code == (200 if poll_target == "review" else 409)
+    assert artifact_path.read_bytes() == stored_after_hook_snapshot
 
 
 @pytest.mark.parametrize(
@@ -534,9 +963,7 @@ def test_subtitle_review_banner_asset_matches_renderer_asset(
         json={"videoId": upload["videoId"], "settings": {}},
     ).json()
 
-    response = client.get(
-        f"/api/jobs/{created['jobId']}/subtitle-review/banner-assets/{position}"
-    )
+    response = client.get(f"/api/jobs/{created['jobId']}/subtitle-review/banner-assets/{position}")
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
@@ -560,9 +987,7 @@ def test_subtitle_review_banner_asset_rejects_invalid_or_missing_asset(
     base_url = f"/api/jobs/{created['jobId']}/subtitle-review/banner-assets"
 
     invalid = client.get(f"{base_url}/center")
-    missing_job = client.get(
-        "/api/jobs/job_missing/subtitle-review/banner-assets/top"
-    )
+    missing_job = client.get("/api/jobs/job_missing/subtitle-review/banner-assets/top")
     monkeypatch.setattr(
         "app.api.jobs.DEFAULT_SHORT_TOP_BANNER_PATH",
         tmp_path / "missing.png",
@@ -610,19 +1035,12 @@ def test_completed_mp4_upload_reopens_matching_job_without_saving_copy(
     assert repeated.status_code == 200
     assert client.get(f"/api/jobs/{job_id}/subtitle-review").json()["renderRevision"] == 2
 
-    queued_hook_updates: list[
-        tuple[str, str, float | None, float | None]
-    ] = []
-    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = (
-        lambda: lambda queued_job_id, clip_id, start, end: queued_hook_updates.append(
-            (queued_job_id, clip_id, start, end)
-        )
+    queued_hook_updates: list[tuple[str, str, float | None, float | None]] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = lambda: (
+        lambda queued_job_id, clip_id, start, end: queued_hook_updates.append((queued_job_id, clip_id, start, end))
     )
     hook_response = client.patch(
-        (
-            f"/api/jobs/{job_id}/subtitle-review/clips/"
-            f"{candidate_id}/hook-scene"
-        ),
+        (f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/hook-scene"),
         json={"start": 2, "end": 4},
     )
 
@@ -722,12 +1140,8 @@ def test_subtitle_review_banner_settings_are_strict_and_persisted(
         assert job.settings_json["shortOverlayTitleMode"] == "always"
     storage = app.dependency_overrides[get_storage_paths]()
     output_dir = storage.job_outputs(job_id)
-    artifact = json.loads(
-        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
-    )
-    summary = json.loads(
-        (output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8")
-    )
+    artifact = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
+    summary = json.loads((output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8"))
     assert artifact["shortOverlayTitleMode"] == "always"
     assert artifact["shortTopBannerEnabled"] is False
     assert artifact["shortBottomBannerEnabled"] is True
@@ -735,9 +1149,7 @@ def test_subtitle_review_banner_settings_are_strict_and_persisted(
     assert summary["short_overlay_title_mode"] == "always"
     assert summary["short_top_banner_enabled"] is False
     assert summary["short_bottom_banner_enabled"] is True
-    assert summary["overlay_title_expected_by_clip"] == {
-        "candidate_short_reedit": True
-    }
+    assert summary["overlay_title_expected_by_clip"] == {"candidate_short_reedit": True}
 
 
 def test_subtitle_review_top_off_preserves_title_and_bottom_only_preserves_never(
@@ -911,9 +1323,7 @@ def test_subtitle_review_title_edit_recomputes_auto_title_expectation(
     assert reopened.status_code == 200
     storage = app.dependency_overrides[get_storage_paths]()
     output_dir = storage.job_outputs(job_id)
-    reopened_artifact = json.loads(
-        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
-    )
+    reopened_artifact = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
     assert reopened_artifact["clips"][0]["overlayTitleExpected"] is False
 
     edited = client.patch(
@@ -924,12 +1334,8 @@ def test_subtitle_review_title_edit_recomputes_auto_title_expectation(
     assert edited.status_code == 200
     assert edited.json()["clips"][0]["titleEdited"] is True
     assert edited.json()["clips"][0]["overlayTitleExpected"] is True
-    artifact = json.loads(
-        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
-    )
-    summary = json.loads(
-        (output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8")
-    )
+    artifact = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
+    summary = json.loads((output_dir / "subtitle_review_summary.json").read_text(encoding="utf-8"))
     assert artifact["clips"][0]["overlayTitleExpected"] is True
     assert summary["overlay_title_expected_by_clip"] == {candidate_id: True}
 
@@ -1002,9 +1408,12 @@ def test_subtitle_review_clip_styles_are_saved_and_omission_preserves_them(
 
     assert updated.status_code == 200
     clip = updated.json()["clips"][0]
-    assert clip["titleStyle"] == title_style
+    assert {key: clip["titleStyle"][key] for key in title_style} == title_style
+    assert clip["titleStyle"]["fontName"] is None
+    assert clip["titleStyle"]["bold"] is None
+    assert clip["titleStyle"]["positionMode"] == "explicit"
     assert clip["hookStyle"] is None
-    assert clip["subtitleStyle"] == subtitle_style
+    assert {key: clip["subtitleStyle"][key] for key in subtitle_style} == subtitle_style
 
     legacy_update = client.patch(
         f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
@@ -1017,8 +1426,183 @@ def test_subtitle_review_clip_styles_are_saved_and_omission_preserves_them(
 
     assert legacy_update.status_code == 200
     legacy_clip = legacy_update.json()["clips"][0]
-    assert legacy_clip["titleStyle"] == title_style
-    assert legacy_clip["subtitleStyle"] == subtitle_style
+    assert {key: legacy_clip["titleStyle"][key] for key in title_style} == title_style
+    assert {key: legacy_clip["subtitleStyle"][key] for key in subtitle_style} == subtitle_style
+
+
+def test_subtitle_review_hydrates_resolved_style_contract_and_preserves_custom_font(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    artifact_path = storage.job_outputs(job_id) / "subtitle_review.json"
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        video = db.get(Video, "vid_reedit_upload")
+        assert job is not None
+        assert video is not None
+        video.width = 640
+        video.height = 360
+        job.settings_json = {
+            **job.settings_json,
+            "mode": "low_cost",
+            "shortOverlayTitleMode": "auto",
+            "shortSubtitleFontName": "利用者の任意フォント",
+            "titleFontName": "利用者の任意タイトルフォント",
+            "shortSubtitleFontSize": 81,
+            "shortSubtitleXPercent": 42.5,
+            "shortSubtitleYPercent": 70,
+            "maxCharsPerLineShort": 13,
+            "maxLines": 2,
+        }
+        db.commit()
+
+    completed = client.get(f"/api/jobs/{job_id}/subtitle-review")
+
+    assert completed.status_code == 200
+    completed_payload = completed.json()
+    completed_clip = completed_payload["clips"][0]
+    assert completed_payload["renderMode"] == "low_cost"
+    assert completed_clip["subtitleMaxCharsPerLine"] == 13
+    assert completed_clip["subtitleMaxLines"] == 2
+    assert completed_clip["previewWidth"] == 1080
+    assert completed_clip["previewHeight"] == 1920
+    assert completed_clip["resolvedSubtitleStyle"]["fontPreset"] is None
+    assert completed_clip["resolvedSubtitleStyle"]["fontName"] == "利用者の任意フォント"
+    assert completed_clip["resolvedSubtitleStyle"]["xPercent"] == 42.5
+    assert completed_clip["resolvedSubtitleStyle"]["positionMode"] == "layout"
+    assert completed_clip["resolvedSubtitleStyle"]["positionOverride"] is True
+    assert completed_clip["resolvedTitleStyle"]["fontName"] == ("利用者の任意タイトルフォント")
+    assert completed_clip["resolvedHookStyle"]["fontName"] == ("利用者の任意タイトルフォント")
+    assert "resolvedSubtitleStyle" not in json.loads(artifact_path.read_text(encoding="utf-8"))["clips"][0]
+
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+    persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert persisted["renderMode"] == "low_cost"
+    assert persisted["clips"][0]["resolvedSubtitleStyle"]["fontName"] == ("利用者の任意フォント")
+
+    updated = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+        json={
+            "title": "手動編集タイトル",
+            "subtitleStyle": {
+                "fontPreset": None,
+                "fontName": "利用者の任意フォント",
+                "bold": True,
+                "fontSize": 81,
+                "primaryColor": "#12AB34",
+                "outlineColor": "#000000",
+                "outlineWidth": 5,
+                "xPercent": 42.5,
+                "yPercent": 70,
+                "positionMode": "layout",
+            },
+        },
+    )
+
+    assert updated.status_code == 200
+    updated_payload = updated.json()
+    updated_clip = updated_payload["clips"][0]
+    assert updated_clip["overlayTitleExpected"] is True
+    assert updated_clip["subtitleStyle"]["fontPreset"] is None
+    assert updated_clip["subtitleStyle"]["fontName"] == "利用者の任意フォント"
+    assert updated_clip["resolvedSubtitleStyle"]["fontName"] == "利用者の任意フォント"
+    assert updated_clip["resolvedSubtitleStyle"]["primaryColor"] == "#12AB34"
+    assert updated_clip["resolvedSubtitleStyle"]["positionMode"] == "layout"
+    assert updated_clip["resolvedSubtitleStyle"]["xPercent"] == 42.5
+
+
+def test_normal_resolved_twelve_pixel_style_round_trips_through_content_patch(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    artifact_path = output_dir / "subtitle_review.json"
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    artifact["clips"][0]["type"] = "normal"
+    artifact["clips"][0]["hookText"] = ""
+    artifact_path.write_text(
+        json.dumps(artifact, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (output_dir / "selected_clips.json").write_text(
+        json.dumps(
+            {
+                "normalClips": [
+                    {
+                        "id": candidate_id,
+                        "type": "normal",
+                        "start": 0,
+                        "end": 10,
+                        "duration": 10,
+                        "transcript_text": "字幕",
+                        "title": "完成した通常切り抜き",
+                    }
+                ],
+                "shorts": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        video = db.get(Video, "vid_reedit_upload")
+        assert job is not None
+        assert video is not None
+        video.width = 640
+        video.height = 360
+        job.settings_json = {
+            **job.settings_json,
+            "normalSubtitleFontName": "12px任意フォント",
+            "normalSubtitleFontSize": 12,
+            "minSubtitleDuration": 0.6,
+            "maxSubtitleDuration": 2.5,
+            "minGapBetweenSubtitles": 0.2,
+        }
+        db.commit()
+
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+    clip = reopened.json()["clips"][0]
+    resolved = clip["resolvedSubtitleStyle"]
+    assert resolved["fontName"] == "12px任意フォント"
+    assert resolved["fontSize"] == 12
+    assert clip["resolvedDefaultSubtitleStyle"] == resolved
+    assert clip["resolvedDefaultTitleStyle"] is not None
+    assert clip["resolvedDefaultHookStyle"] is not None
+    assert clip["subtitleMinDurationSeconds"] == 0.6
+    assert clip["subtitleMaxDurationSeconds"] == 2.5
+    assert clip["subtitleMinGapSeconds"] == 0.2
+
+    updated = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+        json={
+            "title": clip["title"],
+            "subtitleStyle": {
+                "fontPreset": resolved["fontPreset"],
+                "fontName": resolved["fontName"],
+                "bold": resolved["bold"],
+                "fontSize": resolved["fontSize"],
+                "primaryColor": "#12AB34",
+                "outlineColor": resolved["outlineColor"],
+                "outlineWidth": resolved["outlineWidth"],
+                "xPercent": resolved["xPercent"],
+                "yPercent": resolved["yPercent"],
+                "positionMode": resolved["positionMode"],
+            },
+        },
+    )
+
+    assert updated.status_code == 200
+    updated_clip = updated.json()["clips"][0]
+    assert updated_clip["subtitleStyle"]["fontSize"] == 12
+    assert updated_clip["resolvedSubtitleStyle"]["fontSize"] == 12
+    assert updated_clip["resolvedSubtitleStyle"]["primaryColor"] == "#12AB34"
+    assert updated_clip["resolvedDefaultSubtitleStyle"]["fontSize"] == 12
+    assert updated_clip["resolvedDefaultSubtitleStyle"]["primaryColor"] == "#FFFFFF"
 
 
 def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) -> None:
@@ -1170,6 +1754,434 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["ensureSelectedOpenAIScored"] is True
         assert job.settings_json["openaiFinalistScoringLimit"] == 20
         assert job.settings_json["transcriptionLanguage"] == "ja"
+
+
+def test_retry_no_usable_selection_reuses_source_and_settings_once(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 0,
+                "shortCount": 2,
+                "selectionPolicy": "strict_quality",
+                "shortTopBannerEnabled": True,
+            },
+        },
+    ).json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        assert source_job is not None
+        source_job.status = "failed"
+        source_job.progress = 100
+        source_job.current_step = "Failed"
+        source_job.error_code = "no_usable_selection"
+        source_job.error_message = "no clips"
+        expected_settings = dict(source_job.settings_json)
+        db.commit()
+
+    storage = app.dependency_overrides[get_storage_paths]()
+    source_output = storage.job_outputs(created["jobId"]) / "old-artifact.json"
+    source_output.write_text("{}", encoding="utf-8")
+    failed_status = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert failed_status["error"] == {
+        "code": "no_usable_selection",
+        "message": "分析は完了しましたが、選定基準を満たす切り抜き候補がありませんでした。",
+    }
+    queued_jobs: list[str] = []
+
+    def enqueue_once(retry_id: str, _terminal_retry_allowed: object) -> None:
+        if retry_id not in queued_jobs:
+            queued_jobs.append(retry_id)
+
+    app.dependency_overrides[get_enqueue_retry_job] = lambda: enqueue_once
+
+    first = client.post(f"/api/jobs/{created['jobId']}/retry")
+    repeated = client.post(f"/api/jobs/{created['jobId']}/retry")
+
+    assert first.status_code == 202
+    assert repeated.status_code == 202
+    assert first.json() == repeated.json()
+    retry_id = first.json()["jobId"]
+    assert retry_id != created["jobId"]
+    assert first.json()["status"] == "queued"
+    assert queued_jobs == [retry_id]
+    assert source_output.read_text(encoding="utf-8") == "{}"
+    assert not (storage.outputs / retry_id).exists()
+    active_child_source_status = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert active_child_source_status["error"]["code"] == "no_usable_selection"
+    with next(app.dependency_overrides[get_db]()) as db:
+        jobs = list(db.scalars(select(Job)).all())
+        retry = db.get(Job, retry_id)
+        assert len(jobs) == 2
+        assert retry is not None
+        assert retry.video_id == upload["videoId"]
+        assert retry.settings_json == {**expected_settings, "retryOf": created["jobId"]}
+        assert retry.error_code is None
+
+        retry.status = "failed"
+        retry.error_code = "no_usable_selection"
+        retry.error_message = "still no clips"
+        db.commit()
+
+    failed_retry_status = client.get(f"/api/jobs/{retry_id}").json()
+    assert failed_retry_status["error"] == {
+        "code": "no_usable_selection_retry_exhausted",
+        "message": "再処理でも選定基準を満たす切り抜き候補がありませんでした。",
+    }
+    exhausted_source_status = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert exhausted_source_status["error"] == {
+        "code": "no_usable_selection_retry_exhausted",
+        "message": "このJobの再処理は終了しています。",
+    }
+    blocked_source_retry = client.post(f"/api/jobs/{created['jobId']}/retry")
+    assert blocked_source_retry.status_code == 409
+    assert blocked_source_retry.json()["detail"]["code"] == "job_retry_not_available"
+    blocked_grandchild = client.post(f"/api/jobs/{retry_id}/retry")
+    assert blocked_grandchild.status_code == 409
+    assert blocked_grandchild.json()["detail"]["code"] == "job_retry_not_available"
+
+
+def test_retry_supports_legacy_selection_failure_artifacts(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        assert source_job is not None
+        source_job.status = "failed"
+        source_job.error_code = "no_usable_output"
+        source_job.error_message = "legacy no clips"
+        db.commit()
+
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(created["jobId"])
+    (output_dir / "selected_clips.json").write_text(
+        json.dumps({"normalClips": [], "shorts": [], "rejectedCandidates": []}),
+        encoding="utf-8",
+    )
+    (output_dir / "rejection_summary.json").write_text(
+        json.dumps({"render_failure_count": 0, "render_failures": []}),
+        encoding="utf-8",
+    )
+
+    status_payload = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert status_payload["error"] == {
+        "code": "no_usable_selection",
+        "message": "分析は完了しましたが、選定基準を満たす切り抜き候補がありませんでした。",
+    }
+
+    queued_jobs: list[str] = []
+    app.dependency_overrides[get_enqueue_retry_job] = lambda: lambda retry_id, _terminal_retry_allowed: queued_jobs.append(retry_id)
+    retried = client.post(f"/api/jobs/{created['jobId']}/retry")
+    assert retried.status_code == 202
+    assert queued_jobs == [retried.json()["jobId"]]
+
+
+def test_retry_rejects_legacy_render_failure_artifacts(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        assert source_job is not None
+        source_job.status = "failed"
+        source_job.error_code = "no_usable_output"
+        source_job.error_message = "legacy render failure"
+        db.commit()
+
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(created["jobId"])
+    (output_dir / "selected_clips.json").write_text(
+        json.dumps({"normalClips": [], "shorts": [{"id": "short_1"}]}),
+        encoding="utf-8",
+    )
+    (output_dir / "rejection_summary.json").write_text(
+        json.dumps({"render_failure_count": 1}),
+        encoding="utf-8",
+    )
+    (output_dir / "render_failures.json").write_text(
+        json.dumps([{"type": "short", "error": "ffmpeg failed"}]),
+        encoding="utf-8",
+    )
+    (output_dir / "subtitle_review.json").write_text("{}", encoding="utf-8")
+
+    status_payload = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert status_payload["error"] == {
+        "code": "no_usable_output",
+        "message": "切り抜き動画を生成できませんでした。レンダリング結果を確認してください。",
+    }
+    rejected = client.post(f"/api/jobs/{created['jobId']}/retry")
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "job_retry_not_available"
+
+
+def test_retry_no_usable_selection_rejects_other_failures_or_missing_source(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        assert source_job is not None
+        source_job.status = "failed"
+        source_job.error_code = "audio_extraction_failed"
+        db.commit()
+
+    other_failure = client.post(f"/api/jobs/{created['jobId']}/retry")
+    assert other_failure.status_code == 409
+    assert other_failure.json()["detail"]["code"] == "job_retry_not_available"
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        video = db.get(Video, upload["videoId"])
+        assert source_job is not None
+        assert video is not None
+        source_job.error_code = "no_usable_selection"
+        db.commit()
+        Path(video.stored_path).unlink()
+
+    missing_source = client.post(f"/api/jobs/{created['jobId']}/retry")
+    assert missing_source.status_code == 409
+    assert missing_source.json()["detail"]["code"] == "retry_source_unavailable"
+
+
+def test_retry_enqueue_failure_preserves_recoverable_pending_job(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        assert source_job is not None
+        source_job.status = "failed"
+        source_job.error_code = "no_usable_selection"
+        db.commit()
+
+    def fail_enqueue(_job_id: str, _terminal_retry_allowed: object) -> None:
+        raise RuntimeError("queue unavailable")
+
+    app.dependency_overrides[get_enqueue_retry_job] = lambda: fail_enqueue
+    failed = client.post(f"/api/jobs/{created['jobId']}/retry")
+    assert failed.status_code == 503
+    assert failed.json()["detail"]["code"] == "retry_enqueue_failed"
+    with next(app.dependency_overrides[get_db]()) as db:
+        jobs = list(db.scalars(select(Job)).all())
+        assert len(jobs) == 2
+        pending = next(job for job in jobs if job.id != created["jobId"])
+        assert pending.status == "queued"
+        assert pending.current_step == "再処理を開始待ち"
+        pending_id = pending.id
+
+    queued_jobs: list[str] = []
+    app.dependency_overrides[get_enqueue_retry_job] = lambda: lambda retry_id, _terminal_retry_allowed: queued_jobs.append(retry_id)
+    retried = client.post(f"/api/jobs/{created['jobId']}/retry")
+    assert retried.status_code == 202
+    assert queued_jobs == [retried.json()["jobId"]]
+    assert retried.json()["jobId"] == pending_id
+
+
+def test_retry_recovers_child_committed_before_enqueue(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    retry_id = "job_" + hashlib.sha256(f"retry:{created['jobId']}".encode("utf-8")).hexdigest()[:32]
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        assert source_job is not None
+        source_job.status = "failed"
+        source_job.error_code = "no_usable_selection"
+        db.add(
+            Job(
+                id=retry_id,
+                video_id=upload["videoId"],
+                status="queued",
+                progress=5,
+                current_step="再処理を開始待ち",
+                settings_json=dict(source_job.settings_json),
+            )
+        )
+        db.commit()
+
+    queued_jobs: list[str] = []
+    app.dependency_overrides[get_enqueue_retry_job] = lambda: lambda retry_id, _terminal_retry_allowed: queued_jobs.append(retry_id)
+    recovered = client.post(f"/api/jobs/{created['jobId']}/retry")
+
+    assert recovered.status_code == 202
+    assert recovered.json()["jobId"] == retry_id
+    assert queued_jobs == [retry_id]
+    with next(app.dependency_overrides[get_db]()) as db:
+        retry = db.get(Job, retry_id)
+        assert retry is not None
+        assert retry.current_step == "再処理を開始待ち"
+
+
+def test_retry_enqueues_child_committed_by_competing_request(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    retry_id = "job_" + hashlib.sha256(f"retry:{created['jobId']}".encode("utf-8")).hexdigest()[:32]
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        assert source_job is not None
+        source_job.status = "failed"
+        source_job.error_code = "no_usable_selection"
+        db.commit()
+
+    original_commit = Session.commit
+    competing_commit_injected = False
+
+    def commit_with_competing_insert(db: Session) -> None:
+        nonlocal competing_commit_injected
+        pending = next(
+            (item for item in db.new if isinstance(item, Job) and item.id == retry_id),
+            None,
+        )
+        if pending is not None and not competing_commit_injected:
+            competing_commit_injected = True
+            with next(app.dependency_overrides[get_db]()) as competing_db:
+                competing_db.add(
+                    Job(
+                        id=pending.id,
+                        video_id=pending.video_id,
+                        status=pending.status,
+                        progress=pending.progress,
+                        current_step=pending.current_step,
+                        settings_json=dict(pending.settings_json),
+                    )
+                )
+                original_commit(competing_db)
+        original_commit(db)
+
+    monkeypatch.setattr(Session, "commit", commit_with_competing_insert)
+    queued_jobs: list[str] = []
+    app.dependency_overrides[get_enqueue_retry_job] = lambda: lambda queued_id, _terminal_retry_allowed: queued_jobs.append(queued_id)
+
+    recovered = client.post(f"/api/jobs/{created['jobId']}/retry")
+
+    assert recovered.status_code == 202
+    assert recovered.json()["jobId"] == retry_id
+    assert competing_commit_injected is True
+    assert queued_jobs == [retry_id]
+
+
+def test_retry_does_not_rewind_worker_progress_after_enqueue(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        assert source_job is not None
+        source_job.status = "failed"
+        source_job.error_code = "no_usable_selection"
+        db.commit()
+
+    def advance_worker(retry_id: str, _terminal_retry_allowed: object) -> None:
+        with next(app.dependency_overrides[get_db]()) as db:
+            retry = db.get(Job, retry_id)
+            assert retry is not None
+            retry.status = "transcribing"
+            retry.current_step = "Transcribing"
+            retry.progress = 28
+            db.commit()
+
+    app.dependency_overrides[get_enqueue_retry_job] = lambda: advance_worker
+    retried = client.post(f"/api/jobs/{created['jobId']}/retry")
+
+    assert retried.status_code == 202
+    assert retried.json()["status"] == "transcribing"
+    with next(app.dependency_overrides[get_db]()) as db:
+        retry = db.get(Job, retried.json()["jobId"])
+        assert retry is not None
+        assert retry.status == "transcribing"
+        assert retry.current_step == "Transcribing"
+        assert retry.progress == 28
+
+
+def test_retry_does_not_enqueue_after_worker_completes_existing_attempt(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        source_job = db.get(Job, created["jobId"])
+        assert source_job is not None
+        source_job.status = "failed"
+        source_job.error_code = "no_usable_selection"
+        db.commit()
+
+    queued_jobs: list[str] = []
+
+    def finish_before_terminal_retry(
+        retry_id: str,
+        terminal_retry_allowed: object,
+    ) -> None:
+        with next(app.dependency_overrides[get_db]()) as db:
+            retry = db.get(Job, retry_id)
+            assert retry is not None
+            retry.status = "completed"
+            retry.current_step = "Completed"
+            retry.progress = 100
+            db.commit()
+        assert callable(terminal_retry_allowed)
+        assert terminal_retry_allowed() is False
+
+    app.dependency_overrides[get_enqueue_retry_job] = lambda: finish_before_terminal_retry
+    retried = client.post(f"/api/jobs/{created['jobId']}/retry")
+
+    assert retried.status_code == 202
+    assert retried.json()["status"] == "completed"
+    assert queued_jobs == []
 
 
 def test_job_status_exposes_subtitle_correction_progress_artifact(client: TestClient) -> None:
@@ -1574,6 +2586,19 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert "normalSubtitleLowerMargin" in properties
     assert "normalSubtitleXPercent" in properties
     assert "normalSubtitleYPercent" in properties
+
+
+def test_openapi_exposes_optional_boolean_heatmap_mode_for_clip_reselection(
+    client: TestClient,
+) -> None:
+    payload = client.get("/openapi.json").json()
+    schema = payload["components"]["schemas"]["ClipPlanReselectionRequest"]
+
+    assert schema["properties"]["heatmapIntervalMode"]["anyOf"] == [
+        {"type": "boolean"},
+        {"type": "null"},
+    ]
+    assert "heatmapIntervalMode" not in schema["required"]
 
 
 def test_job_creation_rejects_unsupported_transcription_profile(client: TestClient) -> None:

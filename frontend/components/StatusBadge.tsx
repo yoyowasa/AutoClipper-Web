@@ -13,6 +13,7 @@ const STATUS_STYLES: Record<JobStatus, string> = {
   selecting_clips: "border-blue-200 bg-blue-50 text-blue-800",
   reselecting_clips: "border-blue-200 bg-blue-50 text-blue-800",
   preparing_clip_review: "border-blue-200 bg-blue-50 text-blue-800",
+  awaiting_manual_edit: "border-blue-300 bg-blue-50 text-blue-900",
   awaiting_clip_review: "border-blue-300 bg-blue-50 text-blue-900",
   preparing_subtitle_review: "border-sky-200 bg-sky-50 text-sky-800",
   awaiting_subtitle_review: "border-sky-300 bg-sky-50 text-sky-900",
@@ -26,6 +27,7 @@ const STATUS_STYLES: Record<JobStatus, string> = {
 const STATUS_LABELS: Partial<Record<JobStatus, string>> = {
   reselecting_clips: "切り抜きを再選定中",
   preparing_clip_review: "予定確認動画を準備中",
+  awaiting_manual_edit: "手動切り抜き待ち",
   awaiting_clip_review: "切り抜き予定の確認待ち",
   preparing_subtitle_review: "字幕確認動画を準備中",
   awaiting_subtitle_review: "字幕確認待ち",

@@ -5,20 +5,30 @@ import { useState } from "react";
 
 import {
   CLIP_TEXT_FONT_GROUPS,
-  clipTextFontFamily,
+  assPreviewFontMetrics,
   clipTextFontWeight,
   resolvedClipTextStyle,
+  subtitleFontFamily,
   type ClipTextTarget
 } from "../lib/clipTextStyle";
 import {
   HORIZONTAL_POSITION_PRESETS,
   matchingPositionPreset,
-  positionPixels,
   verticalPositionPresets
 } from "../lib/textPositionPresets";
-import type { ClipTextStyle, ExportType } from "../lib/types";
+import { splitSubtitlePreviewLines } from "../lib/subtitlePreview";
+import type {
+  ClipTextFontPreset,
+  ClipTextStyle,
+  ExportType,
+  ResolvedClipTextStyle
+} from "../lib/types";
 
 type ClipTextStyles = Record<ClipTextTarget, ClipTextStyle | null>;
+type ResolvedClipTextStyles = Record<
+  ClipTextTarget,
+  ResolvedClipTextStyle | null
+>;
 
 type ClipTextStyleEditorProps = {
   clipType: ExportType;
@@ -26,7 +36,18 @@ type ClipTextStyleEditorProps = {
   layout?: "stacked" | "workspace";
   selectedTarget?: ClipTextTarget;
   showPreview?: boolean;
+  shortTitleOutputEnabled?: boolean;
+  shortTopBannerEnabled?: boolean;
+  shortTopBannerUrl?: string;
+  shortBottomBannerEnabled?: boolean;
+  shortBottomBannerUrl?: string;
   styles: ClipTextStyles;
+  resolvedStyles: ResolvedClipTextStyles;
+  defaultResolvedStyles: ResolvedClipTextStyles;
+  subtitleMaxCharsPerLine?: number | null;
+  subtitleMaxLines?: number | null;
+  previewWidth?: number | null;
+  previewHeight?: number | null;
   titleText: string;
   hookText: string;
   subtitleText: string;
@@ -44,9 +65,27 @@ type ClipTextStylePreviewProps = {
   shortBottomBannerEnabled?: boolean;
   shortBottomBannerUrl?: string;
   styles: ClipTextStyles;
+  resolvedStyles: ResolvedClipTextStyles;
+  defaultResolvedStyles: ResolvedClipTextStyles;
+  subtitleMaxCharsPerLine?: number | null;
+  subtitleMaxLines?: number | null;
+  previewWidth?: number | null;
+  previewHeight?: number | null;
   titleText: string;
   hookText: string;
   subtitleText: string;
+};
+
+export type ClipTextOverlayProps = {
+  clipType: ExportType;
+  target: ClipTextTarget;
+  style: ClipTextStyle | null;
+  resolvedStyle: ResolvedClipTextStyle | null;
+  defaultResolvedStyle: ResolvedClipTextStyle | null;
+  subtitleMaxCharsPerLine?: number | null;
+  subtitleMaxLines?: number | null;
+  previewWidth?: number | null;
+  text: string;
 };
 
 const TARGET_LABELS: Record<ClipTextTarget, string> = {
@@ -130,6 +169,98 @@ function sampleText(
   return subtitleText.trim() || "字幕の位置と見た目を確認";
 }
 
+function styleDraftFromResolved(style: ResolvedClipTextStyle): ClipTextStyle {
+  const xPercent =
+    style.positionMode === "layout"
+      ? Math.min(95, Math.max(5, style.xPercent))
+      : style.xPercent;
+  const yPercent =
+    style.positionMode === "layout"
+      ? Math.min(95, Math.max(5, style.yPercent))
+      : style.yPercent;
+  return {
+    fontPreset: style.fontPreset,
+    fontName: style.fontName,
+    bold: style.bold,
+    fontSize: style.fontSize,
+    primaryColor: style.primaryColor,
+    outlineColor: style.outlineColor,
+    outlineWidth: style.outlineWidth,
+    xPercent,
+    yPercent,
+    positionMode: style.positionMode
+  };
+}
+
+function alignmentTransform(alignment: number): string {
+  const normalized = Math.min(9, Math.max(1, Math.trunc(alignment)));
+  const column = (normalized - 1) % 3;
+  const row = Math.floor((normalized - 1) / 3);
+  const translateX = column === 0 ? 0 : column === 1 ? -50 : -100;
+  const translateY = row === 0 ? -100 : row === 1 ? -50 : 0;
+  return `translate(${translateX}%, ${translateY}%)`;
+}
+
+export function ClipTextOverlay({
+  clipType,
+  target,
+  style: storedStyle,
+  resolvedStyle,
+  defaultResolvedStyle,
+  subtitleMaxCharsPerLine,
+  subtitleMaxLines,
+  previewWidth,
+  text
+}: ClipTextOverlayProps) {
+  const style = resolvedClipTextStyle(
+    storedStyle,
+    defaultResolvedStyle ?? resolvedStyle,
+    target,
+    clipType
+  );
+  const lineLimit =
+    target === "title" || target === "hook"
+      ? 20
+      : (subtitleMaxCharsPerLine ?? (clipType === "short" ? 16 : 28));
+  const maxLines =
+    target === "title" || target === "hook" ? 2 : (subtitleMaxLines ?? 2);
+  const previewText = splitSubtitlePreviewLines(text, lineLimit, maxLines);
+  if (!previewText) {
+    return null;
+  }
+  const outputWidth = previewWidth ?? (clipType === "short" ? 1080 : 1920);
+  const fontMetrics = assPreviewFontMetrics(style.fontName);
+  const fontSizePercent =
+    ((style.fontSize * fontMetrics.fontSizeScale) / outputWidth) * 100;
+  const outlinePercent = (style.outlineWidth / outputWidth) * 100;
+  const shadowPercent = (style.shadow / outputWidth) * 100;
+  return (
+    <p
+      aria-hidden="true"
+      className="pointer-events-none absolute z-30 m-0 max-w-none whitespace-pre text-center"
+      style={{
+        color: style.primaryColor,
+        fontFamily: subtitleFontFamily(style.fontName),
+        fontSize: `${fontSizePercent}cqw`,
+        fontWeight:
+          style.fontPreset !== null
+            ? clipTextFontWeight(style.fontPreset)
+            : style.bold
+              ? 700
+              : 400,
+        lineHeight: fontMetrics.lineHeight,
+        left: `${style.xPercent}%`,
+        top: `${style.yPercent}%`,
+        transform: alignmentTransform(style.alignment),
+        WebkitTextStroke: `${outlinePercent}cqw ${style.outlineColor}`,
+        textShadow: `${shadowPercent}cqw ${shadowPercent}cqw 0 rgba(0, 0, 0, 0.5)`
+      }}
+    >
+      {previewText}
+    </p>
+  );
+}
+
 export function ClipTextStylePreview({
   clipType,
   displayMode = "compact",
@@ -140,43 +271,70 @@ export function ClipTextStylePreview({
   shortBottomBannerEnabled = false,
   shortBottomBannerUrl,
   styles,
+  resolvedStyles,
+  defaultResolvedStyles,
+  subtitleMaxCharsPerLine,
+  subtitleMaxLines,
+  previewWidth,
+  previewHeight,
   titleText,
   hookText,
   subtitleText
 }: ClipTextStylePreviewProps) {
-  const availableTargets: ClipTextTarget[] =
-    clipType === "short" ? ["title", "hook", "subtitle"] : ["subtitle"];
+  const availableTargets: ClipTextTarget[] = ["title", "hook", "subtitle"];
   const target = availableTargets.includes(selectedTarget)
     ? selectedTarget
     : availableTargets[0];
-  const style = resolvedClipTextStyle(styles[target], target, clipType);
+  const style = resolvedClipTextStyle(
+    styles[target],
+    defaultResolvedStyles[target] ?? resolvedStyles[target],
+    target,
+    clipType
+  );
   const verticalPresets = verticalPositionPresets(clipType);
   const selectedVerticalPreset = matchingPositionPreset(
     verticalPresets,
     style.yPercent
   );
-  const previewText = sampleText(target, titleText, hookText, subtitleText);
+  const previewLineLimit =
+    target === "title" || target === "hook"
+      ? 20
+      : (subtitleMaxCharsPerLine ?? (clipType === "short" ? 16 : 28));
+  const previewMaxLines =
+    target === "title" || target === "hook" ? 2 : (subtitleMaxLines ?? 2);
+  const previewText = splitSubtitlePreviewLines(
+    sampleText(target, titleText, hookText, subtitleText),
+    previewLineLimit,
+    previewMaxLines
+  );
   const titleOutputDisabled =
     clipType === "short" &&
     target === "title" &&
     shortTitleOutputEnabled === false;
-  const outputWidthPercent = clipType === "short" ? 10.8 : 19.2;
-  const previewFontSizePercent = style.fontSize / outputWidthPercent;
-  const previewOutlinePercent = style.outlineWidth / outputWidthPercent;
+  const outputWidth = previewWidth ?? (clipType === "short" ? 1080 : 1920);
+  const outputHeight = previewHeight ?? (clipType === "short" ? 1920 : 1080);
+  const fontMetrics = assPreviewFontMetrics(style.fontName);
+  const previewFontSizePercent =
+    ((style.fontSize * fontMetrics.fontSizeScale) / outputWidth) * 100;
+  const previewOutlinePercent = (style.outlineWidth / outputWidth) * 100;
+  const previewShadowPercent = (style.shadow / outputWidth) * 100;
   const sizeClass =
     displayMode === "workspace"
       ? clipType === "short"
-        ? "aspect-[9/16] w-full max-w-[230px] lg:h-full lg:max-h-full lg:w-auto lg:max-w-full"
-        : "aspect-video w-full max-w-md lg:max-w-3xl"
+        ? "w-full max-w-[230px] lg:h-full lg:max-h-full lg:w-auto lg:max-w-full"
+        : "w-full max-w-md lg:max-w-3xl"
       : clipType === "short"
-        ? "aspect-[9/16] w-full max-w-[230px]"
-        : "aspect-video w-full max-w-md";
+        ? "w-full max-w-[230px]"
+        : "w-full max-w-md";
 
   return (
     <div
       aria-label={`${TARGET_LABELS[target]}配置プレビュー`}
       className={`relative overflow-hidden border border-neutral-400 bg-[#25343A] ${sizeClass}`}
-      style={{ containerType: "inline-size" }}
+      style={{
+        aspectRatio: `${outputWidth} / ${outputHeight}`,
+        containerType: "inline-size"
+      }}
     >
       <div className="absolute inset-y-0 right-0 w-[36%] bg-[#82959C]" />
       <div className="absolute bottom-0 left-0 h-[18%] w-full bg-[#111A1E]" />
@@ -237,24 +395,36 @@ export function ClipTextStylePreview({
           </div>
         );
       })}
-      {!titleOutputDisabled ? (
+      {titleOutputDisabled ? (
+        <div className="absolute inset-0 z-30 flex items-center justify-center p-3 text-center">
+          <span className="bg-neutral-950/85 px-2 py-1 text-[10px] font-semibold text-white">
+            タイトルは書き出しOFF
+          </span>
+        </div>
+      ) : (
         <p
-          className="absolute z-30 m-0 max-w-[90%] whitespace-pre-line text-center leading-[1.2]"
+          className="absolute z-30 m-0 max-w-none whitespace-pre text-center"
           style={{
             color: style.primaryColor,
-            fontFamily: clipTextFontFamily(style.fontPreset),
-            fontSize: `clamp(4px, ${previewFontSizePercent}cqw, 52px)`,
-            fontWeight: clipTextFontWeight(style.fontPreset),
+            fontFamily: subtitleFontFamily(style.fontName),
+            fontSize: `${previewFontSizePercent}cqw`,
+            fontWeight:
+              style.fontPreset !== null
+                ? clipTextFontWeight(style.fontPreset)
+                : style.bold
+                  ? 700
+                  : 400,
+            lineHeight: fontMetrics.lineHeight,
             left: `${style.xPercent}%`,
             top: `${style.yPercent}%`,
-            transform: "translate(-50%, -50%)",
-            WebkitTextStroke: `clamp(0px, ${previewOutlinePercent}cqw, 4px) ${style.outlineColor}`,
-            textShadow: `0 2px 2px ${style.outlineColor}`
+            transform: alignmentTransform(style.alignment),
+            WebkitTextStroke: `${previewOutlinePercent}cqw ${style.outlineColor}`,
+            textShadow: `${previewShadowPercent}cqw ${previewShadowPercent}cqw 0 rgba(0, 0, 0, 0.5)`
           }}
         >
           {previewText}
         </p>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -265,24 +435,37 @@ export function ClipTextStyleEditor({
   layout = "stacked",
   selectedTarget,
   showPreview = true,
+  shortTitleOutputEnabled,
+  shortTopBannerEnabled,
+  shortTopBannerUrl,
+  shortBottomBannerEnabled,
+  shortBottomBannerUrl,
   styles,
+  resolvedStyles,
+  defaultResolvedStyles,
+  subtitleMaxCharsPerLine,
+  subtitleMaxLines,
+  previewWidth,
+  previewHeight,
   titleText,
   hookText,
   subtitleText,
   onChange,
   onSelectedTargetChange
 }: ClipTextStyleEditorProps) {
-  const [internalTarget, setInternalTarget] = useState<ClipTextTarget>(
-    clipType === "short" ? "title" : "subtitle"
-  );
-  const availableTargets: ClipTextTarget[] =
-    clipType === "short" ? ["title", "hook", "subtitle"] : ["subtitle"];
+  const [internalTarget, setInternalTarget] = useState<ClipTextTarget>("title");
+  const availableTargets: ClipTextTarget[] = ["title", "hook", "subtitle"];
   const requestedTarget = selectedTarget ?? internalTarget;
   const target = availableTargets.includes(requestedTarget)
     ? requestedTarget
     : availableTargets[0];
   const storedStyle = styles[target];
-  const style = resolvedClipTextStyle(storedStyle, target, clipType);
+  const style = resolvedClipTextStyle(
+    storedStyle,
+    defaultResolvedStyles[target] ?? resolvedStyles[target],
+    target,
+    clipType
+  );
   const verticalPresets = verticalPositionPresets(clipType);
   const selectedHorizontalPreset = matchingPositionPreset(
     HORIZONTAL_POSITION_PRESETS,
@@ -292,14 +475,16 @@ export function ClipTextStyleEditor({
     verticalPresets,
     style.yPercent
   );
-  const currentPosition = positionPixels(
-    clipType,
-    style.xPercent,
-    style.yPercent
-  );
+  const outputWidth = previewWidth ?? (clipType === "short" ? 1080 : 1920);
+  const outputHeight = previewHeight ?? (clipType === "short" ? 1920 : 1080);
+  const currentPosition = {
+    x: Math.round((outputWidth * style.xPercent) / 100),
+    y: Math.round((outputHeight * style.yPercent) / 100)
+  };
 
   function updateStyle(patch: Partial<ClipTextStyle>) {
-    onChange(target, { ...style, ...patch });
+    const draft = storedStyle ?? styleDraftFromResolved(style);
+    onChange(target, { ...draft, ...patch });
   }
 
   function changeTarget(nextTarget: ClipTextTarget) {
@@ -311,7 +496,8 @@ export function ClipTextStyleEditor({
     updateStyle({
       fontSize: preset.fontSize,
       xPercent: preset.xPercent,
-      yPercent: preset.yPercent
+      yPercent: preset.yPercent,
+      positionMode: "explicit"
     });
   }
 
@@ -348,7 +534,11 @@ export function ClipTextStyleEditor({
         <div
           aria-label="文字スタイルの対象"
           className={`mt-2 grid border border-neutral-300 bg-neutral-100 p-1 ${
-            availableTargets.length === 1 ? "grid-cols-1" : "grid-cols-3"
+            availableTargets.length === 1
+              ? "grid-cols-1"
+              : availableTargets.length === 2
+                ? "grid-cols-2"
+                : "grid-cols-3"
           }`}
           role="group"
         >
@@ -373,13 +563,23 @@ export function ClipTextStyleEditor({
           <select
             className="min-h-9 border border-neutral-300 bg-white px-2 text-sm font-normal"
             disabled={disabled}
-            value={style.fontPreset}
-            onChange={(event) =>
+            value={style.fontPreset ?? "__current_font__"}
+            onChange={(event) => {
+              if (event.target.value === "__current_font__") {
+                return;
+              }
               updateStyle({
-                fontPreset: event.target.value as ClipTextStyle["fontPreset"]
-              })
-            }
+                bold: null,
+                fontName: null,
+                fontPreset: event.target.value as ClipTextFontPreset
+              });
+            }}
           >
+            {style.fontPreset === null ? (
+              <option disabled value="__current_font__">
+                {style.fontName}（現在設定）
+              </option>
+            ) : null}
             {CLIP_TEXT_FONT_GROUPS.map((group) => (
               <optgroup key={group.label} label={group.label}>
                 {group.options.map((option) => (
@@ -400,7 +600,7 @@ export function ClipTextStyleEditor({
               className="h-9 border border-neutral-300 bg-white px-2 text-sm font-normal tabular-nums"
               disabled={disabled}
               max={220}
-              min={20}
+              min={clipType === "normal" ? 12 : 20}
               type="number"
               value={style.fontSize}
               onChange={(event) =>
@@ -478,13 +678,18 @@ export function ClipTextStyleEditor({
                   disabled={disabled}
                   key={preset.id}
                   type="button"
-                  onClick={() => updateStyle({ yPercent: preset.percent })}
+                  onClick={() =>
+                    updateStyle({
+                      yPercent: preset.percent,
+                      positionMode: "explicit"
+                    })
+                  }
                 >
                   <span className="block text-[10px] font-semibold">
                     {preset.label}
                   </span>
                   <span className="block text-[8px] text-neutral-500">
-                    {preset.purpose}
+                    Y {Math.round((outputHeight * preset.percent) / 100)}
                   </span>
                 </button>
               );
@@ -514,7 +719,12 @@ export function ClipTextStyleEditor({
                   key={preset.id}
                   title={preset.purpose}
                   type="button"
-                  onClick={() => updateStyle({ xPercent: preset.percent })}
+                  onClick={() =>
+                    updateStyle({
+                      xPercent: preset.percent,
+                      positionMode: "explicit"
+                    })
+                  }
                 >
                   {preset.label}
                 </button>
@@ -544,7 +754,10 @@ export function ClipTextStyleEditor({
                 type="range"
                 value={style.xPercent}
                 onChange={(event) =>
-                  updateStyle({ xPercent: Number(event.target.value) })
+                  updateStyle({
+                    xPercent: Number(event.target.value),
+                    positionMode: "explicit"
+                  })
                 }
               />
             </label>
@@ -564,7 +777,10 @@ export function ClipTextStyleEditor({
                 type="range"
                 value={style.yPercent}
                 onChange={(event) =>
-                  updateStyle({ yPercent: Number(event.target.value) })
+                  updateStyle({
+                    yPercent: Number(event.target.value),
+                    positionMode: "explicit"
+                  })
                 }
               />
             </label>
@@ -573,77 +789,103 @@ export function ClipTextStyleEditor({
       </div>
 
       <div className={`${panelClass} 2xl:border-b-0`}>
-        <h4 className="text-sm font-semibold text-neutral-950">色</h4>
-        <p className="mt-0.5 text-[10px] text-neutral-500">
-          文字と縁取りを個別に設定
-        </p>
+        <div
+          className={
+            showPreview
+              ? "grid min-w-0 gap-3 2xl:grid-cols-[minmax(0,1fr)_minmax(150px,180px)] 2xl:items-start"
+              : undefined
+          }
+        >
+          <div className="min-w-0">
+            <h4 className="text-sm font-semibold text-neutral-950">色</h4>
+            <p className="mt-0.5 text-[10px] text-neutral-500">
+              文字と縁取りを個別に設定
+            </p>
 
-        <fieldset className="mt-2">
-          <legend className="text-xs font-semibold text-neutral-700">文字色</legend>
-          <div className="mt-1 flex min-h-9 flex-wrap items-center gap-1.5">
-            <input
-              aria-label="文字色を選択"
-              className="h-9 w-10 border border-neutral-300 bg-white p-1"
-              disabled={disabled}
-              type="color"
-              value={style.primaryColor}
-              onChange={(event) =>
-                updateStyle({ primaryColor: event.target.value.toUpperCase() })
-              }
-            />
-            {COLOR_PRESETS.map((color) => (
-              <button
-                aria-label={`文字色 ${color}`}
-                className="h-7 w-7 border border-neutral-400"
-                disabled={disabled}
-                key={color}
-                style={{ backgroundColor: color }}
-                type="button"
-                onClick={() => updateStyle({ primaryColor: color })}
-              />
-            ))}
-          </div>
-        </fieldset>
+            <fieldset className="mt-2">
+              <legend className="text-xs font-semibold text-neutral-700">文字色</legend>
+              <div className="mt-1 flex min-h-9 flex-wrap items-center gap-1.5">
+                <input
+                  aria-label="文字色を選択"
+                  className="h-9 w-10 border border-neutral-300 bg-white p-1"
+                  disabled={disabled}
+                  type="color"
+                  value={style.primaryColor}
+                  onChange={(event) =>
+                    updateStyle({ primaryColor: event.target.value.toUpperCase() })
+                  }
+                />
+                {COLOR_PRESETS.map((color) => (
+                  <button
+                    aria-label={`文字色 ${color}`}
+                    className="h-7 w-7 border border-neutral-400"
+                    disabled={disabled}
+                    key={color}
+                    style={{ backgroundColor: color }}
+                    type="button"
+                    onClick={() => updateStyle({ primaryColor: color })}
+                  />
+                ))}
+              </div>
+            </fieldset>
 
-        <fieldset className="mt-3">
-          <legend className="text-xs font-semibold text-neutral-700">縁取り色</legend>
-          <div className="mt-1 flex min-h-9 flex-wrap items-center gap-1.5">
-            <input
-              aria-label="縁取り色を選択"
-              className="h-9 w-10 border border-neutral-300 bg-white p-1"
-              disabled={disabled}
-              type="color"
-              value={style.outlineColor}
-              onChange={(event) =>
-                updateStyle({ outlineColor: event.target.value.toUpperCase() })
-              }
-            />
-            {["#000000", "#FFFFFF", "#1F2937", "#7F1D1D"].map((color) => (
-              <button
-                aria-label={`縁取り色 ${color}`}
-                className="h-7 w-7 border border-neutral-400"
-                disabled={disabled}
-                key={color}
-                style={{ backgroundColor: color }}
-                type="button"
-                onClick={() => updateStyle({ outlineColor: color })}
-              />
-            ))}
+            <fieldset className="mt-3">
+              <legend className="text-xs font-semibold text-neutral-700">縁取り色</legend>
+              <div className="mt-1 flex min-h-9 flex-wrap items-center gap-1.5">
+                <input
+                  aria-label="縁取り色を選択"
+                  className="h-9 w-10 border border-neutral-300 bg-white p-1"
+                  disabled={disabled}
+                  type="color"
+                  value={style.outlineColor}
+                  onChange={(event) =>
+                    updateStyle({ outlineColor: event.target.value.toUpperCase() })
+                  }
+                />
+                {["#000000", "#FFFFFF", "#1F2937", "#7F1D1D"].map((color) => (
+                  <button
+                    aria-label={`縁取り色 ${color}`}
+                    className="h-7 w-7 border border-neutral-400"
+                    disabled={disabled}
+                    key={color}
+                    style={{ backgroundColor: color }}
+                    type="button"
+                    onClick={() => updateStyle({ outlineColor: color })}
+                  />
+                ))}
+              </div>
+            </fieldset>
           </div>
-        </fieldset>
 
-        {showPreview ? (
-          <div className="mt-3 flex justify-center bg-neutral-100 p-2">
-            <ClipTextStylePreview
-              clipType={clipType}
-              selectedTarget={target}
-              styles={styles}
-              subtitleText={subtitleText}
-              titleText={titleText}
-              hookText={hookText}
-            />
-          </div>
-        ) : null}
+          {showPreview ? (
+            <div className="min-w-0 border border-neutral-300 bg-neutral-100 p-2">
+              <p className="mb-2 text-[10px] font-semibold text-sky-800">
+                編集中プレビュー（即時反映）
+              </p>
+              <div className="flex justify-center">
+                <ClipTextStylePreview
+                  clipType={clipType}
+                  selectedTarget={target}
+                  shortTitleOutputEnabled={shortTitleOutputEnabled}
+                  shortTopBannerEnabled={shortTopBannerEnabled}
+                  shortTopBannerUrl={shortTopBannerUrl}
+                  shortBottomBannerEnabled={shortBottomBannerEnabled}
+                  shortBottomBannerUrl={shortBottomBannerUrl}
+                  styles={styles}
+                  resolvedStyles={resolvedStyles}
+                  defaultResolvedStyles={defaultResolvedStyles}
+                  subtitleMaxCharsPerLine={subtitleMaxCharsPerLine}
+                  subtitleMaxLines={subtitleMaxLines}
+                  previewWidth={previewWidth}
+                  previewHeight={previewHeight}
+                  subtitleText={subtitleText}
+                  titleText={titleText}
+                  hookText={hookText}
+                />
+              </div>
+            </div>
+          ) : null}
+        </div>
 
         <button
           className="mt-3 min-h-9 w-full border border-neutral-300 px-3 text-xs font-semibold text-neutral-700 disabled:text-neutral-400"

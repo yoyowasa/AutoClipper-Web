@@ -10,6 +10,7 @@ JobStatus = Literal[
     "uploaded",
     "queued",
     "probing",
+    "awaiting_manual_edit",
     "extracting_audio",
     "transcribing",
     "correcting_subtitles",
@@ -32,6 +33,8 @@ JobStatus = Literal[
 ExportType = Literal["normal", "short"]
 ClipMode = Literal["low_cost", "fast", "high_quality"]
 ClipProfile = Literal["auto", "talk", "gameplay", "lecture"]
+WorkflowMode = Literal["automatic", "manual"]
+ManualSubtitleMode = Literal["auto", "none", "manual"]
 ShortLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
 SelectionPolicy = Literal["fill_requested", "strict_quality"]
 ClipSelectionPreset = Literal[
@@ -241,6 +244,12 @@ class SubtitleStylePresetDocument(BaseModel):
 
 
 class JobSettings(BaseModel):
+    workflow_mode: WorkflowMode = Field(default="automatic", alias="workflowMode")
+    manual_edit_finalized: bool = Field(default=False, alias="manualEditFinalized")
+    manual_subtitle_mode: ManualSubtitleMode = Field(
+        default="auto",
+        alias="manualSubtitleMode",
+    )
     mode: ClipMode = "high_quality"
     profile: ClipProfile = "auto"
     normal_clip_count: int = Field(default=2, ge=0, alias="normalClipCount")
@@ -442,7 +451,7 @@ class JobSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_duration_ranges(self) -> "JobSettings":
-        if self.normal_clip_count + self.short_count <= 0:
+        if self.workflow_mode != "manual" and self.normal_clip_count + self.short_count <= 0:
             raise ValueError("at least one normal clip or short must be requested")
         if self.normal_max_duration < self.normal_min_duration:
             raise ValueError("normalMaxDuration must be >= normalMinDuration")
@@ -460,13 +469,12 @@ class JobSettings(BaseModel):
             requested_count=self.short_count,
             field_name="shortClipTimeRanges",
         )
-        has_automatic_output = (
-            self.normal_clip_count > 0 and not self.normal_clip_time_ranges
-        ) or (
+        has_automatic_output = (self.normal_clip_count > 0 and not self.normal_clip_time_ranges) or (
             self.short_count > 0 and not self.short_clip_time_ranges
         )
-        if not has_automatic_output:
+        if self.workflow_mode == "manual" or not has_automatic_output:
             self.use_openai_scoring = False
+            self.ensure_selected_openai_scored = False
         if self.ensure_selected_openai_scored is None:
             self.ensure_selected_openai_scored = self.mode == "high_quality"
         if self.openai_finalist_scoring_limit is None:
@@ -527,6 +535,29 @@ class SubtitleReviewClipContentUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class SubtitleReviewClipSegmentUpdate(BaseModel):
+    segment_id: str = Field(min_length=1, alias="segmentId")
+    text: str = Field(max_length=4000)
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class SubtitleReviewClipApplyRequest(SubtitleReviewClipContentUpdateRequest):
+    segments: list[SubtitleReviewClipSegmentUpdate] = Field(
+        default_factory=list,
+        max_length=1000,
+    )
+
+    @model_validator(mode="after")
+    def validate_unique_segments(self) -> "SubtitleReviewClipApplyRequest":
+        segment_ids = [segment.segment_id for segment in self.segments]
+        if len(segment_ids) != len(set(segment_ids)):
+            raise ValueError("duplicate subtitle segment update")
+        return self
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
 class SubtitleReviewSettingsUpdateRequest(BaseModel):
     short_top_banner_enabled: bool = Field(alias="shortTopBannerEnabled", strict=True)
     short_bottom_banner_enabled: bool = Field(alias="shortBottomBannerEnabled", strict=True)
@@ -535,18 +566,19 @@ class SubtitleReviewSettingsUpdateRequest(BaseModel):
 
 
 class ClipPlanReselectionRequest(BaseModel):
-    normal_clip_selection_preset: ClipSelectionPreset = Field(
-        alias="normalClipSelectionPreset"
-    )
-    short_clip_selection_preset: ClipSelectionPreset = Field(
-        alias="shortClipSelectionPreset"
-    )
+    normal_clip_selection_preset: ClipSelectionPreset = Field(alias="normalClipSelectionPreset")
+    short_clip_selection_preset: ClipSelectionPreset = Field(alias="shortClipSelectionPreset")
     normal_clip_guidance: str = Field(max_length=1000, alias="normalClipGuidance")
     short_clip_guidance: str = Field(max_length=1000, alias="shortClipGuidance")
     exclude_intro_outro: bool = Field(alias="excludeIntroOutro")
     exclude_promotional_content: bool = Field(alias="excludePromotionalContent")
     selection_policy: SelectionPolicy = Field(alias="selectionPolicy")
     use_openai_scoring: bool = Field(alias="useOpenAIScoring")
+    heatmap_interval_mode: bool | None = Field(
+        default=None,
+        alias="heatmapIntervalMode",
+        strict=True,
+    )
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -561,6 +593,42 @@ class ClipPlanBoundaryUpdateRequest(BaseModel):
             raise ValueError("end must be greater than start")
         if self.end - self.start < 1:
             raise ValueError("clip duration must be at least 1 second")
+        return self
+
+
+class ManualClipCreateRequest(BaseModel):
+    type: Literal["normal", "short"]
+    title: str = Field(default="", max_length=120)
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "ManualClipCreateRequest":
+        if self.end <= self.start:
+            raise ValueError("end must be greater than start")
+        if self.end - self.start < 1:
+            raise ValueError("clip duration must be at least 1 second")
+        return self
+
+
+class ManualClipUpdateRequest(BaseModel):
+    type: Literal["normal", "short"] | None = None
+    title: str | None = Field(default=None, max_length=120)
+    start: float | None = Field(default=None, ge=0)
+    end: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_update(self) -> "ManualClipUpdateRequest":
+        if all(
+            value is None
+            for value in (self.type, self.title, self.start, self.end)
+        ):
+            raise ValueError("at least one manual clip field is required")
+        if self.start is not None and self.end is not None:
+            if self.end <= self.start:
+                raise ValueError("end must be greater than start")
+            if self.end - self.start < 1:
+                raise ValueError("clip duration must be at least 1 second")
         return self
 
 

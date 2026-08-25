@@ -6,28 +6,24 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
 import {
-  ClipTextStyleEditor,
-  ClipTextStylePreview
+  ClipTextOverlay,
+  ClipTextStyleEditor
 } from "../../../../components/ClipTextStyleEditor";
 import {
-  confirmSubtitleReviewClip,
+  applySubtitleReviewClip,
   finalizeSubtitleReview,
   getJobStatus,
   getSubtitleReview,
+  retrySubtitleReviewPreview,
   toApiUrl,
-  updateSubtitleReviewClipContent,
   updateSubtitleReviewHookScene,
-  updateSubtitleReviewShortBannerSettings,
-  updateSubtitleReviewSegment
+  updateSubtitleReviewShortBannerSettings
 } from "../../../../lib/api";
-import {
-  clipTextFontFamily,
-  clipTextFontWeight,
-  resolvedClipTextStyle,
-  type ClipTextTarget
-} from "../../../../lib/clipTextStyle";
+import { type ClipTextTarget } from "../../../../lib/clipTextStyle";
+import { subtitlePreviewEvents } from "../../../../lib/subtitlePreview";
 import type {
   ClipTextStyle,
+  ExportType,
   SubtitleReviewClip,
   SubtitleReviewDocument,
   SubtitleReviewSegment
@@ -59,6 +55,53 @@ function clipLabel(clip: SubtitleReviewClip, clips: SubtitleReviewClip[]): strin
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum);
+}
+
+function previewVideoSrc(url: string, specHash: string): string {
+  const resolved = toApiUrl(url);
+  if (!specHash) {
+    return resolved;
+  }
+  const separator = resolved.includes("?") ? "&" : "?";
+  return `${resolved}${separator}v=${encodeURIComponent(specHash)}`;
+}
+
+function isPreviewReady(
+  clip: SubtitleReviewClip | null,
+  reviewState: SubtitleReviewDocument["state"] | null | undefined
+): boolean {
+  return Boolean(
+    clip?.previewState === "ready" &&
+      clip.previewVideoUrl &&
+      (reviewState !== "awaiting_review" || clip.previewSpecHash)
+  );
+}
+
+function normalizeReviewTitle(value: string): string {
+  return value.trim().split(/\s+/u).filter(Boolean).join(" ");
+}
+
+function shortTitleOutputExpected({
+  renderMode,
+  storedMode,
+  topBannerEnabled,
+  titleManuallyReviewed
+}: {
+  renderMode: string;
+  storedMode: SubtitleReviewDocument["shortOverlayTitleMode"];
+  topBannerEnabled: boolean;
+  titleManuallyReviewed: boolean;
+}): boolean {
+  if (topBannerEnabled || storedMode === "always") {
+    return true;
+  }
+  if (storedMode === "never") {
+    return false;
+  }
+  if (renderMode === "high_quality") {
+    return true;
+  }
+  return storedMode === "auto" && titleManuallyReviewed;
 }
 
 type ClipContentDraft = {
@@ -93,12 +136,15 @@ function stylesEqual(
   }
   return (
     left.fontPreset === right.fontPreset &&
+    left.fontName === right.fontName &&
+    left.bold === right.bold &&
     left.fontSize === right.fontSize &&
     left.primaryColor === right.primaryColor &&
     left.outlineColor === right.outlineColor &&
     left.outlineWidth === right.outlineWidth &&
     left.xPercent === right.xPercent &&
-    left.yPercent === right.yPercent
+    left.yPercent === right.yPercent &&
+    left.positionMode === right.positionMode
   );
 }
 
@@ -126,15 +172,22 @@ export default function SubtitleReviewPage() {
   const playerShellRef = useRef<HTMLDivElement | null>(null);
   const subtitleListRef = useRef<HTMLDivElement | null>(null);
   const segmentRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const reviewRequestGenerationRef = useRef(0);
+  const reviewMutationCountRef = useRef(0);
   const [review, setReview] = useState<SubtitleReviewDocument | null>(null);
   const [selectedClipId, setSelectedClipId] = useState("");
+  const [activeClipType, setActiveClipType] = useState<ExportType>("normal");
+  const [lastSelectedClipIds, setLastSelectedClipIds] = useState<
+    Record<ExportType, string>
+  >({ normal: "", short: "" });
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [clipContentDrafts, setClipContentDrafts] = useState<
     Record<string, ClipContentDraft>
   >({});
   const [dirtySegmentIds, setDirtySegmentIds] = useState<Set<string>>(new Set());
-  const [savingSegmentId, setSavingSegmentId] = useState<string | null>(null);
-  const [savingClipContentId, setSavingClipContentId] = useState<string | null>(null);
+  const [retryingPreviewClipId, setRetryingPreviewClipId] = useState<
+    string | null
+  >(null);
   const [isSavingShortBannerSettings, setIsSavingShortBannerSettings] =
     useState(false);
   const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
@@ -144,7 +197,7 @@ export default function SubtitleReviewPage() {
   const [isBuffering, setIsBuffering] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
   const [videoLoadSeconds, setVideoLoadSeconds] = useState(0);
-  const [previewFallbackClipIds, setPreviewFallbackClipIds] = useState<Set<string>>(
+  const [previewLoadFailedClipIds, setPreviewLoadFailedClipIds] = useState<Set<string>>(
     new Set()
   );
   const [clipTime, setClipTime] = useState(0);
@@ -155,28 +208,46 @@ export default function SubtitleReviewPage() {
   const [openedFromReupload, setOpenedFromReupload] = useState(false);
   const [selectedTextStyleTarget, setSelectedTextStyleTarget] =
     useState<ClipTextTarget>("title");
+  const [showSavedPreview, setShowSavedPreview] = useState(false);
 
   useEffect(() => {
     if (!jobId) {
       return;
     }
     let active = true;
+    const requestGeneration = reviewRequestGenerationRef.current;
     const search = new URLSearchParams(window.location.search);
     void getSubtitleReview(jobId)
       .then((document) => {
-        if (!active) {
+        if (
+          !active ||
+          requestGeneration !== reviewRequestGenerationRef.current ||
+          reviewMutationCountRef.current > 0
+        ) {
           return;
         }
         setReview(document);
         setOpenedFromReupload(search.get("source") === "reupload");
         const requestedClipId = search.get("clipId");
-        const initialClip =
-          document.clips.find((clip) => clip.id === requestedClipId) ??
-          document.clips[0];
-        setSelectedClipId(initialClip?.id ?? "");
-        setSelectedTextStyleTarget(
-          initialClip?.type === "normal" ? "subtitle" : "title"
+        const requestedClip = document.clips.find(
+          (clip) => clip.id === requestedClipId
         );
+        const firstNormalClip = document.clips.find((clip) => clip.type === "normal");
+        const firstShortClip = document.clips.find((clip) => clip.type === "short");
+        const initialClip = requestedClip ?? firstNormalClip ?? firstShortClip;
+        setSelectedClipId(initialClip?.id ?? "");
+        setActiveClipType(initialClip?.type ?? "normal");
+        setLastSelectedClipIds({
+          normal:
+            initialClip?.type === "normal"
+              ? initialClip.id
+              : (firstNormalClip?.id ?? ""),
+          short:
+            initialClip?.type === "short"
+              ? initialClip.id
+              : (firstShortClip?.id ?? "")
+        });
+        setSelectedTextStyleTarget("title");
         setDrafts(
           Object.fromEntries(document.segments.map((segment) => [segment.id, segment.text]))
         );
@@ -208,9 +279,18 @@ export default function SubtitleReviewPage() {
             return;
           }
           if (status.status === "awaiting_subtitle_review") {
+            if (reviewMutationCountRef.current > 0) {
+              return;
+            }
             window.clearInterval(intervalId);
+            reviewRequestGenerationRef.current += 1;
+            const requestGeneration = reviewRequestGenerationRef.current;
             const document = await getSubtitleReview(jobId);
-            if (!active) {
+            if (
+              !active ||
+              requestGeneration !== reviewRequestGenerationRef.current ||
+              reviewMutationCountRef.current > 0
+            ) {
               return;
             }
             setReview(document);
@@ -227,7 +307,7 @@ export default function SubtitleReviewPage() {
                 ])
               )
             );
-            setPreviewFallbackClipIds((current) => {
+            setPreviewLoadFailedClipIds((current) => {
               const next = new Set(current);
               next.delete(selectedClipId);
               return next;
@@ -270,9 +350,57 @@ export default function SubtitleReviewPage() {
     () => review?.clips.find((clip) => clip.id === selectedClipId) ?? null,
     [review, selectedClipId]
   );
+  const normalClips = useMemo(
+    () => review?.clips.filter((clip) => clip.type === "normal") ?? [],
+    [review]
+  );
+  const shortClips = useMemo(
+    () => review?.clips.filter((clip) => clip.type === "short") ?? [],
+    [review]
+  );
+  const visibleClips = activeClipType === "normal" ? normalClips : shortClips;
+  const hasPendingPreviews = Boolean(
+    review?.clips.some(
+      (clip) =>
+        clip.previewState === "queued" ||
+        clip.previewState === "rendering" ||
+        (review.state === "awaiting_review" && !clip.livePreviewVideoUrl)
+    )
+  );
+
+  useEffect(() => {
+    if (!jobId || !hasPendingPreviews || isUpdatingHookScene) {
+      return;
+    }
+    let active = true;
+    const refreshReview = () => {
+      if (reviewMutationCountRef.current > 0) {
+        return;
+      }
+      const requestGeneration = reviewRequestGenerationRef.current;
+      void getSubtitleReview(jobId)
+        .then((document) => {
+          if (
+            active &&
+            requestGeneration === reviewRequestGenerationRef.current &&
+            reviewMutationCountRef.current === 0
+          ) {
+            setReview(document);
+          }
+        })
+        .catch(() => {
+          // The existing review remains usable while a transient poll fails.
+        });
+    };
+    const intervalId = window.setInterval(refreshReview, 1500);
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [hasPendingPreviews, isUpdatingHookScene, jobId]);
+
   const hasReviewMutationInFlight =
-    savingSegmentId !== null ||
-    savingClipContentId !== null ||
+    retryingPreviewClipId !== null ||
     isUpdatingHookScene ||
     confirmingClipId !== null ||
     isSavingShortBannerSettings ||
@@ -294,11 +422,7 @@ export default function SubtitleReviewPage() {
   const bodyDuration = selectedClip
     ? Math.max(0, selectedClip.end - selectedClip.start)
     : 0;
-  const usesClipPreview = Boolean(
-    selectedClip?.previewVideoUrl && !previewFallbackClipIds.has(selectedClip.id)
-  );
   const hookSceneDuration =
-    usesClipPreview &&
     selectedClip?.hookSceneStart !== null &&
     selectedClip?.hookSceneStart !== undefined &&
     selectedClip.hookSceneEnd !== null &&
@@ -306,24 +430,34 @@ export default function SubtitleReviewPage() {
       ? Math.max(0, selectedClip.hookSceneEnd - selectedClip.hookSceneStart)
       : 0;
   const clipDuration = bodyDuration + hookSceneDuration;
-  const selectedVideoUrl = selectedClip
-    ? usesClipPreview
-      ? selectedClip.previewVideoUrl
-      : review?.sourceVideoUrl
+  const selectedPreviewReady = isPreviewReady(selectedClip, review?.state);
+  const allPreviewsReady = Boolean(
+    review &&
+      review.clips.length > 0 &&
+      review.clips.every((clip) => isPreviewReady(clip, review.state))
+  );
+  const selectedVideoUrl = selectedPreviewReady
+    ? selectedClip?.previewVideoUrl ?? null
     : null;
-  const selectedPreviewVersion = selectedClip
-    ? `${selectedClip.hookSceneStart ?? "none"}-${selectedClip.hookSceneEnd ?? "none"}`
-    : "none";
-  const selectedMediaStart = selectedClip
-    ? usesClipPreview
-      ? 0
-      : selectedClip.start
-    : null;
-  const selectedMediaEnd = selectedClip
-    ? usesClipPreview
-      ? clipDuration
-      : selectedClip.end
-    : null;
+  const selectedPreviewVersion = selectedPreviewReady
+    ? selectedClip?.previewSpecHash ?? ""
+    : "";
+  const selectedLiveVideoUrl = selectedClip?.livePreviewVideoUrl ?? null;
+  const selectedLivePreviewVersion = selectedClip?.livePreviewSpecHash ?? "";
+  const livePreviewReady = Boolean(
+    selectedLiveVideoUrl && selectedLivePreviewVersion
+  );
+  const isShowingLivePreview = livePreviewReady && !showSavedPreview;
+  const selectedPlayerVideoUrl = isShowingLivePreview
+    ? selectedLiveVideoUrl
+    : selectedVideoUrl;
+  const selectedPlayerPreviewVersion = isShowingLivePreview
+    ? selectedLivePreviewVersion
+    : selectedPreviewVersion;
+  const selectedPlayerReady = Boolean(selectedPlayerVideoUrl);
+  const selectedPreviewLoadFailed = Boolean(
+    selectedClip && previewLoadFailedClipIds.has(selectedClip.id)
+  );
   const selectedClipHasDirtySegments = selectedSegments.some((segment) =>
     dirtySegmentIds.has(segment.id)
   );
@@ -337,34 +471,21 @@ export default function SubtitleReviewPage() {
     review?.clips.some((clip) => isClipContentDirty(clip, clipContentDrafts))
   );
   const selectedHookDurationIsValid =
-    selectedClip?.type !== "short" ||
-    (Number.isFinite(selectedClipContentDraft?.hookDurationSeconds ?? Number.NaN) &&
-      (selectedClipContentDraft?.hookDurationSeconds ?? 0) >= 1 &&
-      (selectedClipContentDraft?.hookDurationSeconds ?? 0) <= 8);
-  const previewOverlayKind =
-    selectedClip?.type === "short" &&
-    selectedClipContentDraft?.hookText.trim() &&
-    clipTime < selectedClipContentDraft.hookDurationSeconds
-      ? "フック"
-      : "タイトル";
-  const previewOverlayText =
-    selectedClip?.type === "short"
-      ? previewOverlayKind === "フック"
-        ? selectedClipContentDraft?.hookText.trim()
-        : selectedClipContentDraft?.title.trim()
-      : "";
-  const previewOverlayTarget: ClipTextTarget =
-    previewOverlayKind === "フック" ? "hook" : "title";
-  const previewOverlayStyle =
-    selectedClip && selectedClipContentDraft
-      ? resolvedClipTextStyle(
-          previewOverlayTarget === "hook"
-            ? selectedClipContentDraft.hookStyle
-            : selectedClipContentDraft.titleStyle,
-          previewOverlayTarget,
-          selectedClip.type
+    Number.isFinite(selectedClipContentDraft?.hookDurationSeconds ?? Number.NaN) &&
+    (selectedClipContentDraft?.hookDurationSeconds ?? 0) >= 1 &&
+    (selectedClipContentDraft?.hookDurationSeconds ?? 0) <= 8;
+  const hookSuppressionEnd = selectedClip
+    ? Math.min(
+        clipDuration,
+        Math.max(
+          hookSceneDuration,
+          selectedClipContentDraft?.hookText.trim()
+            ? selectedClipContentDraft.hookDurationSeconds
+            : 0
         )
-      : null;
+      )
+    : 0;
+  const isInHookSuppression = clipTime < hookSuppressionEnd;
   const absolutePlaybackTime = selectedClip
     ? hookSceneDuration > 0 &&
       selectedClip.hookSceneStart !== null &&
@@ -377,7 +498,7 @@ export default function SubtitleReviewPage() {
       : selectedClip.start + Math.max(0, clipTime - hookSceneDuration)
     : 0;
   const activeSegment = useMemo(() => {
-    if (!selectedClip) {
+    if (!selectedClip || isInHookSuppression) {
       return null;
     }
     return selectedSegments.find(
@@ -385,56 +506,115 @@ export default function SubtitleReviewPage() {
         absolutePlaybackTime >= Math.max(segment.start, selectedClip.start) &&
         absolutePlaybackTime < Math.min(segment.end, selectedClip.end)
     );
-  }, [absolutePlaybackTime, selectedClip, selectedSegments]);
+  }, [absolutePlaybackTime, isInHookSuppression, selectedClip, selectedSegments]);
   const activeSegmentId = activeSegment?.id ?? null;
-  const activeSubtitleText = activeSegment
-    ? (drafts[activeSegment.id] ?? activeSegment.text)
-    : "";
   const selectedClipTextStyles = {
     title: selectedClipContentDraft?.titleStyle ?? null,
     hook: selectedClipContentDraft?.hookStyle ?? null,
     subtitle: selectedClipContentDraft?.subtitleStyle ?? null
   };
+  const selectedResolvedClipTextStyles = {
+    title: selectedClip?.resolvedTitleStyle ?? null,
+    hook: selectedClip?.resolvedHookStyle ?? null,
+    subtitle: selectedClip?.resolvedSubtitleStyle ?? null
+  };
+  const selectedDefaultResolvedClipTextStyles = {
+    title: selectedClip?.resolvedDefaultTitleStyle ?? null,
+    hook: selectedClip?.resolvedDefaultHookStyle ?? null,
+    subtitle: selectedClip?.resolvedDefaultSubtitleStyle ?? null
+  };
+  const selectedDraftTitleEdited = Boolean(
+    selectedClip &&
+      selectedClipContentDraft &&
+      normalizeReviewTitle(selectedClipContentDraft.title) !==
+        normalizeReviewTitle(selectedClip.originalTitle ?? selectedClip.title)
+  );
+  const selectedShortTitleOutputEnabled = Boolean(
+    selectedClip?.type === "short" &&
+      review &&
+      shortTitleOutputExpected({
+        renderMode: review.renderMode,
+        storedMode: review.shortOverlayTitleMode,
+        topBannerEnabled: review.shortTopBannerEnabled,
+        titleManuallyReviewed: selectedDraftTitleEdited
+      })
+  );
+  const subtitlePreviewEventList = useMemo(() => {
+    if (!selectedClip) {
+      return [];
+    }
+    return subtitlePreviewEvents({
+      segments: selectedSegments.map((segment) => ({
+        start: segment.start,
+        end: segment.end,
+        text: drafts[segment.id] ?? segment.text
+      })),
+      candidateStart: selectedClip.start,
+      candidateEnd: selectedClip.end,
+      hookSceneDuration,
+      suppressionEnd: hookSuppressionEnd,
+      maxCharsPerLine:
+        selectedClip.subtitleMaxCharsPerLine ??
+        (selectedClip.type === "short" ? 16 : 28),
+      maxLines: selectedClip.subtitleMaxLines ?? 2,
+      minSubtitleDuration: selectedClip.subtitleMinDurationSeconds ?? 1.1,
+      maxSubtitleDuration: selectedClip.subtitleMaxDurationSeconds ?? 4.2,
+      minGapBetweenSubtitles: selectedClip.subtitleMinGapSeconds ?? 0.08
+    });
+  }, [
+    drafts,
+    hookSceneDuration,
+    hookSuppressionEnd,
+    selectedClip,
+    selectedSegments
+  ]);
+  const activePreviewSubtitleEvent = useMemo(
+    () =>
+      subtitlePreviewEventList.find(
+        (event) => clipTime >= event.start && clipTime < event.end
+      ) ?? null,
+    [clipTime, subtitlePreviewEventList]
+  );
   const stylePreviewSubtitleText =
-    activeSubtitleText ||
-    (selectedSegments[0]
-      ? drafts[selectedSegments[0].id] ?? selectedSegments[0].text
-      : "");
-  const previewSubtitleStyle =
-    selectedClip && selectedClipContentDraft
-      ? resolvedClipTextStyle(
-          selectedClipContentDraft.subtitleStyle,
-          "subtitle",
-          selectedClip.type
-        )
-      : null;
-  const shortTitleOutputEnabled =
-    selectedClip?.type === "short" && selectedClip.overlayTitleExpected;
-  const shortBannerPreviewProps =
-    selectedClip?.type === "short"
-      ? {
-          shortTitleOutputEnabled,
-          shortTopBannerEnabled: review?.shortTopBannerEnabled ?? false,
-          shortTopBannerUrl: toApiUrl(
-            `/api/jobs/${jobId}/subtitle-review/banner-assets/top`
-          ),
-          shortBottomBannerEnabled: review?.shortBottomBannerEnabled ?? false,
-          shortBottomBannerUrl: toApiUrl(
-            `/api/jobs/${jobId}/subtitle-review/banner-assets/bottom`
-          )
-        }
-      : {};
+    activePreviewSubtitleEvent?.text ?? subtitlePreviewEventList[0]?.text ?? "";
+  const liveHookText = selectedClipContentDraft?.hookText.trim() ?? "";
+  const liveHookEnd = Math.min(
+    clipDuration,
+    selectedClipContentDraft?.hookDurationSeconds ?? 3
+  );
+  const liveTitleStart = selectedClip
+    ? selectedClip.type === "normal"
+      ? Math.max(hookSceneDuration, liveHookText ? liveHookEnd : 0)
+      : liveHookText
+        ? liveHookEnd
+        : 0
+    : 0;
+  const showLiveHook = Boolean(
+    isShowingLivePreview &&
+      liveHookText &&
+      clipTime < liveHookEnd
+  );
+  const showLiveTitle = Boolean(
+    isShowingLivePreview &&
+      selectedClip &&
+      (selectedClip.type === "normal" || selectedShortTitleOutputEnabled) &&
+      selectedClipContentDraft?.title.trim() &&
+      clipTime >= liveTitleStart
+  );
+  const showLiveSubtitle = Boolean(
+    isShowingLivePreview && activePreviewSubtitleEvent?.text
+  );
 
   useEffect(() => {
     const video = videoRef.current;
     subtitleListRef.current?.scrollTo({ top: 0 });
-    if (!video || selectedMediaStart === null) {
+    if (!video || !selectedPlayerReady) {
       return;
     }
     video.pause();
 
     const moveToClipStart = () => {
-      video.currentTime = selectedMediaStart;
+      video.currentTime = 0;
     };
 
     if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
@@ -447,17 +627,22 @@ export default function SubtitleReviewPage() {
     return () => {
       video.removeEventListener("loadedmetadata", moveToClipStart);
     };
-  }, [selectedClipId, selectedMediaStart, selectedVideoUrl]);
+  }, [
+    selectedClipId,
+    selectedPlayerPreviewVersion,
+    selectedPlayerReady,
+    selectedPlayerVideoUrl
+  ]);
 
   useEffect(() => {
-    if (isPlayerReady || !selectedClip) {
+    if (isPlayerReady || !selectedClip || !selectedPlayerReady) {
       return;
     }
     const intervalId = window.setInterval(() => {
       setVideoLoadSeconds((current) => current + 1);
     }, 1000);
     return () => window.clearInterval(intervalId);
-  }, [isPlayerReady, selectedClip]);
+  }, [isPlayerReady, selectedClip, selectedPlayerReady]);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -494,23 +679,49 @@ export default function SubtitleReviewPage() {
     });
   }, [activeSegmentId, isPlaying]);
 
+  function beginReviewMutation(): number {
+    reviewMutationCountRef.current += 1;
+    reviewRequestGenerationRef.current += 1;
+    return reviewRequestGenerationRef.current;
+  }
+
+  function endReviewMutation() {
+    reviewMutationCountRef.current = Math.max(
+      0,
+      reviewMutationCountRef.current - 1
+    );
+  }
+
+  function isCurrentReviewMutation(generation: number): boolean {
+    return generation === reviewRequestGenerationRef.current;
+  }
+
   function selectClip(clip: SubtitleReviewClip) {
     videoRef.current?.pause();
     setClipTime(0);
     setIsPlaying(false);
-    setIsBuffering(true);
+    setIsBuffering(
+      Boolean(clip.livePreviewVideoUrl) || isPreviewReady(clip, review?.state)
+    );
     setIsPlayerReady(false);
     setVideoLoadSeconds(0);
     setSelectedClipId(clip.id);
-    setSelectedTextStyleTarget(clip.type === "short" ? "title" : "subtitle");
+    setActiveClipType(clip.type);
+    setLastSelectedClipIds((current) => ({ ...current, [clip.type]: clip.id }));
+    setSelectedTextStyleTarget("title");
+    setShowSavedPreview(false);
     setError(null);
   }
 
-  function mediaTimeForClipTime(relativeTime: number): number {
-    if (!selectedClip) {
-      return 0;
+  function selectClipType(clipType: ExportType) {
+    const candidates = clipType === "normal" ? normalClips : shortClips;
+    if (candidates.length === 0) {
+      return;
     }
-    return usesClipPreview ? relativeTime : selectedClip.start + relativeTime;
+    const remembered = candidates.find(
+      (clip) => clip.id === lastSelectedClipIds[clipType]
+    );
+    selectClip(remembered ?? candidates[0]);
   }
 
   function seekToClipTime(nextTime: number) {
@@ -518,23 +729,16 @@ export default function SubtitleReviewPage() {
       return;
     }
     const relativeTime = clamp(nextTime, 0, clipDuration);
-    videoRef.current.currentTime = mediaTimeForClipTime(relativeTime);
+    videoRef.current.currentTime = relativeTime;
     setClipTime(relativeTime);
   }
 
-  function playFrom(start: number) {
+  function playFromClipStart() {
     if (!videoRef.current || !selectedClip) {
       return;
     }
-    const absoluteTime = clamp(
-      Math.max(selectedClip.start, start - 0.15),
-      selectedClip.start,
-      Math.max(selectedClip.start, selectedClip.end - 0.05)
-    );
-    const relativeTime =
-      absoluteTime - selectedClip.start + hookSceneDuration;
-    videoRef.current.currentTime = mediaTimeForClipTime(relativeTime);
-    setClipTime(relativeTime);
+    videoRef.current.currentTime = 0;
+    setClipTime(0);
     void videoRef.current.play();
   }
 
@@ -548,10 +752,16 @@ export default function SubtitleReviewPage() {
       selectedClip.start,
       Math.max(selectedClip.start, selectedClip.end - 0.05)
     );
-    const relativeTime =
-      absoluteTime - selectedClip.start + hookSceneDuration;
+    const relativeTime = clamp(
+      Math.max(
+        absoluteTime - selectedClip.start + hookSceneDuration,
+        hookSuppressionEnd
+      ),
+      0,
+      clipDuration
+    );
     video.pause();
-    video.currentTime = mediaTimeForClipTime(relativeTime);
+    video.currentTime = relativeTime;
     setClipTime(relativeTime);
     setIsPlaying(false);
   }
@@ -577,43 +787,32 @@ export default function SubtitleReviewPage() {
 
   function handleVideoTimeUpdate() {
     const video = videoRef.current;
-    if (
-      !video ||
-      !selectedClip ||
-      selectedMediaStart === null ||
-      selectedMediaEnd === null
-    ) {
+    if (!video || !selectedClip || !selectedPlayerReady) {
       return;
     }
-    if (video.currentTime < selectedMediaStart - 0.05) {
-      video.currentTime = selectedMediaStart;
+    if (video.currentTime < -0.05) {
+      video.currentTime = 0;
       setClipTime(0);
       return;
     }
-    if (video.currentTime >= selectedMediaEnd) {
+    if (video.currentTime >= clipDuration) {
       video.pause();
-      video.currentTime = selectedMediaEnd;
+      video.currentTime = clipDuration;
       setClipTime(clipDuration);
       return;
     }
-    setClipTime(
-      clamp(
-        usesClipPreview ? video.currentTime : video.currentTime - selectedClip.start,
-        0,
-        clipDuration
-      )
-    );
+    setClipTime(clamp(video.currentTime, 0, clipDuration));
   }
 
   function handleVideoSeeking() {
     const video = videoRef.current;
-    if (!video || selectedMediaStart === null || selectedMediaEnd === null) {
+    if (!video || !selectedPlayerReady) {
       return;
     }
-    if (video.currentTime < selectedMediaStart) {
-      video.currentTime = selectedMediaStart;
-    } else if (video.currentTime > selectedMediaEnd) {
-      video.currentTime = selectedMediaEnd;
+    if (video.currentTime < 0) {
+      video.currentTime = 0;
+    } else if (video.currentTime > clipDuration) {
+      video.currentTime = clipDuration;
     }
   }
 
@@ -622,7 +821,13 @@ export default function SubtitleReviewPage() {
     if (!video) {
       return;
     }
-    setError(null);
+    if (selectedClip) {
+      setPreviewLoadFailedClipIds((current) => {
+        const next = new Set(current);
+        next.delete(selectedClip.id);
+        return next;
+      });
+    }
     setVideoLoadSeconds(0);
     setIsPlayerReady(false);
     setIsBuffering(true);
@@ -630,15 +835,10 @@ export default function SubtitleReviewPage() {
   }
 
   function handleVideoError() {
-    if (selectedClip?.previewVideoUrl && !previewFallbackClipIds.has(selectedClip.id)) {
-      setPreviewFallbackClipIds((current) => new Set(current).add(selectedClip.id));
-      setError("確認用動画を読み込めなかったため、元動画へ切り替えました。");
-      setIsPlayerReady(false);
-      setIsBuffering(true);
-      setVideoLoadSeconds(0);
-      return;
+    if (selectedClip) {
+      setPreviewLoadFailedClipIds((current) => new Set(current).add(selectedClip.id));
     }
-    setError("動画を読み込めませんでした。再読み込みしてください。");
+    setIsPlayerReady(false);
     setIsBuffering(false);
   }
 
@@ -682,6 +882,7 @@ export default function SubtitleReviewPage() {
   }
 
   function updateDraft(segmentId: string, text: string) {
+    setShowSavedPreview(false);
     setDrafts((current) => ({ ...current, [segmentId]: text }));
     setDirtySegmentIds((current) => new Set(current).add(segmentId));
   }
@@ -690,6 +891,7 @@ export default function SubtitleReviewPage() {
     clipId: string,
     update: Partial<ClipContentDraft>
   ) {
+    setShowSavedPreview(false);
     setClipContentDrafts((current) => {
       const clip = review?.clips.find((item) => item.id === clipId);
       if (!clip) {
@@ -721,50 +923,6 @@ export default function SubtitleReviewPage() {
       return;
     }
     updateClipContentDraft(selectedClip.id, { subtitleStyle: style });
-  }
-
-  async function saveClipContent() {
-    if (!selectedClip || !selectedClipContentDraft) {
-      return;
-    }
-    const title = selectedClipContentDraft.title.trim();
-    if (!title) {
-      setError("タイトルを入力してください。");
-      return;
-    }
-    if (!selectedHookDurationIsValid) {
-      setError("冒頭フックの表示秒数は1〜8秒で入力してください。");
-      return;
-    }
-    setSavingClipContentId(selectedClip.id);
-    setError(null);
-    try {
-      const updated = await updateSubtitleReviewClipContent(jobId, selectedClip.id, {
-        title,
-        hookText:
-          selectedClip.type === "short" ? selectedClipContentDraft.hookText.trim() : "",
-        hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
-        titleStyle:
-          selectedClip.type === "short" ? selectedClipContentDraft.titleStyle : null,
-        hookStyle:
-          selectedClip.type === "short" ? selectedClipContentDraft.hookStyle : null,
-        subtitleStyle: selectedClipContentDraft.subtitleStyle
-      });
-      setReview(updated);
-      const updatedClip = updated.clips.find((clip) => clip.id === selectedClip.id);
-      if (updatedClip) {
-        setClipContentDrafts((current) => ({
-          ...current,
-          [updatedClip.id]: contentDraftForClip(updatedClip)
-        }));
-      }
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "タイトルとフックを保存できませんでした"
-      );
-    } finally {
-      setSavingClipContentId(null);
-    }
   }
 
   async function saveShortBannerSettings(
@@ -803,6 +961,7 @@ export default function SubtitleReviewPage() {
       shortTopBannerEnabled,
       shortBottomBannerEnabled
     };
+    const mutationGeneration = beginReviewMutation();
     setReview((current) =>
       current
         ? {
@@ -818,43 +977,60 @@ export default function SubtitleReviewPage() {
         jobId,
         requestBody
       );
-      setReview(updated);
+      if (isCurrentReviewMutation(mutationGeneration)) {
+        setReview(updated);
+      }
     } catch (caught) {
-      setReview((current) =>
-        current
-          ? {
-              ...current,
-              ...previousSettings
-            }
-          : current
-      );
+      if (isCurrentReviewMutation(mutationGeneration)) {
+        setReview((current) =>
+          current
+            ? {
+                ...current,
+                ...previousSettings
+              }
+            : current
+        );
+      }
       setError(
         caught instanceof Error
           ? caught.message
           : "ショート帯設定を保存できませんでした"
       );
     } finally {
+      endReviewMutation();
       setIsSavingShortBannerSettings(false);
     }
   }
 
-  async function saveSegment(segment: SubtitleReviewSegment) {
-    const text = drafts[segment.id] ?? "";
-    setSavingSegmentId(segment.id);
+  async function retrySelectedPreview() {
+    if (
+      !selectedClip ||
+      selectedClip.previewState !== "failed" ||
+      retryingPreviewClipId !== null
+    ) {
+      return;
+    }
+    const mutationGeneration = beginReviewMutation();
+    setRetryingPreviewClipId(selectedClip.id);
     setError(null);
     try {
-      const updated = await updateSubtitleReviewSegment(jobId, segment.id, text);
-      setReview(updated);
-      setDrafts((current) => ({ ...current, [segment.id]: text }));
-      setDirtySegmentIds((current) => {
-        const next = new Set(current);
-        next.delete(segment.id);
-        return next;
-      });
+      const queued = await retrySubtitleReviewPreview(jobId, selectedClip.id);
+      if (isCurrentReviewMutation(mutationGeneration)) {
+        setReview(queued);
+      }
+      const refreshed = await getSubtitleReview(jobId);
+      if (isCurrentReviewMutation(mutationGeneration)) {
+        setReview(refreshed);
+      }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "字幕を保存できませんでした");
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "完成表示プレビューを再生成できませんでした"
+      );
     } finally {
-      setSavingSegmentId(null);
+      endReviewMutation();
+      setRetryingPreviewClipId(null);
     }
   }
 
@@ -862,7 +1038,7 @@ export default function SubtitleReviewPage() {
     start: number | null,
     end: number | null
   ) {
-    if (!selectedClip || selectedClip.type !== "short") {
+    if (!selectedClip) {
       return;
     }
     if (dirtySegmentIds.size > 0 || hasDirtyClipContent) {
@@ -871,6 +1047,7 @@ export default function SubtitleReviewPage() {
       );
       return;
     }
+    beginReviewMutation();
     videoRef.current?.pause();
     setError(null);
     setIsUpdatingHookScene(true);
@@ -886,6 +1063,8 @@ export default function SubtitleReviewPage() {
           ? caught.message
           : "冒頭フック映像を更新できませんでした"
       );
+    } finally {
+      endReviewMutation();
     }
   }
 
@@ -894,22 +1073,75 @@ export default function SubtitleReviewPage() {
       setError("ショート帯設定の保存完了後に確認してください。");
       return;
     }
-    if (!selectedClip || selectedClipHasDirtySegments || selectedClipHasDirtyContent) {
-      setError("未保存のタイトル、フック、または字幕があります。先に保存してください。");
+    if (!selectedClip || !selectedClipContentDraft) {
       return;
     }
+    const title = selectedClipContentDraft.title.trim();
+    if (!title) {
+      setError("タイトルを入力してください。");
+      return;
+    }
+    if (!selectedHookDurationIsValid) {
+      setError("冒頭フックの表示秒数は1〜8秒で入力してください。");
+      return;
+    }
+    const segmentUpdates = selectedSegments
+      .filter((segment) => dirtySegmentIds.has(segment.id))
+      .map((segment) => ({
+        segmentId: segment.id,
+        text: drafts[segment.id] ?? segment.text
+      }));
+    const savedSegmentIds = new Set(segmentUpdates.map((segment) => segment.segmentId));
+    const mutationGeneration = beginReviewMutation();
     setConfirmingClipId(selectedClip.id);
     setError(null);
     try {
-      const updated = await confirmSubtitleReviewClip(jobId, selectedClip.id);
-      setReview(updated);
-      const nextClip = updated.clips.find((clip) => !clip.confirmed);
+      const updated = await applySubtitleReviewClip(jobId, selectedClip.id, {
+        title,
+        hookText: selectedClipContentDraft.hookText.trim(),
+        hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
+        titleStyle: selectedClipContentDraft.titleStyle,
+        hookStyle: selectedClipContentDraft.hookStyle,
+        subtitleStyle: selectedClipContentDraft.subtitleStyle,
+        segments: segmentUpdates
+      });
+      if (isCurrentReviewMutation(mutationGeneration)) {
+        setReview(updated);
+        const updatedClip = updated.clips.find((clip) => clip.id === selectedClip.id);
+        if (updatedClip) {
+          setClipContentDrafts((current) => ({
+            ...current,
+            [updatedClip.id]: contentDraftForClip(updatedClip)
+          }));
+        }
+        setDrafts((current) => {
+          const next = { ...current };
+          for (const segment of updated.segments) {
+            if (savedSegmentIds.has(segment.id)) {
+              next[segment.id] = segment.text;
+            }
+          }
+          return next;
+        });
+        setDirtySegmentIds((current) => {
+          const next = new Set(current);
+          for (const segmentId of savedSegmentIds) {
+            next.delete(segmentId);
+          }
+          return next;
+        });
+      }
+      const nextClip =
+        updated.clips.find(
+          (clip) => clip.type === selectedClip.type && !clip.confirmed
+        ) ?? updated.clips.find((clip) => !clip.confirmed);
       if (nextClip) {
-        setSelectedClipId(nextClip.id);
+        selectClip(nextClip);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "clipを確認済みにできませんでした");
+      setError(caught instanceof Error ? caught.message : "clipの内容を保存できませんでした");
     } finally {
+      endReviewMutation();
       setConfirmingClipId(null);
     }
   }
@@ -923,6 +1155,11 @@ export default function SubtitleReviewPage() {
       setError("未保存のタイトル、フック、または字幕があります。先に保存してください。");
       return;
     }
+    if (!allPreviewsReady) {
+      setError("全clipの完成表示プレビューが揃ってからレンダリングしてください。");
+      return;
+    }
+    beginReviewMutation();
     setIsFinalizing(true);
     setError(null);
     try {
@@ -931,6 +1168,8 @@ export default function SubtitleReviewPage() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "レンダリングを開始できませんでした");
       setIsFinalizing(false);
+    } finally {
+      endReviewMutation();
     }
   }
 
@@ -993,12 +1232,49 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
-        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(430px,calc(100vw-1170px),1000px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(220px,15vw,290px)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
+        <div
+          aria-label="編集する動画形式"
+          className="grid grid-cols-2 border border-neutral-300 bg-neutral-100 p-1"
+          role="tablist"
+        >
+          <button
+            aria-selected={activeClipType === "normal"}
+            className={`min-h-11 px-4 text-sm font-semibold ${
+              activeClipType === "normal"
+                ? "bg-neutral-950 text-white"
+                : "bg-white text-neutral-700"
+            } disabled:cursor-not-allowed disabled:text-neutral-400`}
+            disabled={normalClips.length === 0}
+            role="tab"
+            type="button"
+            onClick={() => selectClipType("normal")}
+          >
+            通常編集（{normalClips.length}本）
+          </button>
+          <button
+            aria-selected={activeClipType === "short"}
+            className={`min-h-11 px-4 text-sm font-semibold ${
+              activeClipType === "short"
+                ? "bg-neutral-950 text-white"
+                : "bg-white text-neutral-700"
+            } disabled:cursor-not-allowed disabled:text-neutral-400`}
+            disabled={shortClips.length === 0}
+            role="tab"
+            type="button"
+            onClick={() => selectClipType("short")}
+          >
+            ショート編集（{shortClips.length}本）
+          </button>
+        </div>
+
+        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
           <aside className="relative min-h-[420px] border-b border-neutral-300 lg:min-h-0 lg:border-r">
             <div className="flex min-h-[420px] flex-col lg:absolute lg:inset-0 lg:min-h-0">
             <div className="border-b border-neutral-200 px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold">生成予定clip</p>
+                <p className="text-sm font-semibold">
+                  {activeClipType === "normal" ? "通常clip" : "ショートclip"}
+                </p>
                 <div className="flex flex-wrap justify-end gap-1">
                   {isEditable && review.renderRevision > 1 ? (
                     <span className="bg-violet-100 px-2 py-1 text-[10px] font-semibold text-violet-800">
@@ -1025,7 +1301,7 @@ export default function SubtitleReviewPage() {
               </div>
             </div>
             <div className="max-h-64 min-h-0 overflow-y-auto lg:max-h-none lg:flex-1">
-              {review.clips.map((clip) => {
+              {visibleClips.map((clip) => {
                 const clipDraft = clipContentDrafts[clip.id];
                 const contentDirty = isClipContentDirty(clip, clipContentDrafts);
                 return (
@@ -1063,6 +1339,23 @@ export default function SubtitleReviewPage() {
                     <span className="mt-2 block line-clamp-2 text-sm font-medium">
                       {clipDraft ? clipDraft.title : clip.title}
                     </span>
+                    {!isPreviewReady(clip, review.state) ? (
+                      <span
+                        className={`mt-2 block text-[11px] font-semibold ${
+                          clip.previewState === "failed"
+                            ? clip.id === selectedClipId
+                              ? "text-red-200"
+                              : "text-red-700"
+                            : clip.id === selectedClipId
+                              ? "text-sky-200"
+                              : "text-sky-700"
+                        }`}
+                      >
+                        {clip.previewState === "failed"
+                          ? "プレビュー生成失敗"
+                          : "完成表示プレビューを更新中"}
+                      </span>
+                    ) : null}
                     <span
                       className={`mt-2 block text-xs ${
                         clip.id === selectedClipId ? "text-neutral-300" : "text-neutral-500"
@@ -1100,6 +1393,7 @@ export default function SubtitleReviewPage() {
                 disabled={
                   !isEditable ||
                   !allConfirmed ||
+                  !allPreviewsReady ||
                   dirtySegmentIds.size > 0 ||
                   hasDirtyClipContent ||
                   isSavingShortBannerSettings ||
@@ -1108,7 +1402,11 @@ export default function SubtitleReviewPage() {
                 type="button"
                 onClick={() => void startRendering()}
               >
-                {isFinalizing ? "レンダリング開始中" : "字幕を確定してレンダリング"}
+                {isFinalizing
+                  ? "レンダリング開始中"
+                  : !allPreviewsReady
+                    ? "プレビュー更新完了を待っています"
+                    : "字幕を確定してレンダリング"}
               </button>
               </div>
             </div>
@@ -1122,23 +1420,47 @@ export default function SubtitleReviewPage() {
                     className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white"
                     ref={playerShellRef}
                   >
-                    <div className="relative" style={{ containerType: "inline-size" }}>
-                      <video
-                        className="aspect-video w-full cursor-pointer bg-black object-contain lg:max-h-[calc(100vh-30rem)] lg:min-h-[220px]"
-                        key={`${selectedClip.id}:${selectedVideoUrl ?? ""}:${selectedPreviewVersion}`}
+                    <div
+                      className={`relative overflow-hidden bg-black ${
+                        selectedClip.type === "short"
+                          ? "mx-auto aspect-[9/16] w-full max-w-[360px] 2xl:w-[clamp(210px,calc(34.875vh-4.078125rem),360px)]"
+                          : "mx-auto aspect-video w-full max-w-5xl 2xl:w-[clamp(640px,calc(110.222vh-12.8889rem),1024px)] 2xl:max-w-full"
+                      }`}
+                      style={{ containerType: "inline-size" }}
+                    >
+                      <div className="absolute inset-x-2 top-2 z-40 flex items-center justify-between gap-2">
+                        <span className="pointer-events-none bg-black/70 px-2 py-1 text-[10px] font-semibold text-white">
+                          {isShowingLivePreview
+                            ? "編集中・即時反映"
+                            : "保存済み・完成表示"}
+                        </span>
+                        {livePreviewReady && selectedPreviewReady ? (
+                          <button
+                            className="bg-black/75 px-2 py-1 text-[10px] font-semibold text-white"
+                            type="button"
+                            onClick={() => setShowSavedPreview((current) => !current)}
+                          >
+                            {isShowingLivePreview ? "保存済み表示" : "編集表示へ戻る"}
+                          </button>
+                        ) : null}
+                      </div>
+                      {selectedPlayerReady && selectedPlayerVideoUrl ? (
+                        <video
+                        className="h-full w-full cursor-pointer bg-black object-contain"
+                        key={`${selectedClip.id}:${selectedPlayerVideoUrl}:${selectedPlayerPreviewVersion}`}
                         playsInline
                         preload="metadata"
                         ref={videoRef}
-                        src={
-                          selectedVideoUrl
-                            ? `${toApiUrl(selectedVideoUrl)}${
-                                usesClipPreview
-                                  ? `?v=${encodeURIComponent(selectedPreviewVersion)}`
-                                  : ""
-                              }`
-                            : undefined
-                        }
+                        src={previewVideoSrc(
+                          selectedPlayerVideoUrl,
+                          selectedPlayerPreviewVersion
+                        )}
                         onCanPlay={() => {
+                          setPreviewLoadFailedClipIds((current) => {
+                            const next = new Set(current);
+                            next.delete(selectedClip.id);
+                            return next;
+                          });
                           setIsBuffering(false);
                           setIsPlayerReady(true);
                         }}
@@ -1146,6 +1468,7 @@ export default function SubtitleReviewPage() {
                         onError={handleVideoError}
                         onLoadedMetadata={() => setIsPlayerReady(true)}
                         onLoadStart={() => {
+                          setIsPlaying(false);
                           setIsPlayerReady(false);
                           setIsBuffering(true);
                           setVideoLoadSeconds(0);
@@ -1156,77 +1479,103 @@ export default function SubtitleReviewPage() {
                         onSeeking={handleVideoSeeking}
                         onTimeUpdate={handleVideoTimeUpdate}
                         onWaiting={() => setIsBuffering(true)}
-                      />
-                      {previewOverlayText && previewOverlayStyle ? (
-                        <p
-                          className="pointer-events-none absolute z-10 m-0 max-w-[90%] whitespace-pre-line text-center leading-[1.2]"
-                          style={{
-                            color: previewOverlayStyle.primaryColor,
-                            fontFamily: clipTextFontFamily(
-                              previewOverlayStyle.fontPreset
-                            ),
-                            fontSize: `clamp(14px, ${
-                              previewOverlayStyle.fontSize /
-                              (selectedClip.type === "short" ? 10.8 : 19.2)
-                            }cqw, 60px)`,
-                            fontWeight: clipTextFontWeight(
-                              previewOverlayStyle.fontPreset
-                            ),
-                            left: `${previewOverlayStyle.xPercent}%`,
-                            top: `${previewOverlayStyle.yPercent}%`,
-                            transform: "translate(-50%, -50%)",
-                            WebkitTextStroke: `${Math.min(
-                              4,
-                              previewOverlayStyle.outlineWidth * 0.3
-                            )}px ${previewOverlayStyle.outlineColor}`,
-                            textShadow: `0 2px 2px ${previewOverlayStyle.outlineColor}`
-                          }}
-                        >
-                          {previewOverlayText}
-                        </p>
+                        />
                       ) : null}
-                      {activeSubtitleText && previewSubtitleStyle ? (
-                        <p
-                          className="pointer-events-none absolute z-10 m-0 max-w-[90%] whitespace-pre-line text-center leading-[1.25]"
-                          style={{
-                            color: previewSubtitleStyle.primaryColor,
-                            fontFamily: clipTextFontFamily(
-                              previewSubtitleStyle.fontPreset
-                            ),
-                            fontSize: `clamp(13px, ${
-                              previewSubtitleStyle.fontSize /
-                              (selectedClip.type === "short" ? 10.8 : 19.2)
-                            }cqw, 54px)`,
-                            fontWeight: clipTextFontWeight(
-                              previewSubtitleStyle.fontPreset
-                            ),
-                            left: `${previewSubtitleStyle.xPercent}%`,
-                            top: `${previewSubtitleStyle.yPercent}%`,
-                            transform: "translate(-50%, -50%)",
-                            WebkitTextStroke: `${Math.min(
-                              4,
-                              previewSubtitleStyle.outlineWidth * 0.3
-                            )}px ${previewSubtitleStyle.outlineColor}`,
-                            textShadow: `0 2px 2px ${previewSubtitleStyle.outlineColor}`
-                          }}
-                        >
-                          {activeSubtitleText}
-                        </p>
+                      {isShowingLivePreview && selectedClip ? (
+                        <>
+                          {showLiveTitle ? (
+                            <ClipTextOverlay
+                              clipType={selectedClip.type}
+                              defaultResolvedStyle={
+                                selectedDefaultResolvedClipTextStyles.title
+                              }
+                              previewWidth={selectedClip.previewWidth}
+                              resolvedStyle={selectedResolvedClipTextStyles.title}
+                              style={selectedClipTextStyles.title}
+                              target="title"
+                              text={selectedClipContentDraft?.title ?? ""}
+                            />
+                          ) : null}
+                          {showLiveHook ? (
+                            <ClipTextOverlay
+                              clipType={selectedClip.type}
+                              defaultResolvedStyle={
+                                selectedDefaultResolvedClipTextStyles.hook
+                              }
+                              previewWidth={selectedClip.previewWidth}
+                              resolvedStyle={selectedResolvedClipTextStyles.hook}
+                              style={selectedClipTextStyles.hook}
+                              target="hook"
+                              text={liveHookText}
+                            />
+                          ) : null}
+                          {showLiveSubtitle ? (
+                            <ClipTextOverlay
+                              clipType={selectedClip.type}
+                              defaultResolvedStyle={
+                                selectedDefaultResolvedClipTextStyles.subtitle
+                              }
+                              previewWidth={selectedClip.previewWidth}
+                              resolvedStyle={selectedResolvedClipTextStyles.subtitle}
+                              style={selectedClipTextStyles.subtitle}
+                              subtitleMaxCharsPerLine={
+                                selectedClip.subtitleMaxCharsPerLine
+                              }
+                              subtitleMaxLines={selectedClip.subtitleMaxLines}
+                              target="subtitle"
+                              text={activePreviewSubtitleEvent?.text ?? ""}
+                            />
+                          ) : null}
+                        </>
                       ) : null}
-                      {!isPlayerReady || isBuffering ? (
+                      {!selectedPlayerReady ? (
+                        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-neutral-950 px-5 text-center text-sm font-semibold">
+                          <p>
+                            {selectedClip.previewState === "failed"
+                              ? "完成表示と同じプレビューの生成に失敗しました"
+                              : "完成表示と同じプレビューを更新中"}
+                          </p>
+                          {selectedClip.previewState === "failed" &&
+                          selectedClip.previewError ? (
+                            <p className="max-w-md text-xs font-normal text-red-200">
+                              {selectedClip.previewError}
+                            </p>
+                          ) : null}
+                          {selectedClip.previewState === "failed" ? (
+                            <button
+                              className="min-h-10 border border-white bg-white px-4 text-sm font-semibold text-neutral-950 disabled:border-neutral-500 disabled:bg-neutral-700 disabled:text-neutral-300"
+                              disabled={!isEditable || retryingPreviewClipId !== null}
+                              type="button"
+                              onClick={() => void retrySelectedPreview()}
+                            >
+                              {retryingPreviewClipId === selectedClip.id
+                                ? "再生成を開始中"
+                                : "プレビューを再生成"}
+                            </button>
+                          ) : null}
+                          {selectedClip.previewState === "queued" ||
+                          selectedClip.previewState === "rendering" ? (
+                            <p className="text-xs font-normal text-neutral-300">
+                              完成動画と同じ縦横比・字幕・タイトル・帯を準備しています。
+                            </p>
+                          ) : null}
+                        </div>
+                      ) : !isPlayerReady || isBuffering ? (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/60 px-5 text-center text-sm font-semibold">
                           <p>
-                            {isPlayerReady
+                            {selectedPreviewLoadFailed
+                              ? "完成表示と同じプレビューを読み込めませんでした"
+                              : isPlayerReady
                               ? "選択位置を読み込み中"
-                              : usesClipPreview
-                                ? `確認用clip動画を読み込み中 (${videoLoadSeconds}秒)`
-                                : `元動画を読み込み中 (${videoLoadSeconds}秒)`}
+                              : `完成表示と同じプレビューを読み込み中 (${videoLoadSeconds}秒)`}
                           </p>
-                          {videoLoadSeconds >= 15 ? (
+                          {selectedPreviewLoadFailed || videoLoadSeconds >= 15 ? (
                             <>
-                              <p className="text-xs font-normal text-neutral-200">
-                                読み込みに時間がかかっています。停止状態ではありません。
-                              </p>
+                              {!selectedPreviewLoadFailed ? (
+                                <p className="text-xs font-normal text-neutral-200">
+                                  読み込みに時間がかかっています。停止状態ではありません。
+                                </p>
+                              ) : null}
                               <button
                                 className="min-h-10 border border-white bg-white px-4 text-sm font-semibold text-neutral-950"
                                 type="button"
@@ -1240,6 +1589,7 @@ export default function SubtitleReviewPage() {
                       ) : null}
                     </div>
 
+                    {selectedPlayerReady ? (
                     <div className="border-t border-neutral-700 bg-neutral-900 px-3 py-3">
                       <input
                         aria-label="clip再生位置"
@@ -1264,7 +1614,7 @@ export default function SubtitleReviewPage() {
                           aria-label="clip先頭から再生"
                           className="min-h-10 border border-neutral-600 px-3 text-sm font-medium"
                           type="button"
-                          onClick={() => playFrom(selectedClip.start)}
+                          onClick={playFromClipStart}
                         >
                           先頭
                         </button>
@@ -1345,53 +1695,17 @@ export default function SubtitleReviewPage() {
                         </div>
                       </div>
                     </div>
+                    ) : null}
                   </div>
                 </div>
               </>
             ) : null}
           </section>
 
-          <section className="relative min-h-[420px] border-b border-neutral-300 lg:min-h-0 lg:border-r 2xl:border-r">
-            {selectedClip ? (
-              <div className="flex min-h-[420px] flex-col lg:absolute lg:inset-0 lg:min-h-0">
-                <div className="flex min-h-12 items-center justify-between border-b border-neutral-300 bg-neutral-50 px-4 py-3">
-                  <div>
-                    <h3 className="text-sm font-semibold">文字配置プレビュー</h3>
-                    <p className="mt-0.5 text-[11px] text-neutral-500">
-                      上下帯・タイトル・フック・字幕設定と連動
-                    </p>
-                  </div>
-                  <span className="bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-800">
-                    {selectedTextStyleTarget === "title"
-                      ? selectedClip.type === "short" &&
-                        !shortTitleOutputEnabled
-                        ? "タイトル（出力OFF）"
-                        : "タイトル"
-                      : selectedTextStyleTarget === "hook"
-                        ? "フック"
-                        : "字幕"}
-                  </span>
-                </div>
-                <div className="flex min-h-0 flex-1 items-center justify-center bg-neutral-100 p-3">
-                  <ClipTextStylePreview
-                    clipType={selectedClip.type}
-                    displayMode="workspace"
-                    selectedTarget={selectedTextStyleTarget}
-                    {...shortBannerPreviewProps}
-                    styles={selectedClipTextStyles}
-                    subtitleText={stylePreviewSubtitleText}
-                    titleText={selectedClipContentDraft?.title ?? ""}
-                    hookText={selectedClipContentDraft?.hookText ?? ""}
-                  />
-                </div>
-              </div>
-            ) : null}
-          </section>
-
           <section className="contents">
             {selectedClip ? (
               <div className="contents">
-                <div className="grid min-w-0 bg-white lg:col-span-3 2xl:col-span-4 2xl:col-start-1 2xl:row-start-2 2xl:h-full 2xl:min-h-0 2xl:grid-cols-4 2xl:overflow-hidden">
+                <div className="grid min-w-0 bg-white lg:col-span-3 lg:row-start-2 2xl:col-span-3 2xl:col-start-1 2xl:row-start-2 2xl:h-full 2xl:min-h-0 2xl:grid-cols-4 2xl:overflow-hidden">
                   <div className="min-w-0 border-b border-neutral-300 bg-neutral-50 p-3 2xl:h-full 2xl:min-h-0 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="text-sm font-semibold">タイトル・フック</h3>
@@ -1424,10 +1738,8 @@ export default function SubtitleReviewPage() {
                     <p className="mt-1 text-right text-[10px] text-neutral-500">
                       {selectedClipContentDraft?.title.length ?? 0} / 80
                     </p>
-
                     {selectedClip.type === "short" ? (
-                      <>
-                        <fieldset className="mt-3 border-t border-neutral-300 pt-3">
+                      <fieldset className="mt-3 border-t border-neutral-300 pt-3">
                           <legend className="sr-only">ショート帯（書出し時）</legend>
                           <div className="grid min-h-10 grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] border border-neutral-300 bg-white">
                             <span
@@ -1471,73 +1783,58 @@ export default function SubtitleReviewPage() {
                               </span>
                             </label>
                           </div>
-                        </fieldset>
-
-                        <label className="mt-2 block text-xs font-semibold text-neutral-700">
-                          冒頭フック
-                          <textarea
-                            className="mt-1 min-h-14 w-full resize-y border border-neutral-300 bg-white px-2 py-2 text-sm leading-5 outline-none focus:border-sky-600"
-                            disabled={!isEditable}
-                            maxLength={120}
-                            placeholder="空欄なら表示しません"
-                            value={selectedClipContentDraft?.hookText ?? ""}
-                            onChange={(event) =>
-                              updateClipContentDraft(selectedClip.id, {
-                                hookText: event.target.value
-                              })
-                            }
-                          />
-                        </label>
-                        <div className="mt-2 flex items-end justify-between gap-3">
-                          <label className="block text-xs font-semibold text-neutral-700">
-                            表示秒数
-                            <input
-                              aria-invalid={!selectedHookDurationIsValid}
-                              className="mt-1 h-9 w-20 border border-neutral-300 bg-white px-2 text-sm tabular-nums outline-none focus:border-sky-600"
-                              disabled={!isEditable}
-                              max={8}
-                              min={1}
-                              step={0.5}
-                              type="number"
-                              value={selectedClipContentDraft?.hookDurationSeconds ?? 3}
-                              onChange={(event) =>
-                                updateClipContentDraft(selectedClip.id, {
-                                  hookDurationSeconds: Number(event.target.value)
-                                })
-                              }
-                            />
-                          </label>
-                          <p className="text-[10px] text-neutral-500">
-                            {selectedClipContentDraft?.hookText.length ?? 0} / 120
-                          </p>
-                        </div>
-                        {!selectedHookDurationIsValid ? (
-                          <p className="mt-1 text-xs font-semibold text-red-700">
-                            1〜8秒で入力してください。
-                          </p>
-                        ) : null}
-                      </>
+                      </fieldset>
                     ) : null}
 
-                    <button
-                      className="mt-3 min-h-9 w-full bg-neutral-950 px-3 text-xs font-semibold text-white disabled:bg-neutral-300"
-                      disabled={
-                        !isEditable ||
-                        !selectedClipHasDirtyContent ||
-                        !selectedClipContentDraft?.title.trim() ||
-                        !selectedHookDurationIsValid ||
-                        savingClipContentId === selectedClip.id
-                      }
-                      type="button"
-                      onClick={() => void saveClipContent()}
-                    >
-                      {savingClipContentId === selectedClip.id
-                        ? "保存中"
-                        : "内容・文字スタイルを保存"}
-                    </button>
+                    <label className="mt-2 block text-xs font-semibold text-neutral-700">
+                      冒頭フック
+                      <textarea
+                        className="mt-1 min-h-14 w-full resize-y border border-neutral-300 bg-white px-2 py-2 text-sm leading-5 outline-none focus:border-sky-600"
+                        disabled={!isEditable}
+                        maxLength={120}
+                        placeholder="空欄なら表示しません"
+                        value={selectedClipContentDraft?.hookText ?? ""}
+                        onChange={(event) =>
+                          updateClipContentDraft(selectedClip.id, {
+                            hookText: event.target.value
+                          })
+                        }
+                      />
+                    </label>
+                    <div className="mt-2 flex items-end justify-between gap-3">
+                      <label className="block text-xs font-semibold text-neutral-700">
+                        表示秒数
+                        <input
+                          aria-invalid={!selectedHookDurationIsValid}
+                          className="mt-1 h-9 w-20 border border-neutral-300 bg-white px-2 text-sm tabular-nums outline-none focus:border-sky-600"
+                          disabled={!isEditable}
+                          max={8}
+                          min={1}
+                          step={0.5}
+                          type="number"
+                          value={selectedClipContentDraft?.hookDurationSeconds ?? 3}
+                          onChange={(event) =>
+                            updateClipContentDraft(selectedClip.id, {
+                              hookDurationSeconds: Number(event.target.value)
+                            })
+                          }
+                        />
+                      </label>
+                      <p className="text-[10px] text-neutral-500">
+                        {selectedClipContentDraft?.hookText.length ?? 0} / 120
+                      </p>
+                    </div>
+                    {!selectedHookDurationIsValid ? (
+                      <p className="mt-1 text-xs font-semibold text-red-700">
+                        1〜8秒で入力してください。
+                      </p>
+                    ) : null}
 
-                    {selectedClip.type === "short" ? (
-                      <>
+                    <p className="mt-3 border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-900">
+                      変更はメインへ即時反映します。右下のOKで字幕修正もまとめて保存します。
+                    </p>
+
+                    <>
                         {dirtySegmentIds.size > 0 || hasDirtyClipContent ? (
                           <p className="mt-2 border border-amber-300 bg-amber-50 px-2 py-2 text-[11px] font-medium text-amber-900">
                             フック映像の変更前に、文字設定と字幕を保存してください。
@@ -1555,6 +1852,7 @@ export default function SubtitleReviewPage() {
                                 dirtySegmentIds.size > 0 ||
                                 hasDirtyClipContent
                               }
+                              enforceMaximumDuration={selectedClip.type === "short"}
                               key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
                               playheadSourceTime={absolutePlaybackTime}
                               saving={isUpdatingHookScene}
@@ -1565,8 +1863,7 @@ export default function SubtitleReviewPage() {
                             />
                           </div>
                         </details>
-                      </>
-                    ) : null}
+                    </>
                   </div>
 
                   <ClipTextStyleEditor
@@ -1577,14 +1874,29 @@ export default function SubtitleReviewPage() {
                     layout="workspace"
                     selectedTarget={selectedTextStyleTarget}
                     showPreview={false}
+                    shortTitleOutputEnabled={selectedShortTitleOutputEnabled}
+                    shortTopBannerEnabled={review.shortTopBannerEnabled}
+                    shortTopBannerUrl={toApiUrl(
+                      `/api/jobs/${jobId}/subtitle-review/banner-assets/top`
+                    )}
+                    shortBottomBannerEnabled={review.shortBottomBannerEnabled}
+                    shortBottomBannerUrl={toApiUrl(
+                      `/api/jobs/${jobId}/subtitle-review/banner-assets/bottom`
+                    )}
                     styles={selectedClipTextStyles}
+                    resolvedStyles={selectedResolvedClipTextStyles}
+                    defaultResolvedStyles={selectedDefaultResolvedClipTextStyles}
+                    subtitleMaxCharsPerLine={selectedClip.subtitleMaxCharsPerLine}
+                    subtitleMaxLines={selectedClip.subtitleMaxLines}
+                    previewWidth={selectedClip.previewWidth}
+                    previewHeight={selectedClip.previewHeight}
                     subtitleText={stylePreviewSubtitleText}
                     titleText={selectedClipContentDraft?.title ?? ""}
                     onChange={updateClipTextStyle}
                     onSelectedTargetChange={setSelectedTextStyleTarget}
                   />
                 </div>
-                <div className="flex min-h-[640px] min-w-0 flex-col bg-white lg:col-span-3 2xl:col-span-1 2xl:col-start-4 2xl:row-start-1 2xl:min-h-0">
+                <div className="flex min-h-[640px] min-w-0 flex-col bg-white lg:col-span-1 lg:col-start-3 lg:row-start-1 2xl:col-span-1 2xl:col-start-3 2xl:row-start-1 2xl:min-h-0">
                 <div className="border-b border-neutral-300 bg-white px-4 py-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -1608,12 +1920,12 @@ export default function SubtitleReviewPage() {
                   {selectedSegments.length > 0 ? (
                     selectedSegments.map((segment) => {
                       const isDirty = dirtySegmentIds.has(segment.id);
-                      const isSaving = savingSegmentId === segment.id;
                       const isActive = activeSegmentId === segment.id;
                       const relativeStart = clamp(
-                        segment.start -
-                          selectedClip.start +
-                          hookSceneDuration,
+                        Math.max(
+                          segment.start - selectedClip.start + hookSceneDuration,
+                          hookSuppressionEnd
+                        ),
                         0,
                         clipDuration
                       );
@@ -1676,14 +1988,11 @@ export default function SubtitleReviewPage() {
                             <span className="text-[11px] text-neutral-400">
                               元動画 {formatTime(segment.start)}
                             </span>
-                            <button
-                              className="min-h-9 bg-neutral-950 px-4 text-xs font-semibold text-white disabled:bg-neutral-300"
-                              disabled={!isEditable || !isDirty || isSaving}
-                              type="button"
-                              onClick={() => void saveSegment(segment)}
-                            >
-                              {isSaving ? "保存中" : "この字幕を保存"}
-                            </button>
+                            {isDirty ? (
+                              <span className="text-[11px] font-semibold text-amber-700">
+                                下のOKでまとめて保存
+                              </span>
+                            ) : null}
                           </div>
                         </div>
                       );
@@ -1697,19 +2006,23 @@ export default function SubtitleReviewPage() {
 
                 <div className="border-t border-neutral-300 bg-neutral-50 p-4">
                   <p className="mb-3 text-xs text-neutral-600">
-                    {selectedClip.confirmed
-                      ? "このclipは確認済みです。字幕を再編集すると未確認へ戻ります。"
-                      : selectedClipHasDirtySegments || selectedClipHasDirtyContent
-                        ? "未保存のタイトル、フック、または字幕があります。保存後に確認済みにできます。"
-                        : "このclipの動画と字幕を確認したら完了にします。"}
+                    {selectedClipHasDirtySegments || selectedClipHasDirtyContent
+                      ? "メインの即時表示を確認し、OKでタイトル・文字設定・字幕をまとめて保存します。"
+                      : selectedClip.confirmed && !selectedPreviewReady
+                        ? "OK済みです。完成表示はバックグラウンドで更新しています。"
+                        : selectedClip.confirmed
+                          ? "このclipはOK済みです。"
+                          : "メインの動画と字幕を確認し、OKで保存します。"}
                   </p>
                   <button
                     className="min-h-11 w-full bg-sky-700 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
                     disabled={
-                      selectedClip.confirmed ||
                       !isEditable ||
-                      selectedClipHasDirtySegments ||
-                      selectedClipHasDirtyContent ||
+                      (selectedClip.confirmed &&
+                        !selectedClipHasDirtySegments &&
+                        !selectedClipHasDirtyContent) ||
+                      !selectedClipContentDraft?.title.trim() ||
+                      !selectedHookDurationIsValid ||
                       isSavingShortBannerSettings ||
                       confirmingClipId === selectedClip.id
                     }
@@ -1717,10 +2030,12 @@ export default function SubtitleReviewPage() {
                     onClick={() => void confirmSelectedClip()}
                   >
                     {confirmingClipId === selectedClip.id
-                      ? "確認中"
-                      : selectedClip.confirmed
-                        ? "このclipは確認済み"
-                        : "このclipを確認済みにする"}
+                      ? "OKを反映中"
+                      : selectedClip.confirmed &&
+                          !selectedClipHasDirtySegments &&
+                          !selectedClipHasDirtyContent
+                        ? "このclipはOK済み"
+                        : "この内容でOK（保存して次へ）"}
                   </button>
                 </div>
                 </div>

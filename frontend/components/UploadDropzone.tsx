@@ -16,7 +16,7 @@ type UploadDropzoneProps = {
   accept?: string;
   compact?: boolean;
   disabled?: boolean;
-  purpose?: "new" | "reedit";
+  purpose?: "new" | "manual" | "reedit";
   uploadProgress?: number;
   uploadState?: "idle" | "uploading" | "uploaded";
   onFileChange: (file: File | null) => void;
@@ -121,7 +121,9 @@ export function UploadDropzone({
                 {isUploaded
                   ? purpose === "reedit"
                     ? "元の編集データを確認しました"
-                    : "動画を受け取りました"
+                    : purpose === "manual"
+                      ? "手動切り抜きの準備を開始します"
+                      : "動画を受け取りました"
                   : isUploading
                     ? purpose === "reedit"
                       ? "完成MP4を照合しています"
@@ -139,6 +141,8 @@ export function UploadDropzone({
                     ? "この画面を閉じずにお待ちください"
                     : purpose === "reedit"
                       ? "元jobに保存されたタイトル・フック映像・字幕を使用します"
+                      : purpose === "manual"
+                        ? "アップロード後に元動画を再生して範囲を決めます"
                       : "選択内容を確認し、設定後に処理を開始してください"}
               </p>
             </div>

@@ -8,9 +8,17 @@ const errorLabels: Record<string, string> = {
   transcription_quality_fallback_failed: "文字起こしの再試行に失敗しました",
   heatmap_interval_mode_unavailable: "JSON区間モードを適用できません",
   heatmap_interval_mode_no_candidates: "JSON区間から候補を作成できません",
+  no_usable_selection: "選定基準を満たす候補がありません",
+  no_usable_selection_retry_exhausted: "再処理は終了しています",
+  no_usable_output: "切り抜き動画を生成できませんでした",
 };
 
 export function JobProgress({ job }: { job: JobStatusResponse }) {
+  const stoppedAtSelection =
+    job.status === "failed" &&
+    (job.error?.code === "no_usable_selection" ||
+      job.error?.code === "no_usable_selection_retry_exhausted");
+  const displayedProgress = stoppedAtSelection ? 72 : job.progress;
   const detailNumber = (key: string) => {
     const value = job.details[key];
     return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -57,7 +65,9 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
     correctionCompleted !== null &&
     correctionTotal !== null;
   const currentStep =
-    job.status === "awaiting_clip_review"
+    job.status === "awaiting_manual_edit"
+      ? "元動画から切り抜く範囲を指定してください"
+      : job.status === "awaiting_clip_review"
       ? "切り抜き予定を確認してください"
       : job.status === "awaiting_subtitle_review"
         ? "字幕を確認してください"
@@ -84,13 +94,15 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
               </div>
             ) : null}
           </div>
-          <p className="text-2xl font-semibold tabular-nums text-neutral-950">{job.progress}%</p>
+          <p className="text-2xl font-semibold tabular-nums text-neutral-950">
+            {displayedProgress}%
+          </p>
         </div>
 
         <div className="h-3 overflow-hidden rounded-md bg-neutral-100">
           <div
             className="h-full rounded-md bg-neutral-950 transition-all"
-            style={{ width: `${job.progress}%` }}
+            style={{ width: `${displayedProgress}%` }}
           />
         </div>
 

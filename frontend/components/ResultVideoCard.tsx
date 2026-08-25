@@ -42,7 +42,8 @@ export function ResultVideoCard({
 }) {
   const warnings = item.auditWarnings ?? [];
   const scoreSource = scoreSourceLabel(item);
-  const showOverlayStatus = item.type === "short";
+  const showOverlayStatus =
+    item.overlayTitleExpected !== null || item.overlayTitleRendered !== null;
 
   return (
     <article className="rounded-md border border-neutral-300 bg-white p-5 shadow-sm shadow-neutral-200/60">

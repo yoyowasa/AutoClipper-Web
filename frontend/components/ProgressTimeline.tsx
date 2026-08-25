@@ -27,6 +27,7 @@ const STEP_LABELS: Partial<Record<JobStatus, string>> = {
   selecting_clips: "clip選定",
   reselecting_clips: "再選定",
   preparing_clip_review: "予定動画準備",
+  awaiting_manual_edit: "手動範囲指定",
   awaiting_clip_review: "範囲確認",
   preparing_subtitle_review: "確認動画準備",
   awaiting_subtitle_review: "字幕確認",
@@ -38,12 +39,14 @@ const STEP_LABELS: Partial<Record<JobStatus, string>> = {
 
 type ProgressTimelineProps = {
   status: JobStatus;
+  failureStatus?: JobStatus;
   hasClipPlanReview?: boolean;
   hasSubtitleReview?: boolean;
 };
 
 export function ProgressTimeline({
   status,
+  failureStatus,
   hasClipPlanReview = false,
   hasSubtitleReview = false
 }: ProgressTimelineProps) {
@@ -59,11 +62,14 @@ export function ProgressTimeline({
     hasClipPlanReview ||
     status === "reselecting_clips" ||
     status === "preparing_clip_review" ||
+    status === "awaiting_manual_edit" ||
     status === "awaiting_clip_review"
   ) {
     const renderIndex = steps.indexOf("rendering_normal_clips");
     const clipReviewSteps: JobStatus[] =
-      status === "reselecting_clips"
+      status === "awaiting_manual_edit"
+        ? ["awaiting_manual_edit"]
+        : status === "reselecting_clips"
         ? ["reselecting_clips", "preparing_clip_review", "awaiting_clip_review"]
         : ["preparing_clip_review", "awaiting_clip_review"];
     steps = [
@@ -85,20 +91,23 @@ export function ProgressTimeline({
       ...steps.slice(renderIndex)
     ];
   }
-  const activeIndex = steps.indexOf(status);
+  const visualStatus = status === "failed" && failureStatus ? failureStatus : status;
+  const activeIndex = steps.indexOf(visualStatus);
 
   return (
     <section className="rounded-md border border-neutral-300 bg-white p-5">
       <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {steps.map((step, index) => {
           const isDone = status === "completed" || (activeIndex >= 0 && index < activeIndex);
-          const isCurrent = step === status;
+          const isCurrent = step === visualStatus;
           return (
             <div
               key={step}
               className={`flex min-h-11 items-center gap-3 rounded-md border px-3 ${
                 isCurrent
-                  ? "border-neutral-950 bg-neutral-950 text-white"
+                  ? status === "failed"
+                    ? "border-red-300 bg-red-50 text-red-800"
+                    : "border-neutral-950 bg-neutral-950 text-white"
                   : isDone
                     ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                     : "border-neutral-200 bg-neutral-50 text-neutral-500"
