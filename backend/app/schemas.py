@@ -543,6 +543,14 @@ class SubtitleReviewClipSegmentUpdate(BaseModel):
 
 
 class SubtitleReviewClipApplyRequest(SubtitleReviewClipContentUpdateRequest):
+    publication_title: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        alias="publicationTitle",
+    )
+    hook_scene_start: float | None = Field(default=None, ge=0, alias="hookSceneStart")
+    hook_scene_end: float | None = Field(default=None, ge=0, alias="hookSceneEnd")
     segments: list[SubtitleReviewClipSegmentUpdate] = Field(
         default_factory=list,
         max_length=1000,
@@ -553,12 +561,64 @@ class SubtitleReviewClipApplyRequest(SubtitleReviewClipContentUpdateRequest):
         segment_ids = [segment.segment_id for segment in self.segments]
         if len(segment_ids) != len(set(segment_ids)):
             raise ValueError("duplicate subtitle segment update")
+        hook_fields = {"hook_scene_start", "hook_scene_end"}
+        supplied_hook_fields = self.model_fields_set.intersection(hook_fields)
+        if supplied_hook_fields and supplied_hook_fields != hook_fields:
+            raise ValueError("hook scene requires both start and end")
+        if supplied_hook_fields:
+            if (self.hook_scene_start is None) != (self.hook_scene_end is None):
+                raise ValueError("hook scene requires both start and end")
+            if self.hook_scene_start is not None and self.hook_scene_end is not None:
+                duration = self.hook_scene_end - self.hook_scene_start
+                if not 0.5 <= duration <= 3:
+                    raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        return self
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class SubtitleReviewConvertToShortRequest(BaseModel):
+    start_seconds: float | None = Field(default=None, ge=0, alias="startSeconds")
+    end_seconds: float | None = Field(default=None, ge=0, alias="endSeconds")
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "SubtitleReviewConvertToShortRequest":
+        if (self.start_seconds is None) != (self.end_seconds is None):
+            raise ValueError("startSeconds and endSeconds must be provided together")
+        if (
+            self.start_seconds is not None
+            and self.end_seconds is not None
+            and self.end_seconds <= self.start_seconds
+        ):
+            raise ValueError("endSeconds must be greater than startSeconds")
+        return self
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class TitleHookSuggestionRequest(BaseModel):
+    segments: list[SubtitleReviewClipSegmentUpdate] = Field(
+        default_factory=list,
+        max_length=1000,
+    )
+    force_regenerate: bool = Field(
+        default=False,
+        alias="forceRegenerate",
+        strict=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_unique_segments(self) -> "TitleHookSuggestionRequest":
+        segment_ids = [segment.segment_id for segment in self.segments]
+        if len(segment_ids) != len(set(segment_ids)):
+            raise ValueError("duplicate subtitle segment update")
         return self
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
 class SubtitleReviewSettingsUpdateRequest(BaseModel):
+    short_layout: ShortLayout | None = Field(default=None, alias="shortLayout")
     short_top_banner_enabled: bool = Field(alias="shortTopBannerEnabled", strict=True)
     short_bottom_banner_enabled: bool = Field(alias="shortBottomBannerEnabled", strict=True)
 

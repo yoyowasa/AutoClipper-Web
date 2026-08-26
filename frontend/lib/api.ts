@@ -13,8 +13,10 @@ import type {
   JobResultsResponse,
   JobStatusResponse,
   SubtitleReviewDocument,
+  SubtitleReviewConvertToShortRequest,
   SubtitleReviewFinalizeResponse,
   SubtitleReviewShortBannerSettings,
+  TitleHookSuggestionResponse,
   VideoUploadResponse
 } from "./types";
 import type {
@@ -352,6 +354,70 @@ export async function updateSubtitleReviewClipContent(
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
+export async function createClipReedit(
+  jobId: string,
+  clipId: string
+): Promise<SubtitleReviewDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/clips/${clipId}/reedit`,
+    { method: "POST" }
+  );
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function convertSubtitleReviewClipToShort(
+  jobId: string,
+  clipId: string,
+  request: SubtitleReviewConvertToShortRequest
+): Promise<SubtitleReviewDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/convert-to-short`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(request)
+    }
+  );
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function getTitleHookSuggestions(
+  jobId: string,
+  clipId: string
+): Promise<TitleHookSuggestionResponse | null> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/title-hook-suggestions`,
+    { cache: "no-store" }
+  );
+  if (response.status === 404) {
+    return null;
+  }
+  return parseJsonResponse<TitleHookSuggestionResponse>(response);
+}
+
+export async function requestTitleHookSuggestions(
+  jobId: string,
+  clipId: string,
+  request: {
+    segments: Array<{ segmentId: string; text: string }>;
+    forceRegenerate: boolean;
+  }
+): Promise<TitleHookSuggestionResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/title-hook-suggestions`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(request)
+    }
+  );
+  return parseJsonResponse<TitleHookSuggestionResponse>(response);
+}
+
 export async function createClipPlanClip(
   jobId: string,
   clip: ClipPlanClipCreateRequest
@@ -439,8 +505,11 @@ export async function applySubtitleReviewClip(
   clipId: string,
   content: {
     title: string;
+    publicationTitle: string;
     hookText: string;
     hookDurationSeconds: number;
+    hookSceneStart: number | null;
+    hookSceneEnd: number | null;
     titleStyle: ClipTextStyle | null;
     hookStyle: ClipTextStyle | null;
     subtitleStyle: ClipTextStyle | null;

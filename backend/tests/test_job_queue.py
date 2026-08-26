@@ -178,3 +178,74 @@ def test_subtitle_preview_enqueue_reuses_id_after_terminal_job(
     assert old_job.deleted is True
     assert len(queue.calls) == 1
     assert queue.calls[0][2]["job_id"] == rq_job_id
+
+
+def test_title_hook_enqueue_uses_content_addressed_unique_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+    input_hash = "d" * 64
+
+    queue_module.enqueue_title_hook_suggestions(
+        "job_title_hook",
+        "short_1",
+        input_hash,
+    )
+
+    assert len(queue.calls) == 1
+    function, args, kwargs = queue.calls[0]
+    assert function is queue_module.run_title_hook_suggestion_generation
+    assert args == ("job_title_hook", "short_1", input_hash)
+    assert kwargs["job_id"] == (
+        "ai_title_hook-job_title_hook-short_1-" + input_hash
+    )
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", kwargs["job_id"])
+    assert kwargs["unique"] is True
+    assert kwargs["job_timeout"] == 900
+
+
+def test_title_hook_enqueue_reuses_id_after_terminal_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    input_hash = "e" * 64
+    rq_job_id = queue_module.title_hook_suggestions_rq_job_id(
+        "job_title_hook",
+        "short_1",
+        input_hash,
+    )
+    old_job = FakeJob(JobStatus.FINISHED)
+    queue.jobs[rq_job_id] = old_job
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    queue_module.enqueue_title_hook_suggestions(
+        "job_title_hook",
+        "short_1",
+        input_hash,
+    )
+
+    assert old_job.deleted is True
+    assert len(queue.calls) == 1
+
+
+def test_title_hook_enqueue_keeps_active_same_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    input_hash = "f" * 64
+    rq_job_id = queue_module.title_hook_suggestions_rq_job_id(
+        "job_title_hook",
+        "short_1",
+        input_hash,
+    )
+    queue.jobs[rq_job_id] = FakeJob(JobStatus.STARTED)
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    queue_module.enqueue_title_hook_suggestions(
+        "job_title_hook",
+        "short_1",
+        input_hash,
+    )
+
+    assert queue.calls == []

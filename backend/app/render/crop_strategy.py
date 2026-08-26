@@ -547,6 +547,35 @@ def plan_short_crop(
         )
         if speaker_plan is not None:
             return speaker_plan
+        person_plan = _plan_person_tracking_crop(
+            person_signal,
+            source_width,
+            source_height,
+            fallback_reason="wide_face_group_person_signal",
+        )
+        if person_plan is not None:
+            return person_plan
+        subject_plan = _plan_subject_tracking_crop(
+            subject_signal,
+            source_width,
+            source_height,
+            fallback_reason="wide_face_group_subject_signal",
+        )
+        if subject_plan is not None:
+            return subject_plan
+        if person_signal is not None:
+            return _no_subject_signal_plan(
+                _person_fallback_reason(person_signal),
+                source_width,
+                source_height,
+                confidence=person_signal.confidence,
+                detection_count=len(detections),
+                sampled_frame_count=person_signal.sampled_frames,
+                stability_score=person_signal.stability_score,
+                person_detection_count=person_signal.detection_count,
+                person_detection_confidence=person_signal.confidence,
+                person_box=person_signal.box,
+            )
         if speaker_signal is not None:
             return _no_subject_signal_plan(
                 _speaker_fallback_reason(speaker_signal),
@@ -559,6 +588,17 @@ def plan_short_crop(
                 speaker_window_count=speaker_signal.window_count,
                 speaker_region_confidence=speaker_signal.confidence,
                 speaker_region_box=speaker_signal.box,
+            )
+        if subject_signal is not None:
+            return _no_subject_signal_plan(
+                _subject_fallback_reason(subject_signal),
+                source_width,
+                source_height,
+                confidence=subject_signal.confidence,
+                detection_count=len(detections),
+                sampled_frame_count=subject_signal.sampled_frames,
+                subject_x=subject_signal.center_x,
+                stability_score=subject_signal.stability_score,
             )
     if layout == "auto" and face_plan.fallback_reason == "weak_face_signal":
         speaker_plan = _plan_speaker_tracking_crop(

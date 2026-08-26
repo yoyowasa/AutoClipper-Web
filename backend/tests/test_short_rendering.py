@@ -334,6 +334,50 @@ def test_short_crop_plan_wide_face_group_reliable_speaker_uses_speaker_tracking_
     assert plan.speaker_region_box == (0.65, 0.32, 0.79, 0.52)
 
 
+def test_short_crop_plan_wide_face_group_reliable_person_uses_person_tracking_crop() -> None:
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.25, center_y=0.38, width=0.18, height=0.22),
+        FaceDetection(start=0, end=0, center_x=0.75, center_y=0.38, width=0.18, height=0.22),
+    ]
+
+    plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1920,
+        source_height=1080,
+        person_signal=reliable_person_detection(),
+    )
+
+    assert plan.strategy_order[0] == "person_tracking_crop"
+    assert plan.signal_source == "person_detection"
+    assert plan.fallback_reason == "wide_face_group_person_signal"
+
+
+def test_short_crop_plan_wide_face_group_reliable_subject_uses_subject_tracking_crop() -> None:
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.25, center_y=0.38, width=0.18, height=0.22),
+        FaceDetection(start=0, end=0, center_x=0.75, center_y=0.38, width=0.18, height=0.22),
+    ]
+    subject = SubjectDetection(
+        center_x=0.72,
+        confidence=0.84,
+        stability_score=0.88,
+        sampled_frames=5,
+    )
+
+    plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1920,
+        source_height=1080,
+        subject_signal=subject,
+    )
+
+    assert plan.strategy_order[0] == "subject_tracking_crop"
+    assert plan.signal_source == "motion_edge_saliency"
+    assert plan.fallback_reason == "wide_face_group_subject_signal"
+
+
 def test_short_crop_plan_ambiguous_speaker_signal_uses_blur_background() -> None:
     speaker = SpeakerDetection(
         center_x=0.72,

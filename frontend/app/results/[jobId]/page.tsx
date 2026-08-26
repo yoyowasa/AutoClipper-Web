@@ -5,8 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { ResultVideoCard } from "../../../components/ResultVideoCard";
-import { getJobResults, reopenSubtitleReview, toApiUrl } from "../../../lib/api";
-import type { JobAuditSummary, JobResultsResponse } from "../../../lib/types";
+import { createClipReedit, getJobResults, toApiUrl } from "../../../lib/api";
+import type { JobAuditSummary, JobResultsResponse, ResultExportItem } from "../../../lib/types";
 
 const IMPORTANT_AUDIT_WARNINGS = [
   "missing_title",
@@ -80,7 +80,7 @@ export default function ResultsPage() {
   const jobId = useMemo(() => readJobId(params.jobId), [params.jobId]);
   const [results, setResults] = useState<JobResultsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isReopening, setIsReopening] = useState(false);
+  const [reopeningClipId, setReopeningClipId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!jobId) {
@@ -100,19 +100,25 @@ export default function ResultsPage() {
     void loadResults();
   }, [jobId]);
 
-  async function reopenForEditing() {
-    setIsReopening(true);
+  async function reopenForEditing(item: ResultExportItem) {
+    if (!item.candidateId) {
+      setError("この動画の編集元clipを特定できません");
+      return;
+    }
+    setReopeningClipId(item.candidateId);
     setError(null);
     try {
-      await reopenSubtitleReview(jobId);
-      router.push(`/jobs/${jobId}/subtitles`);
+      const review = await createClipReedit(jobId, item.candidateId);
+      router.push(
+        `/jobs/${review.jobId}/subtitles?clipId=${encodeURIComponent(item.candidateId)}&source=reedit`
+      );
     } catch (caught) {
       setError(
         caught instanceof Error
           ? caught.message
           : "完成jobを再編集用に開けませんでした"
       );
-      setIsReopening(false);
+      setReopeningClipId(null);
     }
   }
 
@@ -151,28 +157,8 @@ export default function ResultsPage() {
         {results ? (
           <>
             {results.canReopenForEditing ? (
-              <section className="border border-sky-300 bg-sky-50 px-5 py-4">
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <div>
-                    <h2 className="text-base font-semibold text-sky-950">
-                      完成後のタイトル・フック映像・字幕を微調整
-                    </h2>
-                    <p className="mt-1 max-w-3xl text-sm text-sky-800">
-                      元動画、切り抜き範囲、文字起こしをそのまま使います。再アップロード、
-                      候補選定、OpenAI処理は行いません。変更後は動画を再レンダリングします。
-                    </p>
-                  </div>
-                  <button
-                    className="min-h-11 bg-sky-700 px-5 text-sm font-semibold text-white disabled:bg-neutral-300"
-                    disabled={isReopening}
-                    type="button"
-                    onClick={() => void reopenForEditing()}
-                  >
-                    {isReopening
-                      ? "再編集画面を開いています"
-                      : "タイトル・フック映像・字幕を再編集"}
-                  </button>
-                </div>
+              <section className="border border-sky-300 bg-sky-50 px-5 py-4 text-sm text-sky-900">
+                各動画の「この動画だけ再編集」から1本だけ開けます。通常動画は再編集画面でショートへ変更できます。
               </section>
             ) : null}
 
@@ -185,7 +171,13 @@ export default function ResultsPage() {
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 {results.normalClips.map((item) => (
-                  <ResultVideoCard key={item.id} item={item} auditAvailable={Boolean(results.auditSummary)} />
+                  <ResultVideoCard
+                    key={item.id}
+                    item={item}
+                    auditAvailable={Boolean(results.auditSummary)}
+                    isReediting={reopeningClipId === item.candidateId}
+                    onReedit={results.canReopenForEditing ? reopenForEditing : undefined}
+                  />
                 ))}
               </div>
             </section>
@@ -197,7 +189,13 @@ export default function ResultsPage() {
               </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                 {results.shorts.map((item) => (
-                  <ResultVideoCard key={item.id} item={item} auditAvailable={Boolean(results.auditSummary)} />
+                  <ResultVideoCard
+                    key={item.id}
+                    item={item}
+                    auditAvailable={Boolean(results.auditSummary)}
+                    isReediting={reopeningClipId === item.candidateId}
+                    onReedit={results.canReopenForEditing ? reopenForEditing : undefined}
+                  />
                 ))}
               </div>
             </section>

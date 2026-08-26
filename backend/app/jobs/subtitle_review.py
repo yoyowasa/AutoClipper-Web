@@ -19,7 +19,7 @@ from app.render.subtitles_ass import (
     resolve_clip_text_style,
 )
 from app.render.title_policy import short_overlay_title_expected
-from app.schemas import ShortOverlayTitleMode
+from app.schemas import ShortLayout, ShortOverlayTitleMode
 
 
 SUBTITLE_REVIEW_FILENAME = "subtitle_review.json"
@@ -80,6 +80,11 @@ class SubtitleReviewClip(BaseModel):
     id: str
     type: Literal["normal", "short"]
     title: str
+    publication_title: str | None = Field(
+        default=None,
+        max_length=100,
+        alias="publicationTitle",
+    )
     original_title: str | None = Field(default=None, alias="originalTitle")
     title_edited: bool = Field(default=False, alias="titleEdited")
     hook_text: str = Field(default="", alias="hookText")
@@ -183,6 +188,8 @@ class SubtitleReviewDocument(BaseModel):
     state: SubtitleReviewState = "awaiting_review"
     render_revision: int = Field(default=1, ge=1, alias="renderRevision")
     reopened_at: str | None = Field(default=None, alias="reopenedAt")
+    reedit_source_job_id: str | None = Field(default=None, alias="reeditSourceJobId")
+    reedit_source_clip_id: str | None = Field(default=None, alias="reeditSourceClipId")
     source_video_url: str = Field(alias="sourceVideoUrl")
     render_mode: str = Field(default="high_quality", alias="renderMode")
     short_max_duration: float = Field(default=75.0, gt=0, alias="shortMaxDuration")
@@ -190,6 +197,7 @@ class SubtitleReviewDocument(BaseModel):
         default="auto",
         alias="shortOverlayTitleMode",
     )
+    short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
     short_top_banner_enabled: bool = Field(default=False, alias="shortTopBannerEnabled")
     short_bottom_banner_enabled: bool = Field(default=False, alias="shortBottomBannerEnabled")
     clips: list[SubtitleReviewClip] = Field(default_factory=list)
@@ -226,7 +234,12 @@ def subtitle_review_preview_url(job_id: str, clip_id: str) -> str:
 
 def _candidate_title(candidate: Candidate, index: int) -> str:
     prefix = "通常切り抜き" if candidate.type == "normal" else "ショート"
-    return (candidate.title or candidate.overlay_title or f"{prefix} {index:02d}").strip()
+    return (candidate.overlay_title or candidate.title or f"{prefix} {index:02d}").strip()
+
+
+def _candidate_publication_title(candidate: Candidate) -> str | None:
+    title = (candidate.title or "").strip()
+    return title or None
 
 
 def _segment_id(index: int) -> str:
@@ -403,6 +416,7 @@ def build_subtitle_review(
     short_max_duration: float = 75.0,
     render_mode: str | None = "high_quality",
     short_overlay_title_mode: ShortOverlayTitleMode = "auto",
+    short_layout: ShortLayout = "auto",
     short_top_banner_enabled: bool = False,
     short_bottom_banner_enabled: bool = False,
     render_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
@@ -432,6 +446,7 @@ def build_subtitle_review(
                 id=candidate.id,
                 type=candidate.type,
                 title=_candidate_title(candidate, type_indices[candidate.type]),
+                publicationTitle=_candidate_publication_title(candidate),
                 originalTitle=_candidate_title(candidate, type_indices[candidate.type]),
                 hookText=candidate.hook_text or "",
                 hookDurationSeconds=candidate.hook_duration_seconds or 3.0,
@@ -471,6 +486,7 @@ def build_subtitle_review(
             renderMode=str(render_mode or "high_quality"),
             shortMaxDuration=short_max_duration,
             shortOverlayTitleMode=short_overlay_title_mode,
+            shortLayout=short_layout,
             shortTopBannerEnabled=short_top_banner_enabled,
             shortBottomBannerEnabled=short_bottom_banner_enabled,
             clips=clips,
@@ -531,6 +547,7 @@ def update_review_render_settings(
     *,
     render_mode: str | None,
     short_overlay_title_mode: ShortOverlayTitleMode,
+    short_layout: ShortLayout,
     short_top_banner_enabled: bool,
     short_bottom_banner_enabled: bool,
     render_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
@@ -538,6 +555,7 @@ def update_review_render_settings(
     source_height: int | None = None,
 ) -> SubtitleReviewDocument:
     document.short_overlay_title_mode = short_overlay_title_mode
+    document.short_layout = short_layout
     document.short_top_banner_enabled = short_top_banner_enabled
     document.short_bottom_banner_enabled = short_bottom_banner_enabled
     document, _changed = refresh_review_render_contract(
@@ -555,6 +573,7 @@ def update_review_clip_content(
     clip_id: str,
     *,
     title: str,
+    publication_title: str | None | object = _STYLE_UNSET,
     hook_text: str = "",
     hook_duration_seconds: float = 3.0,
     title_style: ClipTextStyle | None | object = _STYLE_UNSET,
@@ -571,6 +590,18 @@ def update_review_clip_content(
         raise ValueError("title must not be empty")
     if len(normalized_title) > 80:
         raise ValueError("title must be 80 characters or fewer")
+    next_publication_title = clip.publication_title
+    if publication_title is _STYLE_UNSET:
+        if clip.publication_title is None or clip.publication_title == clip.title:
+            next_publication_title = normalized_title
+    else:
+        next_publication_title = (
+            " ".join(publication_title.split()).strip()
+            if isinstance(publication_title, str)
+            else None
+        )
+        if next_publication_title and len(next_publication_title) > 100:
+            raise ValueError("publication title must be 100 characters or fewer")
     if len(normalized_hook) > 120:
         raise ValueError("hook text must be 120 characters or fewer")
     if not 1 <= hook_duration_seconds <= 8:
@@ -583,6 +614,7 @@ def update_review_clip_content(
 
     changed = (
         clip.title != normalized_title
+        or clip.publication_title != next_publication_title
         or clip.hook_text != normalized_hook
         or clip.hook_duration_seconds != hook_duration_seconds
         or clip.title_style != next_title_style
@@ -595,6 +627,7 @@ def update_review_clip_content(
     original_title = clip.original_title or clip.title
     clip.original_title = original_title
     clip.title = normalized_title
+    clip.publication_title = next_publication_title
     clip.title_edited = normalized_title != original_title
     clip.hook_text = normalized_hook
     clip.hook_duration_seconds = round(hook_duration_seconds, 3)
@@ -678,6 +711,78 @@ def reopen_completed_review(document: SubtitleReviewDocument) -> SubtitleReviewD
     return _refresh_counts(document)
 
 
+def convert_review_clip_to_short(
+    document: SubtitleReviewDocument,
+    clip_id: str,
+    *,
+    start: float,
+    end: float,
+) -> SubtitleReviewDocument:
+    """Convert the only clip in an isolated re-edit job to a short draft."""
+    if document.reedit_source_job_id is None:
+        raise ValueError("clip conversion is available only in an isolated re-edit job")
+    if len(document.clips) != 1:
+        raise ValueError("isolated re-edit job must contain exactly one clip")
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+    if clip.type != "normal":
+        raise ValueError("only a normal clip can be converted to a short")
+    if start < clip.start - 0.001 or end > clip.end + 0.001 or end <= start:
+        raise ValueError("short range must stay within the source normal clip")
+
+    retained_hook = bool(
+        clip.hook_scene_start is not None
+        and clip.hook_scene_end is not None
+        and clip.hook_scene_start >= start - 0.001
+        and clip.hook_scene_end <= end + 0.001
+    )
+    hook_duration = 0.0
+    if retained_hook and clip.hook_scene_start is not None and clip.hook_scene_end is not None:
+        hook_duration = clip.hook_scene_end - clip.hook_scene_start
+    if end - start + hook_duration > document.short_max_duration + 0.001:
+        raise ValueError(
+            f"short duration must not exceed {document.short_max_duration:g} seconds"
+        )
+
+    clip.type = "short"
+    clip.start = start
+    clip.end = end
+    clip.duration = end - start
+    if not retained_hook:
+        clip.hook_scene_start = None
+        clip.hook_scene_end = None
+
+    retained_segments = sorted(
+        (
+            segment
+            for segment in document.segments
+            if segment.end > start and segment.start < end
+        ),
+        key=lambda segment: segment.index,
+    )
+    for segment in retained_segments:
+        segment.affected_clip_ids = [clip_id]
+    document.segments = retained_segments
+    clip.segment_ids = [segment.id for segment in retained_segments]
+
+    # Keep the user's saved text styles. Only resolved values are rebuilt for 9:16.
+    clip.resolved_title_style = None
+    clip.resolved_hook_style = None
+    clip.resolved_subtitle_style = None
+    clip.resolved_default_title_style = None
+    clip.resolved_default_hook_style = None
+    clip.resolved_default_subtitle_style = None
+    clip.preview_state = "queued"
+    clip.preview_spec_hash = None
+    clip.preview_error = None
+    clip.preview_video_url = None
+    clip.live_preview_spec_hash = None
+    clip.live_preview_video_url = None
+    clip.confirmed = False
+    return _refresh_counts(document)
+
+
 def restore_review_after_render_failure(
     document: SubtitleReviewDocument,
 ) -> SubtitleReviewDocument:
@@ -706,13 +811,29 @@ def apply_reviewed_clip_content(
         clip = reviewed_by_id.get(candidate.id)
         if clip is None:
             return candidate
+        publication_title = clip.publication_title or clip.title
+        overlay_title = (
+            clip.title
+            if (
+                clip.publication_title is not None
+                or clip.title_edited
+                or candidate.type == "normal"
+            )
+            else (candidate.overlay_title or clip.title)
+        )
         updates: dict[str, object] = {
-            "title": clip.title,
+            "title": publication_title,
+            "overlay_title": overlay_title,
         }
-        if clip.title_edited:
+        if (
+            clip.title_edited
+            or publication_title != candidate.title
+            or (
+                candidate.overlay_title is not None
+                and overlay_title != candidate.overlay_title
+            )
+        ):
             updates["title_source"] = "manual_review"
-            if candidate.type == "short":
-                updates["overlay_title"] = clip.title
         updates["hook_text"] = clip.hook_text or None
         updates["hook_duration_seconds"] = clip.hook_duration_seconds
         updates["hook_scene_start"] = clip.hook_scene_start
@@ -742,6 +863,7 @@ def write_subtitle_review_summary(
         "render_revision": document.render_revision,
         "reopened_at": document.reopened_at,
         "short_overlay_title_mode": document.short_overlay_title_mode,
+        "short_layout": document.short_layout,
         "short_top_banner_enabled": document.short_top_banner_enabled,
         "short_bottom_banner_enabled": document.short_bottom_banner_enabled,
         "overlay_title_expected_by_clip": {

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import mimetypes
+import shutil
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
@@ -12,9 +13,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.audio.openai_transcript_correction import TRANSCRIPT_CORRECTION_PROGRESS_FILENAME
-from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.audio.transcribe_faster_whisper import (
+    TranscriptSegment,
+    transcript_output_path,
+    write_transcript_segments,
+)
 from app.audio.transcript_postprocess import repair_known_transcript_artifact_segments
-from app.candidates.select_candidates import CandidateSelection
+from app.candidates.merge_boundaries import Candidate, write_candidates
+from app.candidates.select_candidates import CandidateSelection, write_selected_clips
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.ids import make_id
@@ -49,6 +55,7 @@ from app.jobs.queue import (
     RetryJobEnqueue,
     SubtitleReviewHookSceneUpdateEnqueue,
     SubtitleReviewPreviewEnqueue,
+    TitleHookSuggestionsEnqueue,
     get_enqueue_clip_plan_boundary_update,
     get_enqueue_clip_plan_hook_scene_update,
     get_enqueue_clip_plan_reselection,
@@ -57,12 +64,15 @@ from app.jobs.queue import (
     get_enqueue_retry_job,
     get_enqueue_subtitle_review_hook_scene_update,
     get_enqueue_subtitle_review_preview,
+    get_enqueue_title_hook_suggestions,
 )
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP
 from app.jobs.subtitle_review import (
     SubtitleReviewDocument,
+    apply_reviewed_clip_content,
     build_subtitle_review,
     confirm_review_clip,
+    convert_review_clip_to_short,
     load_subtitle_review,
     queue_review_render,
     refresh_review_render_contract,
@@ -84,6 +94,20 @@ from app.jobs.subtitle_review_preview import (
     live_subtitle_review_preview_is_ready,
     refresh_subtitle_review_preview_states,
     subtitle_review_document_lock,
+)
+from app.jobs.title_hook_suggestions import (
+    TitleHookDraftSegment,
+    TitleHookSuggestionsDocument,
+    build_title_hook_suggestion_input,
+    failed_title_hook_suggestions,
+    load_title_hook_suggestion_input,
+    load_title_hook_suggestions,
+    openai_api_key_is_configured,
+    queued_title_hook_suggestions,
+    title_hook_suggestion_input_path,
+    title_hook_suggestions_path,
+    write_title_hook_suggestion_input,
+    write_title_hook_suggestions,
 )
 from app.models import ExportItem, Job, Video
 from app.models import utc_now
@@ -112,12 +136,15 @@ from app.schemas import (
     ManualClipCreateRequest,
     ManualClipUpdateRequest,
     ResultExportItem,
+    ShortLayout,
     ShortOverlayTitleMode,
     SubtitleReviewFinalizeResponse,
     SubtitleReviewClipApplyRequest,
     SubtitleReviewClipContentUpdateRequest,
+    SubtitleReviewConvertToShortRequest,
     SubtitleReviewSettingsUpdateRequest,
     SubtitleReviewSegmentUpdateRequest,
+    TitleHookSuggestionRequest,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.heatmap import HeatmapSidecarError, heatmap_sidecar_path, parse_heatmap_sidecar
@@ -158,6 +185,26 @@ def _get_subtitle_review_or_404(job_id: str, paths: StoragePaths) -> SubtitleRev
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="subtitle review artifact is invalid",
+        ) from exc
+
+
+def _get_title_hook_suggestions_or_404(
+    job_id: str,
+    clip_id: str,
+    paths: StoragePaths,
+) -> TitleHookSuggestionsDocument:
+    artifact_path = title_hook_suggestions_path(paths.job_outputs(job_id), clip_id)
+    if not artifact_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="title/hook suggestions not found",
+        )
+    try:
+        return load_title_hook_suggestions(artifact_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="title/hook suggestions artifact is invalid",
         ) from exc
 
 
@@ -341,6 +388,17 @@ def _short_overlay_title_mode(settings: dict[str, Any]) -> ShortOverlayTitleMode
     return "auto"
 
 
+def _short_layout(settings: dict[str, Any]) -> ShortLayout:
+    value = settings.get("shortLayout", "auto")
+    if value == "face_tracking_crop":
+        return "face_tracking_crop"
+    if value == "center_crop":
+        return "center_crop"
+    if value == "blur_background":
+        return "blur_background"
+    return "auto"
+
+
 def _hydrate_subtitle_review_render_settings(
     document: SubtitleReviewDocument,
     job: Job,
@@ -349,14 +407,17 @@ def _hydrate_subtitle_review_render_settings(
     settings = dict(job.settings_json or {})
     render_mode = str(settings.get("mode", "high_quality"))
     short_overlay_title_mode = _short_overlay_title_mode(settings)
+    short_layout = _short_layout(settings)
     short_top_banner_enabled = bool(settings.get("shortTopBannerEnabled", False))
     short_bottom_banner_enabled = bool(settings.get("shortBottomBannerEnabled", False))
     policy_changed = (
         document.short_overlay_title_mode != short_overlay_title_mode
+        or document.short_layout != short_layout
         or document.short_top_banner_enabled != short_top_banner_enabled
         or document.short_bottom_banner_enabled != short_bottom_banner_enabled
     )
     document.short_overlay_title_mode = short_overlay_title_mode
+    document.short_layout = short_layout
     document.short_top_banner_enabled = short_top_banner_enabled
     document.short_bottom_banner_enabled = short_bottom_banner_enabled
     document, contract_changed = refresh_review_render_contract(
@@ -615,6 +676,316 @@ def _read_json_if_exists(path: Path) -> Any:
         return None
 
 
+def _write_json_payload(path: Path, payload: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    temporary_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
+    return path
+
+
+_SHORT_CONVERSION_ARTIFACT_FILENAMES = (
+    "normal_candidates.json",
+    "short_candidates.json",
+    "candidates.json",
+    "scored_candidates.json",
+    "selected_clips.json",
+    "candidate_generation_summary.json",
+    "subtitle_review.json",
+    "subtitle_review_summary.json",
+)
+
+
+def _snapshot_short_conversion_artifacts(output_dir: Path) -> dict[Path, bytes | None]:
+    snapshot: dict[Path, bytes | None] = {}
+    for filename in _SHORT_CONVERSION_ARTIFACT_FILENAMES:
+        path = output_dir / filename
+        snapshot[path] = path.read_bytes() if path.is_file() else None
+    return snapshot
+
+
+def _restore_short_conversion_artifacts(snapshot: dict[Path, bytes | None]) -> None:
+    for path, payload in snapshot.items():
+        if payload is None:
+            path.unlink(missing_ok=True)
+            continue
+        temporary_path = path.with_suffix(f"{path.suffix}.rollback")
+        temporary_path.write_bytes(payload)
+        temporary_path.replace(path)
+
+
+def _reedit_transcript_segments(
+    output_dir: Path,
+    document: SubtitleReviewDocument,
+) -> list[TranscriptSegment]:
+    payload = _read_json_if_exists(transcript_output_path(output_dir))
+    if isinstance(payload, list) and payload:
+        try:
+            transcript_segments = [TranscriptSegment.model_validate(item) for item in payload]
+            reviewed_text = {segment.index: segment.text for segment in document.segments}
+            return [
+                segment.model_copy(update={"text": reviewed_text.get(index, segment.text)})
+                for index, segment in enumerate(transcript_segments)
+            ]
+        except ValueError:
+            pass
+    return [
+        TranscriptSegment(
+            start=segment.start,
+            end=segment.end,
+            text=segment.text,
+            confidence=segment.confidence,
+        )
+        for segment in sorted(document.segments, key=lambda item: item.index)
+    ]
+
+
+def _reedit_candidate(
+    output_dir: Path,
+    document: SubtitleReviewDocument,
+    clip_id: str,
+) -> tuple[Candidate, CandidateSelection]:
+    selection_payload = _read_json_if_exists(output_dir / "selected_clips.json")
+    try:
+        selection = CandidateSelection.model_validate(selection_payload or {})
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="selected clip data is unavailable",
+        ) from exc
+    selection = apply_reviewed_clip_content(selection, document)
+    candidates = [*selection.normal_clips, *selection.shorts]
+    candidate = next((item for item in candidates if item.id == clip_id), None)
+    if candidate is not None:
+        return candidate, selection
+
+    review_clip = next((item for item in document.clips if item.id == clip_id), None)
+    if review_clip is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="completed clip not found",
+        )
+    transcript_text = " ".join(
+        segment.text.strip()
+        for segment in document.segments
+        if clip_id in segment.affected_clip_ids and segment.text.strip()
+    )
+    candidate = Candidate(
+        id=review_clip.id,
+        type=review_clip.type,
+        start=review_clip.start,
+        end=review_clip.end,
+        duration=review_clip.duration,
+        transcript_text=transcript_text,
+        title=review_clip.publication_title or review_clip.title,
+        overlay_title=review_clip.title,
+        hook_text=review_clip.hook_text or None,
+        hook_duration_seconds=review_clip.hook_duration_seconds,
+        hook_scene_start=review_clip.hook_scene_start,
+        hook_scene_end=review_clip.hook_scene_end,
+        title_style=review_clip.title_style,
+        hook_style=review_clip.hook_style,
+        subtitle_style=review_clip.subtitle_style,
+        selection_reason="completed_clip_reedit",
+        original_start=review_clip.start,
+        original_end=review_clip.end,
+    )
+    return candidate, selection
+
+
+def _isolated_reedit_selection(candidate: Candidate) -> CandidateSelection:
+    normal_clips = [candidate] if candidate.type == "normal" else []
+    shorts = [candidate] if candidate.type == "short" else []
+    return CandidateSelection(
+        normalClips=normal_clips,
+        shorts=shorts,
+        selectionPolicy="fill_requested",
+        requestedNormalCount=len(normal_clips),
+        requestedShortCount=len(shorts),
+        hardGatePassedCount=1,
+        normalHardGatePassedCount=len(normal_clips),
+        shortHardGatePassedCount=len(shorts),
+        selectedAboveThresholdCount=1,
+        selectedClusters={"normal": [], "short": []},
+        unfilledRequestedCounts={"normal": 0, "short": 0},
+    )
+
+
+def _isolated_reedit_source_state_is_supported(
+    job: Job,
+    document: SubtitleReviewDocument,
+) -> bool:
+    if (job.status, document.state) == ("completed", "completed"):
+        return True
+    return (
+        (job.status, document.state) == ("awaiting_subtitle_review", "awaiting_review")
+        and document.reopened_at is not None
+        and document.render_revision > 1
+    )
+
+
+def _create_isolated_reedit_job(
+    *,
+    db: Session,
+    source_job: Job,
+    video: Video,
+    clip_id: str,
+    paths: StoragePaths,
+) -> tuple[Job, SubtitleReviewDocument]:
+    source_output_dir = paths.job_outputs(source_job.id)
+    with subtitle_review_document_lock(source_output_dir):
+        db.refresh(source_job)
+        if not _reedit_artifacts_available(source_job.id, video, paths):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="isolated re-edit source artifacts are unavailable",
+            )
+        source_document = _get_subtitle_review_or_404(source_job.id, paths)
+        if not _isolated_reedit_source_state_is_supported(source_job, source_document):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review state is unavailable for isolated re-editing",
+            )
+        candidate, _source_selection = _reedit_candidate(
+            source_output_dir,
+            source_document,
+            clip_id,
+        )
+        transcript_segments = _reedit_transcript_segments(
+            source_output_dir,
+            source_document,
+        )
+        if not transcript_segments:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="completed transcript is unavailable",
+            )
+        source_audio_features = _read_json_if_exists(source_output_dir / "audio_features.json")
+        source_transcript_summary = _read_json_if_exists(
+            source_output_dir / "transcript_summary.json"
+        )
+
+    selection = _isolated_reedit_selection(candidate)
+    child_settings = dict(source_job.settings_json or {})
+    child_settings.update(
+        {
+            "workflowMode": "manual",
+            "manualEditFinalized": True,
+            "reeditOf": source_job.id,
+            "reeditSourceClipId": clip_id,
+            "normalClipCount": len(selection.normal_clips),
+            "shortCount": len(selection.shorts),
+            "normalClipTimeRanges": (
+                [{"startSeconds": candidate.start, "endSeconds": candidate.end}]
+                if candidate.type == "normal"
+                else []
+            ),
+            "shortClipTimeRanges": (
+                [{"startSeconds": candidate.start, "endSeconds": candidate.end}]
+                if candidate.type == "short"
+                else []
+            ),
+            "manualClipMetadata": [
+                {
+                    "id": candidate.id,
+                    "type": candidate.type,
+                    "title": candidate.title or candidate.overlay_title or "",
+                    "startSeconds": candidate.start,
+                    "endSeconds": candidate.end,
+                    "hookSceneStart": candidate.hook_scene_start,
+                    "hookSceneEnd": candidate.hook_scene_end,
+                }
+            ],
+            "requireSubtitleReview": True,
+            "requireClipPlanReview": False,
+            "heatmapIntervalMode": False,
+            "useOpenAIScoring": False,
+            "ensureSelectedOpenAIScored": False,
+        }
+    )
+    child = Job(
+        id=make_id("job"),
+        video_id=video.id,
+        status="awaiting_subtitle_review",
+        progress=PROGRESS_MAP["awaiting_subtitle_review"],
+        current_step=CURRENT_STEP_MAP["awaiting_subtitle_review"],
+        settings_json=child_settings,
+    )
+    child_output_dir = paths.outputs / child.id
+    db.add(child)
+    try:
+        child_output_dir.mkdir(parents=True, exist_ok=False)
+        write_transcript_segments(
+            transcript_segments,
+            transcript_output_path(child_output_dir),
+        )
+        write_candidates(selection.normal_clips, child_output_dir / "normal_candidates.json")
+        write_candidates(selection.shorts, child_output_dir / "short_candidates.json")
+        write_candidates([candidate], child_output_dir / "candidates.json")
+        write_candidates([candidate], child_output_dir / "scored_candidates.json")
+        write_selected_clips(selection, child_output_dir / "selected_clips.json")
+
+        duration = max(float(video.duration or 0), candidate.end)
+        audio_features = (
+            source_audio_features
+            if isinstance(source_audio_features, dict)
+            else {
+                "duration": duration,
+                "silence_ratio": 0.0,
+                "speech_density": 1.0,
+                "volume_peak": 0.0,
+                "silent_seconds": 0.0,
+                "speech_seconds": duration,
+            }
+        )
+        _write_json_payload(child_output_dir / "audio_features.json", audio_features)
+        _write_json_payload(
+            child_output_dir / "candidate_generation_summary.json",
+            {
+                "source": "completed_clip_reedit",
+                "source_job_id": source_job.id,
+                "source_clip_id": clip_id,
+                "normal_candidate_count": len(selection.normal_clips),
+                "short_candidate_count": len(selection.shorts),
+            },
+        )
+        if isinstance(source_transcript_summary, dict):
+            _write_json_payload(
+                child_output_dir / "transcript_summary.json",
+                source_transcript_summary,
+            )
+
+        document = build_subtitle_review(
+            child.id,
+            selection,
+            transcript_segments,
+            short_max_duration=float(child_settings.get("shortMaxDuration", 75.0)),
+            render_mode=str(child_settings.get("mode", "high_quality")),
+            short_overlay_title_mode=_short_overlay_title_mode(child_settings),
+            short_layout=_short_layout(child_settings),
+            short_top_banner_enabled=bool(child_settings.get("shortTopBannerEnabled", False)),
+            short_bottom_banner_enabled=bool(child_settings.get("shortBottomBannerEnabled", False)),
+            render_settings=child_settings,
+            source_width=video.width,
+            source_height=video.height,
+        )
+        document.reedit_source_job_id = source_job.id
+        document.reedit_source_clip_id = clip_id
+        document.render_revision = max(2, document.render_revision)
+        _write_subtitle_review_unlocked(document, paths)
+        db.commit()
+        db.refresh(child)
+        return child, document
+    except Exception:
+        db.rollback()
+        if child_output_dir.is_dir():
+            shutil.rmtree(child_output_dir)
+        raise
+
+
 def _is_legacy_no_usable_selection(job: Job, paths: StoragePaths) -> bool:
     if job.error_code != LEGACY_NO_USABLE_OUTPUT_ERROR_CODE:
         return False
@@ -826,7 +1197,13 @@ def reopen_from_completed_video(
             unavailable_match_found = True
             continue
         try:
-            document = _reopen_job_subtitle_review(job, video, paths)
+            reedit_job, document = _create_isolated_reedit_job(
+                db=db,
+                source_job=job,
+                video=video,
+                clip_id=export.candidate_id or "",
+                paths=paths,
+            )
         except HTTPException as exc:
             if exc.status_code not in {
                 status.HTTP_404_NOT_FOUND,
@@ -835,9 +1212,8 @@ def reopen_from_completed_video(
                 raise
             unavailable_match_found = True
             continue
-        db.commit()
         return CompletedVideoReeditResponse(
-            jobId=job.id,
+            jobId=reedit_job.id,
             exportId=export.id,
             matchedClipId=export.candidate_id,
             clipType=export.type,
@@ -850,7 +1226,10 @@ def reopen_from_completed_video(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "code": "reedit_source_unavailable",
-                "message": ("対応するjobは見つかりましたが、元動画または編集データが残っていないため再編集できません。"),
+                "message": (
+                    "対応するjobは見つかりましたが、再編集に必要な保存データが不足しているか、"
+                    "現在の処理状態が再編集に対応していません。"
+                ),
             },
         )
     raise HTTPException(
@@ -860,6 +1239,34 @@ def reopen_from_completed_video(
             "message": "このMP4に対応する完成済みjobが見つかりません。",
         },
     )
+
+
+@router.post(
+    "/{job_id}/clips/{clip_id}/reedit",
+    response_model=SubtitleReviewDocument,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_clip_reedit(
+    job_id: str,
+    clip_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> SubtitleReviewDocument:
+    source_job = _get_job_or_404(db, job_id)
+    video = db.get(Video, source_job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
+    _child, document = _create_isolated_reedit_job(
+        db=db,
+        source_job=source_job,
+        video=video,
+        clip_id=clip_id,
+        paths=paths,
+    )
+    return document
 
 
 @router.post("", response_model=JobCreateResponse, status_code=status.HTTP_201_CREATED)
@@ -1741,6 +2148,7 @@ def approve_clip_plan(
         short_max_duration=float((job.settings_json or {}).get("shortMaxDuration", 75.0)),
         render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
         short_overlay_title_mode=_short_overlay_title_mode(dict(job.settings_json or {})),
+        short_layout=_short_layout(dict(job.settings_json or {})),
         short_top_banner_enabled=bool((job.settings_json or {}).get("shortTopBannerEnabled", False)),
         short_bottom_banner_enabled=bool((job.settings_json or {}).get("shortBottomBannerEnabled", False)),
         render_settings=dict(job.settings_json or {}),
@@ -1836,6 +2244,165 @@ def get_subtitle_review(
     )
 
 
+@router.get(
+    "/{job_id}/subtitle-review/clips/{clip_id}/title-hook-suggestions",
+    response_model=TitleHookSuggestionsDocument,
+)
+def get_title_hook_suggestions(
+    job_id: str,
+    clip_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_suggestions: TitleHookSuggestionsEnqueue = Depends(
+        get_enqueue_title_hook_suggestions
+    ),
+) -> TitleHookSuggestionsDocument:
+    job = _get_job_or_404(db, job_id)
+    review = _get_subtitle_review_or_404(job_id, paths)
+    if not any(clip.id == clip_id for clip in review.clips):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="subtitle review clip not found",
+        )
+    artifact = _get_title_hook_suggestions_or_404(job_id, clip_id, paths)
+    if (
+        artifact.state in {"queued", "generating"}
+        and job.status == "awaiting_subtitle_review"
+        and review.state == "awaiting_review"
+    ):
+        request_path = title_hook_suggestion_input_path(
+            paths.job_outputs(job_id),
+            clip_id,
+        )
+        try:
+            generation_input = load_title_hook_suggestion_input(request_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            generation_input = None
+        if (
+            generation_input is not None
+            and generation_input.input_hash == artifact.input_hash
+            and generation_input.draft_hash == artifact.draft_hash
+        ):
+            try:
+                enqueue_suggestions(job_id, clip_id, artifact.input_hash)
+            except Exception:
+                return artifact
+    return artifact
+
+
+@router.post(
+    "/{job_id}/subtitle-review/clips/{clip_id}/title-hook-suggestions",
+    response_model=TitleHookSuggestionsDocument,
+)
+def create_title_hook_suggestions(
+    job_id: str,
+    clip_id: str,
+    request: TitleHookSuggestionRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_suggestions: TitleHookSuggestionsEnqueue = Depends(
+        get_enqueue_title_hook_suggestions
+    ),
+) -> TitleHookSuggestionsDocument:
+    job = _get_job_or_404(db, job_id)
+    if db.get(Video, job.video_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
+    if job.status != "awaiting_subtitle_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not editable",
+        )
+    output_dir = paths.job_outputs(job_id)
+    state_path = title_hook_suggestions_path(output_dir, clip_id)
+    request_path = title_hook_suggestion_input_path(output_dir, clip_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not editable",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting edits",
+            )
+        try:
+            generation_input = build_title_hook_suggestion_input(
+                document,
+                clip_id,
+                [
+                    TitleHookDraftSegment(
+                        segmentId=segment.segment_id,
+                        text=segment.text,
+                    )
+                    for segment in request.segments
+                ],
+                model=str((job.settings_json or {}).get("openaiModel") or "gpt-5.5"),
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip or segment not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+
+        cached: TitleHookSuggestionsDocument | None = None
+        if state_path.is_file() and not request.force_regenerate:
+            try:
+                cached = load_title_hook_suggestions(state_path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                cached = None
+            if (
+                cached is not None
+                and cached.input_hash == generation_input.input_hash
+                and cached.draft_hash == generation_input.draft_hash
+            ):
+                if cached.state in {"ready", "failed"}:
+                    return cached
+                write_title_hook_suggestion_input(generation_input, request_path)
+                queued = cached
+            else:
+                cached = None
+
+        if cached is None:
+            write_title_hook_suggestion_input(generation_input, request_path)
+            if not openai_api_key_is_configured():
+                failed = failed_title_hook_suggestions(
+                    generation_input,
+                    "OPENAI_API_KEY is not configured",
+                )
+                write_title_hook_suggestions(failed, state_path)
+                return failed
+            queued = queued_title_hook_suggestions(generation_input)
+            write_title_hook_suggestions(queued, state_path)
+
+    try:
+        enqueue_suggestions(job_id, clip_id, generation_input.input_hash)
+    except Exception:
+        with subtitle_review_document_lock(output_dir):
+            active = load_title_hook_suggestions(state_path)
+            if (
+                active.input_hash == generation_input.input_hash
+                and active.draft_hash == generation_input.draft_hash
+            ):
+                active = failed_title_hook_suggestions(
+                    generation_input,
+                    "could not queue title/hook generation",
+                )
+                write_title_hook_suggestions(active, state_path)
+        return active
+    return queued
+
+
 @router.get("/{job_id}/subtitle-review/banner-assets/{position}")
 def get_subtitle_review_banner_asset(
     job_id: str,
@@ -1893,15 +2460,18 @@ def update_subtitle_review_settings(
         settings = dict(job.settings_json or {})
         previous_top_banner_enabled = bool(settings.get("shortTopBannerEnabled", False))
         short_overlay_title_mode = _short_overlay_title_mode(settings)
+        short_layout = request.short_layout or _short_layout(settings)
         if previous_top_banner_enabled and not request.short_top_banner_enabled:
             short_overlay_title_mode = "always"
         settings["shortTopBannerEnabled"] = request.short_top_banner_enabled
         settings["shortBottomBannerEnabled"] = request.short_bottom_banner_enabled
         settings["shortOverlayTitleMode"] = short_overlay_title_mode
+        settings["shortLayout"] = short_layout
         document = update_review_render_settings(
             document,
             render_mode=str(settings.get("mode", "high_quality")),
             short_overlay_title_mode=short_overlay_title_mode,
+            short_layout=short_layout,
             short_top_banner_enabled=request.short_top_banner_enabled,
             short_bottom_banner_enabled=request.short_bottom_banner_enabled,
             render_settings=settings,
@@ -2397,6 +2967,252 @@ def update_subtitle_review_clip_content(
 
 
 @router.post(
+    "/{job_id}/subtitle-review/clips/{clip_id}/convert-to-short",
+    response_model=SubtitleReviewDocument,
+)
+def convert_subtitle_review_clip_to_short(
+    job_id: str,
+    clip_id: str,
+    request: SubtitleReviewConvertToShortRequest | None = None,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
+    if job.status != "awaiting_subtitle_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not editable",
+        )
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting edits",
+            )
+        selection_payload = _read_json_if_exists(output_dir / "selected_clips.json")
+        try:
+            selection = CandidateSelection.model_validate(selection_payload or {})
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+
+        selection = apply_reviewed_clip_content(selection, document)
+        candidate = next(
+            (item for item in selection.normal_clips if item.id == clip_id),
+            None,
+        )
+        if candidate is None or selection.shorts or len(selection.normal_clips) != 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="isolated normal clip data is unavailable",
+            )
+
+        review_clip = next((item for item in document.clips if item.id == clip_id), None)
+        if review_clip is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            )
+        source_duration = review_clip.end - review_clip.start
+        supplied_range = bool(
+            request is not None
+            and request.start_seconds is not None
+            and request.end_seconds is not None
+        )
+        if supplied_range:
+            assert request is not None
+            assert request.start_seconds is not None
+            assert request.end_seconds is not None
+            if request.end_seconds > source_duration + 0.001:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="short range must stay within the source normal clip",
+                )
+            short_start = review_clip.start + request.start_seconds
+            short_end = review_clip.start + request.end_seconds
+        else:
+            hook_duration = 0.0
+            if review_clip.hook_scene_start is not None and review_clip.hook_scene_end is not None:
+                hook_duration = review_clip.hook_scene_end - review_clip.hook_scene_start
+            if review_clip.duration + hook_duration > document.short_max_duration + 0.001:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=(
+                        "startSeconds and endSeconds are required when the source normal clip "
+                        f"exceeds {document.short_max_duration:g} seconds"
+                    ),
+                )
+            short_start = review_clip.start
+            short_end = review_clip.end
+
+        try:
+            document = convert_review_clip_to_short(
+                document,
+                clip_id,
+                start=short_start,
+                end=short_end,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+
+        retained_segments = sorted(document.segments, key=lambda item: item.index)
+        segment_indices = [segment.index for segment in retained_segments]
+        transcript_text = " ".join(
+            segment.text.strip() for segment in retained_segments if segment.text.strip()
+        )
+        speech_seconds = sum(
+            max(0.0, min(segment.end, short_end) - max(segment.start, short_start))
+            for segment in retained_segments
+        )
+        duration = short_end - short_start
+        converted_clip = document.clips[0]
+        candidate_payload = candidate.model_dump(mode="python")
+        candidate_payload.update(
+            {
+                "type": "short",
+                "start": short_start,
+                "end": short_end,
+                "duration": duration,
+                "transcript_text": transcript_text,
+                "segment_start_index": min(segment_indices) if segment_indices else None,
+                "segment_end_index": max(segment_indices) if segment_indices else None,
+                "transcript_char_count": len(transcript_text),
+                "speech_seconds": round(speech_seconds, 6),
+                "silence_ratio": round(max(0.0, 1.0 - (speech_seconds / duration)), 6),
+                "hook_scene_start": converted_clip.hook_scene_start,
+                "hook_scene_end": converted_clip.hook_scene_end,
+                "original_start": short_start,
+                "original_end": short_end,
+                "refined_start": short_start,
+                "refined_end": short_end,
+                "boundary_refined": False,
+                "boundary_refinement_reason": None,
+                "boundary_expansion_seconds": 0.0,
+                "clip_plan_recommended_start": short_start,
+                "clip_plan_recommended_end": short_end,
+                "clip_plan_boundary_adjusted": False,
+                "selection_reason": "completed_normal_to_short",
+            }
+        )
+        short_candidate = Candidate.model_validate(candidate_payload)
+        selection = selection.model_copy(
+            update={
+                "normal_clips": [],
+                "shorts": [short_candidate],
+                "requested_normal_count": 0,
+                "requested_short_count": 1,
+                "normal_hard_gate_passed_count": 0,
+                "short_hard_gate_passed_count": 1,
+            }
+        )
+
+        settings = dict(job.settings_json or {})
+        settings.update(
+            {
+                "normalClipCount": 0,
+                "shortCount": 1,
+                "normalClipTimeRanges": [],
+                "shortClipTimeRanges": [
+                    {
+                        "startSeconds": short_candidate.start,
+                        "endSeconds": short_candidate.end,
+                    }
+                ],
+                "manualClipMetadata": [
+                    {
+                        "id": short_candidate.id,
+                        "type": "short",
+                        "title": short_candidate.title or short_candidate.overlay_title or "",
+                        "startSeconds": short_candidate.start,
+                        "endSeconds": short_candidate.end,
+                        "hookSceneStart": short_candidate.hook_scene_start,
+                        "hookSceneEnd": short_candidate.hook_scene_end,
+                    }
+                ],
+                "reeditTargetType": "short",
+            }
+        )
+        document, _contract_changed = refresh_review_render_contract(
+            document,
+            render_mode=str(settings.get("mode", "high_quality")),
+            render_settings=settings,
+            source_width=video.width,
+            source_height=video.height,
+        )
+        summary_payload = _read_json_if_exists(output_dir / "candidate_generation_summary.json")
+        summary = dict(summary_payload) if isinstance(summary_payload, dict) else {}
+        summary.update(
+            {
+                "source": "completed_normal_to_short",
+                "normal_candidate_count": 0,
+                "short_candidate_count": 1,
+                "candidates_kept_by_type": {"normal": 0, "short": 1},
+            }
+        )
+
+        artifact_snapshot = _snapshot_short_conversion_artifacts(output_dir)
+        try:
+            write_candidates([], output_dir / "normal_candidates.json")
+            write_candidates([short_candidate], output_dir / "short_candidates.json")
+            write_candidates([short_candidate], output_dir / "candidates.json")
+            write_candidates([short_candidate], output_dir / "scored_candidates.json")
+            write_selected_clips(selection, output_dir / "selected_clips.json")
+            _write_json_payload(output_dir / "candidate_generation_summary.json", summary)
+            job.settings_json = settings
+            job.updated_at = utc_now()
+            document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+                job=job,
+                video=video,
+                document=document,
+                paths=paths,
+                clip_ids={clip_id},
+            )
+            _write_subtitle_review_unlocked(document, paths)
+            db.commit()
+        except Exception:
+            db.rollback()
+            try:
+                _restore_short_conversion_artifacts(artifact_snapshot)
+            except OSError as restore_exc:
+                raise RuntimeError(
+                    "short conversion failed and artifact rollback could not be completed"
+                ) from restore_exc
+            raise
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
+
+
+@router.post(
     "/{job_id}/subtitle-review/clips/{clip_id}/apply",
     response_model=SubtitleReviewDocument,
 )
@@ -2468,6 +3284,8 @@ def apply_subtitle_review_clip(
                 style_updates["hook_style"] = request.hook_style
             if "subtitle_style" in request.model_fields_set:
                 style_updates["subtitle_style"] = request.subtitle_style
+            if "publication_title" in request.model_fields_set:
+                style_updates["publication_title"] = request.publication_title
             document = update_review_clip_content(
                 document,
                 clip_id,
@@ -2476,6 +3294,16 @@ def apply_subtitle_review_clip(
                 hook_duration_seconds=request.hook_duration_seconds,
                 **style_updates,
             )
+            if {
+                "hook_scene_start",
+                "hook_scene_end",
+            }.issubset(request.model_fields_set):
+                document = update_review_hook_scene(
+                    document,
+                    clip_id,
+                    start=request.hook_scene_start,
+                    end=request.hook_scene_end,
+                )
             for segment_update in request.segments:
                 document = update_review_segment(
                     document,

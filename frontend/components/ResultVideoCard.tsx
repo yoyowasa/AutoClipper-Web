@@ -35,10 +35,14 @@ function scoreSourceLabel(item: ResultExportItem): string {
 
 export function ResultVideoCard({
   item,
-  auditAvailable = false
+  auditAvailable = false,
+  onReedit,
+  isReediting = false
 }: {
   item: ResultExportItem;
   auditAvailable?: boolean;
+  onReedit?: (item: ResultExportItem) => void;
+  isReediting?: boolean;
 }) {
   const warnings = item.auditWarnings ?? [];
   const scoreSource = scoreSourceLabel(item);
@@ -128,6 +132,16 @@ export function ResultVideoCard({
         </details>
 
         <div className="flex flex-wrap gap-2">
+          {onReedit && item.candidateId ? (
+            <button
+              className="inline-flex min-h-10 items-center bg-sky-700 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
+              disabled={isReediting}
+              type="button"
+              onClick={() => onReedit(item)}
+            >
+              {isReediting ? "再編集画面を準備中" : "この動画だけ再編集"}
+            </button>
+          ) : null}
           <a
             className="inline-flex min-h-10 items-center rounded-md bg-neutral-950 px-4 text-sm font-medium text-white"
             href={toApiUrl(item.downloadUrl)}

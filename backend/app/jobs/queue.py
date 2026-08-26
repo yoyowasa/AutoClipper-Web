@@ -15,6 +15,7 @@ from app.jobs.runner import (
     run_subtitle_review_hook_scene_update,
     run_subtitle_review_render,
 )
+from app.jobs.title_hook_suggestions import run_title_hook_suggestion_generation
 
 JobEnqueue = Callable[[str], None]
 TerminalRetryAllowed = Callable[[], bool]
@@ -30,6 +31,7 @@ SubtitleReviewHookSceneUpdateEnqueue = Callable[
     None,
 ]
 SubtitleReviewPreviewEnqueue = Callable[[str, str, str], None]
+TitleHookSuggestionsEnqueue = Callable[[str, str, str], None]
 RenderEnqueue = Callable[[str], None]
 ACTIVE_RETRY_RQ_STATUSES = {
     JobStatus.CREATED,
@@ -138,6 +140,46 @@ def enqueue_subtitle_review_preview(
         raise
 
 
+def title_hook_suggestions_rq_job_id(
+    job_id: str,
+    clip_id: str,
+    input_hash: str,
+) -> str:
+    return f"ai_title_hook-{job_id}-{clip_id}-{input_hash}"
+
+
+def enqueue_title_hook_suggestions(
+    job_id: str,
+    clip_id: str,
+    input_hash: str,
+) -> None:
+    queue = get_queue()
+    rq_job_id = title_hook_suggestions_rq_job_id(job_id, clip_id, input_hash)
+    existing = queue.fetch_job(rq_job_id)
+    if existing is not None:
+        if existing.get_status(refresh=True) in ACTIVE_RETRY_RQ_STATUSES:
+            return
+        existing.delete()
+    try:
+        queue.enqueue(
+            run_title_hook_suggestion_generation,
+            job_id,
+            clip_id,
+            input_hash,
+            job_timeout=900,
+            job_id=rq_job_id,
+            unique=True,
+        )
+    except DuplicateJobError:
+        concurrent = queue.fetch_job(rq_job_id)
+        if (
+            concurrent is not None
+            and concurrent.get_status(refresh=True) in ACTIVE_RETRY_RQ_STATUSES
+        ):
+            return
+        raise
+
+
 def enqueue_clip_plan_reselection(job_id: str) -> None:
     queue = get_queue()
     queue.enqueue(run_clip_plan_reselection, job_id, job_timeout=3600)
@@ -220,6 +262,10 @@ def get_enqueue_subtitle_review_hook_scene_update() -> SubtitleReviewHookSceneUp
 
 def get_enqueue_subtitle_review_preview() -> SubtitleReviewPreviewEnqueue:
     return enqueue_subtitle_review_preview
+
+
+def get_enqueue_title_hook_suggestions() -> TitleHookSuggestionsEnqueue:
+    return enqueue_title_hook_suggestions
 
 
 def get_enqueue_render_job() -> RenderEnqueue:

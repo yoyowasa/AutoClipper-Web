@@ -7616,3 +7616,152 @@ pip check: pass
 
 - 完成動画の手動再編集で、焼き込み済み字幕を除去できない問題は未解決。代替仕様は未実装。
 - Task 122の許可済み実動画による全実E2Eとユーザー受入は未確認。
+
+## 2026-08-25 Task 124 字幕確認中のAIタイトル・フック選定
+
+### 目的
+
+- 仮完成動画を外部へ渡していたタイトル・冒頭フック選定を、字幕確認から最終レンダリングまでの間へ組み込む。
+- 既存の`OPENAI_API_KEY`を再利用し、通常・ショートの公開用タイトル、動画内タイトル、フック文字、見せ場区間を3案から選べるようにする。
+
+### 観測事実・原因
+
+- 変更前は字幕確認画面にAI候補生成がなく、タイトル・フックを選定するには一度動画を完成させる必要があった。
+- 旧subtitle reviewでは`title`が公開タイトルを兼ね、shortの`overlay_title`と意味が分かれていたため、単純なfield追加では既存動画内タイトルを上書きする互換性問題があった。
+- RQ artifactだけが`queued/generating`で残ると、Redis再起動やworker停止後にUIが永久待機する経路があった。
+
+### 変更
+
+- 字幕確認画面の`タイトル・フック`欄へ`AI タイトル・フック案`を追加した。明示ボタンを押した時だけ3案を生成し、案のフック区間をメイン動画で再生できる。
+- AI案は公開用タイトル、動画内タイトル、冒頭フック文字、1.5〜3.0秒のclip相対見せ場区間、選定理由を返す。`フックなし`も選択できる。
+- 案を選んだ時点ではブラウザの下書きだけを更新し、既存の右下`OK`で字幕・タイトル・フックをまとめて保存する。AI失敗時も手入力を継続できる。
+- 現在の未保存字幕全文と、選択clipからFFmpegで抽出した代表JPEG 4枚をOpenAI Responses APIへ送る。動画本体、動画URL、保存path、Cookie、認証情報、元動画絶対時刻は送信しない。`store=false`を指定する。
+- `publicationTitle`と動画内`title/overlay_title`を分離し、通常・ショートのlive preview、exact preview、完成MP4、結果metadataへ同じ意味で反映する。旧artifactでは既存shortの`overlay_title`を保持する。
+- 生成はRQで非同期実行する。入力hashとraw字幕hashでcache・再読込を照合し、字幕変更後の古い案は適用禁止にした。
+- `queued/generating` artifactはGET pollingとPOSTから冪等に再enqueueする。生存中の同一RQ jobは重複させず、字幕確認完了後はworkerのprovider送信前・結果保存前に中止する。
+- OpenAI SDK内蔵retryを無効化し、120秒timeoutと外側最大3retryへ一本化した。失敗してもメインJob状態は変更しない。
+- 主な変更ファイル: `backend/app/scoring/title_hook_suggestions.py`、`backend/app/jobs/title_hook_suggestions.py`、`backend/app/api/jobs.py`、`backend/app/jobs/queue.py`、`backend/app/jobs/subtitle_review.py`、通常・exact renderer、`frontend/components/TitleHookSuggestionPanel.tsx`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、API型、関連test、`README.md`、`STATUS.md`。
+
+### 検証
+
+- backend対象test: `46 passed`。backend全体: `612 passed, 1 skipped`。ruff、compile/import、`git diff --check -- backend`: pass。
+- frontend typecheck、lint、production build: pass。
+- GPU Composeでbackend / worker / frontendをbuild・再作成し、backend healthy、`/health=ok`、frontend HTTP 200: pass。
+- worker GPU preflight: `cuda / float16 / NVIDIA GeForce RTX 5070 Ti`、fallbackなし。
+- 合成4秒動画を使い、実FFmpegで代表frame 4枚を抽出し、既存`OPENAI_API_KEY`による実Responses APIで3案を取得した。strict contractは3案すべてpass。ユーザー動画は送信していない。確認用artifactは削除済み。
+- 1821x1272のin-app browserで字幕確認画面を再読込し、公開用/動画内タイトル、AI生成ボタン、フックなし、既存メインpreviewとの配置を確認した。console warning/error 0件。ユーザーJobの生成・保存操作は未実施。
+- 独立レビューで指摘された旧overlay互換、SDK二重retry、raw字幕cache、RQ消失時の停止、確認完了後の不要送信を修正し、各再現testを追加した。最終再レビュー: P0/P1/P2なし。
+
+### 未解決・制限
+
+- ユーザーの実Jobを変更する`生成`、案の適用、`OK`保存は未実施。HTTP→Redis→worker→画面反映の実Job E2Eとユーザー受入は未確認。
+- AI候補はAPI利用料が発生する明示操作。ChatGPT/Codexのログインではなく、既存の`OPENAI_API_KEY`を使用する。
+
+## 2026-08-27 Task 125 手動ショートの画角変更と自動人物優先
+
+### 目的
+
+- 完成clipを元に手動作成したショートでも、字幕確認画面から人物アップ、中央拡大、全体表示を選び、完成動画と同じ画角で確認できるようにする。
+
+### 観測事実・原因
+
+- 対象Jobは`shortLayout=auto`、1920x1080、字幕なしだった。
+- 顔7件が横に広い判定になり、話者追跡が使えない場合、強い被写体検出があっても`blur_background`へ落ちていた。
+- レンダラーは4種類の画角に対応済みだったが、字幕確認Document/API/UIに`shortLayout`の変更導線がなかった。
+
+### 変更
+
+- 字幕確認のメインpreview上部へ`ショート画角`を追加した。`自動（人物を優先） / 人物アップ（顔を追従） / 中央を拡大 / 全体表示（ぼかし背景）`を選べる。
+- 選択値をJob設定とsubtitle review artifactへ保存し、対象ショートpreviewを自動再生成する。最終レンダリングも同じJob設定を使用する。
+- 初回の字幕確認DocumentにもJobの`shortLayout`を保持し、旧artifactは`auto`で読み込む。
+- `auto`で顔群が広い場合、話者に続いて人物・被写体信号も評価し、信頼できる対象があれば縦型cropを優先する。
+- 新規作成画面にも既存Backendの`face_tracking_crop`を`人物アップ（顔を追従）`として追加した。
+- 主な変更ファイル: `backend/app/schemas.py`、`backend/app/api/jobs.py`、`backend/app/jobs/runner.py`、`backend/app/jobs/subtitle_review.py`、`backend/app/render/crop_strategy.py`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/components/SettingsPanel.tsx`、`frontend/lib/types.ts`、関連test、`README.md`、`STATUS.md`。
+
+### 検証
+
+- backend全test: `614 passed, 1 skipped, 1 warning`。全ruff: pass。`git diff --check`: errorなし。
+- frontend: typecheck / lint / production build: pass。
+- 実素材の読み取り専用判定で、顔7件を確認した。`人物アップ（顔を追従）`指定時は`face_tracking_crop`が先頭戦略になることを確認した。`auto`は同素材では`ambiguous_subject_signal`により全体表示のまま。
+- Dockerのbackend/frontendだけを再build・再起動し、backend health=`ok`、frontend HTTP=`200`を確認した。workerは停止・再起動していない。
+- 実ブラウザで字幕確認画面に4種類の`ショート画角`が表示され、メインpreview上部へ収まることを確認した。
+
+### 未解決・制限
+
+- `人物アップ（顔を追従）`は顔検出不能時に安全なfallbackを使う。人物をクリックして指定する手動パン操作は未実装。
+- 現状の画角設定はJob内の全ショート共通。clipごとの個別画角は未実装。
+- ユーザーJobの設定変更は行っていない。画面から`人物アップ（顔を追従）`を選択後の実previewと完成動画はユーザー受入未確認。
+
+## 2026-08-27 Task 126 完成動画の1本限定再編集・通常からショートへの変換
+
+### 目的
+
+- 完成結果から選択した動画1本だけを再編集し、元Jobの通常2本・ショート3本を強制的に再編集する挙動を解消する。
+- 完成した通常動画を、再編集画面でショートへ切り替えて画角・字幕・タイトル・フックを編集できるようにする。
+
+### 観測事実・原因
+
+- 変更前の`matchedClipId`は字幕確認画面の初期選択にしか使われず、Backendは元Job全体のsubtitle reviewを再開して全clipを未確認へ戻していた。
+- 同じJob内で対象clipだけを差し替えると、出力名・ZIP・review履歴・selectionの衝突が発生するため、元Jobを維持したまま1本専用の再編集Jobへ分離した。
+
+### 変更
+
+- 結果画面の各動画へ`この動画だけ再編集`を追加した。選択時に元Jobを変更せず、対象clip 1本だけを含む子Jobを作成する。
+- 完成MP4をアップロードする再編集導線も、照合した対象clip 1本だけの子Jobを作る方式へ変更した。
+- 子Jobには選択clipに必要なtranscript、candidate、selection、subtitle reviewだけを再構築し、親Jobの動画・Export・ZIP・確認状態を変更しない。
+- 通常clipの1本再編集画面へ`範囲を決めてショート化`を追加した。短いclipは全体、長いclipは現在の再生位置から最大60秒を初期値にし、開始・終了をclip内の秒数で調整できる。
+- 冒頭複製を含む合計を`shortMaxDuration`以内に検証する。選択範囲外の字幕を除外し、見せ場映像が範囲外なら複製だけを解除する。
+- 変換前に未保存の字幕・公開タイトル・動画内タイトル・フック・文字サイズ・色・位置を自動保存し、short用の解像度・preview contractだけを再計算する。
+- candidate、selection、Job設定、候補summaryをnormal 0 / short 1へ同期する。途中失敗時はartifactとDB設定を変換前へ戻す。
+- 子Jobは再編集レンダーとして扱い、初回書き出しに失敗してもterminal failedにせず字幕確認へ戻して再試行できる。
+- 変換後はshort用の画角、字幕、タイトル、フック、帯設定を使ってpreview・最終レンダリングできる。
+- 主な変更ファイル: `backend/app/api/jobs.py`、`backend/app/jobs/subtitle_review.py`、`backend/app/schemas.py`、`backend/tests/test_api_routes.py`、`frontend/app/results/[jobId]/page.tsx`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/components/ResultVideoCard.tsx`、`frontend/components/ShortConversionEditor.tsx`、`frontend/lib/api.ts`、`frontend/lib/types.ts`、`STATUS.md`。
+
+### 検証
+
+- backend対象test: `test_api_routes.py=80 passed`。
+- backend全test: `622 passed, 1 skipped`。全ruff: pass。
+- frontend: typecheck / lint / production build: pass。
+- 複数clipの親Jobから1本だけの子Jobが作られること、親Jobがcompletedのまま変化しないこと、100秒の通常clip内から50秒をshort化できること、編集済み字幕・タイトル・フック・3種類の文字styleを保持することをAPI testで確認した。
+- 変換途中の書込み失敗で全artifactとDB設定が元へ戻ること、Export 0件の子Jobでレンダー失敗後に字幕確認へ復帰できることをtestで確認した。
+- 処理待ち・実行中がともに0件の状態でGPU Composeのbackend / worker / frontendをbuild・再作成した。backend health=`ok`、frontend HTTP=`200`、worker=`cuda / float16 / NVIDIA GeForce RTX 5070 Ti`、fallbackなしを確認した。
+- 実ブラウザで完成結果の`この動画だけ再編集`から子Jobを作成し、`範囲を決めてショート化`を開いて25秒の検証clipをshortへ変換した。画面は通常0本 / ショート1本へ切り替わり、人物アップを含む4画角が表示された。完成表示preview=`ready`、console warning/error 0件、親Job=`completed`、子Job=`awaiting_subtitle_review`、子clip=1本を確認した。最終レンダリングは開始していない。
+
+### 未解決・制限
+
+- 許可済みユーザー実動画による長尺範囲指定と、子Jobの最終MP4・ZIPまでの実E2E、ユーザー受入は未確認。
+
+## 2026-08-27 Task 127 旧再編集Jobの1本分離互換
+
+### 目的
+
+- 旧方式でJob全体を再編集状態へ戻した後でも、完成MP4から対象動画1本だけの再編集Jobを作成できるようにする。
+- 実データが残っているのに「元動画または編集データが残っていない」と表示される誤判定を解消する。
+
+### 観測事実・原因
+
+- 対象MP4はExportとSHA-256が完全一致し、元動画、`subtitle_review.json`、`selected_clips.json`、`transcript_segments.json`、対象candidateも残っていた。
+- 元Jobは旧方式で`awaiting_subtitle_review`、reviewは`awaiting_review`へ戻っていた。
+- Task 126の1本分離処理が`completed / completed`だけを再編集元として許可したため、保存データ完備でも409へ変換されていた。
+
+### 変更
+
+- 1本分離再編集の元状態として、`completed / completed`に加え、再オープン履歴がある`awaiting_subtitle_review / awaiting_review`を許可した。
+- 初回字幕確認Jobとの混同を防ぐため、旧状態は`reopenedAt`設定済みかつ`renderRevision > 1`の場合だけ許可する。
+- 可変状態の元Jobはsource側のdocument lock内でreview、candidate、transcript、補助artifactを同じ時点のsnapshotとして読み取る。
+- 子Job作成後も親Jobの状態、設定、編集JSON、Export、ZIPを変更しない。
+- 再編集不能時の表示を、保存データ不足と処理状態非対応の両方を区別できる文面へ修正した。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/tests/test_api_routes.py`、`STATUS.md`。
+
+### 検証
+
+- focused test: `3 passed`。`test_api_routes.py`: `83 passed`。
+- backend全test: `625 passed, 1 skipped`。backend全ruff: pass。
+- frontend typecheck、lint、production build: pass。
+- 独立レビューで初回字幕確認Jobまで許可するP2を検出し、再オープン履歴条件と拒否testを追加した。最終再レビュー: P0/P1/P2なし。
+- GPU Composeのbackendをbuild・再作成し、`/health=ok`を確認した。
+- 直前に409となった同一MP4を再送し、`job_a7c9385e583c4eb7ab33d59ada785462`を作成した。対象clip 1本、review=`awaiting_review`、元Job=`awaiting_subtitle_review`のまま、元reviewのSHA-256不変を確認した。
+
+### 未解決・制限
+
+- 作成した子Jobの字幕確認後から最終MP4・ZIPまでのユーザー受入は未確認。

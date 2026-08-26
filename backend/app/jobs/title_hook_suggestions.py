@@ -1,0 +1,468 @@
+import json
+import os
+from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
+from hashlib import sha256
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any, Literal, Protocol
+from uuid import uuid4
+
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.orm import Session
+
+from app.db import SessionLocal
+from app.jobs.subtitle_review import (
+    SubtitleReviewDocument,
+    load_subtitle_review,
+    subtitle_review_output_path,
+)
+from app.jobs.subtitle_review_preview import subtitle_review_document_lock
+from app.models import Job, Video
+from app.scoring.title_hook_suggestions import (
+    TITLE_HOOK_PROMPT_VERSION,
+    OpenAITitleHookSuggestionGenerator,
+    TitleHookSuggestion,
+    TitleHookSuggestionResult,
+    extract_representative_frames,
+    normalize_title_hook_suggestions,
+)
+from app.storage.paths import StoragePaths, get_storage_paths
+
+
+TITLE_HOOK_SUGGESTIONS_DIRNAME = "title_hook_suggestions"
+TITLE_HOOK_GENERATION_CANCELLED_ERROR = (
+    "subtitle review is no longer awaiting title/hook suggestions"
+)
+TitleHookSuggestionState = Literal["queued", "generating", "ready", "failed"]
+
+
+def _utc_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+class TitleHookDraftSegment(BaseModel):
+    segment_id: str = Field(alias="segmentId")
+    text: str
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class TitleHookSuggestionInputSegment(BaseModel):
+    segment_id: str = Field(alias="segmentId")
+    start: float = Field(ge=0)
+    end: float = Field(ge=0)
+    source_start: float = Field(ge=0, alias="sourceStart")
+    source_end: float = Field(ge=0, alias="sourceEnd")
+    text: str
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class TitleHookSuggestionInput(BaseModel):
+    version: int = 1
+    prompt_version: str = Field(alias="promptVersion")
+    job_id: str = Field(alias="jobId")
+    clip_id: str = Field(alias="clipId")
+    clip_type: Literal["normal", "short"] = Field(alias="clipType")
+    clip_start: float = Field(ge=0, alias="clipStart")
+    clip_end: float = Field(gt=0, alias="clipEnd")
+    clip_duration: float = Field(gt=0, alias="clipDuration")
+    input_hash: str = Field(min_length=64, max_length=64, alias="inputHash")
+    draft_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        alias="draftHash",
+    )
+    model: str = Field(min_length=1)
+    segments: list[TitleHookSuggestionInputSegment] = Field(default_factory=list)
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    def prompt_payload(self) -> dict[str, Any]:
+        return {
+            "clipType": self.clip_type,
+            "clipDurationSeconds": self.clip_duration,
+            "timestampSemantics": "clip_relative_seconds",
+            "subtitleStatus": "available" if any(item.text.strip() for item in self.segments) else "unavailable",
+            "segments": [
+                {
+                    "start": item.start,
+                    "end": item.end,
+                    "text": item.text,
+                }
+                for item in self.segments
+            ],
+        }
+
+
+class TitleHookSuggestionsDocument(BaseModel):
+    clip_id: str = Field(alias="clipId")
+    state: TitleHookSuggestionState
+    input_hash: str = Field(min_length=64, max_length=64, alias="inputHash")
+    draft_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        alias="draftHash",
+    )
+    model: str
+    suggestions: list[TitleHookSuggestion] = Field(default_factory=list)
+    error: str | None = None
+    generated_at: str | None = Field(default=None, alias="generatedAt")
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+def _clip_digest(clip_id: str) -> str:
+    return sha256(clip_id.encode("utf-8")).hexdigest()[:24]
+
+
+def title_hook_suggestions_path(output_dir: str | Path, clip_id: str) -> Path:
+    return Path(output_dir) / TITLE_HOOK_SUGGESTIONS_DIRNAME / f"{_clip_digest(clip_id)}.json"
+
+
+def title_hook_suggestion_input_path(output_dir: str | Path, clip_id: str) -> Path:
+    return Path(output_dir) / TITLE_HOOK_SUGGESTIONS_DIRNAME / f"{_clip_digest(clip_id)}.input.json"
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.{uuid4().hex}.tmp")
+    temporary_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary_path.replace(path)
+    return path
+
+
+def write_title_hook_suggestions(
+    document: TitleHookSuggestionsDocument,
+    path: str | Path,
+) -> Path:
+    return _write_json_atomic(
+        Path(path),
+        document.model_dump(by_alias=True, mode="json"),
+    )
+
+
+def load_title_hook_suggestions(path: str | Path) -> TitleHookSuggestionsDocument:
+    return TitleHookSuggestionsDocument.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def write_title_hook_suggestion_input(
+    request: TitleHookSuggestionInput,
+    path: str | Path,
+) -> Path:
+    return _write_json_atomic(
+        Path(path),
+        request.model_dump(by_alias=True, mode="json"),
+    )
+
+
+def load_title_hook_suggestion_input(path: str | Path) -> TitleHookSuggestionInput:
+    return TitleHookSuggestionInput.model_validate_json(Path(path).read_text(encoding="utf-8"))
+
+
+def build_title_hook_suggestion_input(
+    document: SubtitleReviewDocument,
+    clip_id: str,
+    drafts: Sequence[TitleHookDraftSegment],
+    *,
+    model: str,
+) -> TitleHookSuggestionInput:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+    allowed_ids = set(clip.segment_ids)
+    requested_ids = [draft.segment_id for draft in drafts]
+    if len(requested_ids) != len(set(requested_ids)):
+        raise ValueError("duplicate subtitle segment update")
+    if set(requested_ids) - allowed_ids:
+        raise ValueError("subtitle segment does not belong to the selected clip")
+    if set(requested_ids) != allowed_ids:
+        raise ValueError("all subtitle segments for the selected clip are required")
+    stored_by_id = {segment.id: segment for segment in document.segments}
+    draft_by_id = {draft.segment_id: draft for draft in drafts}
+    missing_ids = [segment_id for segment_id in requested_ids if segment_id not in stored_by_id]
+    if missing_ids:
+        raise KeyError(missing_ids[0])
+
+    input_segments: list[TitleHookSuggestionInputSegment] = []
+    for segment_id in sorted(requested_ids, key=lambda item: stored_by_id[item].index):
+        stored = stored_by_id[segment_id]
+        relative_start = min(clip.duration, max(0.0, stored.start - clip.start))
+        relative_end = min(clip.duration, max(relative_start, stored.end - clip.start))
+        input_segments.append(
+            TitleHookSuggestionInputSegment(
+                segmentId=segment_id,
+                start=round(relative_start, 3),
+                end=round(relative_end, 3),
+                sourceStart=round(stored.start, 3),
+                sourceEnd=round(stored.end, 3),
+                text=draft_by_id[segment_id].text.strip(),
+            )
+        )
+
+    normalized_model = model.strip() or "gpt-5.5"
+    hash_payload = {
+        "promptVersion": TITLE_HOOK_PROMPT_VERSION,
+        "jobId": document.job_id,
+        "clipId": clip.id,
+        "clipType": clip.type,
+        "clipStart": round(clip.start, 3),
+        "clipEnd": round(clip.end, 3),
+        "clipDuration": round(clip.duration, 3),
+        "model": normalized_model,
+        "segments": [item.model_dump(by_alias=True, mode="json") for item in input_segments],
+    }
+    encoded = json.dumps(
+        hash_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    input_hash = sha256(encoded.encode("utf-8")).hexdigest()
+    ordered_segment_ids = [item.segment_id for item in input_segments]
+    draft_payload = [
+        {"segmentId": segment_id, "text": draft_by_id[segment_id].text}
+        for segment_id in ordered_segment_ids
+    ]
+    draft_hash = sha256(
+        json.dumps(
+            draft_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return TitleHookSuggestionInput(
+        promptVersion=TITLE_HOOK_PROMPT_VERSION,
+        jobId=document.job_id,
+        clipId=clip.id,
+        clipType=clip.type,
+        clipStart=clip.start,
+        clipEnd=clip.end,
+        clipDuration=clip.duration,
+        inputHash=input_hash,
+        draftHash=draft_hash,
+        model=normalized_model,
+        segments=input_segments,
+    )
+
+
+def queued_title_hook_suggestions(request: TitleHookSuggestionInput) -> TitleHookSuggestionsDocument:
+    return TitleHookSuggestionsDocument(
+        clipId=request.clip_id,
+        state="queued",
+        inputHash=request.input_hash,
+        draftHash=request.draft_hash,
+        model=request.model,
+    )
+
+
+def failed_title_hook_suggestions(
+    request: TitleHookSuggestionInput,
+    error: str,
+) -> TitleHookSuggestionsDocument:
+    return TitleHookSuggestionsDocument(
+        clipId=request.clip_id,
+        state="failed",
+        inputHash=request.input_hash,
+        draftHash=request.draft_hash,
+        model=request.model,
+        error=error,
+        generatedAt=_utc_iso(),
+    )
+
+
+def openai_api_key_is_configured() -> bool:
+    return bool(os.environ.get("OPENAI_API_KEY", "").strip())
+
+
+class TitleHookSuggestionGeneratorProtocol(Protocol):
+    def generate(
+        self,
+        payload: dict[str, Any],
+        frame_paths: Sequence[Path],
+    ) -> TitleHookSuggestionResult:
+        pass
+
+
+FrameExtractor = Callable[..., list[Path]]
+SessionFactory = Callable[[], Session]
+
+
+def _safe_generation_error(exc: Exception) -> str:
+    if isinstance(exc, RuntimeError) and str(exc) == "OPENAI_API_KEY is not configured":
+        return str(exc)
+    return f"title/hook generation failed ({exc.__class__.__name__})"
+
+
+def _generation_context_is_active(
+    session_factory: SessionFactory,
+    job_id: str,
+    review_path: Path,
+) -> bool:
+    try:
+        with session_factory() as db:
+            job = db.get(Job, job_id)
+            if job is None or job.status != "awaiting_subtitle_review":
+                return False
+        if not review_path.is_file():
+            return False
+        return load_subtitle_review(review_path).state == "awaiting_review"
+    except Exception:
+        return False
+
+
+def _cancelled_title_hook_suggestions(
+    request: TitleHookSuggestionInput,
+) -> TitleHookSuggestionsDocument:
+    return failed_title_hook_suggestions(
+        request,
+        TITLE_HOOK_GENERATION_CANCELLED_ERROR,
+    )
+
+
+def run_title_hook_suggestion_generation(
+    job_id: str,
+    clip_id: str,
+    input_hash: str,
+    session_factory: SessionFactory = SessionLocal,
+    paths: StoragePaths | None = None,
+    generator: TitleHookSuggestionGeneratorProtocol | None = None,
+    frame_extractor: FrameExtractor = extract_representative_frames,
+) -> list[str]:
+    storage_paths = paths or get_storage_paths()
+    job_dir = storage_paths.job_outputs(job_id)
+    state_path = title_hook_suggestions_path(job_dir, clip_id)
+    input_request_path = title_hook_suggestion_input_path(job_dir, clip_id)
+    review_path = subtitle_review_output_path(job_dir)
+
+    with subtitle_review_document_lock(job_dir):
+        if not state_path.is_file() or not input_request_path.is_file():
+            return ["superseded"]
+        state = load_title_hook_suggestions(state_path)
+        request = load_title_hook_suggestion_input(input_request_path)
+        if (
+            state.state not in {"queued", "generating"}
+            or state.input_hash != input_hash
+            or request.input_hash != input_hash
+            or state.draft_hash != request.draft_hash
+        ):
+            return ["superseded"]
+        if not _generation_context_is_active(session_factory, job_id, review_path):
+            write_title_hook_suggestions(
+                _cancelled_title_hook_suggestions(request),
+                state_path,
+            )
+            return ["cancelled"]
+        generating = state.model_copy(
+            update={
+                "state": "generating",
+                "suggestions": [],
+                "error": None,
+                "generated_at": None,
+            }
+        )
+        write_title_hook_suggestions(generating, state_path)
+
+    try:
+        with session_factory() as db:
+            job = db.get(Job, job_id)
+            if job is None:
+                raise ValueError(f"job not found: {job_id}")
+            video = db.get(Video, job.video_id)
+            if video is None:
+                raise ValueError(f"video not found for job: {job_id}")
+            source_path = storage_paths.resolve_stored_file(video.stored_path)
+
+        frame_paths: list[Path] = []
+        temp_root = storage_paths.temp / job_id / TITLE_HOOK_SUGGESTIONS_DIRNAME
+        temp_root.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix=f"{_clip_digest(clip_id)}-", dir=temp_root) as temporary_dir:
+            try:
+                frame_paths = frame_extractor(
+                    source_path,
+                    clip_start=request.clip_start,
+                    clip_end=request.clip_end,
+                    output_dir=Path(temporary_dir),
+                )
+            except Exception:
+                frame_paths = []
+            if not frame_paths and not any(item.text.strip() for item in request.segments):
+                raise ValueError("title/hook generation requires subtitles or representative frames")
+            if not openai_api_key_is_configured() and generator is None:
+                raise RuntimeError("OPENAI_API_KEY is not configured")
+            with subtitle_review_document_lock(job_dir):
+                if not state_path.is_file() or not input_request_path.is_file():
+                    return ["superseded"]
+                active_state = load_title_hook_suggestions(state_path)
+                active_request = load_title_hook_suggestion_input(input_request_path)
+                if (
+                    active_state.state not in {"queued", "generating"}
+                    or active_state.input_hash != input_hash
+                    or active_request.input_hash != input_hash
+                    or active_state.draft_hash != active_request.draft_hash
+                ):
+                    return ["superseded"]
+                if not _generation_context_is_active(
+                    session_factory,
+                    job_id,
+                    review_path,
+                ):
+                    write_title_hook_suggestions(
+                        _cancelled_title_hook_suggestions(active_request),
+                        state_path,
+                    )
+                    return ["cancelled"]
+                request = active_request
+            active_generator = generator or OpenAITitleHookSuggestionGenerator(model=request.model)
+            result = active_generator.generate(request.prompt_payload(), frame_paths)
+
+        suggestions = normalize_title_hook_suggestions(
+            result,
+            clip_duration=request.clip_duration,
+        )
+        next_state = TitleHookSuggestionsDocument(
+            clipId=clip_id,
+            state="ready",
+            inputHash=input_hash,
+            draftHash=request.draft_hash,
+            model=request.model,
+            suggestions=suggestions,
+            generatedAt=_utc_iso(),
+        )
+        result_state = "ready"
+    except Exception as exc:
+        next_state = failed_title_hook_suggestions(request, _safe_generation_error(exc))
+        result_state = "failed"
+
+    with subtitle_review_document_lock(job_dir):
+        if not state_path.is_file():
+            return ["superseded"]
+        active_state = load_title_hook_suggestions(state_path)
+        if not input_request_path.is_file():
+            return ["superseded"]
+        active_request = load_title_hook_suggestion_input(input_request_path)
+        if (
+            active_state.state not in {"queued", "generating"}
+            or active_state.input_hash != input_hash
+            or active_request.input_hash != input_hash
+            or active_state.draft_hash != active_request.draft_hash
+        ):
+            return ["superseded"]
+        if not _generation_context_is_active(session_factory, job_id, review_path):
+            write_title_hook_suggestions(
+                _cancelled_title_hook_suggestions(active_request),
+                state_path,
+            )
+            return ["cancelled"]
+        next_state = next_state.model_copy(
+            update={"draft_hash": active_request.draft_hash}
+        )
+        write_title_hook_suggestions(next_state, state_path)
+    return [result_state]

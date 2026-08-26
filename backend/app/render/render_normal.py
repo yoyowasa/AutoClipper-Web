@@ -237,6 +237,7 @@ def _write_export_metadata(
     export_id: str,
     candidate: Candidate,
     title: str,
+    overlay_title: str,
     video_path: Path,
     subtitle_path: Path | None,
 ) -> Path:
@@ -249,6 +250,7 @@ def _write_export_metadata(
                 "type": "normal",
                 "candidate_id": candidate.id,
                 "title": title,
+                "overlay_title": overlay_title,
                 "title_source": candidate.title_source,
                 "title_rendered": True,
                 "overlay_title_expected": True,
@@ -343,7 +345,8 @@ def render_selected_normal_candidates(
 
         try:
             title = _candidate_title(candidate, index)
-            use_ass = burn_subtitles or bool(title.strip())
+            overlay_title = (candidate.overlay_title or title).strip()
+            use_ass = burn_subtitles or bool(overlay_title)
             if use_ass:
                 subtitle_path = subtitle_dir / f"normal_{index:02d}.ass"
                 ass_candidate = (
@@ -365,7 +368,7 @@ def render_selected_normal_candidates(
                         settings=subtitle_settings,
                     ),
                     subtitle_settings=subtitle_settings,
-                    top_title=title,
+                    top_title=overlay_title,
                 )
 
             render_kwargs: dict[str, Any] = {
@@ -385,6 +388,7 @@ def render_selected_normal_candidates(
                 export_id=export_id,
                 candidate=candidate,
                 title=title,
+                overlay_title=overlay_title,
                 video_path=output_path,
                 subtitle_path=subtitle_path,
             )

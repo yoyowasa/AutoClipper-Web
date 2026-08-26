@@ -399,8 +399,7 @@ def test_exact_normal_preview_uses_hook_scene_and_hook_text(tmp_path: Path) -> N
     assert result.live_path.read_bytes() == b"normal-live"
     spec = json.loads(result.spec_path.read_text(encoding="utf-8"))
     assert spec["overlayTitleExpected"] is True
-    assert spec["topTitle"] == "通常切り抜きの表示タイトル"
-    assert "編集前の短縮タイトル" not in rendered_ass[0]
+    assert spec["topTitle"] == "編集前の短縮タイトル"
     assert len(calls) == 2
     assert calls[0]["hook_scene_start"] == 14.0
     assert calls[0]["hook_scene_end"] == 16.0
@@ -408,7 +407,8 @@ def test_exact_normal_preview_uses_hook_scene_and_hook_text(tmp_path: Path) -> N
     assert calls[1]["hook_scene_end"] == 16.0
     assert "Dialogue: 2,0:00:00.00,0:00:02.00,Hook,Hook" in rendered_ass[0]
     assert "Dialogue: 1,0:00:02.00,0:00:12.00,Title" in rendered_ass[0]
-    assert "通常切り抜きの表示タイトル" in rendered_ass[0]
+    assert "編集前の短縮タイトル" in rendered_ass[0]
+    assert "通常切り抜きの表示タイトル" not in rendered_ass[0]
     assert "Dialogue: 0,0:00:02.00,0:00:04.00,Subtitle" in rendered_ass[0]
 
 
@@ -418,7 +418,7 @@ def test_exact_short_preview_uses_final_composition_and_nonoverlapping_ass(
     candidate = make_candidate("short_1", "short").model_copy(
         update={
             "overlay_title": "二行以内のタイトル",
-            "title": "二行以内のタイトル",
+            "title": "ショート公開用タイトル",
             "hook_text": "冒頭フック",
             "hook_duration_seconds": 3.0,
             "hook_scene_start": 14.0,
@@ -488,6 +488,8 @@ def test_exact_short_preview_uses_final_composition_and_nonoverlapping_ass(
     assert "PlayResY: 1920" in rendered_ass[0]
     assert "Dialogue: 2,0:00:00.00,0:00:03.00,Hook,Hook" in rendered_ass[0]
     assert "Dialogue: 1,0:00:03.00,0:00:12.54,Title" in rendered_ass[0]
+    assert "二行以内のタイトル" in rendered_ass[0]
+    assert "ショート公開用タイトル" not in rendered_ass[0]
     assert "Dialogue: 0,0:00:02.54,0:00:04.54,Subtitle" not in rendered_ass[0]
     assert "Dialogue: 0,0:00:03.00,0:00:04.54,Subtitle" in rendered_ass[0]
 

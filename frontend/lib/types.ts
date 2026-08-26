@@ -105,7 +105,7 @@ export type ClipSettings = {
   normalSubtitleYPercent?: number;
   normalSubtitlePrimaryColor?: string;
   normalSubtitleOutlineColor?: string;
-  shortLayout: "auto" | "center_crop" | "blur_background";
+  shortLayout: "auto" | "face_tracking_crop" | "center_crop" | "blur_background";
   shortOverlayTitleMode: "auto" | "always" | "high_quality_only" | "never";
   shortTopBannerEnabled: boolean;
   shortBottomBannerEnabled: boolean;
@@ -288,6 +288,7 @@ export type SubtitleReviewClip = {
   id: string;
   type: ExportType;
   title: string;
+  publicationTitle?: string | null;
   originalTitle: string | null;
   titleEdited: boolean;
   overlayTitleExpected: boolean;
@@ -331,10 +332,13 @@ export type SubtitleReviewDocument = {
   state: "awaiting_review" | "render_queued" | "rendering" | "completed";
   renderRevision: number;
   reopenedAt: string | null;
+  reeditSourceJobId: string | null;
+  reeditSourceClipId: string | null;
   sourceVideoUrl: string;
   renderMode: string;
   shortMaxDuration: number;
   shortOverlayTitleMode: "auto" | "always" | "high_quality_only" | "never";
+  shortLayout: ClipSettings["shortLayout"];
   shortTopBannerEnabled: boolean;
   shortBottomBannerEnabled: boolean;
   clips: SubtitleReviewClip[];
@@ -348,12 +352,39 @@ export type SubtitleReviewDocument = {
 
 export type SubtitleReviewShortBannerSettings = Pick<
   SubtitleReviewDocument,
-  "shortTopBannerEnabled" | "shortBottomBannerEnabled"
+  "shortLayout" | "shortTopBannerEnabled" | "shortBottomBannerEnabled"
 >;
 
 export type SubtitleReviewFinalizeResponse = {
   jobId: string;
   status: JobStatus;
+};
+
+export type SubtitleReviewConvertToShortRequest = {
+  startSeconds?: number;
+  endSeconds?: number;
+};
+
+export type TitleHookSuggestion = {
+  id: string;
+  publicationTitle: string;
+  overlayTitle: string;
+  hookText: string;
+  hookDurationSeconds: number;
+  hookSceneStart: number | null;
+  hookSceneEnd: number | null;
+  reason: string;
+};
+
+export type TitleHookSuggestionResponse = {
+  clipId: string;
+  state: "queued" | "generating" | "ready" | "failed";
+  inputHash: string | null;
+  draftHash?: string | null;
+  model: string | null;
+  suggestions: TitleHookSuggestion[];
+  error: string | null;
+  generatedAt: string | null;
 };
 
 export type ClipPlanClip = {

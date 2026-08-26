@@ -101,6 +101,7 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     candidates = [
         make_candidate("cand_normal_1", 0.0, 120.0, "First normal", 91.0).model_copy(
             update={
+                "overlay_title": "Video overlay",
                 "hook_text": "通常切り抜きのフック",
                 "hook_duration_seconds": 2.0,
                 "hook_scene_start": 60.0,
@@ -166,6 +167,7 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     assert (normal_dir / "normal_03.mp4").is_file()
     normal_metadata = json.loads((normal_dir / "normal_01.json").read_text(encoding="utf-8"))
     assert normal_metadata["title"] == "First normal"
+    assert normal_metadata["overlay_title"] == "Video overlay"
     assert normal_metadata["title_source"] == "existing"
     assert normal_metadata["title_rendered"] is True
     assert normal_metadata["overlay_title_expected"] is True
@@ -183,7 +185,8 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     assert normal_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/normal/normal_01.ass")
     normal_ass = (subtitle_dir / "normal_01.ass").read_text(encoding="utf-8-sig")
     assert ",Title,,0,0,0,," in normal_ass
-    assert "First normal" in normal_ass
+    assert "Video overlay" in normal_ass
+    assert "First normal" not in normal_ass
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200

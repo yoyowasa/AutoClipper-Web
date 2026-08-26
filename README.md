@@ -1089,12 +1089,17 @@ Title fallback behavior:
 - The top switch controls the bundled Japanese-pattern background. After the pattern has been enabled, turning it off keeps the displayed title as a title-only overlay and removes only the background.
 - Each subtitle-review clip exposes `overlayTitleExpected`, calculated by the same policy used by the renderer.
 - The bottom banner uses `backend/app/render/assets/short_bottom_banner.png` as supplied, without redrawing its logo or text, and scales the complete image uniformly to the short-video width.
-- The subtitle review and completed-video re-edit screen exposes the same two switches for short clips. Changes are saved immediately to the original job and used by the next re-render.
+- The subtitle review and completed-video re-edit screen exposes the short framing selector (`auto`, face tracking, center crop, or blur background) and the same two banner switches for short clips. Changes are saved immediately, regenerate the exact short preview, and are used by the next re-render.
 - The subtitle review and re-edit screen separates `Normal edit` and `Short edit`. Normal previews play at `16:9`; short previews play at `9:16`.
 - The main review player defaults to an editable live view: a textless base video generated with the same normal/short renderer, crop strategy, hook-scene composition, and bundled banner bytes as the final export, with the unsaved title, hook, or subtitle style drawn immediately on the same canvas.
 - `Saved final view` switches the same player to the exact MP4 generated with the final ASS/libass path. Browser glyph rasterization can differ slightly, so this saved view remains the final output reference.
 - Exact preview artifacts are keyed by the reviewed text/style and full render settings. The textless live base has an independent visual hash, so title, hook, subtitle text, color, size, and position drafts update immediately without writing the review artifact or re-rendering video.
 - `OK` batches the selected clip's content, text styles, and edited subtitle segments into one atomic update, marks that clip reviewed, and queues the exact preview once. Editing can continue on the next clip while that preview renders; finalization still waits for every current exact preview revision.
+- Subtitle review has an explicit `AI タイトル・フック案` action. It uses the current unsaved subtitle draft and four representative frames from the selected source range to produce three alternatives for the publication title, in-video title, opening hook text, and a 1.5-to-3-second hook scene.
+- AI suggestions use the OpenAI Responses API with the job's `openaiModel` setting, defaulting to `gpt-5.5`. The action requires `OPENAI_API_KEY`; it does not use a ChatGPT or Codex login.
+- Generation runs in RQ and never blocks the HTTP request. It starts only when the user presses the generate button. Selecting a suggestion changes the browser draft only; `OK` remains the single save operation.
+- Video files, video URLs, storage paths, cookies, and credentials are not sent to OpenAI. The request contains only the selected clip's corrected subtitle text, clip-relative timestamps, clip type/duration, and the four extracted JPEG frames. Responses use `store=false`.
+- Suggestions become stale as soon as the subtitle draft changes and cannot be applied until regenerated. Suggested hook times are clip-relative in the AI contract and are converted exactly once to source-video absolute times when applied to the draft.
 - While a short hook is displayed, regular subtitle events are suppressed. This applies both to duplicated hook scenes and to text-only hooks, so hook text and conversation subtitles do not overlap.
 - Audit treats an empty title as `missing_title`; deterministic labels are reported as the weaker `generic_fallback_title`.
 - Audit only reports `missing_ass_title_event` when overlay title burn-in is expected but the ASS title event is missing.
@@ -1114,12 +1119,13 @@ Subtitle readability behavior:
 Short composition fallback behavior:
 
 - `shortLayout=auto` first uses reliable face tracking when face detections fit safely inside a 9:16 crop.
-- If face detections are too wide to fit a vertical crop, `blur_background` is preferred to preserve the full frame.
+- If face detections are too wide to fit a vertical crop, AutoClipper checks stable speaker, person, and motion / edge / saliency signals before preserving the full frame with `blur_background`.
 - If face groups are too wide but transcript timing exposes a stable single dialogue region, AutoClipper can use `speaker_tracking_crop`.
 - If no reliable face / speaker crop is available, AutoClipper samples optional person detections and uses `person_tracking_crop` only when the detected person box is confident, stable, and unambiguous.
 - If person detection is unavailable or ambiguous, AutoClipper samples lightweight motion / edge / saliency signals and uses `subject_tracking_crop` only when confidence and stability are sufficient.
 - If person / subject signals are weak, source dimensions are missing, or the face signal is too weak on a landscape video, `blur_background` is preferred before `center_crop`.
 - Explicit `shortLayout=center_crop` still forces center crop first.
+- Explicit `shortLayout=face_tracking_crop` forces the detected face group into a 9:16 crop when a usable face signal is available.
 - Short metadata records `crop_strategy`, `crop_signal_source`, `crop_confidence`, `crop_fallback_reason`, `crop_x`, `crop_y`, `crop_detection_count`, `crop_sampled_frames`, `crop_subject_x`, `crop_stability_score`, `person_detection_count`, `person_detection_confidence`, `person_box`, `speaker_window_count`, `speaker_region_confidence`, `speaker_region_box`, and `crop_attempted_strategies`.
 
 Subtitle burn-in smoke:

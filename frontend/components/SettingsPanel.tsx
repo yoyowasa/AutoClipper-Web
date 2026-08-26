@@ -325,6 +325,7 @@ export function SettingsPanel({
                     }
                   >
                     <option value="auto">自動</option>
+                    <option value="face_tracking_crop">人物アップ（顔を追従）</option>
                     <option value="center_crop">中央を切り抜く</option>
                     <option value="blur_background">ぼかし背景</option>
                   </select>

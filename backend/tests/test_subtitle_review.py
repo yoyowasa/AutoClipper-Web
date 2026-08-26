@@ -53,6 +53,7 @@ def test_review_build_defaults_to_auto_and_exposes_title_expectation_alias() -> 
     clips = {clip.type: clip for clip in review.clips}
 
     assert review.short_overlay_title_mode == "auto"
+    assert review.short_layout == "auto"
     assert clips["normal"].overlay_title_expected is True
     assert clips["short"].overlay_title_expected is True
     assert clips["short"].preview_state == "queued"
@@ -78,11 +79,13 @@ def test_review_build_preserves_short_render_settings() -> None:
         selection,
         transcript,
         short_overlay_title_mode="high_quality_only",
+        short_layout="face_tracking_crop",
         short_top_banner_enabled=True,
         short_bottom_banner_enabled=True,
     )
 
     assert review.short_overlay_title_mode == "high_quality_only"
+    assert review.short_layout == "face_tracking_crop"
     assert review.short_top_banner_enabled is True
     assert review.short_bottom_banner_enabled is True
     assert review.clips[0].overlay_title_expected is True

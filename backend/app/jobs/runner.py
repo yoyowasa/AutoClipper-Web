@@ -3592,6 +3592,7 @@ def run_autoclipper_job(
                         "shortOverlayTitleMode",
                         "auto",
                     ),
+                    short_layout=settings.get("shortLayout", "auto"),
                     short_top_banner_enabled=bool(
                         settings.get("shortTopBannerEnabled", False)
                     ),
