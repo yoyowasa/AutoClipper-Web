@@ -550,6 +550,29 @@ def test_normal_clip_accepts_title_hook_and_subtitle_styles() -> None:
     assert updated.normal_clips[0].title_style == title_style
 
 
+def test_review_preserves_manual_title_and_hook_line_breaks() -> None:
+    _transcript, review = _review_fixture()
+    selection = CandidateSelection(
+        normalClips=[_candidate("normal_1", "normal", 0.0, 20.0)],
+        shorts=[_candidate("short_1", "short", 10.0, 30.0)],
+    )
+
+    review = update_review_clip_content(
+        review,
+        "short_1",
+        title="タイトル前半\r\nタイトル後半\n三行目",
+        hook_text="フック前半\nフック後半",
+    )
+    updated = apply_reviewed_clip_content(selection, review)
+
+    assert review.clips[1].title == "タイトル前半\nタイトル後半 三行目"
+    assert review.clips[1].publication_title == "タイトル前半 タイトル後半 三行目"
+    assert review.clips[1].hook_text == "フック前半\nフック後半"
+    assert updated.shorts[0].title == "タイトル前半 タイトル後半 三行目"
+    assert updated.shorts[0].overlay_title == "タイトル前半\nタイトル後半 三行目"
+    assert updated.shorts[0].hook_text == "フック前半\nフック後半"
+
+
 def test_review_artifact_round_trip(tmp_path: Path) -> None:
     _transcript, review = _review_fixture()
     output_path = tmp_path / "subtitle_review.json"

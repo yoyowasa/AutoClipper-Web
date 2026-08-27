@@ -33,7 +33,7 @@ from app.render.title_policy import (
 from app.video.speaker_detect import dialogue_windows_for_clip
 
 
-EXACT_SUBTITLE_REVIEW_RENDERER_VERSION = "exact-subtitle-review-v4"
+EXACT_SUBTITLE_REVIEW_RENDERER_VERSION = "exact-subtitle-review-v5"
 LIVE_SUBTITLE_REVIEW_RENDERER_VERSION = "live-subtitle-review-v4"
 SUBTITLE_REVIEW_PREVIEW_DIRNAME = "subtitle_review_previews"
 # The API keeps the full SHA-256. The 128-bit filesystem key avoids MAX_PATH

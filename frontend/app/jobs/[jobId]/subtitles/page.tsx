@@ -88,7 +88,21 @@ function isPreviewReady(
 }
 
 function normalizeReviewTitle(value: string): string {
-  return value.trim().split(/\s+/u).filter(Boolean).join(" ");
+  return limitToTwoTextLines(value)
+    .split("\n")
+    .map((line) => line.trim().split(/\s+/u).filter(Boolean).join(" "))
+    .filter(Boolean)
+    .join("\n");
+}
+
+function limitToTwoTextLines(value: string): string {
+  const [firstLine = "", ...remainingLines] = value
+    .replace(/\r\n|\r|\u2028|\u2029|\\N/gu, "\n")
+    .split("\n");
+  if (remainingLines.length === 0) {
+    return firstLine;
+  }
+  return `${firstLine}\n${remainingLines.join(" ")}`;
 }
 
 function canonicalSuggestionDraft(
@@ -1598,9 +1612,14 @@ export default function SubtitleReviewPage() {
       suggestion.hookSceneEnd !== null &&
       suggestedHookEnd > suggestedHookStart;
     updateClipContentDraft(selectedClip.id, {
-      publicationTitle: suggestion.publicationTitle.slice(0, 100),
-      title: suggestion.overlayTitle.slice(0, 80),
-      hookText: suggestion.hookText.slice(0, 120),
+      publicationTitle: suggestion.publicationTitle
+        .trim()
+        .split(/\s+/u)
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, 100),
+      title: limitToTwoTextLines(suggestion.overlayTitle).slice(0, 80),
+      hookText: limitToTwoTextLines(suggestion.hookText).slice(0, 120),
       hookDurationSeconds: clamp(suggestion.hookDurationSeconds, 1, 8),
       hookSceneStart: hasValidHookScene
         ? selectedClip.start + suggestedHookStart
@@ -2252,11 +2271,18 @@ export default function SubtitleReviewPage() {
             </div>
           </aside>
 
-          <section className="flex min-w-0 flex-col border-b border-neutral-300 lg:border-r">
+          <section className="flex min-w-0 flex-col border-b border-neutral-300 lg:border-r 2xl:min-h-0 2xl:overflow-hidden">
             {selectedClip ? (
               <>
+                <div
+                  className={`flex min-h-0 flex-1 flex-col ${
+                    selectedClip.type === "short"
+                      ? "2xl:grid 2xl:grid-cols-[340px_minmax(0,1fr)]"
+                      : ""
+                  }`}
+                >
                 {selectedClip.type === "short" ? (
-                  <>
+                  <div className="min-w-0 2xl:min-h-0 2xl:overflow-y-auto 2xl:border-r 2xl:border-neutral-300">
                     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-300 bg-white px-4 py-2">
                       <div>
                         <p className="text-sm font-semibold text-neutral-900">ショート画角</p>
@@ -2341,7 +2367,7 @@ export default function SubtitleReviewPage() {
                             </button>
                           </div>
                         </div>
-                        <div className="mt-3 grid gap-3 md:grid-cols-3">
+                        <div className="mt-3 grid gap-3 md:grid-cols-3 2xl:grid-cols-1">
                           <ShortFramingRange
                             ariaLabel="このショートの左右画角"
                             disabled={!isEditable || savingShortFramingClipId !== null}
@@ -2416,21 +2442,22 @@ export default function SubtitleReviewPage() {
                         </div>
                       </div>
                     ) : null}
-                  </>
+                  </div>
                 ) : null}
-                <div className="flex items-start justify-center bg-neutral-100 p-3 sm:p-4">
+                <div className="flex items-start justify-center bg-neutral-100 p-3 sm:p-4 2xl:h-full 2xl:min-h-0 2xl:flex-1 2xl:items-stretch 2xl:overflow-hidden">
                   <div
-                    className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white"
+                    className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white 2xl:flex 2xl:min-h-0 2xl:flex-col"
                     ref={playerShellRef}
                   >
-                    <div
-                      className={`relative overflow-hidden bg-black ${
-                        selectedClip.type === "short"
-                          ? "mx-auto aspect-[9/16] w-full max-w-[360px] 2xl:w-[clamp(210px,calc(34.875vh-4.078125rem),360px)]"
-                          : "mx-auto aspect-video w-full max-w-5xl 2xl:w-[clamp(640px,calc(110.222vh-12.8889rem),1024px)] 2xl:max-w-full"
-                      }`}
-                      style={{ containerType: "inline-size" }}
-                    >
+                    <div className="flex items-center justify-center bg-black 2xl:min-h-0 2xl:flex-1 2xl:overflow-hidden">
+                      <div
+                        className={`relative overflow-hidden bg-black ${
+                          selectedClip.type === "short"
+                            ? "aspect-[9/16] w-full max-w-[360px] 2xl:h-full 2xl:w-auto 2xl:max-w-full"
+                            : "aspect-video w-full max-w-5xl 2xl:h-full 2xl:w-auto 2xl:max-w-full"
+                        }`}
+                        style={{ containerType: "inline-size" }}
+                      >
                       <div className="absolute inset-x-2 top-2 z-40 flex items-center justify-between gap-2">
                         <span className="pointer-events-none bg-black/70 px-2 py-1 text-[10px] font-semibold text-white">
                           {isShowingLivePreview
@@ -2590,6 +2617,7 @@ export default function SubtitleReviewPage() {
                           ) : null}
                         </div>
                       ) : null}
+                      </div>
                     </div>
 
                     {selectedPlayerReady ? (
@@ -2697,9 +2725,10 @@ export default function SubtitleReviewPage() {
                           </button>
                         </div>
                       </div>
-                    </div>
+                      </div>
                     ) : null}
                   </div>
+                </div>
                 </div>
               </>
             ) : null}
@@ -2744,22 +2773,24 @@ export default function SubtitleReviewPage() {
 
                     <label className="mt-2 block text-xs font-semibold text-neutral-700">
                       動画内タイトル
-                      <input
-                        className="mt-1 min-h-9 w-full border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-sky-600"
+                      <textarea
+                        className="mt-1 min-h-14 w-full resize-y border border-neutral-300 bg-white px-2 py-2 text-sm leading-5 outline-none focus:border-sky-600"
                         disabled={!isEditable}
                         maxLength={80}
-                        type="text"
+                        placeholder="2行にする位置でEnter"
+                        rows={2}
                         value={selectedClipContentDraft?.title ?? ""}
                         onChange={(event) =>
                           updateClipContentDraft(selectedClip.id, {
-                            title: event.target.value
+                            title: limitToTwoTextLines(event.target.value)
                           })
                         }
                       />
                     </label>
-                    <p className="mt-1 text-right text-[10px] text-neutral-500">
-                      {selectedClipContentDraft?.title.length ?? 0} / 80
-                    </p>
+                    <div className="mt-1 flex items-center justify-between gap-3 text-[10px] text-neutral-500">
+                      <span>Enterを入れた位置で2行表示します（最大2行）</span>
+                      <span>{selectedClipContentDraft?.title.length ?? 0} / 80</span>
+                    </div>
                     {selectedClip.type === "short" ? (
                       <fieldset className="mt-3 border-t border-neutral-300 pt-3">
                           <legend className="sr-only">ショート帯（書出し時）</legend>
@@ -2822,7 +2853,7 @@ export default function SubtitleReviewPage() {
                         placeholder="空欄なら表示しません"
                         value={selectedClipContentDraft?.hookText ?? ""}
                         onChange={(event) => {
-                          const hookText = event.target.value;
+                          const hookText = limitToTwoTextLines(event.target.value);
                           updateClipContentDraft(selectedClip.id, {
                             hookText,
                             ...(hookText.trim()
@@ -2832,6 +2863,9 @@ export default function SubtitleReviewPage() {
                         }}
                       />
                     </label>
+                    <p className="mt-1 text-[10px] text-neutral-500">
+                      Enterを入れた位置で2行表示します（最大2行）
+                    </p>
                     <div className="mt-2 flex items-end justify-between gap-3">
                       <label className="block text-xs font-semibold text-neutral-700">
                         表示秒数

@@ -131,3 +131,18 @@ def test_openai_title_is_preserved() -> None:
     assert titled.title == "OpenAI title"
     assert titled.overlay_title == "OpenAI overlay"
     assert titled.title_source == "openai"
+
+
+def test_manual_short_overlay_title_keeps_two_line_break() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="fallback text",
+        title="公開用タイトル",
+        overlay_title="表示タイトル前半\n表示タイトル後半",
+    ).model_copy(update={"title_source": "manual_review"})
+
+    titled = candidate_with_title(candidate, index=1)
+
+    assert titled.title == "公開用タイトル"
+    assert titled.overlay_title == "表示タイトル前半\n表示タイトル後半"
+    assert titled.title_source == "manual_review"

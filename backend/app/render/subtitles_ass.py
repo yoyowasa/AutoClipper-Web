@@ -6,6 +6,7 @@ from typing import Any, Literal, Sequence
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
+from app.overlay_text import normalize_overlay_text
 
 
 SHORT_WIDTH = 1080
@@ -646,6 +647,25 @@ def split_subtitle_lines(
     return "\\N".join(line for line in lines if line)
 
 
+def split_overlay_lines(
+    text: str,
+    max_chars_per_line: int = 20,
+    max_lines: int = 2,
+) -> str:
+    """Honor manual breaks for title/hook; auto-wrap legacy one-line text."""
+    clean_text = normalize_overlay_text(text, max_lines=max_lines)
+    if not clean_text:
+        return ""
+    manual_lines = clean_text.split("\n")
+    if len(manual_lines) > 1:
+        return "\\N".join(manual_lines)
+    return split_subtitle_lines(
+        clean_text,
+        max_chars_per_line=max_chars_per_line,
+        max_lines=max_lines,
+    )
+
+
 def _escape_ass_text(text: str) -> str:
     return text.replace("{", "(").replace("}", ")")
 
@@ -1096,9 +1116,11 @@ def build_ass_document(
         candidate,
         active_layout,
     )
-    title_text = _normalize_text(top_title if top_title is not None else (candidate.overlay_title or ""))
+    title_text = normalize_overlay_text(
+        top_title if top_title is not None else (candidate.overlay_title or "")
+    )
     include_title = bool(title_text)
-    hook_text = _normalize_text(candidate.hook_text or "")
+    hook_text = normalize_overlay_text(candidate.hook_text or "")
     include_hook = bool(hook_text)
     hook_end = min(
         output_duration,
@@ -1164,7 +1186,7 @@ def build_ass_document(
                 f"1,{format_ass_timestamp(title_start)},{format_ass_timestamp(output_duration)},"
                 f"Title,,0,0,0,,"
                 f"{title_position}"
-                f"{_escape_ass_text(split_subtitle_lines(title_text, max_chars_per_line=20, max_lines=2))}"
+                f"{_escape_ass_text(split_overlay_lines(title_text, max_chars_per_line=20, max_lines=2))}"
             )
 
     if include_hook:
@@ -1187,7 +1209,7 @@ def build_ass_document(
             f"2,{format_ass_timestamp(0.0)},{format_ass_timestamp(hook_end)},"
             f"Hook,Hook,0,0,0,,"
             f"{hook_position}"
-            f"{_escape_ass_text(split_subtitle_lines(hook_text, max_chars_per_line=20, max_lines=2))}"
+            f"{_escape_ass_text(split_overlay_lines(hook_text, max_chars_per_line=20, max_lines=2))}"
         )
 
     for event in subtitle_events:

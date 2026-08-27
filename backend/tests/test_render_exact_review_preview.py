@@ -79,7 +79,7 @@ def test_exact_preview_spec_is_canonical_and_ignores_unrelated_segments() -> Non
     ("changed", "value"),
     [
         ("source_fingerprint", "different-source"),
-        ("renderer_version", "exact-subtitle-review-v5"),
+        ("renderer_version", "exact-subtitle-review-v6"),
         ("candidate_index", 2),
     ],
 )
@@ -141,6 +141,41 @@ def test_exact_preview_spec_hash_tracks_clip_review_text_and_render_settings() -
     }
 
     assert len(hashes) == 4
+
+
+def test_manual_overlay_break_changes_exact_hash_but_not_text_free_live_video_hash() -> None:
+    base_candidate = make_candidate("short_1", "short").model_copy(
+        update={"title": "公開タイトル", "overlay_title": "表示タイトル 前半"}
+    )
+    manual_break_candidate = base_candidate.model_copy(
+        update={"overlay_title": "表示タイトル\n前半"}
+    )
+    common = {
+        "transcript_segments": [],
+        "settings": {"shortLayout": "center_crop"},
+        "source_fingerprint": "source-sha256",
+        "source_width": 1920,
+        "source_height": 1080,
+    }
+
+    one_line_exact = build_subtitle_review_preview_spec(
+        candidate=base_candidate,
+        **common,
+    )
+    manual_break_exact = build_subtitle_review_preview_spec(
+        candidate=manual_break_candidate,
+        **common,
+    )
+    one_line_live = build_live_subtitle_review_preview_spec(one_line_exact)
+    manual_break_live = build_live_subtitle_review_preview_spec(manual_break_exact)
+
+    assert manual_break_exact["topTitle"] == "表示タイトル\n前半"
+    assert subtitle_review_preview_spec_hash(manual_break_exact) != (
+        subtitle_review_preview_spec_hash(one_line_exact)
+    )
+    assert subtitle_review_preview_spec_hash(manual_break_live) == (
+        subtitle_review_preview_spec_hash(one_line_live)
+    )
 
 
 def test_preview_specs_and_hashes_track_short_framing() -> None:
@@ -453,9 +488,9 @@ def test_exact_short_preview_uses_final_composition_and_nonoverlapping_ass(
 ) -> None:
     candidate = make_candidate("short_1", "short").model_copy(
         update={
-            "overlay_title": "二行以内のタイトル",
+            "overlay_title": "二行以内の\nタイトル",
             "title": "ショート公開用タイトル",
-            "hook_text": "冒頭フック",
+            "hook_text": "冒頭\nフック",
             "hook_duration_seconds": 3.0,
             "hook_scene_start": 14.0,
             "hook_scene_end": 16.54,
@@ -533,7 +568,8 @@ def test_exact_short_preview_uses_final_composition_and_nonoverlapping_ass(
     assert "PlayResY: 1920" in rendered_ass[0]
     assert "Dialogue: 2,0:00:00.00,0:00:03.00,Hook,Hook" in rendered_ass[0]
     assert "Dialogue: 1,0:00:03.00,0:00:12.54,Title" in rendered_ass[0]
-    assert "二行以内のタイトル" in rendered_ass[0]
+    assert "二行以内の\\Nタイトル" in rendered_ass[0]
+    assert "冒頭\\Nフック" in rendered_ass[0]
     assert "ショート公開用タイトル" not in rendered_ass[0]
     assert "Dialogue: 0,0:00:02.54,0:00:04.54,Subtitle" not in rendered_ass[0]
     assert "Dialogue: 0,0:00:03.00,0:00:04.54,Subtitle" in rendered_ass[0]

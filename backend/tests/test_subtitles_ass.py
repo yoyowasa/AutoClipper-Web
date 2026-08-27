@@ -3,11 +3,13 @@ from pathlib import Path
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.select_candidates import CandidateSelection
+from app.overlay_text import normalize_overlay_text
 from app.render.subtitles_ass import (
     SubtitleLayout,
     build_ass_document,
     clipped_transcript_segments,
     format_ass_timestamp,
+    split_overlay_lines,
     split_subtitle_lines,
     split_subtitle_text,
     subtitle_events_for_candidate,
@@ -45,6 +47,22 @@ def test_split_subtitle_lines_uses_max_two_lines() -> None:
 
     assert split.count("\\N") == 1
     assert split.replace("\\N", " ") == text
+
+
+def test_overlay_lines_keep_manual_break_and_bound_three_lines_to_two() -> None:
+    assert normalize_overlay_text("一行目\r\n二行目\n三行目") == "一行目\n二行目 三行目"
+    assert normalize_overlay_text("一行目\u2028二行目\u2029三行目") == "一行目\n二行目 三行目"
+    assert normalize_overlay_text(r"一行目\N二行目") == "一行目\n二行目"
+    assert split_overlay_lines("ここで改行\n二行目を表示") == "ここで改行\\N二行目を表示"
+
+
+def test_overlay_lines_keep_legacy_single_line_auto_wrap() -> None:
+    text = "自動折り返しを維持する既存の一行タイトル"
+
+    rendered = split_overlay_lines(text, max_chars_per_line=12, max_lines=2)
+
+    assert rendered.count("\\N") == 1
+    assert rendered.replace("\\N", "") == text
 
 
 def test_japanese_long_sentence_splits_into_two_line_chunks() -> None:
@@ -142,6 +160,28 @@ def test_short_hook_precedes_title_without_overlapping_title_events() -> None:
     assert "Dialogue: 2,0:00:00.00,0:00:03.00,Hook,Hook" in ass
     assert "Dialogue: 1,0:00:03.00,0:00:10.00,Title,," in ass
     assert "Dialogue: 1,0:00:00.00,0:00:10.00,Title,," not in ass
+
+
+def test_title_and_hook_render_at_manual_two_line_breaks() -> None:
+    candidate = make_candidate(
+        "short_1",
+        "short",
+        0.0,
+        10.0,
+        overlay_title="タイトル前半\nタイトル後半",
+    ).model_copy(
+        update={
+            "hook_text": "フック前半\nフック後半",
+            "hook_duration_seconds": 3.0,
+        }
+    )
+
+    ass = build_ass_document(candidate, [], layout=SubtitleLayout.short())
+
+    assert "タイトル前半\\Nタイトル後半" in ass
+    assert "フック前半\\Nフック後半" in ass
+    assert "Dialogue: 2,0:00:00.00,0:00:03.00,Hook,Hook" in ass
+    assert "Dialogue: 1,0:00:03.00,0:00:10.00,Title" in ass
 
 
 def test_short_hook_can_render_when_overlay_title_is_disabled() -> None:

@@ -1431,8 +1431,10 @@ def test_render_selected_short_candidates_applies_overlay_title_policy(
         duration=45.0,
         transcript_text="投資判断が変わる場面です。",
         title="投資判断の転換点",
-        overlay_title="投資判断の転換点",
+        overlay_title="投資判断の\n転換点",
         title_source=title_source,
+        hook_text="冒頭フックの\n二行目",
+        hook_duration_seconds=3.0,
         final_score=82.0,
     )
 
@@ -1460,6 +1462,9 @@ def test_render_selected_short_candidates_applies_overlay_title_policy(
     assert short_metadata["overlay_title_rendered"] is expect_title_event
     assert short_metadata["overlay_title_mode"] == overlay_mode
     assert (",Title,," in ass_text) is expect_title_event
+    assert "冒頭フックの\\N二行目" in ass_text
+    if expect_title_event:
+        assert "投資判断の\\N転換点" in ass_text
 
 
 def test_top_banner_renders_title_when_conversation_subtitles_are_disabled(client: TestClient) -> None:

@@ -8,6 +8,7 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.transcript_postprocess import repair_known_transcript_artifact_text
 from app.audio.transcript_suspicion import contains_unexpected_script
 from app.candidates.merge_boundaries import Candidate, TitleSource
+from app.overlay_text import normalize_overlay_text
 from app.scoring.clip_preferences import is_generic_intro_outro_text
 
 
@@ -46,6 +47,13 @@ def _postprocessed_plain_text(value: str | None) -> str:
     if not clean:
         return ""
     return _plain_text(repair_known_transcript_artifact_text(clean))
+
+
+def _postprocessed_overlay_text(value: str | None) -> str:
+    clean = normalize_overlay_text(value or "")
+    if not clean:
+        return ""
+    return normalize_overlay_text(repair_known_transcript_artifact_text(clean))
 
 
 def _strip_filler_prefixes(text: str) -> str:
@@ -148,7 +156,7 @@ def resolve_candidate_title(
         source = candidate.title_source
         if source is None:
             source = "openai" if candidate.openai_scored is True or candidate.used_ai_score is True else "existing"
-        overlay_title = _postprocessed_plain_text(candidate.overlay_title) or (
+        overlay_title = _postprocessed_overlay_text(candidate.overlay_title) or (
             existing_title if candidate.type == "short" else None
         )
         return TitleResolution(title=existing_title, overlay_title=overlay_title, title_source=source)
@@ -159,7 +167,7 @@ def resolve_candidate_title(
             _candidate_transcript_text(candidate, transcript_segments)
         )
     if transcript_title:
-        overlay_title = _postprocessed_plain_text(candidate.overlay_title) or (
+        overlay_title = _postprocessed_overlay_text(candidate.overlay_title) or (
             transcript_title if candidate.type == "short" else None
         )
         return TitleResolution(
@@ -169,7 +177,7 @@ def resolve_candidate_title(
         )
 
     fallback = deterministic_title(candidate.type, index)
-    overlay_title = _postprocessed_plain_text(candidate.overlay_title) or (
+    overlay_title = _postprocessed_overlay_text(candidate.overlay_title) or (
         fallback if candidate.type == "short" else None
     )
     return TitleResolution(

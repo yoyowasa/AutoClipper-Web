@@ -7806,3 +7806,38 @@ pip check: pass
 
 - 許可済みユーザー実動画によるclip別調整から最終MP4・ZIPまでの実E2Eと、頭位置・字幕位置のユーザー受入は未確認。
 - 既存Jobは保存済みの帯設定を維持するため、自動で上下帯ONへ書き換えない。
+
+## 2026-08-27 Task 129 字幕編集previewの重なり解消・タイトル／フック手動2行
+
+### 目的
+
+- 縦動画previewが下段のタイトル・字幕設定を覆う状態を解消し、同じ画面で編集操作を続けられるようにする。
+- 動画内タイトルと冒頭フックを、入力者が指定した位置で最大2行表示し、即時previewと完成動画を一致させる。
+
+### 観測事実・原因
+
+- `2xl`表示では固定された1段目へ画角設定、9:16動画、再生操作を縦積みし、動画下端が2段目へ約85px越境していた。
+- 字幕確認保存、タイトルfallback、ASS生成で改行を空白へ変換していたため、入力した改行位置が完成動画まで残らなかった。
+
+### 変更
+
+- `2xl`表示ではショート画角設定を左、動画previewを右へ配置した。動画サイズを維持しつつ、1段目の境界内へ収める。
+- 動画内タイトルを2行textareaへ変更し、タイトル・フックともEnter位置を最大2行として即時previewへ反映する。
+- CRLF、CR、Unicode改行、既存`\\N`を同じ改行として扱う。3行目以降は第2行へ空白結合する。
+- 保存、Candidate、title fallback、exact preview、normal／short完成ASSへ同じ改行を渡す。改行なしの既存データは従来の自動折返しを維持する。
+- 公開用タイトルは従来どおり1行を維持する。
+- exact preview renderer contractを`v5`へ更新した。文字なしのlive preview動画hashは文字変更で変えない。
+- 変更ファイル: `backend/app/overlay_text.py`、`backend/app/candidates/title_fallback.py`、`backend/app/jobs/subtitle_review.py`、`backend/app/render/subtitles_ass.py`、`backend/app/render/render_exact_review_preview.py`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/lib/subtitlePreview.ts`、関連test、`STATUS.md`。
+
+### 検証
+
+- backend関連test: `133 passed`。backend全test: `642 passed, 1 skipped`。backend全ruff: pass。
+- frontend: typecheck、lint、production build: pass。
+- Dockerのbackend／worker／frontendをbuild・再作成し、backend health=`healthy`、worker／frontend起動を確認した。
+- 実ブラウザ`1821x900`で、動画previewと2段目の重なり=`0px`、動画高さ=`392.7px`、再生操作表示、字幕textareaのfocusを確認した。
+- タイトルは再生5秒位置、フックは0秒位置で、Enter指定位置から2行の即時previewになることを確認した。テスト入力は再読込で破棄し、Jobへ保存していない。
+- browser console warning／error=`0件`。
+
+### 未解決・制限
+
+- 許可済み実動画で改行を保存し、exact previewから最終MP4まで目視する実E2Eとユーザー受入は未確認。

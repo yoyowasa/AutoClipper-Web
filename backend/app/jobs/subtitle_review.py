@@ -10,6 +10,7 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
+from app.overlay_text import normalize_overlay_text
 from app.render.subtitles_ass import (
     DEFAULT_NORMAL_HEIGHT,
     DEFAULT_NORMAL_WIDTH,
@@ -590,8 +591,8 @@ def update_review_clip_content(
     if clip is None:
         raise KeyError(clip_id)
 
-    normalized_title = " ".join(title.split()).strip()
-    normalized_hook = " ".join(hook_text.split()).strip()
+    normalized_title = normalize_overlay_text(title)
+    normalized_hook = normalize_overlay_text(hook_text)
     if not normalized_title:
         raise ValueError("title must not be empty")
     if len(normalized_title) > 80:
@@ -599,7 +600,7 @@ def update_review_clip_content(
     next_publication_title = clip.publication_title
     if publication_title is _STYLE_UNSET:
         if clip.publication_title is None or clip.publication_title == clip.title:
-            next_publication_title = normalized_title
+            next_publication_title = " ".join(normalized_title.split())
     else:
         next_publication_title = (
             " ".join(publication_title.split()).strip()

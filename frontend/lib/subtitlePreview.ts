@@ -99,6 +99,24 @@ export function splitSubtitlePreviewLines(
   maxCharactersPerLine: number,
   maxLines = 2
 ): string {
+  const explicitLines = text
+    .replace(/\r\n|\r|\u2028|\u2029|\\N/gu, "\n")
+    .split("\n");
+  if (explicitLines.length > 1) {
+    const resolvedMaxLines = Math.max(1, maxLines);
+    const lines = explicitLines
+      .slice(0, resolvedMaxLines)
+      .map((line) => normalizeText(line));
+    if (explicitLines.length > resolvedMaxLines) {
+      lines[resolvedMaxLines - 1] = normalizeText(
+        [lines[resolvedMaxLines - 1], ...explicitLines.slice(resolvedMaxLines)].join(
+          " "
+        )
+      );
+    }
+    return lines.filter(Boolean).join("\n");
+  }
+
   const cleanText = normalizeText(text);
   if (!cleanText) {
     return "";
