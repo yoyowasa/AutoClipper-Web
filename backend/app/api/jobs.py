@@ -81,6 +81,7 @@ from app.jobs.subtitle_review import (
     subtitle_review_preview_path,
     subtitle_review_summary_path,
     update_review_clip_content,
+    update_review_clip_framing,
     update_review_hook_scene,
     update_review_render_settings,
     update_review_segment,
@@ -141,6 +142,7 @@ from app.schemas import (
     SubtitleReviewFinalizeResponse,
     SubtitleReviewClipApplyRequest,
     SubtitleReviewClipContentUpdateRequest,
+    SubtitleReviewClipFramingUpdateRequest,
     SubtitleReviewConvertToShortRequest,
     SubtitleReviewSettingsUpdateRequest,
     SubtitleReviewSegmentUpdateRequest,
@@ -166,6 +168,16 @@ NO_USABLE_SELECTION_ERROR_CODE = "no_usable_selection"
 NO_USABLE_SELECTION_RETRY_EXHAUSTED_ERROR_CODE = "no_usable_selection_retry_exhausted"
 LEGACY_NO_USABLE_OUTPUT_ERROR_CODE = "no_usable_output"
 RETRY_SOURCE_SETTING_KEY = "retryOf"
+
+
+def _validated_persisted_job_settings(
+    settings: dict[str, Any] | None,
+) -> JobSettings:
+    payload = dict(settings or {})
+    payload.setdefault("shortTopBannerEnabled", False)
+    payload.setdefault("shortBottomBannerEnabled", False)
+    payload.setdefault("shortSubtitleYPercent", None)
+    return JobSettings.model_validate(payload)
 
 
 def _get_job_or_404(db: Session, job_id: str) -> Job:
@@ -789,6 +801,9 @@ def _reedit_candidate(
         title_style=review_clip.title_style,
         hook_style=review_clip.hook_style,
         subtitle_style=review_clip.subtitle_style,
+        framing_offset_x=review_clip.framing_offset_x,
+        framing_offset_y=review_clip.framing_offset_y,
+        framing_zoom=review_clip.framing_zoom,
         selection_reason="completed_clip_reedit",
         original_start=review_clip.start,
         original_end=review_clip.end,
@@ -1370,7 +1385,7 @@ def retry_job(
             },
         )
 
-    settings = JobSettings.model_validate(source_job.settings_json or {})
+    settings = _validated_persisted_job_settings(source_job.settings_json)
     automatic_output = (settings.normal_clip_count > 0 and not settings.normal_clip_time_ranges) or (
         settings.short_count > 0 and not settings.short_clip_time_ranges
     )
@@ -1998,7 +2013,7 @@ def reselect_clip_plan(
             exclude_none=True,
         )
     )
-    validated_settings = JobSettings.model_validate(settings_payload)
+    validated_settings = _validated_persisted_job_settings(settings_payload)
     job.settings_json = validated_settings.model_dump(
         by_alias=True,
         mode="json",
@@ -2080,7 +2095,7 @@ def approve_clip_plan(
             )
         previous_settings = dict(job.settings_json or {})
         try:
-            next_settings = JobSettings.model_validate(
+            next_settings = _validated_persisted_job_settings(
                 manual_plan_settings(document, previous_settings)
             ).model_dump(by_alias=True, mode="json")
         except ValueError as exc:
@@ -2931,6 +2946,86 @@ def update_subtitle_review_clip_content(
                 hook_text=request.hook_text,
                 hook_duration_seconds=request.hook_duration_seconds,
                 **style_updates,
+            )
+            document, _contract_changed = refresh_review_render_contract(
+                document,
+                render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
+                render_settings=dict(job.settings_json or {}),
+                source_width=video.width,
+                source_height=video.height,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review clip not found",
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+            job=job,
+            video=video,
+            document=document,
+            paths=paths,
+            clip_ids={clip_id},
+        )
+        _write_subtitle_review_unlocked(document, paths)
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id,
+        document=document,
+        queued=queued_previews,
+        paths=paths,
+        enqueue_preview=enqueue_preview,
+    )
+
+
+@router.patch(
+    "/{job_id}/subtitle-review/clips/{clip_id}/framing",
+    response_model=SubtitleReviewDocument,
+)
+def update_subtitle_review_clip_framing(
+    job_id: str,
+    clip_id: str,
+    request: SubtitleReviewClipFramingUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="source video record is unavailable",
+        )
+    if job.status != "awaiting_subtitle_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="subtitle review is not editable",
+        )
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not editable",
+            )
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="subtitle review is not awaiting edits",
+            )
+        try:
+            document = update_review_clip_framing(
+                document,
+                clip_id,
+                framing_offset_x=request.framing_offset_x,
+                framing_offset_y=request.framing_offset_y,
+                framing_zoom=request.framing_zoom,
             )
             document, _contract_changed = refresh_review_render_contract(
                 document,

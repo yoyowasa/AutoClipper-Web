@@ -33,8 +33,8 @@ from app.render.title_policy import (
 from app.video.speaker_detect import dialogue_windows_for_clip
 
 
-EXACT_SUBTITLE_REVIEW_RENDERER_VERSION = "exact-subtitle-review-v3"
-LIVE_SUBTITLE_REVIEW_RENDERER_VERSION = "live-subtitle-review-v3"
+EXACT_SUBTITLE_REVIEW_RENDERER_VERSION = "exact-subtitle-review-v4"
+LIVE_SUBTITLE_REVIEW_RENDERER_VERSION = "live-subtitle-review-v4"
 SUBTITLE_REVIEW_PREVIEW_DIRNAME = "subtitle_review_previews"
 # The API keeps the full SHA-256. The 128-bit filesystem key avoids MAX_PATH
 # failures under long Windows storage/test roots while remaining content addressed.
@@ -329,6 +329,9 @@ def build_live_subtitle_review_preview_spec(
                 "end": clip.get("end"),
                 "hookSceneStart": clip.get("hook_scene_start"),
                 "hookSceneEnd": clip.get("hook_scene_end"),
+                "framingOffsetX": clip.get("framing_offset_x"),
+                "framingOffsetY": clip.get("framing_offset_y"),
+                "framingZoom": clip.get("framing_zoom"),
             },
             "segments": visual_segments,
             "settings": visual_settings,
@@ -561,6 +564,9 @@ def render_exact_subtitle_review_preview(
                 "layout": str(render_settings["shortLayout"]),
                 "source_width": source_width,
                 "source_height": source_height,
+                "framing_offset_x": resolved_candidate.framing_offset_x,
+                "framing_offset_y": resolved_candidate.framing_offset_y,
+                "framing_zoom": resolved_candidate.framing_zoom,
                 "dialogue_windows": dialogue_windows_for_clip(
                     resolved_candidate.start,
                     resolved_candidate.end,

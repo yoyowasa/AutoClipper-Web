@@ -108,6 +108,9 @@ class Candidate(BaseModel):
     title_style: ClipTextStyle | None = None
     hook_style: ClipTextStyle | None = None
     subtitle_style: ClipTextStyle | None = None
+    framing_offset_x: float = Field(default=0.0, ge=-100, le=100)
+    framing_offset_y: float = Field(default=0.0, ge=-100, le=100)
+    framing_zoom: float = Field(default=1.0, ge=1.0, le=1.6)
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
     reject_reason: str | None = None

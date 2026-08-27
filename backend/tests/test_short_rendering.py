@@ -259,12 +259,68 @@ def test_short_render_command_overlays_top_and_bottom_banners_before_ass(tmp_pat
     assert input_paths == ["source.mp4", str(top_banner), str(bottom_banner)]
     assert command.count("-loop") == 2
     assert command.count("-vf") == 0
+    assert "scale=1080:1200:force_original_aspect_ratio=increase" in filter_graph
+    assert "crop=1080:1200" in filter_graph
+    assert "pad=1080:1920:0:360:color=black" in filter_graph
     assert "[1:v:0]scale=1080:-2" in filter_graph
     assert "[2:v:0]scale=1080:-2" in filter_graph
     assert "overlay=0:0" in filter_graph
     assert "overlay=0:H-h" in filter_graph
     assert filter_graph.index("overlay=0:0") < filter_graph.index("overlay=0:H-h")
     assert filter_graph.index("overlay=0:H-h") < filter_graph.index("ass=")
+
+
+@pytest.mark.parametrize(
+    ("top_enabled", "bottom_enabled", "expected_height", "expected_y"),
+    [
+        (True, False, 1560, 360),
+        (False, True, 1560, 0),
+        (True, True, 1200, 360),
+    ],
+)
+def test_short_render_command_reserves_banner_safe_content_viewport(
+    tmp_path: Path,
+    top_enabled: bool,
+    bottom_enabled: bool,
+    expected_height: int,
+    expected_y: int,
+) -> None:
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=10.0,
+        end=25.0,
+        layout="blur_background",
+        source_width=1920,
+        source_height=1080,
+        top_banner_path=top_banner if top_enabled else None,
+        bottom_banner_path=bottom_banner if bottom_enabled else None,
+    )
+
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert f"scale=1080:{expected_height}:force_original_aspect_ratio=increase" in filter_graph
+    assert f"scale=1080:{expected_height}:force_original_aspect_ratio=decrease" in filter_graph
+    assert f"pad=1080:1920:0:{expected_y}:color=black" in filter_graph
+
+
+def test_short_render_command_without_banners_keeps_full_frame_crop() -> None:
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=10.0,
+        end=25.0,
+        layout="center_crop",
+    )
+
+    video_filter = command[command.index("-vf") + 1]
+    assert "scale=1080:1920:force_original_aspect_ratio=increase" in video_filter
+    assert "crop=1080:1920" in video_filter
+    assert "pad=" not in video_filter
 
 
 def test_short_render_command_overlays_banners_after_hook_concat(tmp_path: Path) -> None:
@@ -291,6 +347,8 @@ def test_short_render_command_overlays_banners_after_hook_concat(tmp_path: Path)
 
     assert input_paths == ["source.mp4", "source.mp4", str(top_banner), str(bottom_banner)]
     assert command.count("-loop") == 2
+    assert filter_graph.count("scale=1080:1200:force_original_aspect_ratio=increase") == 2
+    assert filter_graph.count("pad=1080:1920:0:360:color=black") == 2
     assert "[2:v:0]scale=1080:-2" in filter_graph
     assert "[3:v:0]scale=1080:-2" in filter_graph
     assert filter_graph.index("concat=n=2:v=1:a=1") < filter_graph.index("overlay=0:0")
@@ -557,6 +615,21 @@ def test_short_crop_plan_no_face_portrait_keeps_center_crop_fallback() -> None:
     assert plan.fallback_reason == "no_face_detections"
 
 
+def test_short_crop_plan_no_face_banded_portrait_uses_blur_background() -> None:
+    plan = plan_short_crop(
+        "auto",
+        detections=[],
+        source_width=1080,
+        source_height=1920,
+        target_width=1080,
+        target_height=1200,
+    )
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
+    assert plan.fallback_reason == "no_face_detections"
+
+
 def test_short_crop_plan_forced_center_crop_keeps_center_first() -> None:
     plan = plan_short_crop("center_crop", detections=[], source_width=1920, source_height=1080)
 
@@ -593,6 +666,169 @@ def test_short_crop_plan_moves_low_face_out_of_subtitle_area_when_possible() -> 
 
     video_filter = build_face_tracking_crop_filter(1080, 2400, plan.face_center)
     assert f"crop=1080:1920:{plan.crop_x}:{plan.crop_y}" in video_filter
+
+
+def test_short_crop_plan_uses_banner_safe_height_for_top_aligned_face() -> None:
+    detections = [
+        FaceDetection(
+            start=0,
+            end=0,
+            center_x=0.5,
+            center_y=0.18,
+            width=0.18,
+            height=0.18,
+        )
+    ]
+
+    plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1080,
+        source_height=1920,
+        target_width=1080,
+        target_height=1200,
+    )
+
+    assert plan.strategy_order[0] == "face_tracking_crop"
+    assert plan.face_center is not None
+    assert plan.crop_y == 0
+    video_filter = build_face_tracking_crop_filter(
+        1080,
+        1920,
+        plan.face_center,
+        target_width=1080,
+        target_height=1200,
+    )
+    assert "crop=1080:1200:0:0" in video_filter
+
+
+def test_render_short_clip_uses_banner_safe_height_for_top_aligned_face(
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "short.mp4"
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+    commands: list[list[str]] = []
+
+    def fake_face_detector(
+        _input_path: str | Path,
+        _start: float,
+        _end: float,
+    ) -> list[FaceDetection]:
+        return [
+            FaceDetection(
+                start=0,
+                end=0,
+                center_x=0.5,
+                center_y=0.18,
+                width=0.18,
+                height=0.18,
+            )
+        ]
+
+    def fake_metadata_probe(_input_path: str | Path) -> VideoMetadata:
+        return VideoMetadata(
+            duration=60.0,
+            width=1080,
+            height=1920,
+            fps=30.0,
+            has_audio=True,
+        )
+
+    def fake_runner(command: list[str]) -> None:
+        commands.append(command)
+        output_path.write_bytes(b"short mp4")
+
+    result = render_short_clip(
+        "input.mp4",
+        output_path,
+        start=0.0,
+        end=30.0,
+        layout="auto",
+        top_banner_path=top_banner,
+        bottom_banner_path=bottom_banner,
+        face_detector=fake_face_detector,
+        metadata_probe=fake_metadata_probe,
+        command_runner=fake_runner,
+    )
+
+    assert result.strategy == "face_tracking_crop"
+    assert len(commands) == 1
+    filter_graph = commands[0][commands[0].index("-filter_complex") + 1]
+    assert "crop=1080:1200:0:0" in filter_graph
+    assert "pad=1080:1920:0:360:color=black" in filter_graph
+
+
+def test_render_short_clip_reports_effective_crop_after_framing(tmp_path: Path) -> None:
+    output_path = tmp_path / "short.mp4"
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+    commands: list[list[str]] = []
+    detections = [
+        FaceDetection(
+            start=0,
+            end=0,
+            center_x=0.5,
+            center_y=0.18,
+            width=0.18,
+            height=0.18,
+        )
+    ]
+
+    def fake_face_detector(
+        _input_path: str | Path,
+        _start: float,
+        _end: float,
+    ) -> list[FaceDetection]:
+        return detections
+
+    def fake_metadata_probe(_input_path: str | Path) -> VideoMetadata:
+        return VideoMetadata(
+            duration=60.0,
+            width=1080,
+            height=1920,
+            fps=30.0,
+            has_audio=True,
+        )
+
+    def fake_runner(command: list[str]) -> None:
+        commands.append(command)
+        output_path.write_bytes(b"short mp4")
+
+    result = render_short_clip(
+        "input.mp4",
+        output_path,
+        start=0.0,
+        end=30.0,
+        layout="auto",
+        top_banner_path=top_banner,
+        bottom_banner_path=bottom_banner,
+        framing_offset_x=10.0,
+        framing_offset_y=20.0,
+        framing_zoom=1.2,
+        face_detector=fake_face_detector,
+        metadata_probe=fake_metadata_probe,
+        command_runner=fake_runner,
+    )
+
+    base_plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1080,
+        source_height=1920,
+        target_width=1080,
+        target_height=1200,
+    )
+    assert result.strategy == "face_tracking_crop"
+    assert result.crop_x is not None
+    assert result.crop_y is not None
+    assert (result.crop_x, result.crop_y) != (base_plan.crop_x, base_plan.crop_y)
+    filter_graph = commands[0][commands[0].index("-filter_complex") + 1]
+    assert f"crop=1080:1200:{result.crop_x}:{result.crop_y}" in filter_graph
 
 
 def test_render_short_clip_auto_falls_back_to_center_crop(tmp_path: Path) -> None:
@@ -979,6 +1215,9 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
             update={
                 "hook_scene_start": 5.0,
                 "hook_scene_end": 7.0,
+                "framing_offset_x": 15.0,
+                "framing_offset_y": -10.0,
+                "framing_zoom": 1.2,
             }
         ),
         make_short("cand_short_fail", 50.0, 95.0, "Broken short", 90.0),
@@ -1030,6 +1269,9 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert all(call["source_width"] == 1920 for call in renderer_calls)
     assert renderer_calls[0]["hook_scene_start"] == 5.0
     assert renderer_calls[0]["hook_scene_end"] == 7.0
+    assert renderer_calls[0]["framing_offset_x"] == 15.0
+    assert renderer_calls[0]["framing_offset_y"] == -10.0
+    assert renderer_calls[0]["framing_zoom"] == 1.2
     assert all(Path(call["top_banner_path"]).name == "short_top_banner.png" for call in renderer_calls)
     assert all(Path(call["bottom_banner_path"]).name == "short_bottom_banner.png" for call in renderer_calls)
 
@@ -1062,6 +1304,9 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert "crop_sampled_frames" in short_metadata
     assert "crop_subject_x" in short_metadata
     assert "crop_stability_score" in short_metadata
+    assert short_metadata["framing_offset_x"] == 15.0
+    assert short_metadata["framing_offset_y"] == -10.0
+    assert short_metadata["framing_zoom"] == 1.2
     assert "person_detection_count" in short_metadata
     assert "person_detection_confidence" in short_metadata
     assert "person_box" in short_metadata

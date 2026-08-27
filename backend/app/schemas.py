@@ -337,7 +337,7 @@ class JobSettings(BaseModel):
         alias="shortSubtitleXPercent",
     )
     short_subtitle_y_percent: float | None = Field(
-        default=None,
+        default=68.75,
         ge=5,
         le=95,
         alias="shortSubtitleYPercent",
@@ -387,8 +387,8 @@ class JobSettings(BaseModel):
     normalize_audio: bool = Field(default=False, alias="normalizeAudio")
     short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
     short_overlay_title_mode: ShortOverlayTitleMode = Field(default="auto", alias="shortOverlayTitleMode")
-    short_top_banner_enabled: bool = Field(default=False, alias="shortTopBannerEnabled")
-    short_bottom_banner_enabled: bool = Field(default=False, alias="shortBottomBannerEnabled")
+    short_top_banner_enabled: bool = Field(default=True, alias="shortTopBannerEnabled")
+    short_bottom_banner_enabled: bool = Field(default=True, alias="shortBottomBannerEnabled")
     enable_transcript_post_processing: bool = Field(default=True, alias="enableTranscriptPostProcessing")
     transcript_normalize_unicode: bool = Field(default=True, alias="transcriptNormalizeUnicode")
     transcript_normalize_whitespace: bool = Field(default=True, alias="transcriptNormalizeWhitespace")
@@ -533,6 +533,14 @@ class SubtitleReviewClipContentUpdateRequest(BaseModel):
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+class SubtitleReviewClipFramingUpdateRequest(BaseModel):
+    framing_offset_x: float = Field(ge=-100, le=100, alias="framingOffsetX")
+    framing_offset_y: float = Field(ge=-100, le=100, alias="framingOffsetY")
+    framing_zoom: float = Field(ge=1.0, le=1.6, alias="framingZoom")
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
 class SubtitleReviewClipSegmentUpdate(BaseModel):

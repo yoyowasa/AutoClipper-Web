@@ -161,6 +161,15 @@ def test_manual_clip_crud_and_approve_preserve_user_values(
         requireSubtitleReview=True,
     ).model_dump(by_alias=True, mode="json")
     _seed_job(session_factory, storage, settings=settings)
+    with session_factory() as db:
+        job = db.get(Job, "job_manual")
+        assert job is not None
+        legacy_settings = dict(job.settings_json or {})
+        legacy_settings.pop("shortTopBannerEnabled", None)
+        legacy_settings.pop("shortBottomBannerEnabled", None)
+        legacy_settings.pop("shortSubtitleYPercent", None)
+        job.settings_json = legacy_settings
+        db.commit()
     run_autoclipper_job(
         "job_manual",
         session_factory=session_factory,
@@ -245,6 +254,9 @@ def test_manual_clip_crud_and_approve_preserve_user_values(
         assert job.settings_json["requireClipPlanReview"] is False
         assert job.settings_json["normalClipCount"] == 0
         assert job.settings_json["shortCount"] == 1
+        assert job.settings_json["shortTopBannerEnabled"] is False
+        assert job.settings_json["shortBottomBannerEnabled"] is False
+        assert job.settings_json["shortSubtitleYPercent"] is None
         assert job.settings_json["shortClipTimeRanges"] == [
             {"startSeconds": 3.0, "endSeconds": 9.5}
         ]

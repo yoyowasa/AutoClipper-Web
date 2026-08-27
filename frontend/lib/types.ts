@@ -299,6 +299,9 @@ export type SubtitleReviewClip = {
   titleStyle: ClipTextStyle | null;
   hookStyle: ClipTextStyle | null;
   subtitleStyle: ClipTextStyle | null;
+  framingOffsetX: number;
+  framingOffsetY: number;
+  framingZoom: number;
   resolvedTitleStyle: ResolvedClipTextStyle | null;
   resolvedHookStyle: ResolvedClipTextStyle | null;
   resolvedSubtitleStyle: ResolvedClipTextStyle | null;
@@ -353,6 +356,11 @@ export type SubtitleReviewDocument = {
 export type SubtitleReviewShortBannerSettings = Pick<
   SubtitleReviewDocument,
   "shortLayout" | "shortTopBannerEnabled" | "shortBottomBannerEnabled"
+>;
+
+export type SubtitleReviewClipFramingUpdateRequest = Pick<
+  SubtitleReviewClip,
+  "framingOffsetX" | "framingOffsetY" | "framingZoom"
 >;
 
 export type SubtitleReviewFinalizeResponse = {

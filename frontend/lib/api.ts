@@ -13,6 +13,7 @@ import type {
   JobResultsResponse,
   JobStatusResponse,
   SubtitleReviewDocument,
+  SubtitleReviewClipFramingUpdateRequest,
   SubtitleReviewConvertToShortRequest,
   SubtitleReviewFinalizeResponse,
   SubtitleReviewShortBannerSettings,
@@ -349,6 +350,24 @@ export async function updateSubtitleReviewClipContent(
         "Content-Type": "application/json"
       },
       body: JSON.stringify(content)
+    }
+  );
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
+export async function updateSubtitleReviewClipFraming(
+  jobId: string,
+  clipId: string,
+  framing: SubtitleReviewClipFramingUpdateRequest
+): Promise<SubtitleReviewDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/framing`,
+    {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(framing)
     }
   );
   return parseJsonResponse<SubtitleReviewDocument>(response);

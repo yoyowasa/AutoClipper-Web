@@ -588,6 +588,49 @@ def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
     assert persisted["segments"][0]["text"] == "OKでまとめて保存した字幕"
 
 
+def test_patch_subtitle_review_clip_framing_persists_and_requeues_preview(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    queued: list[tuple[str, str, str]] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
+        lambda queued_job_id, clip_id, spec_hash: queued.append(
+            (queued_job_id, clip_id, spec_hash)
+        )
+    )
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+    baseline_hash = reopened.json()["clips"][0]["previewSpecHash"]
+    queued.clear()
+
+    response = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/framing",
+        json={
+            "framingOffsetX": 25.126,
+            "framingOffsetY": -30.874,
+            "framingZoom": 1.23456,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    clip = payload["clips"][0]
+    assert clip["framingOffsetX"] == 25.13
+    assert clip["framingOffsetY"] == -30.87
+    assert clip["framingZoom"] == 1.235
+    assert clip["confirmed"] is False
+    assert clip["previewState"] == "queued"
+    assert clip["previewSpecHash"] != baseline_hash
+    assert queued == [(job_id, candidate_id, clip["previewSpecHash"])]
+
+    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    persisted = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
+    assert persisted["clips"][0]["framingOffsetX"] == 25.13
+    assert persisted["clips"][0]["framingOffsetY"] == -30.87
+    assert persisted["clips"][0]["framingZoom"] == 1.235
+
+
 def test_apply_subtitle_review_clip_rejects_segment_from_another_clip(
     client: TestClient,
 ) -> None:
@@ -2362,8 +2405,9 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["crossTypeOverlapDedupe"] is False
         assert job.settings_json["heatmapIntervalMode"] is False
         assert job.settings_json["shortOverlayTitleMode"] == "auto"
-        assert job.settings_json["shortTopBannerEnabled"] is False
-        assert job.settings_json["shortBottomBannerEnabled"] is False
+        assert job.settings_json["shortTopBannerEnabled"] is True
+        assert job.settings_json["shortBottomBannerEnabled"] is True
+        assert job.settings_json["shortSubtitleYPercent"] == 68.75
         assert job.settings_json["openaiCandidateLimit"] == 40
         assert job.settings_json["openaiModel"] == "gpt-5.5"
         assert job.settings_json["openaiFallbackToRuleScore"] is True
@@ -2399,7 +2443,17 @@ def test_retry_no_usable_selection_reuses_source_and_settings_once(
         source_job.current_step = "Failed"
         source_job.error_code = "no_usable_selection"
         source_job.error_message = "no clips"
-        expected_settings = dict(source_job.settings_json)
+        legacy_settings = dict(source_job.settings_json)
+        legacy_settings.pop("shortTopBannerEnabled", None)
+        legacy_settings.pop("shortBottomBannerEnabled", None)
+        legacy_settings.pop("shortSubtitleYPercent", None)
+        source_job.settings_json = legacy_settings
+        expected_settings = {
+            **legacy_settings,
+            "shortTopBannerEnabled": False,
+            "shortBottomBannerEnabled": False,
+            "shortSubtitleYPercent": None,
+        }
         db.commit()
 
     storage = app.dependency_overrides[get_storage_paths]()

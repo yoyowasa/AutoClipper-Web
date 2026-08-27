@@ -78,8 +78,8 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   subtitleCorrectionFallbackEnabled: true,
   shortLayout: "auto",
   shortOverlayTitleMode: "auto",
-  shortTopBannerEnabled: false,
-  shortBottomBannerEnabled: false
+  shortTopBannerEnabled: true,
+  shortBottomBannerEnabled: true
 };
 
 export function settingsForRuntimeProfile(profile: string | null): ClipSettings {
@@ -332,7 +332,9 @@ export function SettingsPanel({
                 </label>
 
                 <fieldset className="flex min-w-0 flex-col gap-2">
-                  <legend className="text-sm font-medium text-neutral-700">ショート帯</legend>
+                  <legend className="text-sm font-medium text-neutral-700">
+                    ショート帯（基本ON）
+                  </legend>
                   <div className="grid min-h-10 grid-cols-2 border border-neutral-300 bg-white">
                     <label className="flex cursor-pointer items-center gap-2 border-r border-neutral-300 px-3">
                       <input
@@ -365,6 +367,9 @@ export function SettingsPanel({
                       <span className="text-sm font-medium text-neutral-700">下: ロゴ</span>
                     </label>
                   </div>
+                  <p className="text-xs leading-5 text-neutral-500">
+                    上帯と下帯の間へ映像を収め、人物が帯に隠れない画角で書き出します。
+                  </p>
                 </fieldset>
               </>
             ) : null}

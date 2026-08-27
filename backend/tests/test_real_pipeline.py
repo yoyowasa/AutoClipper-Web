@@ -1030,6 +1030,16 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
         for name in rollback_names
     }
 
+    with next(app.dependency_overrides[get_db]()) as db:
+        stored_job = db.get(Job, created["jobId"])
+        assert stored_job is not None
+        legacy_settings = dict(stored_job.settings_json or {})
+        legacy_settings.pop("shortTopBannerEnabled", None)
+        legacy_settings.pop("shortBottomBannerEnabled", None)
+        legacy_settings.pop("shortSubtitleYPercent", None)
+        stored_job.settings_json = legacy_settings
+        db.commit()
+
     queued_reselections: list[str] = []
     app.dependency_overrides[get_enqueue_clip_plan_reselection] = (
         lambda: queued_reselections.append
@@ -1064,6 +1074,9 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
         stored_job = db.get(Job, created["jobId"])
         assert stored_job is not None
         assert stored_job.settings_json["heatmapIntervalMode"] is False
+        assert stored_job.settings_json["shortTopBannerEnabled"] is False
+        assert stored_job.settings_json["shortBottomBannerEnabled"] is False
+        assert stored_job.settings_json["shortSubtitleYPercent"] is None
 
     original_write_clip_plan = runner_module.write_clip_plan
     write_attempt_count = 0
@@ -1661,7 +1674,11 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         if clip["type"] == "normal"
     )
     assert all(
-        clip["overlayTitleExpected"] is (expected_overlay_mode != "never")
+        clip["overlayTitleExpected"]
+        is (
+            stored_review["shortTopBannerEnabled"]
+            or expected_overlay_mode != "never"
+        )
         for clip in stored_review["clips"]
         if clip["type"] == "short"
     )
@@ -1828,7 +1845,11 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         if clip["type"] == "normal"
     )
     assert all(
-        clip["overlayTitleExpected"] is (expected_overlay_mode != "never")
+        clip["overlayTitleExpected"]
+        is (
+            stored_review["shortTopBannerEnabled"]
+            or expected_overlay_mode != "never"
+        )
         for clip in stored_review["clips"]
         if clip["type"] == "short"
     )

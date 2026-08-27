@@ -79,7 +79,7 @@ def test_exact_preview_spec_is_canonical_and_ignores_unrelated_segments() -> Non
     ("changed", "value"),
     [
         ("source_fingerprint", "different-source"),
-        ("renderer_version", "exact-subtitle-review-v4"),
+        ("renderer_version", "exact-subtitle-review-v5"),
         ("candidate_index", 2),
     ],
 )
@@ -141,6 +141,42 @@ def test_exact_preview_spec_hash_tracks_clip_review_text_and_render_settings() -
     }
 
     assert len(hashes) == 4
+
+
+def test_preview_specs_and_hashes_track_short_framing() -> None:
+    candidate = make_candidate("short_1", "short")
+    adjusted = candidate.model_copy(
+        update={
+            "framing_offset_x": 24.5,
+            "framing_offset_y": -18.25,
+            "framing_zoom": 1.3,
+        }
+    )
+    common = {
+        "transcript_segments": [],
+        "settings": {"shortLayout": "face_tracking_crop"},
+        "source_fingerprint": "source-sha256",
+        "source_width": 1920,
+        "source_height": 1080,
+    }
+
+    baseline_exact = build_subtitle_review_preview_spec(candidate=candidate, **common)
+    adjusted_exact = build_subtitle_review_preview_spec(candidate=adjusted, **common)
+    baseline_live = build_live_subtitle_review_preview_spec(baseline_exact)
+    adjusted_live = build_live_subtitle_review_preview_spec(adjusted_exact)
+
+    assert adjusted_exact["clip"]["framing_offset_x"] == 24.5
+    assert adjusted_exact["clip"]["framing_offset_y"] == -18.25
+    assert adjusted_exact["clip"]["framing_zoom"] == 1.3
+    assert adjusted_live["clip"]["framingOffsetX"] == 24.5
+    assert adjusted_live["clip"]["framingOffsetY"] == -18.25
+    assert adjusted_live["clip"]["framingZoom"] == 1.3
+    assert subtitle_review_preview_spec_hash(adjusted_exact) != (
+        subtitle_review_preview_spec_hash(baseline_exact)
+    )
+    assert subtitle_review_preview_spec_hash(adjusted_live) != (
+        subtitle_review_preview_spec_hash(baseline_live)
+    )
 
 
 def test_live_preview_spec_ignores_text_style_but_tracks_visual_layout() -> None:
@@ -423,6 +459,9 @@ def test_exact_short_preview_uses_final_composition_and_nonoverlapping_ass(
             "hook_duration_seconds": 3.0,
             "hook_scene_start": 14.0,
             "hook_scene_end": 16.54,
+            "framing_offset_x": 22.5,
+            "framing_offset_y": -15.0,
+            "framing_zoom": 1.25,
         }
     )
     segments = [TranscriptSegment(start=10.0, end=12.0, text="本編先頭")]
@@ -469,11 +508,17 @@ def test_exact_short_preview_uses_final_composition_and_nonoverlapping_ass(
     assert calls[0]["source_height"] == 1080
     assert calls[0]["hook_scene_start"] == 14.0
     assert calls[0]["hook_scene_end"] == 16.54
+    assert calls[0]["framing_offset_x"] == 22.5
+    assert calls[0]["framing_offset_y"] == -15.0
+    assert calls[0]["framing_zoom"] == 1.25
     assert calls[0]["top_banner_path"] == DEFAULT_SHORT_TOP_BANNER_PATH
     assert calls[0]["bottom_banner_path"] == DEFAULT_SHORT_BOTTOM_BANNER_PATH
     assert calls[1]["subtitle_path"] is None
     assert calls[1]["layout"] == "center_crop"
     assert calls[1]["hook_scene_start"] == 14.0
+    assert calls[1]["framing_offset_x"] == 22.5
+    assert calls[1]["framing_offset_y"] == -15.0
+    assert calls[1]["framing_zoom"] == 1.25
     assert calls[1]["top_banner_path"] == DEFAULT_SHORT_TOP_BANNER_PATH
     spec_settings = json.loads(result.spec_path.read_text(encoding="utf-8"))[
         "settings"

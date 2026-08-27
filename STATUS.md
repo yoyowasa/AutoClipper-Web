@@ -7765,3 +7765,44 @@ pip check: pass
 ### 未解決・制限
 
 - 作成した子Jobの字幕確認後から最終MP4・ZIPまでのユーザー受入は未確認。
+
+## 2026-08-27 Task 128 ショート帯の安全領域とclip別画角調整
+
+### 目的
+
+- 上帯タイトル・下帯ロゴを基本構成にしつつ、帯による人物の頭切れを防ぐ。
+- 自動畫角だけで合わないショートを、clipごとに左右・上下・拡大率で微調整できるようにする。
+
+### 観測事実・原因
+
+- 変更前は上下帯を完成映像へ重ねていたため、上帯の下に人物の頭が隠れる素材があった。
+- 画角はJob共通の4種類だけで、clipごとの位置・拡大調整値を保存する契約がなかった。
+- 顔・人物などの検出に失敗した場合、帯の間の実表示領域ではなく固定`1080x1920`を基準にfallbackを選んでいた。
+
+### 変更
+
+- 新規Jobの上帯・下帯を既定ONへ変更した。既存Jobに保存済みのON/OFF値は維持する。
+- 上帯・下帯を各`360px`の予約領域として扱い、映像を帯の間へ配置する。両帯ON時の映像領域は`1080x1200`、片側のみON時は`1080x1560`、帯なしは従来どおり`1080x1920`。
+- 上帯ON時は動画内タイトルを表示し、下帯ON時はロゴ帯を表示する既存契約を維持した。
+- 字幕確認画面へ、選択中ショートだけに効く`左右 -100〜100`、`上下 -100〜100`、`拡大 100〜160%`と`自動値へ戻す`を追加した。
+- 画角値はclip単位で保存し、そのclipだけ完成表示previewを再生成する。保存失敗時も下書きを保持し、未保存画角がある間はclip確定・最終レンダリングを禁止する。
+- 顔・人物・話者・被写体の追跡、冒頭複製、即時preview、完成表示preview、最終MP4へ同じ安全領域と画角値を渡す。
+- 検出なしで帯内cropが素材を破壊する場合は`blur_background`を優先する。Export JSONには画角値と実描画後のcrop座標を保存する。
+- 両帯ON時のショート字幕既定位置を`68.75%`へ変更し、下帯へ重なりにくくした。
+- 旧Jobに帯・字幕位置の3項目が保存されていない場合、再試行・再選定・手動確定では旧契約の`上帯OFF / 下帯OFF / 字幕位置未指定`を補完し、新規既定を混入させない。
+- 主な変更ファイル: `backend/app/render/crop_strategy.py`、`backend/app/render/render_short.py`、`backend/app/render/render_exact_review_preview.py`、`backend/app/jobs/subtitle_review.py`、`backend/app/api/jobs.py`、`backend/app/schemas.py`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/components/SettingsPanel.tsx`、`frontend/lib/api.ts`、`frontend/lib/types.ts`、関連test、`STATUS.md`。
+
+### 検証
+
+- backend全test: `636 passed, 1 skipped`。backend全ruff: pass。
+- frontend: typecheck / lint / production build: pass。
+- GPU Composeのbackend / worker / frontendをbuild・再作成し、backend health=`ok`、frontend HTTP=`200`、worker起動を確認した。
+- 最新backendコンテナで、上端に頭領域を置いた合成`1080x1920`動画をFFmpegで実レンダリングした。出力=`1080x1920`、戦略=`face_tracking_crop`、`crop_y=0`、上帯直下の画素が頭領域の赤色であることを確認した。
+- 同じ合成動画で検出0件時の戦略が`blur_background`になることを確認した。
+- 実ブラウザで字幕確認画面にclip別の左右・上下・拡大、自動値へ戻す、`上下帯（基本ON）`が表示されることを確認した。
+- 独立監査でP0/P1なし。検出失敗時fallback、実crop座標、未保存画角保持、保存契機、旧Jobへの新規既定混入のP2を修正後、関連test=`170 passed`。
+
+### 未解決・制限
+
+- 許可済みユーザー実動画によるclip別調整から最終MP4・ZIPまでの実E2Eと、頭位置・字幕位置のユーザー受入は未確認。
+- 既存Jobは保存済みの帯設定を維持するため、自動で上下帯ONへ書き換えない。

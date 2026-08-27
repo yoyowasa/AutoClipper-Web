@@ -22,6 +22,7 @@ from app.render.crop_strategy import (
     build_center_crop_filter as _build_center_crop_filter,
     build_crop_filter,
     plan_short_crop,
+    resolve_tracking_crop_geometry,
 )
 from app.render.filters import ass_filter, loudnorm_filter
 from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
@@ -39,6 +40,7 @@ from app.video.subject_detect import SubjectDetection, detect_subject_for_clip
 SHORT_BANNER_ASSET_DIR = Path(__file__).resolve().parent / "assets"
 DEFAULT_SHORT_TOP_BANNER_PATH = SHORT_BANNER_ASSET_DIR / "short_top_banner.png"
 DEFAULT_SHORT_BOTTOM_BANNER_PATH = SHORT_BANNER_ASSET_DIR / "short_bottom_banner.png"
+SHORT_BANNER_HEIGHT = SHORT_WIDTH // 3
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,42 @@ SubjectDetector = Callable[[str | Path, float, float], SubjectDetection | None]
 MetadataProbe = Callable[[str | Path], VideoMetadata]
 
 
+def _effective_tracking_crop_coordinates(
+    strategy: CropStrategy,
+    *,
+    source_width: int,
+    source_height: int,
+    target_height: int,
+    face_center: tuple[float, float] | None,
+    speaker_center: tuple[float, float] | None,
+    person_center: tuple[float, float] | None,
+    subject_center: tuple[float, float] | None,
+    framing_offset_x: float,
+    framing_offset_y: float,
+    framing_zoom: float,
+) -> tuple[int | None, int | None]:
+    centers = {
+        "face_tracking_crop": face_center,
+        "speaker_tracking_crop": speaker_center,
+        "person_tracking_crop": person_center,
+        "subject_tracking_crop": subject_center,
+    }
+    center = centers.get(strategy)
+    if center is None:
+        return None, None
+    _, _, crop_x, crop_y = resolve_tracking_crop_geometry(
+        source_width,
+        source_height,
+        center,
+        target_width=SHORT_WIDTH,
+        target_height=target_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
+    )
+    return crop_x, crop_y
+
+
 def _duration(start: float, end: float) -> float:
     duration = end - start
     if duration <= 0:
@@ -125,19 +163,37 @@ def _labeled_crop_filter(
     speaker_center: tuple[float, float] | None,
     person_center: tuple[float, float] | None,
     subject_center: tuple[float, float] | None,
+    content_height: int = SHORT_HEIGHT,
+    content_y: int = 0,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
 ) -> str:
+    if content_height <= 0 or content_y < 0 or content_y + content_height > SHORT_HEIGHT:
+        raise ValueError("short content viewport must stay within 1080x1920")
+    pad_filter = (
+        ""
+        if content_height == SHORT_HEIGHT and content_y == 0
+        else f",pad={SHORT_WIDTH}:{SHORT_HEIGHT}:0:{content_y}:color=black"
+    )
     if layout == "blur_background":
+        foreground_width = round(SHORT_WIDTH * framing_zoom)
+        foreground_height = round(content_height * framing_zoom)
+        foreground_width += foreground_width % 2
+        foreground_height += foreground_height % 2
+        overlay_x = f"(W-w)/2-(w-W)*{framing_offset_x / 200:.4f}"
+        overlay_y = f"(H-h)/2-(h-H)*{framing_offset_y / 200:.4f}"
         return (
             f"[{input_label}]setpts=PTS-STARTPTS,"
             f"split=2[{namespace}_bgsrc][{namespace}_fgsrc];"
             f"[{namespace}_bgsrc]"
-            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT},gblur=sigma=24[{namespace}_bg];"
+            f"scale={SHORT_WIDTH}:{content_height}:force_original_aspect_ratio=increase,"
+            f"crop={SHORT_WIDTH}:{content_height},gblur=sigma=24[{namespace}_bg];"
             f"[{namespace}_fgsrc]"
-            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=decrease"
+            f"scale={foreground_width}:{foreground_height}:force_original_aspect_ratio=decrease"
             f"[{namespace}_fg];"
             f"[{namespace}_bg][{namespace}_fg]"
-            f"overlay=(W-w)/2:(H-h)/2[{output_label}]"
+            f"overlay={overlay_x}:{overlay_y}{pad_filter}[{output_label}]"
         )
     crop_filter = build_crop_filter(
         layout,
@@ -147,10 +203,27 @@ def _labeled_crop_filter(
         speaker_center=speaker_center,
         person_center=person_center,
         subject_center=subject_center,
+        target_width=SHORT_WIDTH,
+        target_height=content_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
     )
     return (
-        f"[{input_label}]setpts=PTS-STARTPTS,{crop_filter}[{output_label}]"
+        f"[{input_label}]setpts=PTS-STARTPTS,{crop_filter}{pad_filter}[{output_label}]"
     )
+
+
+def _content_viewport(
+    *,
+    top_banner_enabled: bool,
+    bottom_banner_enabled: bool,
+) -> tuple[int, int]:
+    content_y = SHORT_BANNER_HEIGHT if top_banner_enabled else 0
+    reserved_height = content_y
+    if bottom_banner_enabled:
+        reserved_height += SHORT_BANNER_HEIGHT
+    return SHORT_HEIGHT - reserved_height, content_y
 
 
 def _banner_input_args(
@@ -233,7 +306,14 @@ def _build_hook_prepend_filter(
     subject_center: tuple[float, float] | None,
     top_banner_input_index: int | None = None,
     bottom_banner_input_index: int | None = None,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
 ) -> tuple[str, str, str]:
+    content_height, content_y = _content_viewport(
+        top_banner_enabled=top_banner_input_index is not None,
+        bottom_banner_enabled=bottom_banner_input_index is not None,
+    )
     filters = [
         _labeled_crop_filter(
             "0:v:0",
@@ -246,6 +326,11 @@ def _build_hook_prepend_filter(
             speaker_center=speaker_center,
             person_center=person_center,
             subject_center=subject_center,
+            content_height=content_height,
+            content_y=content_y,
+            framing_offset_x=framing_offset_x,
+            framing_offset_y=framing_offset_y,
+            framing_zoom=framing_zoom,
         ),
         _labeled_crop_filter(
             "1:v:0",
@@ -258,6 +343,11 @@ def _build_hook_prepend_filter(
             speaker_center=speaker_center,
             person_center=person_center,
             subject_center=subject_center,
+            content_height=content_height,
+            content_y=content_y,
+            framing_offset_x=framing_offset_x,
+            framing_offset_y=framing_offset_y,
+            framing_zoom=framing_zoom,
         ),
         "[0:a:0]aresample=48000,asetpts=PTS-STARTPTS[hook_a]",
         "[1:a:0]aresample=48000,asetpts=PTS-STARTPTS[main_a]",
@@ -299,6 +389,9 @@ def build_render_short_command(
     hook_scene_end: float | None = None,
     top_banner_path: str | Path | None = None,
     bottom_banner_path: str | Path | None = None,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
 ) -> list[str]:
     hook_scene = _hook_scene_range(hook_scene_start, hook_scene_end)
     if hook_scene is not None:
@@ -320,6 +413,9 @@ def build_render_short_command(
             subject_center=subject_center,
             top_banner_input_index=top_banner_input_index,
             bottom_banner_input_index=bottom_banner_input_index,
+            framing_offset_x=framing_offset_x,
+            framing_offset_y=framing_offset_y,
+            framing_zoom=framing_zoom,
         )
         return [
             ffmpeg_bin,
@@ -363,6 +459,10 @@ def build_render_short_command(
         first_input_index=1,
     )
     if banner_args:
+        content_height, content_y = _content_viewport(
+            top_banner_enabled=top_banner_input_index is not None,
+            bottom_banner_enabled=bottom_banner_input_index is not None,
+        )
         filters = [
             _labeled_crop_filter(
                 "0:v:0",
@@ -375,6 +475,11 @@ def build_render_short_command(
                 speaker_center=speaker_center,
                 person_center=person_center,
                 subject_center=subject_center,
+                content_height=content_height,
+                content_y=content_y,
+                framing_offset_x=framing_offset_x,
+                framing_offset_y=framing_offset_y,
+                framing_zoom=framing_zoom,
             )
         ]
         video_label = _append_banner_and_subtitle_filters(
@@ -425,6 +530,9 @@ def build_render_short_command(
                 speaker_center=speaker_center,
                 person_center=person_center,
                 subject_center=subject_center,
+                framing_offset_x=framing_offset_x,
+                framing_offset_y=framing_offset_y,
+                framing_zoom=framing_zoom,
             ),
         ]
 
@@ -589,6 +697,9 @@ def render_short_clip(
     hook_scene_end: float | None = None,
     top_banner_path: str | Path | None = None,
     bottom_banner_path: str | Path | None = None,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
 ) -> ShortRenderResult:
     for label, banner_path in (
         ("top", top_banner_path),
@@ -603,6 +714,10 @@ def render_short_clip(
         source_height=source_height,
         metadata_probe=metadata_probe,
     )
+    content_height, _content_y = _content_viewport(
+        top_banner_enabled=top_banner_path is not None,
+        bottom_banner_enabled=bottom_banner_path is not None,
+    )
     detections = _detect_faces_for_layout(
         layout,
         input_path=input_path,
@@ -615,6 +730,8 @@ def render_short_clip(
         detections=detections,
         source_width=width,
         source_height=height,
+        target_width=SHORT_WIDTH,
+        target_height=content_height,
     )
     if _needs_secondary_crop_signals(layout, crop_plan):
         speaker_signal = _detect_speaker_for_layout(
@@ -649,6 +766,8 @@ def render_short_clip(
             speaker_signal=speaker_signal,
             person_signal=person_signal,
             subject_signal=subject_signal,
+            target_width=SHORT_WIDTH,
+            target_height=content_height,
         )
     face_center = crop_plan.face_center or best_face_center(detections)
     speaker_center = crop_plan.speaker_center
@@ -679,19 +798,35 @@ def render_short_clip(
                 hook_scene_end=hook_scene_end,
                 top_banner_path=top_banner_path,
                 bottom_banner_path=bottom_banner_path,
+                framing_offset_x=framing_offset_x,
+                framing_offset_y=framing_offset_y,
+                framing_zoom=framing_zoom,
             )
             command_runner(command)
             fallback_reason = crop_plan.fallback_reason
             if len(attempted) > 1 and fallback_reason is None:
                 fallback_reason = f"render_strategy_failed:{attempted[0]}"
+            crop_x, crop_y = _effective_tracking_crop_coordinates(
+                strategy,
+                source_width=width,
+                source_height=height,
+                target_height=content_height,
+                face_center=face_center,
+                speaker_center=speaker_center,
+                person_center=person_center,
+                subject_center=subject_center,
+                framing_offset_x=framing_offset_x,
+                framing_offset_y=framing_offset_y,
+                framing_zoom=framing_zoom,
+            )
             return ShortRenderResult(
                 path=Path(output_path),
                 strategy=strategy,
                 crop_signal_source=crop_plan.signal_source,
                 crop_confidence=crop_plan.confidence,
                 crop_fallback_reason=fallback_reason,
-                crop_x=crop_plan.crop_x,
-                crop_y=crop_plan.crop_y,
+                crop_x=crop_x,
+                crop_y=crop_y,
                 crop_detection_count=crop_plan.detection_count,
                 crop_sampled_frames=crop_plan.sampled_frame_count,
                 crop_subject_x=crop_plan.subject_x,
@@ -857,6 +992,9 @@ def _write_export_metadata(
                 "crop_sampled_frames": crop_sampled_frames,
                 "crop_subject_x": crop_subject_x,
                 "crop_stability_score": crop_stability_score,
+                "framing_offset_x": candidate.framing_offset_x,
+                "framing_offset_y": candidate.framing_offset_y,
+                "framing_zoom": candidate.framing_zoom,
                 "person_detection_count": person_detection_count,
                 "person_detection_confidence": person_detection_confidence,
                 "person_box": list(person_box) if person_box is not None else None,
@@ -989,6 +1127,9 @@ def render_selected_short_candidates(
                 "layout": layout,
                 "source_width": source_width,
                 "source_height": source_height,
+                "framing_offset_x": candidate.framing_offset_x,
+                "framing_offset_y": candidate.framing_offset_y,
+                "framing_zoom": candidate.framing_zoom,
                 "dialogue_windows": dialogue_windows_for_clip(
                     candidate.start,
                     candidate.end,

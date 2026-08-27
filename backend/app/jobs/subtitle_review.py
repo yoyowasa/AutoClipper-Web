@@ -94,6 +94,9 @@ class SubtitleReviewClip(BaseModel):
     title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
+    framing_offset_x: float = Field(default=0.0, ge=-100, le=100, alias="framingOffsetX")
+    framing_offset_y: float = Field(default=0.0, ge=-100, le=100, alias="framingOffsetY")
+    framing_zoom: float = Field(default=1.0, ge=1.0, le=1.6, alias="framingZoom")
     resolved_title_style: ResolvedClipTextStyle | None = Field(
         default=None,
         alias="resolvedTitleStyle",
@@ -455,6 +458,9 @@ def build_subtitle_review(
                 titleStyle=candidate.title_style,
                 hookStyle=candidate.hook_style,
                 subtitleStyle=candidate.subtitle_style,
+                framingOffsetX=candidate.framing_offset_x,
+                framingOffsetY=candidate.framing_offset_y,
+                framingZoom=candidate.framing_zoom,
                 start=candidate.start,
                 end=candidate.end,
                 duration=candidate.duration,
@@ -636,6 +642,41 @@ def update_review_clip_content(
     clip.subtitle_style = (
         next_subtitle_style if isinstance(next_subtitle_style, ClipTextStyle) else None
     )
+    clip.confirmed = False
+    return _refresh_counts(document)
+
+
+def update_review_clip_framing(
+    document: SubtitleReviewDocument,
+    clip_id: str,
+    *,
+    framing_offset_x: float,
+    framing_offset_y: float,
+    framing_zoom: float,
+) -> SubtitleReviewDocument:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+    if clip.type != "short":
+        raise ValueError("framing can only be changed for short clips")
+    if not -100 <= framing_offset_x <= 100 or not -100 <= framing_offset_y <= 100:
+        raise ValueError("framing offsets must be between -100 and 100")
+    if not 1.0 <= framing_zoom <= 1.6:
+        raise ValueError("framing zoom must be between 1.0 and 1.6")
+
+    next_x = round(float(framing_offset_x), 2)
+    next_y = round(float(framing_offset_y), 2)
+    next_zoom = round(float(framing_zoom), 3)
+    if (
+        clip.framing_offset_x == next_x
+        and clip.framing_offset_y == next_y
+        and clip.framing_zoom == next_zoom
+    ):
+        return _refresh_counts(document)
+
+    clip.framing_offset_x = next_x
+    clip.framing_offset_y = next_y
+    clip.framing_zoom = next_zoom
     clip.confirmed = False
     return _refresh_counts(document)
 
@@ -841,6 +882,9 @@ def apply_reviewed_clip_content(
         updates["hook_style"] = clip.hook_style
         updates["title_style"] = clip.title_style
         updates["subtitle_style"] = clip.subtitle_style
+        updates["framing_offset_x"] = clip.framing_offset_x
+        updates["framing_offset_y"] = clip.framing_offset_y
+        updates["framing_zoom"] = clip.framing_zoom
         return candidate.model_copy(update=updates)
 
     return selection.model_copy(

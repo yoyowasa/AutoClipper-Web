@@ -17,6 +17,7 @@ from app.jobs.subtitle_review import (
     subtitle_review_preview_path,
     subtitle_review_preview_url,
     update_review_clip_content,
+    update_review_clip_framing,
     update_review_hook_scene,
     update_review_segment,
     write_subtitle_review,
@@ -89,6 +90,56 @@ def test_review_build_preserves_short_render_settings() -> None:
     assert review.short_top_banner_enabled is True
     assert review.short_bottom_banner_enabled is True
     assert review.clips[0].overlay_title_expected is True
+
+
+def test_review_clip_framing_round_trips_between_candidate_review_and_artifact(
+    tmp_path: Path,
+) -> None:
+    transcript = [TranscriptSegment(start=0.0, end=10.0, text="short")]
+    candidate = _candidate("short_1", "short", 0.0, 10.0).model_copy(
+        update={
+            "framing_offset_x": 12.5,
+            "framing_offset_y": -8.25,
+            "framing_zoom": 1.2,
+        }
+    )
+    selection = CandidateSelection(shorts=[candidate])
+
+    review = build_subtitle_review("job_review", selection, transcript)
+    clip = review.clips[0]
+
+    assert clip.framing_offset_x == 12.5
+    assert clip.framing_offset_y == -8.25
+    assert clip.framing_zoom == 1.2
+    payload = review.model_dump(by_alias=True, mode="json")
+    assert payload["clips"][0]["framingOffsetX"] == 12.5
+    assert payload["clips"][0]["framingOffsetY"] == -8.25
+    assert payload["clips"][0]["framingZoom"] == 1.2
+
+    review = update_review_clip_framing(
+        review,
+        "short_1",
+        framing_offset_x=33.336,
+        framing_offset_y=-12.344,
+        framing_zoom=1.23456,
+    )
+    updated = apply_reviewed_clip_content(selection, review).shorts[0]
+
+    assert review.clips[0].framing_offset_x == 33.34
+    assert review.clips[0].framing_offset_y == -12.34
+    assert review.clips[0].framing_zoom == 1.235
+    assert review.clips[0].confirmed is False
+    assert updated.framing_offset_x == 33.34
+    assert updated.framing_offset_y == -12.34
+    assert updated.framing_zoom == 1.235
+
+    output_path = tmp_path / "subtitle_review.json"
+    write_subtitle_review(review, output_path)
+    restored = load_subtitle_review(output_path)
+
+    assert restored.clips[0].framing_offset_x == 33.34
+    assert restored.clips[0].framing_offset_y == -12.34
+    assert restored.clips[0].framing_zoom == 1.235
 
 
 def test_review_build_exposes_exact_resolved_styles_and_layout_contract() -> None:
