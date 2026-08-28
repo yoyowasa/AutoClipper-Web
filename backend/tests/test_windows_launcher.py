@@ -532,6 +532,28 @@ def test_recommended_start_uses_gpu_override_and_gpu_upload_profile(tmp_path: Pa
     assert opened == ["http://localhost:3000/upload?runtimeProfile=gpu"]
 
 
+def test_stopped_gpu_runtime_starts_without_forced_rebuild(tmp_path: Path) -> None:
+    runner = FakeRunner(
+        ps_output=compose_ps(running=False),
+        docker_gpu=True,
+        worker_profile="gpu",
+    )
+    controller = make_controller(
+        make_project(tmp_path),
+        runner,
+        ready=True,
+        gpu=HostGpu("NVIDIA Test GPU", "1.0", 16384),
+    )
+
+    result = controller.start(profile="recommended", open_browser=False)
+
+    up_call = next(call for call in runner.calls if "up" in call[0])
+    assert "--build" not in up_call[0]
+    assert "--force-recreate" not in up_call[0]
+    assert result.runtime_profile.key == "gpu"
+    assert result.already_running is False
+
+
 def test_running_gpu_profile_revalidates_worker_before_early_return(tmp_path: Path) -> None:
     runner = FakeRunner(
         ps_output=compose_ps(),

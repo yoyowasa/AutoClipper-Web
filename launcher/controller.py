@@ -871,7 +871,6 @@ class LauncherController:
         rebuild_worker_for_profile = (
             profile_changed
             or gpu_runtime_repair_needed
-            or selected_profile.key == "gpu"
         )
         worker_running = report.runtime_status.services.get(
             "worker", ServiceState("worker")

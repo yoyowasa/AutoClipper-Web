@@ -7841,3 +7841,30 @@ pip check: pass
 ### 未解決・制限
 
 - 許可済み実動画で改行を保存し、exact previewから最終MP4まで目視する実E2Eとユーザー受入は未確認。
+
+## 2026-08-28 Windows LauncherのGPU起動待機短縮
+
+### 目的
+
+- デスクトップ起動時にAutoClipperが起動しないように見える長時間待機を解消する。
+
+### 原因・変更
+
+- ショートカット、Python、Docker daemon、Compose、各serviceは正常だった。
+- LauncherはGPU profileを選んだだけでGPU worker imageを毎回`--build`していた。実測では22:15:21開始、22:21:52完了で6分31秒かかり、途中進捗がないため起動不能に見えていた。
+- GPUという理由だけの無条件buildを廃止した。明示的な`再ビルドして起動`、CPU/GPU profile切替、GPU worker検証失敗からの修復では従来どおりbuildする。
+
+### 変更ファイル
+
+- `launcher/controller.py`
+- `backend/tests/test_windows_launcher.py`
+
+### 最小検証
+
+- Windows Launcher test: `42 passed`。
+- 稼働中GPU profileに対する起動処理は`8.21秒`、`already_running=True`、`ready=True`。workerの作成日時、起動日時、image IDは前後一致し、再build／再作成なし。
+- backend `/health=200`、frontend `/upload=200`。backend、frontend、Redis、workerの4serviceは稼働中。
+
+### 未解決事項
+
+- Docker Desktop停止状態からのcold startは、稼働serviceを停止しないため今回は未実施。既存の自動起動経路とtestは維持している。
