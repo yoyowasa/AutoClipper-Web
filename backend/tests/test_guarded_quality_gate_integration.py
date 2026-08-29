@@ -97,13 +97,15 @@ def _decision(
     return QualityGateDecision(
         jobId=job_id,
         mode=mode,
-        enforced=mode == "guarded",
+        enforced=mode in {"guarded", "auto"},
         stage=stage,
         inputHash=hashlib.sha256(f"{job_id}:{stage}:{outcome}".encode()).hexdigest(),
         outcome=outcome,
         route=(
             "observe"
             if mode == "shadow"
+            else "subtitle_review"
+            if mode == "auto" and stage == "post_render" and outcome != "pass"
             else route_by_stage_and_outcome[(stage, outcome)]
         ),
         checks=[
@@ -772,3 +774,322 @@ def test_quality_gate_record_failure_keeps_existing_review_fallback(
         storage.job_outputs(job_id),
         "selection",
     ).exists()
+
+
+def _patch_auto_gate_outcomes(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    selection: str = "pass",
+    content: str = "pass",
+    post_render: str = "pass",
+) -> None:
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_selection_quality_gate",
+        lambda **kwargs: _decision(
+            str(kwargs["job_id"]),
+            stage="selection",
+            outcome=selection,
+            mode="auto",
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_content_quality_gate",
+        lambda **kwargs: _decision(
+            str(kwargs["job_id"]),
+            stage="content",
+            outcome=content,
+            mode="auto",
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_post_render_quality_gate",
+        lambda **kwargs: _decision(
+            str(kwargs["job_id"]),
+            stage="post_render",
+            outcome=post_render,
+            mode="auto",
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_generate_auto_title_hook_evidence",
+        lambda **_kwargs: ({}, {}),
+    )
+
+
+def test_auto_pass_completes_and_packages_posting_artifacts(
+    guarded_client: tuple[TestClient, StoragePaths, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client, storage, session_factory = guarded_client
+    job_id = _create_review_job(client, automation_mode="auto")
+    _patch_auto_gate_outcomes(monkeypatch)
+
+    statuses = run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+
+    output_dir = storage.job_outputs(job_id)
+    assert statuses[-1] == "completed"
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == "completed"
+    assert (output_dir / "youtube_posting_packages.json").is_file()
+    assert (output_dir / "youtube_posts.md").is_file()
+    assert storage.zip_path(job_id).is_file()
+
+
+def test_auto_content_attention_stops_before_rendering(
+    guarded_client: tuple[TestClient, StoragePaths, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client, storage, session_factory = guarded_client
+    job_id = _create_review_job(client, automation_mode="auto")
+    _patch_auto_gate_outcomes(monkeypatch, content="unknown")
+
+    statuses = run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+
+    assert statuses[-1] == "awaiting_subtitle_review"
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == (
+        "awaiting_subtitle_review"
+    )
+    with session_factory() as db:
+        assert list(
+            db.scalars(select(ExportItem).where(ExportItem.job_id == job_id)).all()
+        ) == []
+
+
+def test_auto_post_render_attention_discards_output_and_restores_review(
+    guarded_client: tuple[TestClient, StoragePaths, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client, storage, session_factory = guarded_client
+    job_id = _create_review_job(client, automation_mode="auto")
+    _patch_auto_gate_outcomes(monkeypatch, post_render="unknown")
+
+    statuses = run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+
+    assert statuses[-1] == "awaiting_subtitle_review"
+    review = load_subtitle_review(
+        subtitle_review_output_path(storage.job_outputs(job_id))
+    )
+    assert review.state == "awaiting_review"
+    payload = client.get(f"/api/jobs/{job_id}").json()
+    assert payload["status"] == "awaiting_subtitle_review"
+    assert payload["details"]["automationGateStage"] == "post_render"
+    assert payload["details"]["automationGateOutcome"] == "unknown"
+    with session_factory() as db:
+        assert list(
+            db.scalars(select(ExportItem).where(ExportItem.job_id == job_id)).all()
+        ) == []
+
+
+def test_auto_clip_approval_is_single_enqueue_and_resumes_same_selection(
+    guarded_client: tuple[TestClient, StoragePaths, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client, storage, session_factory = guarded_client
+    job_id = _create_review_job(client, automation_mode="auto")
+    _patch_auto_gate_outcomes(monkeypatch, selection="unknown")
+    initial = run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+    assert initial[-1] == "awaiting_clip_review"
+
+    enqueued: list[str] = []
+    app.dependency_overrides[get_enqueue_job] = lambda: enqueued.append
+    approved = client.post(f"/api/jobs/{job_id}/clip-plan/approve")
+    duplicate = client.post(f"/api/jobs/{job_id}/clip-plan/approve")
+
+    assert approved.status_code == 200
+    assert approved.json()["status"] == "queued"
+    assert duplicate.status_code == 409
+    assert enqueued == [job_id]
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.settings_json["_autoResumeAfterClipReview"] is True
+
+    _patch_auto_gate_outcomes(monkeypatch)
+    resumed = run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+
+    assert resumed[-1] == "completed"
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.status == "completed"
+        assert "_autoResumeAfterClipReview" not in job.settings_json
+
+
+def test_auto_resume_marker_survives_abrupt_worker_termination(
+    guarded_client: tuple[TestClient, StoragePaths, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client, storage, session_factory = guarded_client
+    job_id = _create_review_job(client, automation_mode="auto")
+    _patch_auto_gate_outcomes(monkeypatch, selection="unknown")
+    run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+    approved = client.post(f"/api/jobs/{job_id}/clip-plan/approve")
+    assert approved.status_code == 200
+    monkeypatch.setattr(
+        runner_module,
+        "_resume_auto_after_clip_review",
+        lambda **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        run_autoclipper_job(
+            job_id,
+            session_factory=session_factory,
+            paths=storage,
+            dependencies=_dependencies(tmp_path),
+        )
+
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.settings_json["_autoResumeAfterClipReview"] is True
+
+
+@pytest.mark.parametrize("failed_review_state", ["rendering", "completed"])
+def test_auto_resume_regular_failure_restores_editable_review_and_consumes_marker(
+    guarded_client: tuple[TestClient, StoragePaths, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failed_review_state: str,
+) -> None:
+    client, storage, session_factory = guarded_client
+    job_id = _create_review_job(client, automation_mode="auto")
+    _patch_auto_gate_outcomes(monkeypatch, selection="unknown")
+    run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+    assert client.post(f"/api/jobs/{job_id}/clip-plan/approve").status_code == 200
+
+    review_path = subtitle_review_output_path(storage.job_outputs(job_id))
+
+    def fail_after_render_started(**_kwargs: object) -> list[str]:
+        review = load_subtitle_review(review_path)
+        review.state = failed_review_state
+        write_subtitle_review(review, review_path)
+        raise RuntimeError("render worker failed")
+
+    monkeypatch.setattr(
+        runner_module,
+        "_resume_auto_after_clip_review",
+        fail_after_render_started,
+    )
+
+    statuses = run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+
+    assert statuses == ["awaiting_subtitle_review"]
+    assert load_subtitle_review(review_path).state == "awaiting_review"
+    decision = load_quality_gate_decision(
+        quality_gate_decision_path(storage.job_outputs(job_id), "content")
+    )
+    assert decision.outcome == "unknown"
+    assert decision.checks[0].reason_code == "auto_resume_after_clip_review_failed"
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.status == "awaiting_subtitle_review"
+        assert "_autoResumeAfterClipReview" not in job.settings_json
+
+
+@pytest.mark.parametrize(
+    ("review_state", "job_status", "expected_status"),
+    [
+        ("completed", "completed", "completed"),
+        ("completed", "packaging_zip", "awaiting_subtitle_review"),
+        ("rendering", "rendering_normal_clips", "awaiting_subtitle_review"),
+        ("render_queued", "queued", "awaiting_subtitle_review"),
+    ],
+)
+def test_auto_resume_retry_recovers_durable_review_state_without_reselection(
+    guarded_client: tuple[TestClient, StoragePaths, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    review_state: str,
+    job_status: str,
+    expected_status: str,
+) -> None:
+    client, storage, session_factory = guarded_client
+    job_id = _create_review_job(client, automation_mode="auto")
+    _patch_auto_gate_outcomes(monkeypatch, selection="unknown")
+    run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+    assert client.post(f"/api/jobs/{job_id}/clip-plan/approve").status_code == 200
+
+    review_path = subtitle_review_output_path(storage.job_outputs(job_id))
+    review = load_subtitle_review(review_path)
+    review.state = review_state
+    write_subtitle_review(review, review_path)
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.status = job_status
+        db.commit()
+    if expected_status == "completed":
+        storage.zip_path(job_id).write_bytes(b"published zip")
+
+    statuses = run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+
+    assert statuses[-1] == expected_status
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.status == expected_status
+        assert "_autoResumeAfterClipReview" not in job.settings_json
+    recovered_review = load_subtitle_review(review_path)
+    assert recovered_review.state == (
+        "completed" if expected_status == "completed" else "awaiting_review"
+    )

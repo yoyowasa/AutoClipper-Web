@@ -8356,3 +8356,44 @@ pip check: pass
 ### 未解決事項
 
 - なし。新しいadvisory追加時は`npm audit`で再確認する。
+
+## 2026-08-30 完全自動化 Phase 4 と68分実動画受入
+
+### 目的
+
+- `auto`モードで初期選定からタイトル／フック／投稿情報、字幕品質確認、書き出し、ZIP作成まで進め、証拠不足のclipだけを人へ戻す。
+- 68分実動画とheatmap JSONで通常2本・ショート3本を作り、例外確認数、完成媒体、投稿artifactを受け入れ確認する。
+
+### 現在状態・変更
+
+- `manual / shadow / guarded / auto`を共通契約化し、upload／job画面へ`auto`を追加した。autoはCodex初期選定とタイトル／フック／YouTube説明欄生成を使う。
+- selection／content／post-renderの品質判定を追加した。強制モードはfail／unknownを通過させず、clip確認または字幕確認へ戻す。
+- 字幕構造、ASR confidence、タイトル／フック根拠、実際のASS event配置、媒体本数／identity／duration／stream、ショート画角・追従geometryを証拠化した。
+- clip単位の人確認を自動判定の上書き証拠として扱い、1件だけ確認した後は残りclipを未確認のまま再評価し、自動書き出しへ再開する。`apply`／`confirm`／preview完了の各経路を接続した。
+- 長文字幕gateをraw segment単位から、preview／ASSと同じ実際の分割event単位へ変更した。
+- Codex推奨案IDを正規化後の候補indexへ対応付け、推奨案と採用案がずれないよう修正した。
+- AI／手動で確定済みのタイトルへASR文字補正を再適用しない。語尾`ブロッコリー`の長音`ー`が書き出しmetadataだけで欠落する不整合を修正した。
+- auto再開中にZIP作成失敗／worker中断が起きても、job未完了なら`review=completed`を終端扱いせず、未公開成果を破棄して`awaiting_review`へ整合復旧できるようにした。
+
+### 変更ファイル
+
+- backend: `app/api/jobs.py`、`app/candidates/title_fallback.py`、`app/jobs/automation.py`、`app/jobs/quality_gate.py`、`app/jobs/runner.py`、`app/jobs/subtitle_review.py`、`app/jobs/title_hook_suggestions.py`、render／schema関連module
+- frontend: `app/jobs/[jobId]/page.tsx`、`components/JobProgress.tsx`、`components/SettingsPanel.tsx`、`lib/automationQuality.ts`、`lib/types.ts`
+- test: auto契約、3段階gate、API再開、preview runner、title／hook、short metadata、overlay fit関連test
+
+### 最小検証
+
+- backend全test: `912 passed / 1 skipped / 0 failed`。backend Ruff: pass。
+- frontend: automation UI test、overlay fit test、typecheck、lint、Next.js `16.3.3` build: pass。`npm audit --audit-level=high`: `found 0 vulnerabilities`。
+- GPU構成を再構築し、backend `/health=ok`、workerはRTX 5070 Ti／CUDA `float16`／fallbackなしで起動した。
+- 実動画job `job_837e02c2b37f4be3960190f8b6904e2b`は、元動画68:33・1920x1080・60fps、heatmap JSON 100区間を適用し、Codex初期選定で通常2本・ショート3本を生成した。ショート間重複は`0.0秒`。
+- ASR p10=`0.4794`の通常clip 1件だけを人確認し、残り4件は未確認のまま自動通過した。content gate=`pass/continue`、post-render gate=`pass/continue`、clip plan=`approved`。
+- 5clipすべてにタイトル候補3件、推奨＝採用、説明欄、hashtags、根拠字幕ID、`postMetadataSource=codex`を確認した。
+- 完成媒体は通常2本=`1920x1080/H.264/AAC`、ショート3本=`1080x1920/H.264/AAC`。durationは`330.70 / 359.93 / 49.03 / 45.48 / 59.67秒`。
+- ZIPは49項目で、MP4 5本、ASS 5本、個別metadata 5件、投稿JSON 5件、投稿Markdown 5見出し、automation manifest、承認済みclip plan、content／post-render判定を確認した。
+- in-app browserでjob=`completed/100%`、工程全項目OK、resultsに通常2本・ショート3本と再編集／download導線が表示されることを確認した。
+
+### 未解決事項
+
+- selection自動判定はこの実jobで証拠不足となり、人がclip planを承認した。承認後の最終ZIPは`clip_plan.json`を選定証跡とし、初回の`selection.json`は保持しない現行仕様。
+- タイトル／フック意味品質はCodexの字幕segment provenance、字幕正確性はASR confidence、人物追従はrenderer geometryによる間接証拠。完成pixelからの独立再検出は未接続。

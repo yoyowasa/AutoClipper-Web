@@ -857,6 +857,14 @@ def queue_review_render(document: SubtitleReviewDocument) -> SubtitleReviewDocum
     return _refresh_counts(document)
 
 
+def queue_auto_review_render(document: SubtitleReviewDocument) -> SubtitleReviewDocument:
+    """Queue an auto-gated document without forging human confirmations."""
+    if document.state != "awaiting_review":
+        raise ValueError("subtitle review is not awaiting automated rendering")
+    document.state = "render_queued"
+    return _refresh_counts(document)
+
+
 def mark_review_rendering(document: SubtitleReviewDocument) -> SubtitleReviewDocument:
     document.state = "rendering"
     return _refresh_counts(document)

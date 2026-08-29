@@ -146,3 +146,18 @@ def test_manual_short_overlay_title_keeps_two_line_break() -> None:
     assert titled.title == "公開用タイトル"
     assert titled.overlay_title == "表示タイトル前半\n表示タイトル後半"
     assert titled.title_source == "manual_review"
+
+
+def test_curated_title_keeps_trailing_prolonged_sound_mark() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="fallback text",
+        title="箸が止まらない！バジルソースで食べるブロッコリー",
+        overlay_title="箸が止まらない！\nめちゃうまブロッコリー",
+    ).model_copy(update={"title_source": "manual_review"})
+
+    titled = candidate_with_title(candidate, index=1)
+
+    assert titled.title == "箸が止まらない！バジルソースで食べるブロッコリー"
+    assert titled.overlay_title == "箸が止まらない！\nめちゃうまブロッコリー"
+    assert titled.title_source == "manual_review"

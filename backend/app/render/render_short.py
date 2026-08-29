@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,13 +16,16 @@ from app.ids import make_id
 from app.models import ExportItem, Job
 from app.render.crop_strategy import (
     CropLayout,
+    CropPlan,
     CropStrategy,
     SHORT_HEIGHT,
     SHORT_WIDTH,
     build_center_crop_filter as _build_center_crop_filter,
     build_crop_filter,
     plan_short_crop,
+    resolve_tracking_crop_evidence_geometry,
     resolve_tracking_crop_geometry,
+    tracking_safe_margins,
 )
 from app.render.filters import ass_filter, loudnorm_filter
 from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
@@ -59,9 +62,11 @@ class ShortRenderResult:
     person_detection_count: int | None = None
     person_detection_confidence: float | None = None
     person_box: tuple[float, float, float, float] | None = None
+    face_box: tuple[float, float, float, float] | None = None
     speaker_window_count: int | None = None
     speaker_region_confidence: float | None = None
     speaker_region_box: tuple[float, float, float, float] | None = None
+    tracking_evidence: dict[str, Any] | None = None
     crop_attempted_strategies: tuple[CropStrategy, ...] = ()
 
 
@@ -124,6 +129,105 @@ def _effective_tracking_crop_coordinates(
         framing_zoom=framing_zoom,
     )
     return crop_x, crop_y
+
+
+def _tracking_evidence_for_render(
+    strategy: CropStrategy,
+    *,
+    crop_plan: CropPlan,
+    detections: Sequence[FaceDetection],
+    start: float,
+    end: float,
+    source_width: int,
+    source_height: int,
+    target_height: int,
+    framing_offset_x: float,
+    framing_offset_y: float,
+    framing_zoom: float,
+) -> dict[str, Any] | None:
+    centers = {
+        "face_tracking_crop": crop_plan.face_center or best_face_center(detections),
+        "speaker_tracking_crop": crop_plan.speaker_center,
+        "person_tracking_crop": crop_plan.person_center,
+        "subject_tracking_crop": crop_plan.subject_center,
+    }
+    center = centers.get(strategy)
+    margins = tracking_safe_margins(strategy)
+    if center is None or margins is None:
+        return None
+    scaled_width, scaled_height, crop_x, crop_y = resolve_tracking_crop_evidence_geometry(
+        source_width,
+        source_height,
+        center,
+        target_width=SHORT_WIDTH,
+        target_height=target_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
+    )
+    margin_left, margin_top, margin_right, margin_bottom = margins
+    safe_width = SHORT_WIDTH - margin_left - margin_right
+    safe_height = target_height - margin_top - margin_bottom
+    if safe_width <= 0 or safe_height <= 0:
+        return None
+
+    samples: list[dict[str, Any]] = []
+    if strategy == "face_tracking_crop":
+        samples = [
+            {
+                "start": detection.start,
+                "end": detection.end,
+                "box": [
+                    detection.center_x - detection.width / 2,
+                    detection.center_y - detection.height / 2,
+                    detection.center_x + detection.width / 2,
+                    detection.center_y + detection.height / 2,
+                ],
+                "confidence": detection.confidence,
+                "source": "face_detection",
+            }
+            for detection in detections
+        ]
+    elif strategy == "speaker_tracking_crop" and crop_plan.speaker_region_box is not None:
+        samples = [
+            {
+                "start": start,
+                "end": end,
+                "box": list(crop_plan.speaker_region_box),
+                "confidence": crop_plan.speaker_region_confidence,
+                "source": crop_plan.signal_source,
+            }
+        ]
+    elif strategy == "person_tracking_crop" and crop_plan.person_box is not None:
+        samples = [
+            {
+                "start": start,
+                "end": end,
+                "box": list(crop_plan.person_box),
+                "confidence": crop_plan.person_detection_confidence,
+                "source": crop_plan.signal_source,
+            }
+        ]
+
+    return {
+        "schema_version": 1,
+        "strategy": strategy,
+        "source": {"width": source_width, "height": source_height},
+        "scaled": {"width": scaled_width, "height": scaled_height},
+        "crop": {
+            "x": crop_x,
+            "y": crop_y,
+            "width": SHORT_WIDTH,
+            "height": target_height,
+        },
+        "safe_area": {
+            "x": crop_x + margin_left,
+            "y": crop_y + margin_top,
+            "width": safe_width,
+            "height": safe_height,
+        },
+        "samples": samples,
+    }
 
 
 def _duration(start: float, end: float) -> float:
@@ -819,6 +923,19 @@ def render_short_clip(
                 framing_offset_y=framing_offset_y,
                 framing_zoom=framing_zoom,
             )
+            tracking_evidence = _tracking_evidence_for_render(
+                strategy,
+                crop_plan=crop_plan,
+                detections=detections,
+                start=start,
+                end=end,
+                source_width=width,
+                source_height=height,
+                target_height=content_height,
+                framing_offset_x=framing_offset_x,
+                framing_offset_y=framing_offset_y,
+                framing_zoom=framing_zoom,
+            )
             return ShortRenderResult(
                 path=Path(output_path),
                 strategy=strategy,
@@ -834,9 +951,11 @@ def render_short_clip(
                 person_detection_count=crop_plan.person_detection_count,
                 person_detection_confidence=crop_plan.person_detection_confidence,
                 person_box=crop_plan.person_box,
+                face_box=crop_plan.face_box,
                 speaker_window_count=crop_plan.speaker_window_count,
                 speaker_region_confidence=crop_plan.speaker_region_confidence,
                 speaker_region_box=crop_plan.speaker_region_box,
+                tracking_evidence=tracking_evidence,
                 crop_attempted_strategies=tuple(attempted),
             )
         except Exception as exc:
@@ -920,9 +1039,11 @@ def _write_export_metadata(
     person_detection_count: int | None,
     person_detection_confidence: float | None,
     person_box: tuple[float, float, float, float] | None,
+    face_box: tuple[float, float, float, float] | None,
     speaker_window_count: int | None,
     speaker_region_confidence: float | None,
     speaker_region_box: tuple[float, float, float, float] | None,
+    tracking_evidence: Mapping[str, Any] | None,
     crop_attempted_strategies: Sequence[str],
     overlay_title_expected: bool,
     overlay_title_rendered: bool,
@@ -932,6 +1053,8 @@ def _write_export_metadata(
     top_banner_rendered: bool,
     bottom_banner_rendered: bool,
     output_duration: float,
+    source_width: int | None,
+    source_height: int | None,
 ) -> Path:
     path.write_text(
         json.dumps(
@@ -1006,12 +1129,16 @@ def _write_export_metadata(
                 "framing_offset_x": candidate.framing_offset_x,
                 "framing_offset_y": candidate.framing_offset_y,
                 "framing_zoom": candidate.framing_zoom,
+                "source_width": source_width,
+                "source_height": source_height,
                 "person_detection_count": person_detection_count,
                 "person_detection_confidence": person_detection_confidence,
                 "person_box": list(person_box) if person_box is not None else None,
+                "face_box": list(face_box) if face_box is not None else None,
                 "speaker_window_count": speaker_window_count,
                 "speaker_region_confidence": speaker_region_confidence,
                 "speaker_region_box": list(speaker_region_box) if speaker_region_box is not None else None,
+                "tracking_evidence": dict(tracking_evidence) if tracking_evidence is not None else None,
                 "crop_attempted_strategies": list(crop_attempted_strategies),
                 "video_path": str(video_path),
                 "subtitle_path": str(subtitle_path) if subtitle_path is not None else None,
@@ -1189,6 +1316,7 @@ def render_selected_short_candidates(
                 if isinstance(render_result, ShortRenderResult)
                 else None,
                 person_box=render_result.person_box if isinstance(render_result, ShortRenderResult) else None,
+                face_box=render_result.face_box if isinstance(render_result, ShortRenderResult) else None,
                 speaker_window_count=render_result.speaker_window_count
                 if isinstance(render_result, ShortRenderResult)
                 else None,
@@ -1196,6 +1324,9 @@ def render_selected_short_candidates(
                 if isinstance(render_result, ShortRenderResult)
                 else None,
                 speaker_region_box=render_result.speaker_region_box if isinstance(render_result, ShortRenderResult) else None,
+                tracking_evidence=render_result.tracking_evidence
+                if isinstance(render_result, ShortRenderResult)
+                else None,
                 crop_attempted_strategies=render_result.crop_attempted_strategies
                 if isinstance(render_result, ShortRenderResult)
                 else (),
@@ -1207,6 +1338,8 @@ def render_selected_short_candidates(
                 top_banner_rendered=short_top_banner_enabled,
                 bottom_banner_rendered=short_bottom_banner_enabled,
                 output_duration=output_duration,
+                source_width=source_width,
+                source_height=source_height,
             )
 
             export = ExportItem(

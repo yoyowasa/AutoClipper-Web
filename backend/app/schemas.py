@@ -461,11 +461,7 @@ class JobSettings(BaseModel):
     def validate_duration_ranges(self) -> "JobSettings":
         if self.workflow_mode == "manual":
             self.automation_mode = "manual"
-        elif self.automation_mode == "auto":
-            raise ValueError(
-                "automationMode auto is unavailable until the final quality gate is implemented"
-            )
-        elif self.automation_mode in {"shadow", "guarded"} and not (
+        elif self.automation_mode in {"shadow", "guarded", "auto"} and not (
             self.burn_subtitles
             and self.require_clip_plan_review
             and self.require_subtitle_review

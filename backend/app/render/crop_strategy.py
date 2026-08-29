@@ -42,6 +42,7 @@ class CropPlan:
     person_detection_count: int = 0
     person_detection_confidence: float | None = None
     person_box: tuple[float, float, float, float] | None = None
+    face_box: tuple[float, float, float, float] | None = None
     speaker_window_count: int = 0
     speaker_region_confidence: float | None = None
     speaker_region_box: tuple[float, float, float, float] | None = None
@@ -241,6 +242,60 @@ def resolve_tracking_crop_geometry(
     return scale_width, scale_height, crop_x, crop_y
 
 
+def resolve_tracking_crop_evidence_geometry(
+    source_width: int,
+    source_height: int,
+    center: tuple[float, float],
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
+) -> tuple[int, int, int, int]:
+    scale_width = _framing_scale(target_width, framing_zoom)
+    scale_height = _framing_scale(target_height, framing_zoom)
+    scaled_width, scaled_height = _scaled_dimensions(
+        source_width,
+        source_height,
+        target_width=scale_width,
+        target_height=scale_height,
+    )
+    _, _, crop_x, crop_y = resolve_tracking_crop_geometry(
+        source_width,
+        source_height,
+        center,
+        target_width=target_width,
+        target_height=target_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
+    )
+    return scaled_width, scaled_height, crop_x, crop_y
+
+
+def tracking_safe_margins(
+    strategy: CropStrategy,
+) -> tuple[int, int, int, int] | None:
+    if strategy == "face_tracking_crop":
+        return FACE_SAFE_MARGIN_X, FACE_SAFE_MARGIN_TOP, FACE_SAFE_MARGIN_X, FACE_SAFE_MARGIN_BOTTOM
+    if strategy == "speaker_tracking_crop":
+        return (
+            SPEAKER_SAFE_MARGIN_X,
+            SPEAKER_SAFE_MARGIN_TOP,
+            SPEAKER_SAFE_MARGIN_X,
+            SPEAKER_SAFE_MARGIN_BOTTOM,
+        )
+    if strategy == "person_tracking_crop":
+        return (
+            PERSON_SAFE_MARGIN_X,
+            PERSON_SAFE_MARGIN_TOP,
+            PERSON_SAFE_MARGIN_X,
+            PERSON_SAFE_MARGIN_BOTTOM,
+        )
+    return None
+
+
 def _clamp_int(value: float | int, minimum: int, maximum: int) -> int:
     return min(max(round(float(value)), minimum), maximum)
 
@@ -363,6 +418,12 @@ def _plan_face_tracking_crop(
         crop_x=crop_x,
         crop_y=crop_y,
         detection_count=len(detections),
+        face_box=(
+            left / scaled_width,
+            top / scaled_height,
+            right / scaled_width,
+            bottom / scaled_height,
+        ),
     )
 
 
@@ -861,6 +922,12 @@ def plan_short_crop(
             confidence=face_plan.confidence,
             fallback_reason="forced_face_tracking_despite_wide_face_group",
             detection_count=len(detections),
+            face_box=(
+                min(face.center_x - face.width / 2 for face in detections),
+                min(face.center_y - face.height / 2 for face in detections),
+                max(face.center_x + face.width / 2 for face in detections),
+                max(face.center_y + face.height / 2 for face in detections),
+            ),
         )
     return face_plan
 

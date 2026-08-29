@@ -30,6 +30,7 @@ from app.jobs.title_hook_suggestions import (
     TitleHookDraftSegment,
     TitleHookSuggestionsDocument,
     build_title_hook_suggestion_input,
+    generate_title_hook_suggestions_for_auto,
     load_title_hook_suggestions,
     queued_title_hook_suggestions,
     run_title_hook_suggestion_generation,
@@ -1382,6 +1383,53 @@ def test_normalization_clamps_scenes_to_clip_range() -> None:
     ]
     assert all(0 <= item.hook_scene_start < item.hook_scene_end <= 20 for item in suggestions)
     assert all(1.5 <= item.hook_scene_end - item.hook_scene_start <= 3 for item in suggestions)
+
+
+def test_auto_generation_maps_recommended_source_id_to_normalized_id(
+    tmp_path: Path,
+) -> None:
+    short = _candidate(
+        "short_auto",
+        "short",
+        0,
+        20,
+        title="自動生成前",
+    )
+    document = build_subtitle_review(
+        "job_auto_title_hook",
+        CandidateSelection(normalClips=[], shorts=[short]),
+        [],
+    )
+    result_payload = _suggestion_result().model_dump(by_alias=True, mode="json")
+    result_payload["recommendedSuggestionId"] = "model-b"
+    result = TitleHookSuggestionResult.model_validate(result_payload)
+    generator = SimpleNamespace(generate=lambda _payload, _frames: result)
+    storage = StoragePaths(tmp_path / "storage")
+    storage.ensure()
+
+    artifact = generate_title_hook_suggestions_for_auto(
+        document=document,
+        clip_id=short.id,
+        source_path=tmp_path / "source.mp4",
+        paths=storage,
+        model="codex-default",
+        generator=generator,
+        frame_extractor=lambda *_args, **_kwargs: [tmp_path / "frame.jpg"],
+    )
+
+    assert [item.id for item in artifact.suggestions] == [
+        "suggestion_1",
+        "suggestion_2",
+        "suggestion_3",
+    ]
+    assert artifact.recommended_suggestion_id == "suggestion_2"
+    persisted = load_title_hook_suggestions(
+        title_hook_suggestions_path(
+            storage.job_outputs(document.job_id),
+            short.id,
+        )
+    )
+    assert persisted.recommended_suggestion_id == "suggestion_2"
 
 
 def test_suggestion_contract_accepts_explicit_no_hook() -> None:

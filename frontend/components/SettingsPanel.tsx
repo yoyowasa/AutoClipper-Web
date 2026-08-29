@@ -8,6 +8,7 @@ import {
   isManualTimeMode,
   resizeManualRanges
 } from "../lib/manualClipRanges";
+import { isExceptionOnlyAutomationMode } from "../lib/automationQuality";
 
 type SettingsPanelProps = {
   settings: ClipSettings;
@@ -141,6 +142,15 @@ export function SettingsPanel({
   onChange
 }: SettingsPanelProps) {
   const outputMode = outputModeForSettings(settings);
+  const exceptionOnlyAutomation = isExceptionOnlyAutomationMode(settings.automationMode);
+  const automationDescription =
+    settings.automationMode === "auto"
+      ? "問題がなければ完成まで自動で進み、問題または判定不能の項目だけ人の確認へ戻します。"
+      : settings.automationMode === "guarded"
+        ? "段階運用です。自動判定できない項目または問題がある項目だけ確認します。"
+        : settings.automationMode === "shadow"
+          ? "処理結果を変えず、自動判断を保存して全工程を確認します。"
+          : "予定確認と字幕確認を個別に設定します。";
 
   return (
     <section
@@ -380,7 +390,7 @@ export function SettingsPanel({
               <input
                 checked={settings.burnSubtitles}
                 className="h-4 w-4"
-                disabled={disabled || settings.automationMode === "guarded"}
+                disabled={disabled || exceptionOnlyAutomation}
                 type="checkbox"
                 onChange={(event) =>
                   onChange({
@@ -388,8 +398,7 @@ export function SettingsPanel({
                     burnSubtitles: event.target.checked,
                     automationMode:
                       !event.target.checked &&
-                      (settings.automationMode === "shadow" ||
-                        settings.automationMode === "guarded")
+                      (settings.automationMode === "shadow" || exceptionOnlyAutomation)
                         ? "manual"
                         : settings.automationMode
                   })
@@ -406,8 +415,10 @@ export function SettingsPanel({
               <span className="ml-1 inline-flex w-[calc(100%_-_1.25rem)] items-center justify-between gap-3 align-middle">
                 <span>開始後の確認</span>
                 <span className="text-xs font-normal text-neutral-500">
-                  {settings.automationMode === "guarded"
-                    ? "自動判定できない項目または問題時のみ確認"
+                  {settings.automationMode === "auto"
+                    ? "問題・判定不能だけ人へ戻す"
+                    : settings.automationMode === "guarded"
+                      ? "自動判定できない項目または問題時のみ確認"
                     : !settings.burnSubtitles
                     ? "なし"
                     : [
@@ -429,7 +440,8 @@ export function SettingsPanel({
                   onChange={(event) => {
                     const automationMode = event.target.value as ClipSettings["automationMode"];
                     const requiresReviewPipeline =
-                      automationMode === "shadow" || automationMode === "guarded";
+                      automationMode === "shadow" ||
+                      isExceptionOnlyAutomationMode(automationMode);
                     onChange({
                       ...settings,
                       automationMode,
@@ -445,24 +457,20 @@ export function SettingsPanel({
                 >
                   <option value="manual">手動確認（現行）</option>
                   <option value="shadow">Shadow（自動判断を保存し、全件確認）</option>
-                  <option value="guarded">問題だけ確認</option>
-                  <option disabled value="auto">完全自動（準備中）</option>
+                  <option value="guarded">問題だけ確認（段階運用）</option>
+                  <option value="auto">自動（問題だけ人へ戻す）</option>
                 </select>
-                <span className="text-xs text-neutral-600">
-                  {settings.automationMode === "guarded"
-                    ? "自動判定できない項目または問題時のみ確認します。"
-                    : "Shadowは処理結果を変えず、判断記録を残して全工程を確認します。"}
-                </span>
+                <span className="text-xs text-neutral-600">{automationDescription}</span>
               </label>
               <label className="flex items-start gap-2">
                 <input
                   checked={
-                    settings.automationMode === "guarded" || settings.requireClipPlanReview
+                    exceptionOnlyAutomation || settings.requireClipPlanReview
                   }
                   className="mt-0.5 h-4 w-4"
                   disabled={
                     disabled ||
-                    settings.automationMode === "guarded" ||
+                    exceptionOnlyAutomation ||
                     !settings.burnSubtitles ||
                     !settings.requireSubtitleReview
                   }
@@ -483,18 +491,20 @@ export function SettingsPanel({
                     切り抜き予定を確認
                   </span>
                   <span className="mt-1 block text-xs text-neutral-600">
-                    範囲を再生し、必要なら場面を選び直します。
+                    {exceptionOnlyAutomation
+                      ? "問題または判定不能のときだけ、範囲を確認します。"
+                      : "範囲を再生し、必要なら場面を選び直します。"}
                   </span>
                 </span>
               </label>
               <label className="flex items-start gap-2">
                 <input
                   checked={
-                    settings.automationMode === "guarded" || settings.requireSubtitleReview
+                    exceptionOnlyAutomation || settings.requireSubtitleReview
                   }
                   className="mt-0.5 h-4 w-4"
                   disabled={
-                    disabled || settings.automationMode === "guarded" || !settings.burnSubtitles
+                    disabled || exceptionOnlyAutomation || !settings.burnSubtitles
                   }
                   type="checkbox"
                   onChange={(event) =>
@@ -514,7 +524,9 @@ export function SettingsPanel({
                 <span>
                   <span className="block text-sm font-semibold text-neutral-900">字幕を確認</span>
                   <span className="mt-1 block text-xs text-neutral-600">
-                    書き出し前に字幕を確認します。
+                    {exceptionOnlyAutomation
+                      ? "問題または判定不能のときだけ、字幕を確認します。"
+                      : "書き出し前に字幕を確認します。"}
                   </span>
                 </span>
               </label>

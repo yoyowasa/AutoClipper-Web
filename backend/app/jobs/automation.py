@@ -7,22 +7,24 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 AutomationMode = Literal["manual", "shadow", "guarded", "auto"]
-EffectiveAutomationMode = Literal["manual", "shadow", "guarded"]
+EffectiveAutomationMode = Literal["manual", "shadow", "guarded", "auto"]
+AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING = "_autoResumeAfterClipReview"
 AUTOMATION_MANIFEST_FILENAME = "automation_manifest.json"
 
 
 class AutomationRoleAssignments(BaseModel):
     initial_selection: Literal["legacy", "codex"] = Field(alias="initialSelection")
-    title_hook: Literal["manual_request"] = Field(
+    title_hook: Literal["manual_request", "codex_auto"] = Field(
         default="manual_request",
         alias="titleHook",
     )
-    clip_review: Literal["manual", "guarded", "skipped"] = Field(alias="clipReview")
-    subtitle_review: Literal["manual", "guarded", "skipped"] = Field(alias="subtitleReview")
+    clip_review: Literal["manual", "guarded", "auto_evidence", "skipped"] = Field(alias="clipReview")
+    subtitle_review: Literal["manual", "guarded", "auto_evidence", "skipped"] = Field(alias="subtitleReview")
     final_quality_gate: Literal[
         "not_connected",
         "shadow_structural",
         "guarded_structural",
+        "auto_evidence",
     ] = Field(
         default="not_connected",
         alias="finalQualityGate",
@@ -93,13 +95,11 @@ def build_automation_manifest(
     )
 
     fallback_reason: str | None = None
-    if requested_mode in {"shadow", "guarded"} and burn_subtitles and clip_review and subtitle_review:
+    if requested_mode in {"shadow", "guarded", "auto"} and burn_subtitles and clip_review and subtitle_review:
         effective_mode: EffectiveAutomationMode = requested_mode
     else:
         effective_mode = "manual"
-        if requested_mode == "auto":
-            fallback_reason = "final_quality_gate_not_connected"
-        elif requested_mode in {"shadow", "guarded"}:
+        if requested_mode in {"shadow", "guarded", "auto"}:
             fallback_reason = f"{requested_mode}_review_stops_incomplete"
         elif raw_mode != requested_mode:
             fallback_reason = "unknown_mode"
@@ -122,29 +122,44 @@ def build_automation_manifest(
             initialSelection=(
                 "codex" if initial_selection == "codex" else "legacy"
             ),
+            titleHook=("codex_auto" if effective_mode == "auto" else "manual_request"),
             clipReview=(
-                "guarded"
+                "auto_evidence"
+                if effective_mode == "auto"
+                else "guarded"
                 if effective_mode == "guarded"
                 else "manual" if clip_review else "skipped"
             ),
             subtitleReview=(
-                "guarded"
+                "auto_evidence"
+                if effective_mode == "auto"
+                else "guarded"
                 if effective_mode == "guarded"
                 else "manual" if subtitle_review else "skipped"
             ),
             finalQualityGate=(
-                "guarded_structural"
+                "auto_evidence"
+                if effective_mode == "auto"
+                else "guarded_structural"
                 if effective_mode == "guarded"
                 else "shadow_structural"
                 if effective_mode == "shadow"
                 else "not_connected"
             ),
         ),
-        limitations=[
-            "automated_title_hook_not_connected",
-            "semantic_subtitle_accuracy_not_connected",
-            "visual_framing_and_layout_quality_not_connected",
-        ],
+        limitations=(
+            [
+                "audio_subtitle_alignment_uses_asr_confidence_evidence",
+                "semantic_title_hook_quality_uses_codex_segment_provenance",
+                "visual_unknown_routes_to_human_review",
+            ]
+            if effective_mode == "auto"
+            else [
+                "automated_title_hook_not_connected",
+                "semantic_subtitle_accuracy_not_connected",
+                "visual_framing_and_layout_quality_not_connected",
+            ]
+        ),
     )
 
 

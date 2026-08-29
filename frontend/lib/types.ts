@@ -24,6 +24,13 @@ export type JobStatus =
 export type ExportType = "normal" | "short";
 export type WorkflowMode = "automatic" | "manual";
 export type AutomationMode = "manual" | "shadow" | "guarded" | "auto";
+export type AutomationGateState =
+  | "passed"
+  | "needs_attention"
+  | "fallback_manual"
+  | "evaluating";
+export type AutomationGateStage = "selection" | "content" | "post_render";
+export type AutomationGateOutcome = "pass" | "fail" | "unknown";
 export type PostTitleIntent = "factual" | "engagement" | "concise";
 
 export type PostTitleCandidate = {
@@ -195,12 +202,24 @@ export type JobError = {
   message: string;
 };
 
+export type JobStatusDetails = Record<string, unknown> & {
+  automationMode?: AutomationMode;
+  automationEffectiveMode?: AutomationMode;
+  automationGateState?: AutomationGateState;
+  automationGateStage?: AutomationGateStage;
+  automationGateOutcome?: AutomationGateOutcome;
+  automationGateReasonCodes?: string[];
+  automationGateAttentionClipIds?: string[];
+  automationGateAutoPassedClips?: number;
+  automationGateAttentionClips?: number;
+};
+
 export type JobStatusResponse = {
   id: string;
   status: JobStatus;
   progress: number;
   currentStep: string;
-  details: Record<string, unknown>;
+  details: JobStatusDetails;
   error: JobError | null;
 };
 

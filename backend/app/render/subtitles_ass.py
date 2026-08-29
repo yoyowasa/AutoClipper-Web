@@ -868,6 +868,19 @@ def _subtitle_events_with_hook_scene(
     return shifted_body_events, output_duration
 
 
+def subtitle_events_for_candidate_output(
+    transcript_segments: Sequence[TranscriptSegment],
+    candidate: Candidate,
+    layout: SubtitleLayout,
+) -> tuple[list[SubtitleEvent], float]:
+    """Return the exact subtitle event sequence consumed by ASS rendering."""
+    return _subtitle_events_with_hook_scene(
+        transcript_segments,
+        candidate,
+        layout,
+    )
+
+
 def _ass_color(color: str, default: str) -> str:
     normalized = _coerce_hex_color(color, default)
     red = normalized[1:3]
@@ -1120,7 +1133,7 @@ def build_ass_document(
     active_layout = layout or (
         SubtitleLayout.short() if candidate.type == "short" else SubtitleLayout.normal()
     )
-    subtitle_events, output_duration = _subtitle_events_with_hook_scene(
+    subtitle_events, output_duration = subtitle_events_for_candidate_output(
         transcript_segments,
         candidate,
         active_layout,

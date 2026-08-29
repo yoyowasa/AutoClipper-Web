@@ -24,8 +24,13 @@ from app.candidates.select_candidates import CandidateSelection, write_selected_
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.ids import make_id
-from app.jobs.automation import automation_manifest_path, load_automation_manifest
+from app.jobs.automation import (
+    AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING,
+    automation_manifest_path,
+    load_automation_manifest,
+)
 from app.jobs.quality_gate import (
+    QualityGateDecision,
     QualityGateMode,
     QualityGateStage,
     evaluate_content_quality_gate,
@@ -86,6 +91,7 @@ from app.jobs.subtitle_review import (
     confirm_review_clip,
     convert_review_clip_to_short,
     load_subtitle_review,
+    queue_auto_review_render,
     queue_review_render,
     refresh_review_render_contract,
     reopen_completed_review,
@@ -1142,6 +1148,7 @@ def _quality_gate_attention_clip_ids(
     list_keys = {
         "invalidClipIds",
         "missingClipIds",
+        "staleClipIds",
         "uncoveredClipIds",
         "failedClipIds",
         "unknownClipIds",
@@ -1172,14 +1179,20 @@ def _quality_gate_attention_clip_ids(
                 }
                 clip_ids.update(valid_values)
                 found_for_check = found_for_check or bool(valid_values)
-            for item_key in ("problems", "duplicates"):
+            for item_key in (
+                "problems",
+                "duplicates",
+                "unknown",
+                "failures",
+                "inconsistent",
+            ):
                 items = evidence.get(item_key)
                 if not isinstance(items, list):
                     continue
                 for item in items:
                     if not isinstance(item, dict):
                         continue
-                    for key in ("clipId", "duplicateOf"):
+                    for key in ("clipId", "candidateId", "duplicateOf"):
                         value = item.get(key)
                         if isinstance(value, str) and value in all_clip_ids:
                             clip_ids.add(value)
@@ -1200,28 +1213,49 @@ def _job_quality_gate_mode(
         except (OSError, ValueError):
             pass
         else:
-            return effective_mode if effective_mode in {"shadow", "guarded"} else None
+            return (
+                effective_mode
+                if effective_mode in {"shadow", "guarded", "auto"}
+                else None
+            )
     requested_mode = str(
         (job.settings_json or {}).get("automationMode") or "manual"
     ).strip()
-    return requested_mode if requested_mode in {"shadow", "guarded"} else None
+    return (
+        requested_mode
+        if requested_mode in {"shadow", "guarded", "auto"}
+        else None
+    )
 
 
-def _write_content_quality_gate(
+def _evaluate_and_write_content_quality_gate(
     *,
     job: Job,
     document: SubtitleReviewDocument,
     output_dir: Path,
-) -> bool:
+) -> QualityGateDecision | None:
     mode = _job_quality_gate_mode(job, output_dir)
     if mode is None:
-        return False
+        return None
+    title_hook_evidence: dict[str, TitleHookSuggestionsDocument] = {}
+    if mode == "auto":
+        for clip in document.clips:
+            artifact_path = title_hook_suggestions_path(output_dir, clip.id)
+            if not artifact_path.is_file():
+                continue
+            try:
+                artifact = load_title_hook_suggestions(artifact_path)
+            except (OSError, ValueError):
+                continue
+            if artifact.clip_id == clip.id:
+                title_hook_evidence[clip.id] = artifact
     try:
         content_gate = evaluate_content_quality_gate(
             job_id=job.id,
             document=document,
             settings=dict(job.settings_json or {}),
             mode=mode,
+            title_hook_evidence=title_hook_evidence,
         )
     except Exception as exc:
         content_gate = unknown_quality_gate_decision(
@@ -1237,15 +1271,120 @@ def _write_content_quality_gate(
             quality_gate_decision_path(output_dir, "content"),
         )
     except OSError:
-        return False
-    return True
+        return None
+    return content_gate
 
 
-def _quality_gate_stage_order(job_status: str) -> tuple[QualityGateStage, ...]:
+def _write_content_quality_gate(
+    *,
+    job: Job,
+    document: SubtitleReviewDocument,
+    output_dir: Path,
+) -> bool:
+    return (
+        _evaluate_and_write_content_quality_gate(
+            job=job,
+            document=document,
+            output_dir=output_dir,
+        )
+        is not None
+    )
+
+
+def _prepare_auto_review_render_unlocked(
+    *,
+    db: Session,
+    job: Job,
+    document: SubtitleReviewDocument,
+    paths: StoragePaths,
+) -> tuple[SubtitleReviewDocument, bool]:
+    output_dir = paths.job_outputs(job.id)
+    if (
+        _job_quality_gate_mode(job, output_dir) != "auto"
+        or job.status != "awaiting_subtitle_review"
+        or document.state != "awaiting_review"
+    ):
+        return document, False
+
+    decision = _evaluate_and_write_content_quality_gate(
+        job=job,
+        document=document,
+        output_dir=output_dir,
+    )
+    if decision is None or decision.route != "continue":
+        return document, False
+
+    document = queue_auto_review_render(document)
+    write_subtitle_review(
+        document,
+        subtitle_review_output_path(output_dir),
+    )
+    write_subtitle_review_summary(
+        document,
+        subtitle_review_summary_path(output_dir),
+    )
+    job.status = "rendering_normal_clips"
+    job.progress = PROGRESS_MAP["rendering_normal_clips"]
+    job.current_step = CURRENT_STEP_MAP["rendering_normal_clips"]
+    job.error_code = None
+    job.error_message = None
+    job.updated_at = utc_now()
+    db.commit()
+    db.refresh(job)
+    return document, True
+
+
+def _enqueue_prepared_auto_review_render(
+    *,
+    db: Session,
+    job: Job,
+    document: SubtitleReviewDocument,
+    paths: StoragePaths,
+    enqueue_render: RenderEnqueue,
+) -> None:
+    output_dir = paths.job_outputs(job.id)
+    try:
+        enqueue_render(job.id, document.render_revision)
+    except Exception as exc:
+        with subtitle_review_document_lock(output_dir):
+            latest = _get_subtitle_review_or_404(job.id, paths)
+            if latest.state == "render_queued":
+                latest.state = "awaiting_review"
+                write_subtitle_review(
+                    latest,
+                    subtitle_review_output_path(output_dir),
+                )
+                write_subtitle_review_summary(
+                    latest,
+                    subtitle_review_summary_path(output_dir),
+                )
+            db.refresh(job)
+            job.status = "awaiting_subtitle_review"
+            job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
+            job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
+            job.updated_at = utc_now()
+            db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="could not queue automatic subtitle rendering",
+        ) from exc
+
+
+def _quality_gate_stage_order(
+    job_status: str,
+    *,
+    auto_post_render_review: bool = False,
+) -> tuple[QualityGateStage, ...]:
     if job_status in {"preparing_clip_review", "awaiting_clip_review"}:
         return ("selection",)
-    if job_status in {"preparing_subtitle_review", "awaiting_subtitle_review"}:
+    if job_status == "preparing_subtitle_review":
         return ("content",)
+    if job_status == "awaiting_subtitle_review":
+        return (
+            ("post_render", "content")
+            if auto_post_render_review
+            else ("content",)
+        )
     if job_status in {
         "rendering_normal_clips",
         "rendering_shorts",
@@ -1301,7 +1440,10 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
             )
     quality_decision = None
     gate_document_found = False
-    for stage in _quality_gate_stage_order(job.status):
+    for stage in _quality_gate_stage_order(
+        job.status,
+        auto_post_render_review=effective_automation_mode == "auto",
+    ):
         decision_path = quality_gate_decision_path(output_dir, stage)
         if not decision_path.is_file():
             continue
@@ -1311,7 +1453,7 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
             if quality_decision.job_id != job.id or quality_decision.stage != stage:
                 raise ValueError("quality gate decision identity does not match its job and stage")
             if (
-                effective_automation_mode in {"shadow", "guarded"}
+                effective_automation_mode in {"shadow", "guarded", "auto"}
                 and quality_decision.mode != effective_automation_mode
             ):
                 raise ValueError("quality gate decision mode does not match the active automation mode")
@@ -1342,7 +1484,10 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
             for check in quality_decision.checks
             if check.reason_code is not None
         ]
-    elif effective_automation_mode == "guarded" and not gate_document_found:
+    elif (
+        effective_automation_mode in {"guarded", "auto"}
+        and not gate_document_found
+    ):
         if job.status in {"awaiting_clip_review", "awaiting_subtitle_review", "completed"}:
             details["automationGateState"] = "fallback_manual"
             details["automationGateMissing"] = True
@@ -2532,6 +2677,48 @@ def approve_clip_plan(
         mark_clip_plan_approved(document),
         clip_plan_output_path(output_dir),
     )
+    if _job_quality_gate_mode(job, output_dir) == "auto":
+        previous_settings = dict(job.settings_json or {})
+        claimed_settings = {
+            **previous_settings,
+            AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING: True,
+        }
+        claim = db.execute(
+            update(Job)
+            .where(
+                Job.id == job.id,
+                Job.status == "awaiting_clip_review",
+            )
+            .values(
+                settings_json=claimed_settings,
+                status="queued",
+                progress=PROGRESS_MAP["queued"],
+                current_step=CURRENT_STEP_MAP["queued"],
+                error_code=None,
+                error_message=None,
+                updated_at=utc_now(),
+            )
+        )
+        if claim.rowcount != 1:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="clip plan approval is already being processed",
+            )
+        db.commit()
+        db.refresh(job)
+        try:
+            enqueue_job(job.id)
+        except Exception:
+            job.settings_json = previous_settings
+            job.status = "awaiting_subtitle_review"
+            job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
+            job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
+            job.updated_at = utc_now()
+            db.commit()
+            db.refresh(job)
+        else:
+            return ClipPlanActionResponse(jobId=job.id, status=job.status)
     job.status = "awaiting_subtitle_review"
     job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
     job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
@@ -3689,6 +3876,7 @@ def apply_subtitle_review_clip(
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
     enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+    enqueue_render: RenderEnqueue = Depends(get_enqueue_render_job),
 ) -> SubtitleReviewDocument:
     """Persist one clip's drafts and accept it without waiting for exact preview rendering."""
     job = _get_job_or_404(db, job_id)
@@ -3963,14 +4151,29 @@ def apply_subtitle_review_clip(
         )
         document = confirm_review_clip(document, clip_id)
         _write_subtitle_review_unlocked(document, paths)
+        document, auto_render_queued = _prepare_auto_review_render_unlocked(
+            db=db,
+            job=job,
+            document=document,
+            paths=paths,
+        )
 
-    return _enqueue_subtitle_review_previews(
+    document = _enqueue_subtitle_review_previews(
         job_id=job.id,
         document=document,
         queued=queued_previews,
         paths=paths,
         enqueue_preview=enqueue_preview,
     )
+    if auto_render_queued:
+        _enqueue_prepared_auto_review_render(
+            db=db,
+            job=job,
+            document=document,
+            paths=paths,
+            enqueue_render=enqueue_render,
+        )
+    return document
 
 
 @router.patch(
@@ -4055,6 +4258,7 @@ def confirm_subtitle_review_clip(
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
     enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+    enqueue_render: RenderEnqueue = Depends(get_enqueue_render_job),
 ) -> SubtitleReviewDocument:
     job = _get_job_or_404(db, job_id)
     video = db.get(Video, job.video_id)
@@ -4105,6 +4309,14 @@ def confirm_subtitle_review_clip(
                     detail="clip not found",
                 ) from exc
             _write_subtitle_review_unlocked(document, paths)
+            document, auto_render_queued = _prepare_auto_review_render_unlocked(
+                db=db,
+                job=job,
+                document=document,
+                paths=paths,
+            )
+        else:
+            auto_render_queued = False
     document = _enqueue_subtitle_review_previews(
         job_id=job.id,
         document=document,
@@ -4119,6 +4331,14 @@ def confirm_subtitle_review_clip(
                 "code": "subtitle_review_preview_not_ready",
                 "message": "現在の編集内容のプレビュー完成後に確認してください。",
             },
+        )
+    if auto_render_queued:
+        _enqueue_prepared_auto_review_render(
+            db=db,
+            job=job,
+            document=document,
+            paths=paths,
+            enqueue_render=enqueue_render,
         )
     return document
 

@@ -1,4 +1,5 @@
 import type { JobStatusResponse } from "../lib/types";
+import { automationGateDisplay } from "../lib/automationQuality";
 import { StatusBadge } from "./StatusBadge";
 
 const errorLabels: Record<string, string> = {
@@ -34,36 +35,23 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
   const correctionTargetsCompleted = detailNumber("correctionTargetsCompleted");
   const correctionTargetsTotal = detailNumber("correctionTargetsTotal");
   const transcriptSegmentCount = detailNumber("transcriptSegmentCount");
-  const guardedAutomation = job.details.automationEffectiveMode === "guarded";
-  const automationGateAutoPassedClips = detailNumber("automationGateAutoPassedClips");
-  const automationGateAttentionClips = detailNumber("automationGateAttentionClips");
-  const automationGateStage =
-    typeof job.details.automationGateStage === "string"
-      ? job.details.automationGateStage
-      : null;
-  const automationGateReasonCodes = Array.isArray(job.details.automationGateReasonCodes)
-    ? [
-        ...new Set(
-          job.details.automationGateReasonCodes.filter(
-            (value): value is string => typeof value === "string" && value.length > 0
-          )
-        )
-      ]
-    : [];
-  const automationGateStageLabel =
-    automationGateStage === "selection"
-      ? "切り抜き予定"
-      : automationGateStage === "content"
-        ? "タイトル・字幕"
-        : automationGateStage === "post_render"
-          ? "完成動画"
-          : automationGateStage;
-  const showAutomationGateSummary =
-    guardedAutomation &&
-    (automationGateStageLabel !== null ||
-      automationGateAutoPassedClips !== null ||
-      automationGateAttentionClips !== null ||
-      automationGateReasonCodes.length > 0);
+  const automationGate = automationGateDisplay(job.details);
+  const exceptionOnlyAutomation = automationGate.active;
+  const automationGateAttentionCount =
+    automationGate.attentionClips ??
+    (automationGate.attentionClipIds.length > 0 ? automationGate.attentionClipIds.length : null);
+  const automationGateToneClass =
+    automationGate.tone === "passed"
+      ? "border-emerald-200 text-emerald-900"
+      : automationGate.tone === "attention"
+        ? "border-amber-200 text-amber-900"
+        : "border-sky-200 text-sky-900";
+  const automationGateReasonClass =
+    automationGate.tone === "passed"
+      ? "text-emerald-800"
+      : automationGate.tone === "attention"
+        ? "text-amber-800"
+        : "text-sky-800";
   const heatmapStatus =
     typeof job.details.heatmapStatus === "string" ? job.details.heatmapStatus : null;
   const heatmapSegmentCount = detailNumber("heatmapSegmentCount") ?? 0;
@@ -149,12 +137,12 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
     job.status === "awaiting_manual_edit"
       ? "元動画から切り抜く範囲を指定してください"
       : job.status === "awaiting_clip_review"
-      ? guardedAutomation
-        ? "自動判定で確認が必要な切り抜き予定があります"
+      ? exceptionOnlyAutomation
+        ? "自動処理を止め、問題のある切り抜き予定だけ確認へ戻しました"
         : "切り抜き予定を確認してください"
       : job.status === "awaiting_subtitle_review"
-        ? guardedAutomation
-          ? "自動判定できない項目を確認してください"
+        ? exceptionOnlyAutomation
+          ? "自動処理を止め、問題のあるタイトル・字幕だけ確認へ戻しました"
           : "字幕を確認してください"
         : job.currentStep;
 
@@ -215,24 +203,24 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
           </p>
         ) : null}
 
-        {showAutomationGateSummary ? (
+        {automationGate.visible ? (
           <div
-            className="border-t border-amber-200 pt-4 text-xs text-amber-900"
+            className={`border-t pt-4 text-xs ${automationGateToneClass}`}
             data-testid="automation-gate-summary"
           >
             <p className="font-semibold">
-              自動判定{automationGateStageLabel ? `: ${automationGateStageLabel}` : ""}
+              {automationGate.title}
+              {automationGate.stageLabel ? `: ${automationGate.stageLabel}` : ""}
             </p>
-            {automationGateAutoPassedClips !== null ||
-            automationGateAttentionClips !== null ? (
+            {automationGate.autoPassedClips !== null || automationGateAttentionCount !== null ? (
               <p className="mt-1 tabular-nums">
-                自動通過 {automationGateAutoPassedClips ?? 0}件 ・ 要確認{" "}
-                {automationGateAttentionClips ?? 0}件
+                自動通過 {automationGate.autoPassedClips ?? 0}件 ・ 要確認{" "}
+                {automationGateAttentionCount ?? 0}件
               </p>
             ) : null}
-            {automationGateReasonCodes.length > 0 ? (
-              <p className="mt-1 break-words text-amber-800">
-                理由: {automationGateReasonCodes.join(" / ")}
+            {automationGate.reasonLabels.length > 0 ? (
+              <p className={`mt-1 break-words ${automationGateReasonClass}`}>
+                理由: {automationGate.reasonLabels.join(" / ")}
               </p>
             ) : null}
           </div>

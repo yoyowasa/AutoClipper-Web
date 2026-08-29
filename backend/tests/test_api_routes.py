@@ -17,6 +17,7 @@ from app.config import Settings, get_settings
 from app.db import Base, get_db
 from app.jobs.queue import (
     get_enqueue_job,
+    get_enqueue_render_job,
     get_enqueue_retry_job,
     get_enqueue_subtitle_review_hook_scene_update,
     get_enqueue_subtitle_review_preview,
@@ -692,6 +693,87 @@ def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
     persisted = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
     assert persisted["clips"][0]["confirmed"] is True
     assert persisted["segments"][0]["text"] == "OKでまとめて保存した字幕"
+
+
+@pytest.mark.parametrize("action", ["apply", "confirm"])
+def test_auto_clip_acceptance_queues_render_without_confirming_auto_passed_sibling(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    review_path = output_dir / "subtitle_review.json"
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    sibling = dict(review["clips"][0])
+    sibling.update(
+        {
+            "id": "auto_passed_sibling",
+            "title": "自動判定済み",
+            "originalTitle": "自動判定済み",
+            "segmentIds": [],
+            "confirmed": False,
+        }
+    )
+    review["clips"].append(sibling)
+    review["totalClipCount"] = 2
+    review["confirmedClipCount"] = 0
+    for index, clip in enumerate(review["clips"], start=1):
+        clip["previewState"] = "ready"
+        clip["previewSpecHash"] = f"{index:064x}"
+        clip["previewVideoUrl"] = f"/preview-{clip['id']}.mp4"
+    review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {"automationMode": "auto"}
+        db.commit()
+
+    monkeypatch.setattr(
+        jobs_api,
+        "_refresh_subtitle_review_previews_unlocked",
+        lambda **kwargs: (kwargs["document"], []),
+    )
+    monkeypatch.setattr(
+        jobs_api,
+        "_evaluate_and_write_content_quality_gate",
+        lambda **_kwargs: type("PassingDecision", (), {"route": "continue"})(),
+    )
+    queued: list[tuple[str, int]] = []
+    app.dependency_overrides[get_enqueue_render_job] = lambda: (
+        lambda queued_job_id, revision: queued.append((queued_job_id, revision))
+    )
+
+    if action == "apply":
+        response = client.post(
+            f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
+            json={
+                "title": review["clips"][0]["title"],
+                "hookText": "",
+                "hookDurationSeconds": 3,
+                "segments": [],
+            },
+        )
+    else:
+        response = client.post(
+            f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/confirm"
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["state"] == "render_queued"
+    assert payload["confirmedClipCount"] == 1
+    assert payload["totalClipCount"] == 2
+    assert next(
+        clip for clip in payload["clips"] if clip["id"] == "auto_passed_sibling"
+    )["confirmed"] is False
+    assert queued == [(job_id, payload["renderRevision"])]
+    assert client.get(f"/api/jobs/{job_id}").json()["status"] == (
+        "rendering_normal_clips"
+    )
 
 
 def test_patch_subtitle_review_clip_framing_persists_and_requeues_preview(
@@ -2530,7 +2612,7 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["transcriptionLanguage"] == "ja"
 
 
-@pytest.mark.parametrize("automation_mode", ["shadow", "guarded"])
+@pytest.mark.parametrize("automation_mode", ["shadow", "guarded", "auto"])
 def test_create_job_persists_review_based_automation_mode(
     client: TestClient,
     automation_mode: str,
@@ -2562,8 +2644,8 @@ def test_create_job_persists_review_based_automation_mode(
         assert job.settings_json["requireSubtitleReview"] is True
 
 
-@pytest.mark.parametrize("automation_mode", ["auto", "automatic", "future"])
-def test_create_job_rejects_unavailable_or_unknown_automation_mode(
+@pytest.mark.parametrize("automation_mode", ["automatic", "future"])
+def test_create_job_rejects_unknown_automation_mode(
     client: TestClient,
     automation_mode: str,
 ) -> None:
@@ -2592,7 +2674,7 @@ def test_create_job_rejects_unavailable_or_unknown_automation_mode(
         assert len(list(db.scalars(select(Job)).all())) == jobs_before
 
 
-@pytest.mark.parametrize("automation_mode", ["shadow", "guarded"])
+@pytest.mark.parametrize("automation_mode", ["shadow", "guarded", "auto"])
 def test_create_job_rejects_review_based_mode_without_both_review_stops(
     client: TestClient,
     automation_mode: str,

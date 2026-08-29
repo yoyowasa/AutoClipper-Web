@@ -240,6 +240,7 @@ def _write_export_metadata(
     overlay_title: str,
     video_path: Path,
     subtitle_path: Path | None,
+    hook_rendered: bool,
 ) -> Path:
     hook_scene_duration = _candidate_hook_scene_duration(candidate)
     output_duration = candidate.duration + hook_scene_duration
@@ -276,6 +277,7 @@ def _write_export_metadata(
                 "duration": output_duration,
                 "body_duration": candidate.duration,
                 "hook_text": candidate.hook_text,
+                "hook_rendered": hook_rendered,
                 "hook_duration_seconds": candidate.hook_duration_seconds,
                 "hook_scene_start": candidate.hook_scene_start,
                 "hook_scene_end": candidate.hook_scene_end,
@@ -402,6 +404,7 @@ def render_selected_normal_candidates(
                 overlay_title=overlay_title,
                 video_path=output_path,
                 subtitle_path=subtitle_path,
+                hook_rendered=bool(burn_subtitles and candidate.hook_text),
             )
 
             export = ExportItem(

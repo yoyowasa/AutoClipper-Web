@@ -42,6 +42,12 @@ def _plain_text(value: str | None) -> str:
     return text.strip(" \t\r\n、。，．.!！?？:：;；-ー~〜")
 
 
+def _curated_plain_text(value: str | None) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", str(value).replace("\n", " ")).strip()
+
+
 def _postprocessed_plain_text(value: str | None) -> str:
     clean = _plain_text(value)
     if not clean:
@@ -151,12 +157,23 @@ def resolve_candidate_title(
     index: int,
     transcript_segments: Sequence[TranscriptSegment] | None = None,
 ) -> TitleResolution:
-    existing_title = _postprocessed_plain_text(candidate.title)
+    # A non-null source means this title was already resolved or explicitly curated.
+    # Reapplying transcript repair can corrupt valid Japanese, such as a trailing `ー`.
+    title_is_already_resolved = candidate.title_source is not None
+    existing_title = (
+        _curated_plain_text(candidate.title)
+        if title_is_already_resolved
+        else _postprocessed_plain_text(candidate.title)
+    )
     if _usable_title(existing_title):
         source = candidate.title_source
         if source is None:
             source = "openai" if candidate.openai_scored is True or candidate.used_ai_score is True else "existing"
-        overlay_title = _postprocessed_overlay_text(candidate.overlay_title) or (
+        overlay_title = (
+            normalize_overlay_text(candidate.overlay_title or "")
+            if title_is_already_resolved
+            else _postprocessed_overlay_text(candidate.overlay_title)
+        ) or (
             existing_title if candidate.type == "short" else None
         )
         return TitleResolution(title=existing_title, overlay_title=overlay_title, title_source=source)

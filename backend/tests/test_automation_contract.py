@@ -89,6 +89,36 @@ def test_guarded_manifest_connects_structural_quality_roles(tmp_path) -> None:
     assert loaded.roles.final_quality_gate == "guarded_structural"
 
 
+def test_auto_manifest_keeps_auto_only_with_all_fail_closed_stops(tmp_path) -> None:
+    settings = {
+        "automationMode": "auto",
+        "initialSelectionProvider": "codex",
+        "burnSubtitles": True,
+        "requireClipPlanReview": True,
+        "requireSubtitleReview": True,
+    }
+
+    output_path = write_automation_manifest(
+        build_automation_manifest(
+            job_id="job_1",
+            video_id="video_1",
+            stored_path="videos/source.mp4",
+            settings=settings,
+        ),
+        automation_manifest_path(tmp_path),
+    )
+    loaded = load_automation_manifest(output_path)
+
+    assert loaded.requested_mode == "auto"
+    assert loaded.effective_mode == "auto"
+    assert loaded.fallback_reason is None
+    assert loaded.roles.initial_selection == "codex"
+    assert loaded.roles.title_hook == "codex_auto"
+    assert loaded.roles.clip_review == "auto_evidence"
+    assert loaded.roles.subtitle_review == "auto_evidence"
+    assert loaded.roles.final_quality_gate == "auto_evidence"
+
+
 @pytest.mark.parametrize(
     ("clip_review", "subtitle_review"),
     [(False, False), (False, True), (True, False), (True, True)],

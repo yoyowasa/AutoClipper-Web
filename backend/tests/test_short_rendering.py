@@ -776,7 +776,23 @@ def test_render_short_clip_reports_effective_crop_after_framing(tmp_path: Path) 
             center_y=0.18,
             width=0.18,
             height=0.18,
-        )
+        ),
+        FaceDetection(
+            start=15,
+            end=15,
+            center_x=0.5,
+            center_y=0.18,
+            width=0.18,
+            height=0.18,
+        ),
+        FaceDetection(
+            start=30,
+            end=30,
+            center_x=0.5,
+            center_y=0.18,
+            width=0.18,
+            height=0.18,
+        ),
     ]
 
     def fake_face_detector(
@@ -827,6 +843,16 @@ def test_render_short_clip_reports_effective_crop_after_framing(tmp_path: Path) 
     assert result.crop_x is not None
     assert result.crop_y is not None
     assert (result.crop_x, result.crop_y) != (base_plan.crop_x, base_plan.crop_y)
+    assert result.face_box == pytest.approx((0.41, 0.09, 0.59, 0.27))
+    assert result.tracking_evidence is not None
+    assert result.tracking_evidence["strategy"] == "face_tracking_crop"
+    assert result.tracking_evidence["crop"] == {
+        "x": result.crop_x,
+        "y": result.crop_y,
+        "width": 1080,
+        "height": 1200,
+    }
+    assert len(result.tracking_evidence["samples"]) == 3
     filter_graph = commands[0][commands[0].index("-filter_complex") + 1]
     assert f"crop=1080:1200:{result.crop_x}:{result.crop_y}" in filter_graph
 
@@ -1208,7 +1234,16 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
         if Path(output_path).name == "short_02.mp4":
             raise RuntimeError("short render failed")
         Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
-        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+        return ShortRenderResult(
+            path=Path(output_path),
+            strategy="face_tracking_crop",
+            face_box=(0.41, 0.09, 0.59, 0.27),
+            tracking_evidence={
+                "schema_version": 1,
+                "strategy": "face_tracking_crop",
+                "samples": [{"start": 0.0, "end": 0.0, "box": [0.41, 0.09, 0.59, 0.27]}],
+            },
+        )
 
     candidates = [
         make_short("cand_short_1", 0.0, 45.0, "First short", 93.0).model_copy(
@@ -1298,7 +1333,7 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert "refined_start" in short_metadata
     assert "boundary_refined" in short_metadata
     assert short_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/shorts/short_01.ass")
-    assert short_metadata["crop_strategy"] == "center_crop"
+    assert short_metadata["crop_strategy"] == "face_tracking_crop"
     assert "crop_signal_source" in short_metadata
     assert "crop_fallback_reason" in short_metadata
     assert "crop_sampled_frames" in short_metadata
@@ -1310,6 +1345,8 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert "person_detection_count" in short_metadata
     assert "person_detection_confidence" in short_metadata
     assert "person_box" in short_metadata
+    assert short_metadata["face_box"] == pytest.approx([0.41, 0.09, 0.59, 0.27])
+    assert short_metadata["tracking_evidence"]["strategy"] == "face_tracking_crop"
     assert "speaker_window_count" in short_metadata
     assert "speaker_region_confidence" in short_metadata
     assert "speaker_region_box" in short_metadata
@@ -1386,6 +1423,71 @@ def test_render_selected_short_candidates_writes_fallback_title_metadata(client:
     assert not (shorts_dir / "short_01.ass").exists()
     ass_text = (subtitle_dir / "short_01.ass").read_text(encoding="utf-8")
     assert ",Title,," not in ass_text
+
+
+def test_render_selected_short_candidates_preserves_curated_publication_and_overlay_titles(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_renderer(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> ShortRenderResult:
+        Path(output_path).write_bytes(b"rendered short")
+        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+
+    publication_title = "箸が止まらない！バジルソースで食べるブロッコリー"
+    overlay_title = "箸が止まらない！\nめちゃうまブロッコリー"
+    candidate = Candidate(
+        id="cand_short_curated_title",
+        type="short",
+        start=0.0,
+        end=45.0,
+        duration=45.0,
+        transcript_text="ブロッコリーにバジルソースをかけます。",
+        title=publication_title,
+        overlay_title=overlay_title,
+        title_source="manual_review",
+        final_score=90.0,
+    )
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        result = render_selected_short_candidates(
+            db=db,
+            job=job,
+            input_path=Path(storage.uploads) / "sample.mp4",
+            selected_candidates=[candidate],
+            burn_subtitles=True,
+            paths=storage,
+            renderer=fake_renderer,
+            mode="high_quality",
+            short_top_banner_enabled=True,
+        )
+
+    assert result.exports[0].title == publication_title
+    metadata = json.loads(
+        (
+            storage.outputs
+            / created["jobId"]
+            / "shorts"
+            / "short_01.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert metadata["title"] == publication_title
+    assert metadata["overlay_title"] == overlay_title
+    assert metadata["title_source"] == "manual_review"
 
 
 @pytest.mark.parametrize(

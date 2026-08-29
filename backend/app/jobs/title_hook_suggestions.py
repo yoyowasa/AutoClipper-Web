@@ -19,7 +19,7 @@ from app.jobs.subtitle_review import (
 )
 from app.jobs.subtitle_review_preview import subtitle_review_document_lock
 from app.models import Job, Video
-from app.posting_metadata import build_post_metadata_revision_hash
+from app.posting_metadata import YouTubeTitleCandidate, build_post_metadata_revision_hash
 from app.scoring.codex_title_hook_suggestions import (
     CodexTitleHookSuggestionError,
     CodexTitleHookSuggestionGenerator,
@@ -406,6 +406,182 @@ def _same_generation_context(
         and state.revision_hash == request.revision_hash
         and state.provider == request.provider
     )
+
+
+def generate_title_hook_suggestions_for_auto(
+    *,
+    document: SubtitleReviewDocument,
+    clip_id: str,
+    source_path: str | Path,
+    paths: StoragePaths,
+    model: str,
+    generator: TitleHookSuggestionGeneratorProtocol | None = None,
+    frame_extractor: FrameExtractor = extract_representative_frames,
+) -> TitleHookSuggestionsDocument:
+    """Generate a current Codex proposal without requiring an active review stop.
+
+    The automatic pipeline calls this before the subtitle-review document is first
+    published.  It deliberately has no OpenAI fallback: an unavailable host bridge
+    raises and the caller routes the job to human review.
+    """
+
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise KeyError(clip_id)
+    segments_by_id = {segment.id: segment for segment in document.segments}
+    request = build_title_hook_suggestion_input(
+        document,
+        clip_id,
+        [
+            TitleHookDraftSegment(
+                segmentId=segment_id,
+                text=segments_by_id[segment_id].text,
+            )
+            for segment_id in clip.segment_ids
+        ],
+        model=model,
+        provider="codex",
+    )
+    job_dir = paths.job_outputs(document.job_id)
+    state_path = title_hook_suggestions_path(job_dir, clip_id)
+    input_path = title_hook_suggestion_input_path(job_dir, clip_id)
+    previous_thread_id: str | None = None
+    if state_path.is_file():
+        try:
+            cached = load_title_hook_suggestions(state_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            cached = None
+        if cached is not None:
+            previous_thread_id = cached.thread_id
+            if (
+                cached.state == "ready"
+                and cached.input_hash == request.input_hash
+                and cached.draft_hash == request.draft_hash
+                and cached.revision_hash == request.revision_hash
+                and cached.provider == "codex"
+            ):
+                return cached
+
+    active_generator = generator or CodexTitleHookSuggestionGenerator(
+        storage_root=paths.root,
+        job_id=document.job_id,
+        clip_id=clip_id,
+        model=request.model,
+        thread_id=previous_thread_id,
+    )
+    temp_root = paths.temp / document.job_id / TITLE_HOOK_SUGGESTIONS_DIRNAME
+    temp_root.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=f"{_clip_digest(clip_id)}-", dir=temp_root) as temporary_dir:
+        try:
+            frame_paths = frame_extractor(
+                source_path,
+                clip_start=request.clip_start,
+                clip_end=request.clip_end,
+                output_dir=Path(temporary_dir),
+            )
+        except Exception:
+            frame_paths = []
+        if not frame_paths and not any(item.text.strip() for item in request.segments):
+            raise ValueError(
+                "title/hook generation requires subtitles or representative frames"
+            )
+        result = active_generator.generate(request.prompt_payload(), frame_paths)
+
+    _validate_suggestion_evidence(result, request)
+    suggestions = normalize_title_hook_suggestions(
+        result,
+        clip_duration=request.clip_duration,
+    )
+    recommended_index = next(
+        (
+            index
+            for index, suggestion in enumerate(result.suggestions)
+            if suggestion.id == result.recommended_suggestion_id
+        ),
+        0,
+    )
+    recommended_id = suggestions[recommended_index].id
+    artifact = TitleHookSuggestionsDocument(
+        clipId=clip_id,
+        state="ready",
+        inputHash=request.input_hash,
+        draftHash=request.draft_hash,
+        revisionHash=request.revision_hash,
+        provider="codex",
+        threadId=getattr(active_generator, "last_thread_id", previous_thread_id),
+        model=request.model,
+        suggestions=suggestions,
+        recommendedSuggestionId=recommended_id,
+        youtubeDescription=result.youtube_description,
+        hashtags=result.hashtags,
+        descriptionEvidenceSegmentIds=result.description_evidence_segment_ids,
+        generatedAt=_utc_iso(),
+    )
+    write_title_hook_suggestion_input(request, input_path)
+    write_title_hook_suggestions(artifact, state_path)
+    return artifact
+
+
+def apply_recommended_title_hook_suggestions(
+    document: SubtitleReviewDocument,
+    artifact: TitleHookSuggestionsDocument,
+) -> SubtitleReviewDocument:
+    """Apply the generated recommendation while preserving its evidence contract."""
+
+    if artifact.state != "ready" or not artifact.revision_hash:
+        raise ValueError("title/hook suggestions are not ready")
+    clip = next((item for item in document.clips if item.id == artifact.clip_id), None)
+    if clip is None:
+        raise KeyError(artifact.clip_id)
+    recommended = next(
+        (
+            item
+            for item in artifact.suggestions
+            if item.id == artifact.recommended_suggestion_id
+        ),
+        None,
+    )
+    if recommended is None:
+        raise ValueError("recommended title/hook suggestion is unavailable")
+
+    if clip.original_title is None:
+        clip.original_title = clip.title
+    clip.title = recommended.overlay_title
+    clip.publication_title = recommended.publication_title
+    clip.title_edited = True
+    clip.hook_text = recommended.hook_text
+    clip.hook_duration_seconds = recommended.hook_duration_seconds
+    clip.hook_scene_start = (
+        None
+        if recommended.hook_scene_start is None
+        else round(clip.start + recommended.hook_scene_start, 3)
+    )
+    clip.hook_scene_end = (
+        None
+        if recommended.hook_scene_end is None
+        else round(clip.start + recommended.hook_scene_end, 3)
+    )
+    clip.title_candidates = [
+        YouTubeTitleCandidate(
+            id=item.id,
+            title=item.publication_title,
+            intent=item.intent,
+            reason=item.reason,
+            evidenceSegmentIds=item.evidence_segment_ids,
+        )
+        for item in artifact.suggestions
+        if item.intent is not None
+    ]
+    clip.recommended_title_id = recommended.id
+    clip.selected_title_id = recommended.id
+    clip.youtube_description = artifact.youtube_description
+    clip.youtube_hashtags = list(artifact.hashtags)
+    clip.description_evidence_segment_ids = list(
+        artifact.description_evidence_segment_ids
+    )
+    clip.post_metadata_source = "codex"
+    clip.post_metadata_revision_hash = artifact.revision_hash
+    return document
 
 
 def run_title_hook_suggestion_generation(

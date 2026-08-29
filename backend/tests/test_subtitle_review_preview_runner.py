@@ -290,6 +290,148 @@ def test_preview_worker_never_overwrites_a_concurrent_api_edit(tmp_path: Path) -
     assert persisted.clips[0].preview_spec_hash != old_hash
 
 
+def test_auto_preview_worker_queues_render_after_confirmed_preview_becomes_ready(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'auto.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+    storage = StoragePaths(tmp_path / "storage")
+    storage.ensure()
+    source_path = storage.uploads / "source.mp4"
+    source_path.write_bytes(b"source")
+    job_id = "job_auto_preview_resume"
+    clip_id = "candidate_auto_confirmed"
+    output_dir = storage.job_outputs(job_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    candidate = Candidate(
+        id=clip_id,
+        type="normal",
+        start=0,
+        end=20,
+        duration=20,
+        transcript_text="確認済み字幕",
+        title="確認済みタイトル",
+    )
+    selection = CandidateSelection(normalClips=[candidate], shorts=[])
+    segments = [
+        TranscriptSegment(start=0, end=20, text="確認済み字幕", confidence=0.1)
+    ]
+    write_selected_clips(selection, output_dir / "selected_clips.json")
+    write_transcript_segments(segments, transcript_output_path(output_dir))
+
+    with session_factory() as db:
+        video = Video(
+            id="vid_auto_preview_resume",
+            original_filename="source.mp4",
+            stored_path=str(source_path),
+            duration=20,
+            width=1920,
+            height=1080,
+            fps=30,
+            has_audio=True,
+        )
+        job = Job(
+            id=job_id,
+            video_id=video.id,
+            status="awaiting_subtitle_review",
+            progress=80,
+            current_step="字幕確認",
+            settings_json={"automationMode": "auto", "burnSubtitles": True},
+        )
+        db.add_all([video, job])
+        db.commit()
+        document = build_subtitle_review(job_id, selection, segments)
+        spec, spec_hash, _inputs = current_subtitle_review_preview_spec(
+            job=job,
+            video=video,
+            document=document,
+            paths=storage,
+            clip_id=clip_id,
+        )
+        document.clips[0].confirmed = True
+        document.clips[0].preview_state = "queued"
+        document.clips[0].preview_spec_hash = spec_hash
+        document.confirmed_clip_count = 1
+        write_subtitle_review(document, subtitle_review_output_path(output_dir))
+        write_subtitle_review_summary(
+            document,
+            subtitle_review_summary_path(output_dir),
+        )
+
+    def fake_exact_renderer(
+        _input_path: str | Path,
+        renderer_output_dir: str | Path,
+        **_kwargs: Any,
+    ) -> ExactPreviewResult:
+        artifacts = exact_subtitle_review_preview_paths(
+            renderer_output_dir,
+            clip_id,
+            spec_hash,
+        )
+        artifacts.video_path.parent.mkdir(parents=True, exist_ok=True)
+        artifacts.video_path.write_bytes(b"exact preview")
+        artifacts.subtitle_path.write_text("ass", encoding="utf-8")
+        artifacts.spec_path.write_text(
+            json.dumps(spec, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        live_spec = build_live_subtitle_review_preview_spec(spec)
+        live_hash = subtitle_review_preview_spec_hash(live_spec)
+        live_artifacts = live_subtitle_review_preview_paths(
+            renderer_output_dir,
+            clip_id,
+            live_hash,
+        )
+        live_artifacts.video_path.parent.mkdir(parents=True, exist_ok=True)
+        live_artifacts.video_path.write_bytes(b"live preview")
+        live_artifacts.spec_path.write_text(
+            json.dumps(live_spec, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return ExactPreviewResult(
+            path=artifacts.video_path,
+            subtitle_path=artifacts.subtitle_path,
+            spec_path=artifacts.spec_path,
+            spec_hash=spec_hash,
+            live_path=live_artifacts.video_path,
+            live_spec_path=live_artifacts.spec_path,
+            live_spec_hash=live_hash,
+        )
+
+    queued: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        "app.jobs.queue.enqueue_subtitle_review_render",
+        lambda queued_job_id, revision: queued.append((queued_job_id, revision)),
+    )
+
+    statuses = run_subtitle_review_preview(
+        job_id,
+        clip_id,
+        spec_hash,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=AutoClipperPipelineDependencies(
+            subtitle_review_exact_preview_renderer=fake_exact_renderer,
+        ),
+    )
+
+    assert statuses == ["ready", "render_queued"]
+    persisted = load_subtitle_review(subtitle_review_output_path(output_dir))
+    assert persisted.state == "render_queued"
+    assert persisted.clips[0].preview_state == "ready"
+    assert persisted.confirmed_clip_count == 1
+    assert queued == [(job_id, persisted.render_revision)]
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.status == "rendering_normal_clips"
+
+
 def test_hook_preview_worker_rejects_changed_review_snapshot(tmp_path: Path) -> None:
     engine = create_engine(
         f"sqlite:///{tmp_path / 'test.db'}",

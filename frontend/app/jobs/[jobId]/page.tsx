@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { JobProgress } from "../../../components/JobProgress";
 import { ProgressTimeline } from "../../../components/ProgressTimeline";
 import { getJobStatus, retryJob } from "../../../lib/api";
+import { automationGateDisplay } from "../../../lib/automationQuality";
 import type { JobStatusResponse } from "../../../lib/types";
 
 function readJobId(param: string | string[] | undefined): string {
@@ -82,15 +83,11 @@ export default function JobPage() {
     };
   }, [jobId]);
 
-  const guardedAutomation = job?.details.automationEffectiveMode === "guarded";
-  const guardedAutoPassedClips =
-    typeof job?.details.automationGateAutoPassedClips === "number"
-      ? job.details.automationGateAutoPassedClips
-      : null;
-  const guardedAttentionClips =
-    typeof job?.details.automationGateAttentionClips === "number"
-      ? job.details.automationGateAttentionClips
-      : null;
+  const automationGate = automationGateDisplay(job?.details);
+  const exceptionOnlyAutomation = automationGate.active;
+  const automationGateAttentionCount =
+    automationGate.attentionClips ??
+    (automationGate.attentionClipIds.length > 0 ? automationGate.attentionClipIds.length : null);
 
   return (
     <main className="min-h-screen bg-[#f7f7f4] px-6 py-8 text-neutral-950">
@@ -165,15 +162,15 @@ export default function JobPage() {
                 <p className="text-sm font-semibold text-blue-950">
                   {job.status === "awaiting_manual_edit"
                     ? "元動画の準備ができました。手動で切り抜く範囲を作成できます。"
-                    : guardedAutomation
-                      ? "自動判定で確認が必要な切り抜き予定があります。"
+                    : exceptionOnlyAutomation
+                      ? "問題のある切り抜き予定だけ人の確認へ戻しました。"
                       : "切り抜き候補が決まりました。字幕を作る前に範囲を確認できます。"}
                 </p>
                 <p className="mt-1 text-sm text-blue-800">
                   {job.status === "awaiting_manual_edit"
                     ? "元動画を再生し、通常切り抜きとショートの開始・終了を指定してください。"
-                    : guardedAutomation
-                      ? "自動判定の結果を確認し、必要なら範囲を調整してください。"
+                    : exceptionOnlyAutomation
+                      ? "問題または判定不能の項目を確認し、必要なら範囲を調整してください。"
                       : "各予定clipを再生し、合わなければ狙う場面を変更して再選定してください。"}
                 </p>
                 <Link
@@ -182,7 +179,7 @@ export default function JobPage() {
                 >
                   {job.status === "awaiting_manual_edit"
                     ? "手動切り抜きを開く"
-                    : guardedAutomation
+                    : exceptionOnlyAutomation
                       ? "確認が必要な切り抜き予定を開く"
                       : "切り抜き予定を確認"}
                 </Link>
@@ -191,16 +188,17 @@ export default function JobPage() {
             {job.status === "awaiting_subtitle_review" ? (
               <section className="border border-sky-300 bg-sky-50 px-5 py-5">
                 <p className="text-sm font-semibold text-sky-950">
-                  {guardedAutomation
-                    ? "自動判定できない項目があります。"
+                  {exceptionOnlyAutomation
+                    ? "問題のあるタイトル・字幕だけ人の確認へ戻しました。"
                     : "clip選定が完了しました。次は字幕確認です。"}
                 </p>
                 <p className="mt-1 text-sm text-sky-800">
-                  {guardedAutomation ? (
-                    guardedAutoPassedClips !== null || guardedAttentionClips !== null ? (
+                  {exceptionOnlyAutomation ? (
+                    automationGate.autoPassedClips !== null ||
+                    automationGateAttentionCount !== null ? (
                       <>
-                        自動通過 {guardedAutoPassedClips ?? 0}件 ・ 要確認{" "}
-                        {guardedAttentionClips ?? 0}件
+                        自動通過 {automationGate.autoPassedClips ?? 0}件 ・ 要確認{" "}
+                        {automationGateAttentionCount ?? 0}件
                       </>
                     ) : (
                       <>自動判定の確認対象を開いてください。</>
@@ -216,7 +214,7 @@ export default function JobPage() {
                   className="mt-4 inline-flex min-h-11 items-center bg-sky-700 px-5 text-sm font-semibold text-white"
                   href={`/jobs/${job.id}/subtitles`}
                 >
-                  {guardedAutomation ? "確認が必要な項目を開く" : "字幕確認へ進む"}
+                  {exceptionOnlyAutomation ? "確認が必要な項目を開く" : "字幕確認へ進む"}
                 </Link>
               </section>
             ) : null}

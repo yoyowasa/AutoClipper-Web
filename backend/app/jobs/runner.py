@@ -112,6 +112,7 @@ from app.jobs.clip_plan import (
     write_clip_plan,
 )
 from app.jobs.automation import (
+    AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING,
     automation_manifest_path,
     build_automation_manifest,
     load_automation_manifest,
@@ -158,7 +159,9 @@ from app.jobs.subtitle_review import (
     load_subtitle_review,
     mark_review_completed,
     mark_review_rendering,
+    queue_auto_review_render,
     queue_review_render,
+    refresh_review_overlay_title_expectations,
     reviewed_transcript_output_path,
     restore_review_after_render_failure,
     subtitle_review_output_path,
@@ -174,9 +177,17 @@ from app.jobs.subtitle_review_preview import (
     exact_subtitle_review_preview_error_path,
     live_subtitle_review_preview_is_ready,
     live_subtitle_review_preview_url,
+    refresh_subtitle_review_preview_states,
     subtitle_review_document_lock,
     subtitle_review_preview_url as exact_subtitle_review_preview_url,
     write_subtitle_review_preview_error,
+)
+from app.jobs.title_hook_suggestions import (
+    TitleHookSuggestionsDocument,
+    apply_recommended_title_hook_suggestions,
+    generate_title_hook_suggestions_for_auto,
+    load_title_hook_suggestions,
+    title_hook_suggestions_path,
 )
 from app.models import ExportItem, Job, Video, utc_now
 from app.posting_metadata import write_youtube_posting_artifacts
@@ -287,6 +298,9 @@ class AutoClipperPipelineDependencies:
     openai_scorer: OpenAICandidateScorer | None = None
     transcript_corrector: OpenAITranscriptCorrector | None = None
     codex_initial_selector: Callable[..., Any] = request_codex_initial_selection
+    auto_title_hook_generator: Callable[..., TitleHookSuggestionsDocument] = (
+        generate_title_hook_suggestions_for_auto
+    )
 
 
 class PipelineExpectedError(Exception):
@@ -729,8 +743,8 @@ def _active_quality_gate_mode(
         except (OSError, ValueError):
             pass
         else:
-            return effective_mode if effective_mode in {"shadow", "guarded"} else None
-    return requested_mode if requested_mode in {"shadow", "guarded"} else None
+            return effective_mode if effective_mode in {"shadow", "guarded", "auto"} else None
+    return requested_mode if requested_mode in {"shadow", "guarded", "auto"} else None
 
 
 def _evaluate_selection_quality_gate_for_mode(
@@ -768,7 +782,7 @@ def _evaluate_selection_quality_gate_for_mode(
         decision,
         quality_gate_decision_path(job_dir, "selection"),
     )
-    if decision_path is None and mode == "guarded":
+    if decision_path is None and mode in {"guarded", "auto"}:
         decision = unknown_quality_gate_decision(
             job_id=job_id,
             stage="selection",
@@ -2636,17 +2650,34 @@ def _project_staged_exports_for_quality_gate(
     staging_job_dir: Path,
     canonical_job_dir: Path,
 ) -> list[dict[str, Any]]:
+    def project_path(value: str | None) -> tuple[str | None, str | None]:
+        if not value:
+            return None, None
+        source_path = Path(value)
+        relative_path = source_path.resolve().relative_to(resolved_staging_dir)
+        return str(canonical_job_dir / relative_path), str(source_path)
+
     projected: list[dict[str, Any]] = []
     resolved_staging_dir = staging_job_dir.resolve()
     for export in staged_exports:
-        source_path = Path(export.video_path)
-        relative_path = source_path.resolve().relative_to(resolved_staging_dir)
+        video_path, inspection_video_path = project_path(export.video_path)
+        subtitle_path, inspection_subtitle_path = project_path(
+            getattr(export, "subtitle_path", None)
+        )
+        metadata_path, inspection_metadata_path = project_path(
+            getattr(export, "metadata_path", None)
+        )
         projected.append(
             {
                 "id": export.id,
                 "candidateId": export.candidate_id,
                 "type": export.type,
-                "videoPath": str(canonical_job_dir / relative_path),
+                "videoPath": video_path,
+                "subtitlePath": subtitle_path,
+                "metadataPath": metadata_path,
+                "inspectionVideoPath": inspection_video_path,
+                "inspectionSubtitlePath": inspection_subtitle_path,
+                "inspectionMetadataPath": inspection_metadata_path,
             }
         )
     return projected
@@ -2948,6 +2979,141 @@ def _render_exact_subtitle_review_preview_for_clip(
     return result
 
 
+def _load_title_hook_evidence(
+    job_dir: Path,
+    document: SubtitleReviewDocument,
+) -> dict[str, TitleHookSuggestionsDocument]:
+    artifacts: dict[str, TitleHookSuggestionsDocument] = {}
+    for clip in document.clips:
+        path = title_hook_suggestions_path(job_dir, clip.id)
+        if not path.is_file():
+            continue
+        try:
+            artifact = load_title_hook_suggestions(path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if artifact.state == "ready":
+            artifacts[clip.id] = artifact
+    return artifacts
+
+
+def _prepare_auto_render_after_preview(
+    *,
+    db: Session,
+    job: Job,
+    video: Video,
+    storage_paths: StoragePaths,
+) -> int | None:
+    job_dir = storage_paths.job_outputs(job.id)
+    review_path = subtitle_review_output_path(job_dir)
+    with subtitle_review_document_lock(job_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review":
+            return None
+        document = load_subtitle_review(review_path)
+        if document.state != "awaiting_review":
+            return None
+        document, _queued, changed = refresh_subtitle_review_preview_states(
+            job=job,
+            video=video,
+            document=document,
+            paths=storage_paths,
+        )
+        if changed:
+            write_subtitle_review(document, review_path)
+            write_subtitle_review_summary(
+                document,
+                subtitle_review_summary_path(job_dir),
+            )
+
+        settings = dict(job.settings_json or {})
+        if _active_quality_gate_mode(job_dir, settings) != "auto":
+            return None
+        invalidate_quality_gate_decisions(job_dir, ("content", "post_render"))
+        try:
+            content_gate = evaluate_content_quality_gate(
+                job_id=job.id,
+                document=document,
+                settings=settings,
+                mode="auto",
+                title_hook_evidence=_load_title_hook_evidence(job_dir, document),
+            )
+        except Exception as exc:
+            content_gate = unknown_quality_gate_decision(
+                job_id=job.id,
+                stage="content",
+                reason_code="content_gate_evaluation_failed",
+                evidence={"errorType": exc.__class__.__name__},
+                mode="auto",
+            )
+        content_gate_path = _try_write_quality_gate_decision(
+            content_gate,
+            quality_gate_decision_path(job_dir, "content"),
+        )
+        if content_gate_path is None or content_gate.route != "continue":
+            return None
+
+        document = queue_auto_review_render(document)
+        write_subtitle_review(document, review_path)
+        write_subtitle_review_summary(
+            document,
+            subtitle_review_summary_path(job_dir),
+        )
+        _set_status(db, job, "rendering_normal_clips")
+        return document.render_revision
+
+
+def _restore_auto_review_after_enqueue_failure(
+    *,
+    db: Session,
+    job: Job,
+    storage_paths: StoragePaths,
+) -> None:
+    job_dir = storage_paths.job_outputs(job.id)
+    review_path = subtitle_review_output_path(job_dir)
+    with subtitle_review_document_lock(job_dir):
+        document = load_subtitle_review(review_path)
+        if document.state == "render_queued":
+            document = restore_review_after_render_failure(document)
+            write_subtitle_review(document, review_path)
+            write_subtitle_review_summary(
+                document,
+                subtitle_review_summary_path(job_dir),
+            )
+        db.refresh(job)
+        _set_status(db, job, "awaiting_subtitle_review")
+
+
+def _generate_auto_title_hook_evidence(
+    *,
+    dependencies: AutoClipperPipelineDependencies,
+    document: SubtitleReviewDocument,
+    input_path: Path,
+    paths: StoragePaths,
+    model: str,
+) -> tuple[dict[str, TitleHookSuggestionsDocument], dict[str, str]]:
+    artifacts: dict[str, TitleHookSuggestionsDocument] = {}
+    failures: dict[str, str] = {}
+    for clip in document.clips:
+        try:
+            artifact = dependencies.auto_title_hook_generator(
+                document=document,
+                clip_id=clip.id,
+                source_path=input_path,
+                paths=paths,
+                model=model,
+            )
+            apply_recommended_title_hook_suggestions(document, artifact)
+            artifacts[clip.id] = artifact
+        except Exception as exc:
+            failures[clip.id] = exc.__class__.__name__
+    refresh_review_overlay_title_expectations(
+        document,
+        render_mode=document.render_mode,
+    )
+    return artifacts, failures
+
+
 def _mark_subtitle_review_preview_ready(
     document: SubtitleReviewDocument,
     *,
@@ -3060,6 +3226,150 @@ def _prepare_clip_plan_review(
     return output_path
 
 
+def _resume_auto_after_clip_review(
+    *,
+    db: Session,
+    job: Job,
+    video: Video,
+    settings: Mapping[str, Any],
+    session_factory: SessionFactory,
+    storage_paths: StoragePaths,
+    dependencies: AutoClipperPipelineDependencies,
+) -> list[str]:
+    """Resume auto processing after the selection exception was accepted."""
+    visited_statuses: list[str] = []
+    job_dir = storage_paths.job_outputs(job.id)
+    review_path = subtitle_review_output_path(job_dir)
+    review_document = load_subtitle_review(review_path)
+    if review_document.state == "completed":
+        zip_path = storage_paths.zip_path(job.id)
+        try:
+            publication_completed = (
+                job.status == "completed"
+                and zip_path.is_file()
+                and zip_path.stat().st_size > 0
+            )
+        except OSError:
+            publication_completed = False
+        if publication_completed:
+            return ["completed"]
+    if review_document.state in {"render_queued", "rendering", "completed"}:
+        partial_exports = list(
+            db.scalars(
+                select(ExportItem).where(ExportItem.job_id == job.id)
+            ).all()
+        )
+        _discard_unpublished_exports(
+            db,
+            partial_exports,
+            job_dir=job_dir,
+        )
+        review_document = restore_review_after_render_failure(review_document)
+        write_subtitle_review(review_document, review_path)
+        write_subtitle_review_summary(
+            review_document,
+            subtitle_review_summary_path(job_dir),
+        )
+        _set_status(db, job, "awaiting_subtitle_review")
+        return ["awaiting_subtitle_review"]
+    if review_document.state != "awaiting_review":
+        _set_status(db, job, "awaiting_subtitle_review")
+        return ["awaiting_subtitle_review"]
+    input_path = storage_paths.resolve_stored_file(video.stored_path)
+
+    title_hook_evidence, _generation_failures = _generate_auto_title_hook_evidence(
+        dependencies=dependencies,
+        document=review_document,
+        input_path=input_path,
+        paths=storage_paths,
+        model=str(settings.get("titleHookModel") or "codex-default"),
+    )
+    preview_total = len(review_document.clips)
+    _set_subtitle_review_preview_progress(
+        db,
+        job,
+        completed=0,
+        total=preview_total,
+    )
+    visited_statuses.append("preparing_subtitle_review")
+    for preview_index, clip in enumerate(review_document.clips, start=1):
+        try:
+            result = _render_exact_subtitle_review_preview_for_clip(
+                dependencies=dependencies,
+                input_path=input_path,
+                job_dir=job_dir,
+                job=job,
+                video=video,
+                document=review_document,
+                paths=storage_paths,
+                clip_id=clip.id,
+            )
+        except Exception:
+            # The content gate observes the missing current preview and returns
+            # unknown. The review UI can retry only the unavailable preview.
+            pass
+        else:
+            _mark_subtitle_review_preview_ready(
+                review_document,
+                clip_id=clip.id,
+                spec_hash=result.spec_hash,
+                live_spec_hash=result.live_spec_hash,
+            )
+        _set_subtitle_review_preview_progress(
+            db,
+            job,
+            completed=preview_index,
+            total=preview_total,
+        )
+
+    write_subtitle_review(review_document, review_path)
+    write_subtitle_review_summary(
+        review_document,
+        subtitle_review_summary_path(job_dir),
+    )
+    invalidate_quality_gate_decisions(job_dir, ("content", "post_render"))
+    try:
+        content_gate = evaluate_content_quality_gate(
+            job_id=job.id,
+            document=review_document,
+            settings=settings,
+            mode="auto",
+            title_hook_evidence=title_hook_evidence,
+        )
+    except Exception as exc:
+        content_gate = unknown_quality_gate_decision(
+            job_id=job.id,
+            stage="content",
+            reason_code="content_gate_evaluation_failed",
+            evidence={"errorType": exc.__class__.__name__},
+            mode="auto",
+        )
+    content_gate_path = _try_write_quality_gate_decision(
+        content_gate,
+        quality_gate_decision_path(job_dir, "content"),
+    )
+    if content_gate_path is None or content_gate.route != "continue":
+        _set_status(db, job, "awaiting_subtitle_review")
+        visited_statuses.append("awaiting_subtitle_review")
+        return visited_statuses
+
+    review_document = queue_auto_review_render(review_document)
+    write_subtitle_review(review_document, review_path)
+    write_subtitle_review_summary(
+        review_document,
+        subtitle_review_summary_path(job_dir),
+    )
+    db.commit()
+    render_statuses = run_subtitle_review_render(
+        job.id,
+        render_revision=review_document.render_revision,
+        session_factory=session_factory,
+        paths=storage_paths,
+        dependencies=dependencies,
+    )
+    return [*visited_statuses, *render_statuses]
+
+
 def run_autoclipper_job(
     job_id: str,
     session_factory: SessionFactory = SessionLocal,
@@ -3133,6 +3443,84 @@ def run_autoclipper_job(
         temp_dir.mkdir(parents=True, exist_ok=True)
         input_path = storage_paths.resolve_stored_file(video.stored_path)
         audio_path = temp_dir / "audio.wav"
+
+        resume_after_clip_review = bool(
+            settings.get(AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING, False)
+        )
+        if resume_after_clip_review:
+            consume_resume_marker = True
+            resume_settings = dict(settings)
+            resume_settings.pop(AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING, None)
+            if automation_mode != "auto":
+                _set_status(db, job, "awaiting_subtitle_review")
+                resume_statuses = ["awaiting_subtitle_review"]
+            else:
+                try:
+                    resume_statuses = _resume_auto_after_clip_review(
+                        db=db,
+                        job=job,
+                        video=video,
+                        settings=resume_settings,
+                        session_factory=session_factory,
+                        storage_paths=storage_paths,
+                        dependencies=deps,
+                    )
+                except Exception as exc:
+                    try:
+                        failed_review = load_subtitle_review(
+                            subtitle_review_output_path(job_dir)
+                        )
+                        if failed_review.state in {
+                            "render_queued",
+                            "rendering",
+                            "completed",
+                        }:
+                            partial_exports = list(
+                                db.scalars(
+                                    select(ExportItem).where(ExportItem.job_id == job.id)
+                                ).all()
+                            )
+                            _discard_unpublished_exports(
+                                db,
+                                partial_exports,
+                                job_dir=job_dir,
+                            )
+                            failed_review = restore_review_after_render_failure(
+                                failed_review
+                            )
+                            write_subtitle_review(
+                                failed_review,
+                                subtitle_review_output_path(job_dir),
+                            )
+                            write_subtitle_review_summary(
+                                failed_review,
+                                subtitle_review_summary_path(job_dir),
+                            )
+                    except Exception:
+                        # Preserve the durable marker so a retry can recover a
+                        # review left in render_queued/rendering.
+                        consume_resume_marker = False
+                    resume_gate = unknown_quality_gate_decision(
+                        job_id=job.id,
+                        stage="content",
+                        reason_code="auto_resume_after_clip_review_failed",
+                        evidence={"errorType": exc.__class__.__name__},
+                        mode="auto",
+                    )
+                    _try_write_quality_gate_decision(
+                        resume_gate,
+                        quality_gate_decision_path(job_dir, "content"),
+                    )
+                    _set_status(db, job, "awaiting_subtitle_review")
+                    resume_statuses = ["awaiting_subtitle_review"]
+            db.refresh(job)
+            persisted_settings = dict(job.settings_json or {})
+            if consume_resume_marker:
+                persisted_settings.pop(AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING, None)
+            job.settings_json = persisted_settings
+            db.commit()
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return resume_statuses
 
         def write_summaries() -> list[Path]:
             return write_generation_summaries(
@@ -4074,7 +4462,7 @@ def run_autoclipper_job(
                 )
 
             selection_gate = None
-            if automation_mode in {"shadow", "guarded"}:
+            if automation_mode in {"shadow", "guarded", "auto"}:
                 selection_gate, selection_gate_path = (
                     _evaluate_selection_quality_gate_for_mode(
                         job_id=job.id,
@@ -4108,12 +4496,12 @@ def run_autoclipper_job(
                 )
 
             guarded_selection_needs_review = bool(
-                automation_mode == "guarded"
+                automation_mode in {"guarded", "auto"}
                 and selection_gate is not None
                 and selection_gate.route != "continue"
             )
             manual_clip_plan_review = bool(
-                automation_mode != "guarded"
+                automation_mode not in {"guarded", "auto"}
                 and bool(settings.get("requireClipPlanReview", False))
                 and bool(settings.get("requireSubtitleReview", False))
                 and bool(settings.get("burnSubtitles", True))
@@ -4140,6 +4528,7 @@ def run_autoclipper_job(
             )
             content_gate: QualityGateDecision | None = None
             guarded_content_auto_passed = False
+            title_hook_evidence: dict[str, TitleHookSuggestionsDocument] = {}
             if subtitle_review_requested:
                 review_document = build_subtitle_review(
                     job.id,
@@ -4158,6 +4547,18 @@ def run_autoclipper_job(
                     source_width=video.width,
                     source_height=video.height,
                 )
+                if automation_mode == "auto":
+                    title_hook_evidence, _title_hook_failures = (
+                        _generate_auto_title_hook_evidence(
+                            dependencies=deps,
+                            document=review_document,
+                            input_path=input_path,
+                            paths=storage_paths,
+                            model=str(
+                                settings.get("titleHookModel") or "codex-default"
+                            ),
+                        )
+                    )
                 preview_total = len(review_document.clips)
                 _set_subtitle_review_preview_progress(
                     db,
@@ -4205,7 +4606,7 @@ def run_autoclipper_job(
                 )
                 metadata_files.extend([review_path, review_summary_path])
 
-                if automation_mode in {"shadow", "guarded"}:
+                if automation_mode in {"shadow", "guarded", "auto"}:
                     invalidate_quality_gate_decisions(
                         job_dir,
                         ("content", "post_render"),
@@ -4216,6 +4617,7 @@ def run_autoclipper_job(
                             document=review_document,
                             settings=settings,
                             mode=automation_mode,
+                            title_hook_evidence=title_hook_evidence,
                         )
                     except Exception as exc:
                         content_gate = unknown_quality_gate_decision(
@@ -4231,7 +4633,7 @@ def run_autoclipper_job(
                     )
                     if content_gate_path is not None:
                         metadata_files.append(content_gate_path)
-                    elif automation_mode == "guarded":
+                    elif automation_mode in {"guarded", "auto"}:
                         content_gate = unknown_quality_gate_decision(
                             job_id=job.id,
                             stage="content",
@@ -4242,7 +4644,7 @@ def run_autoclipper_job(
                 summary_files = write_summaries()
                 metadata_files.extend(path for path in summary_files if path not in metadata_files)
                 guarded_content_auto_passed = bool(
-                    automation_mode == "guarded"
+                    automation_mode in {"guarded", "auto"}
                     and content_gate is not None
                     and content_gate.route == "continue"
                 )
@@ -4250,6 +4652,24 @@ def run_autoclipper_job(
                     _set_status(db, job, "awaiting_subtitle_review")
                     visited_statuses.append("awaiting_subtitle_review")
                     return visited_statuses
+
+                if guarded_content_auto_passed:
+                    transcript_segments = apply_reviewed_text(
+                        transcript_segments,
+                        review_document,
+                    )
+                    selection = apply_reviewed_clip_content(
+                        selection,
+                        review_document,
+                    )
+                    write_transcript_segments(
+                        transcript_segments,
+                        transcript_output_path(job_dir),
+                    )
+                    write_selected_clips(
+                        selection,
+                        job_dir / "selected_clips.json",
+                    )
 
             normal_result, short_result, exports, render_failures_path = _render_selected_outputs(
                 db=db,
@@ -4264,7 +4684,7 @@ def run_autoclipper_job(
                 visited_statuses=visited_statuses,
             )
             metadata_files.append(render_failures_path)
-            if automation_mode in {"shadow", "guarded"}:
+            if automation_mode in {"shadow", "guarded", "auto"}:
                 invalidate_quality_gate_decisions(job_dir, ("post_render",))
                 try:
                     post_render_gate = evaluate_post_render_quality_gate(
@@ -4278,6 +4698,7 @@ def run_autoclipper_job(
                             *short_result.failures,
                         ],
                         mode=automation_mode,
+                        document=review_document,
                     )
                 except Exception as exc:
                     post_render_gate = unknown_quality_gate_decision(
@@ -4293,22 +4714,33 @@ def run_autoclipper_job(
                 )
                 if post_render_gate_path is not None:
                     metadata_files.append(post_render_gate_path)
-                elif automation_mode == "guarded":
+                elif automation_mode in {"guarded", "auto"}:
                     _discard_unpublished_exports(
                         db,
                         exports,
                         job_dir=job_dir,
                     )
+                    if automation_mode == "auto":
+                        _set_status(db, job, "awaiting_subtitle_review")
+                        visited_statuses.append("awaiting_subtitle_review")
+                        return visited_statuses
                     raise PipelineExpectedError(
                         "quality_gate_record_failed",
                         "Guarded post-render quality decision could not be recorded.",
                     )
-                if automation_mode == "guarded" and post_render_gate.route != "continue":
+                if (
+                    automation_mode in {"guarded", "auto"}
+                    and post_render_gate.route != "continue"
+                ):
                     _discard_unpublished_exports(
                         db,
                         exports,
                         job_dir=job_dir,
                     )
+                    if automation_mode == "auto":
+                        _set_status(db, job, "awaiting_subtitle_review")
+                        visited_statuses.append("awaiting_subtitle_review")
+                        return visited_statuses
                     raise PipelineExpectedError(
                         "quality_gate_render_failed",
                         "Guarded quality gate rejected incomplete rendered output.",
@@ -4328,13 +4760,21 @@ def run_autoclipper_job(
                     review_document,
                     subtitle_review_summary_path(job_dir),
                 )
+                posting_files = write_youtube_posting_artifacts(
+                    review_document.clips,
+                    job_dir,
+                )
+                metadata_files.extend(
+                    path for path in posting_files if path not in metadata_files
+                )
                 invalidate_quality_gate_decisions(job_dir, ("content",))
                 try:
                     content_gate = evaluate_content_quality_gate(
                         job_id=job.id,
                         document=review_document,
                         settings=settings,
-                        mode="guarded",
+                        mode=automation_mode,
+                        title_hook_evidence=title_hook_evidence,
                     )
                 except Exception as exc:
                     content_gate = unknown_quality_gate_decision(
@@ -4342,7 +4782,7 @@ def run_autoclipper_job(
                         stage="content",
                         reason_code="content_gate_evaluation_failed",
                         evidence={"errorType": exc.__class__.__name__},
-                        mode="guarded",
+                        mode=automation_mode,
                     )
                 content_gate_path = _try_write_quality_gate_decision(
                     content_gate,
@@ -4799,43 +5239,63 @@ def run_subtitle_review_preview(
             clip_id,
             live_hash,
         )
-        if exact_subtitle_review_preview_is_ready(
+        preview_ready = exact_subtitle_review_preview_is_ready(
             artifacts,
             spec_hash,
-        ) and live_subtitle_review_preview_is_ready(live_artifacts, live_hash):
-            return ["ready"]
+        ) and live_subtitle_review_preview_is_ready(live_artifacts, live_hash)
 
+        if not preview_ready:
+            try:
+                result = _render_exact_subtitle_review_preview_for_clip(
+                    dependencies=deps,
+                    input_path=storage_paths.resolve_stored_file(video.stored_path),
+                    job_dir=job_dir,
+                    job=job,
+                    video=video,
+                    document=document,
+                    paths=storage_paths,
+                    clip_id=clip_id,
+                )
+            except Exception as exc:
+                write_subtitle_review_preview_error(
+                    job_dir,
+                    clip_id,
+                    spec_hash,
+                    str(exc),
+                )
+                raise
+
+            if result.spec_hash != spec_hash:
+                raise RuntimeError("subtitle review preview renderer returned a stale spec")
+            try:
+                exact_subtitle_review_preview_error_path(
+                    job_dir,
+                    clip_id,
+                    spec_hash,
+                ).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        render_revision = _prepare_auto_render_after_preview(
+            db=db,
+            job=job,
+            video=video,
+            storage_paths=storage_paths,
+        )
+        if render_revision is None:
+            return ["ready"]
         try:
-            result = _render_exact_subtitle_review_preview_for_clip(
-                dependencies=deps,
-                input_path=storage_paths.resolve_stored_file(video.stored_path),
-                job_dir=job_dir,
+            from app.jobs.queue import enqueue_subtitle_review_render
+
+            enqueue_subtitle_review_render(job.id, render_revision)
+        except Exception:
+            _restore_auto_review_after_enqueue_failure(
+                db=db,
                 job=job,
-                video=video,
-                document=document,
-                paths=storage_paths,
-                clip_id=clip_id,
-            )
-        except Exception as exc:
-            write_subtitle_review_preview_error(
-                job_dir,
-                clip_id,
-                spec_hash,
-                str(exc),
+                storage_paths=storage_paths,
             )
             raise
-
-        if result.spec_hash != spec_hash:
-            raise RuntimeError("subtitle review preview renderer returned a stale spec")
-        try:
-            exact_subtitle_review_preview_error_path(
-                job_dir,
-                clip_id,
-                spec_hash,
-            ).unlink(missing_ok=True)
-        except OSError:
-            pass
-    return ["ready"]
+        return ["ready", "render_queued"]
 
 
 def run_subtitle_review_hook_scene_update(
@@ -5384,12 +5844,18 @@ def run_subtitle_review_render(
                 settings,
             )
             if effective_automation_mode is not None:
+                title_hook_evidence = (
+                    _load_title_hook_evidence(job_dir, review_document)
+                    if effective_automation_mode == "auto"
+                    else {}
+                )
                 try:
                     content_gate = evaluate_content_quality_gate(
                         job_id=job.id,
                         document=review_document,
                         settings=settings,
                         mode=effective_automation_mode,
+                        title_hook_evidence=title_hook_evidence,
                     )
                 except Exception as exc:
                     content_gate = unknown_quality_gate_decision(
@@ -5403,14 +5869,14 @@ def run_subtitle_review_render(
                     content_gate,
                     quality_gate_decision_path(job_dir, "content"),
                 )
-                guarded_content_blocked = (
-                    effective_automation_mode == "guarded"
+                enforced_content_blocked = (
+                    effective_automation_mode in {"guarded", "auto"}
                     and (
                         content_gate_path is None
                         or content_gate.route != "continue"
                     )
                 )
-                if guarded_content_blocked:
+                if enforced_content_blocked:
                     if (
                         is_rerender
                         and rerender_publication_marker_created
@@ -5431,9 +5897,9 @@ def run_subtitle_review_render(
                             else "quality_gate_content_review_required"
                         ),
                         message=(
-                            "Guarded content quality decision could not be recorded."
+                            "Enforced content quality decision could not be recorded."
                             if content_gate_path is None
-                            else "Guarded content quality checks require subtitle review."
+                            else "Enforced content quality checks require subtitle review."
                         ),
                     )
                     visited_statuses.append("awaiting_subtitle_review")
@@ -5509,6 +5975,7 @@ def run_subtitle_review_render(
                             *short_result.failures,
                         ],
                         mode=effective_automation_mode,
+                        document=review_document,
                     )
                 except Exception as exc:
                     post_render_gate = unknown_quality_gate_decision(
@@ -5523,20 +5990,44 @@ def run_subtitle_review_render(
                     quality_gate_decision_path(job_dir, "post_render"),
                 )
                 if (
+                    effective_automation_mode == "auto"
+                    and not is_rerender
+                    and (
+                        post_render_gate_path is None
+                        or post_render_gate.route != "continue"
+                    )
+                ):
+                    _discard_unpublished_exports(
+                        db,
+                        exports,
+                        job_dir=job_dir,
+                    )
+                    review_document = restore_review_after_render_failure(
+                        review_document
+                    )
+                    write_subtitle_review(review_document, review_path)
+                    write_subtitle_review_summary(
+                        review_document,
+                        subtitle_review_summary_path(job_dir),
+                    )
+                    _set_status(db, job, "awaiting_subtitle_review")
+                    visited_statuses.append("awaiting_subtitle_review")
+                    return visited_statuses
+                if (
                     post_render_gate_path is None
-                    and effective_automation_mode == "guarded"
+                    and effective_automation_mode in {"guarded", "auto"}
                 ):
                     raise PipelineExpectedError(
                         "quality_gate_record_failed",
-                        "Guarded post-render quality decision could not be recorded.",
+                        "Enforced post-render quality decision could not be recorded.",
                     )
                 if (
-                    effective_automation_mode == "guarded"
+                    effective_automation_mode in {"guarded", "auto"}
                     and post_render_gate.route != "continue"
                 ):
                     raise PipelineExpectedError(
                         "quality_gate_render_failed",
-                        "Guarded quality gate rejected incomplete rendered output.",
+                        "Enforced quality gate rejected incomplete rendered output.",
                         details={
                             "qualityGateStage": "post_render",
                             "qualityGateOutcome": post_render_gate.outcome,
