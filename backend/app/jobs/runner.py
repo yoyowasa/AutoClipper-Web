@@ -179,6 +179,7 @@ from app.jobs.subtitle_review_preview import (
     write_subtitle_review_preview_error,
 )
 from app.models import ExportItem, Job, Video, utc_now
+from app.posting_metadata import write_youtube_posting_artifacts
 from app.render.render_normal import NormalRenderBatchResult, render_normal_clip, render_selected_normal_candidates
 from app.render.render_exact_review_preview import (
     ExactPreviewResult,
@@ -5605,6 +5606,7 @@ def run_subtitle_review_render(
                 review_document,
                 subtitle_review_summary_path(job_dir),
             )
+            write_youtube_posting_artifacts(review_document.clips, job_dir)
             zip_path = storage_paths.zip_path(job.id)
             if is_rerender:
                 if rerender_promotion is None:

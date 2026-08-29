@@ -115,13 +115,13 @@ from app.jobs.title_hook_suggestions import (
     failed_title_hook_suggestions,
     load_title_hook_suggestion_input,
     load_title_hook_suggestions,
-    openai_api_key_is_configured,
     queued_title_hook_suggestions,
     title_hook_suggestion_input_path,
     title_hook_suggestions_path,
     write_title_hook_suggestion_input,
     write_title_hook_suggestions,
 )
+from app.posting_metadata import build_post_metadata_revision_hash
 from app.models import ExportItem, Job, Video
 from app.models import utc_now
 from app.render.render_exact_review_preview import (
@@ -670,6 +670,40 @@ def _result_item(
             selected.get("title_source"),
             audit_clip.get("title_source"),
         ),
+        titleCandidates=_first_value(
+            metadata.get("title_candidates"),
+            selected.get("title_candidates"),
+            [],
+        ),
+        recommendedTitleId=_first_value(
+            metadata.get("recommended_title_id"),
+            selected.get("recommended_title_id"),
+        ),
+        selectedTitleId=_first_value(
+            metadata.get("selected_title_id"),
+            selected.get("selected_title_id"),
+        ),
+        youtubeDescription=str(
+            _first_value(
+                metadata.get("youtube_description"),
+                selected.get("youtube_description"),
+                "",
+            )
+        ),
+        youtubeHashtags=_first_value(
+            metadata.get("youtube_hashtags"),
+            selected.get("youtube_hashtags"),
+            [],
+        ),
+        descriptionEvidenceSegmentIds=_first_value(
+            metadata.get("description_evidence_segment_ids"),
+            selected.get("description_evidence_segment_ids"),
+            [],
+        ),
+        postMetadataSource=_first_value(
+            metadata.get("post_metadata_source"),
+            selected.get("post_metadata_source"),
+        ),
         duration=export.duration,
         score=score if score is not None else export.score,
         finalScore=final_score,
@@ -836,6 +870,14 @@ def _reedit_candidate(
         hook_duration_seconds=review_clip.hook_duration_seconds,
         hook_scene_start=review_clip.hook_scene_start,
         hook_scene_end=review_clip.hook_scene_end,
+        title_candidates=review_clip.title_candidates,
+        recommended_title_id=review_clip.recommended_title_id,
+        selected_title_id=review_clip.selected_title_id,
+        youtube_description=review_clip.youtube_description or None,
+        youtube_hashtags=review_clip.youtube_hashtags,
+        description_evidence_segment_ids=review_clip.description_evidence_segment_ids,
+        post_metadata_source=review_clip.post_metadata_source,
+        post_metadata_revision_hash=review_clip.post_metadata_revision_hash,
         title_style=review_clip.title_style,
         hook_style=review_clip.hook_style,
         subtitle_style=review_clip.subtitle_style,
@@ -2685,7 +2727,7 @@ def create_title_hook_suggestions(
                     )
                     for segment in request.segments
                 ],
-                model=str((job.settings_json or {}).get("openaiModel") or "gpt-5.5"),
+                model=str((job.settings_json or {}).get("titleHookModel") or "codex-default"),
             )
         except KeyError as exc:
             raise HTTPException(
@@ -2698,15 +2740,19 @@ def create_title_hook_suggestions(
                 detail=str(exc),
             ) from exc
 
-        cached: TitleHookSuggestionsDocument | None = None
-        if state_path.is_file() and not request.force_regenerate:
+        existing_artifact: TitleHookSuggestionsDocument | None = None
+        if state_path.is_file():
             try:
-                cached = load_title_hook_suggestions(state_path)
+                existing_artifact = load_title_hook_suggestions(state_path)
             except (OSError, ValueError, json.JSONDecodeError):
-                cached = None
+                existing_artifact = None
+        previous_thread_id = existing_artifact.thread_id if existing_artifact is not None else None
+        cached: TitleHookSuggestionsDocument | None = (
+            None if request.force_regenerate else existing_artifact
+        )
+        if cached is not None:
             if (
-                cached is not None
-                and cached.input_hash == generation_input.input_hash
+                cached.input_hash == generation_input.input_hash
                 and cached.draft_hash == generation_input.draft_hash
             ):
                 if cached.state in {"ready", "failed"}:
@@ -2718,14 +2764,10 @@ def create_title_hook_suggestions(
 
         if cached is None:
             write_title_hook_suggestion_input(generation_input, request_path)
-            if not openai_api_key_is_configured():
-                failed = failed_title_hook_suggestions(
-                    generation_input,
-                    "OPENAI_API_KEY is not configured",
-                )
-                write_title_hook_suggestions(failed, state_path)
-                return failed
-            queued = queued_title_hook_suggestions(generation_input)
+            queued = queued_title_hook_suggestions(
+                generation_input,
+                thread_id=previous_thread_id,
+            )
             write_title_hook_suggestions(queued, state_path)
 
     try:
@@ -3700,6 +3742,85 @@ def apply_subtitle_review_clip(
                 )
             affected_clip_ids.update(segment.affected_clip_ids)
 
+        draft_text_by_id = {
+            segment_update.segment_id: segment_update.text for segment_update in request.segments
+        }
+
+        def revision_hash(text_by_id: dict[str, str]) -> str:
+            return build_post_metadata_revision_hash(
+                clip_id=clip.id,
+                clip_type=clip.type,
+                start=clip.start,
+                end=clip.end,
+                segments=[
+                    {
+                        "segmentId": segment.id,
+                        "start": round(
+                            min(clip.duration, max(0.0, segment.start - clip.start)),
+                            3,
+                        ),
+                        "end": round(
+                            min(
+                                clip.duration,
+                                max(0.0, segment.end - clip.start),
+                            ),
+                            3,
+                        ),
+                        "text": text_by_id.get(segment.id, segment.text).strip(),
+                    }
+                    for segment in sorted(
+                        (segments_by_id[segment_id] for segment_id in clip.segment_ids),
+                        key=lambda item: item.index,
+                    )
+                ],
+            )
+
+        current_revision_hash = revision_hash({})
+        prospective_revision_hash = revision_hash(draft_text_by_id)
+        revision_changed_in_save = current_revision_hash != prospective_revision_hash
+        posting_fields = {
+            "title_candidates",
+            "recommended_title_id",
+            "selected_title_id",
+            "youtube_description",
+            "youtube_hashtags",
+            "description_evidence_segment_ids",
+            "post_metadata_source",
+            "post_metadata_revision_hash",
+        }
+        supplied_posting_fields = request.model_fields_set.intersection(posting_fields)
+        stale_codex_payload = (
+            request.post_metadata_source == "codex"
+            and request.post_metadata_revision_hash != prospective_revision_hash
+        )
+        incoming_ai_state = bool(
+            request.title_candidates
+            or request.recommended_title_id
+            or request.selected_title_id
+            or request.description_evidence_segment_ids
+            or request.post_metadata_revision_hash
+        )
+        stored_ai_state = bool(
+            clip.post_metadata_source == "codex"
+            or clip.title_candidates
+            or clip.recommended_title_id
+            or clip.selected_title_id
+            or clip.description_evidence_segment_ids
+            or clip.post_metadata_revision_hash
+        )
+        manualize_stale_payload = revision_changed_in_save and (
+            stale_codex_payload
+            or (
+                request.post_metadata_source == "manual"
+                and (incoming_ai_state or stored_ai_state)
+            )
+        )
+        if stale_codex_payload and not manualize_stale_payload:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="AI proposal is stale; regenerate it from the current subtitles",
+            )
+
         try:
             style_updates: dict[str, object] = {}
             if "title_style" in request.model_fields_set:
@@ -3710,6 +3831,87 @@ def apply_subtitle_review_clip(
                 style_updates["subtitle_style"] = request.subtitle_style
             if "publication_title" in request.model_fields_set:
                 style_updates["publication_title"] = request.publication_title
+            resolved_title_candidates = list(request.title_candidates)
+            resolved_description_evidence_ids = list(
+                request.description_evidence_segment_ids
+            )
+            if (
+                not manualize_stale_payload
+                and request.post_metadata_source == "codex"
+                and request.post_metadata_revision_hash == prospective_revision_hash
+            ):
+                try:
+                    artifact = load_title_hook_suggestions(
+                        title_hook_suggestions_path(output_dir, clip_id)
+                    )
+                except (OSError, ValueError, json.JSONDecodeError):
+                    artifact = None
+                if (
+                    artifact is not None
+                    and artifact.state == "ready"
+                    and artifact.revision_hash == prospective_revision_hash
+                ):
+                    evidence_by_id = {
+                        suggestion.id: suggestion.evidence_segment_ids
+                        for suggestion in artifact.suggestions
+                    }
+                    resolved_title_candidates = [
+                        candidate.model_copy(
+                            update={
+                                "evidence_segment_ids": evidence_by_id.get(
+                                    candidate.id,
+                                    candidate.evidence_segment_ids,
+                                )
+                            }
+                        )
+                        for candidate in resolved_title_candidates
+                    ]
+                    if not resolved_description_evidence_ids:
+                        resolved_description_evidence_ids = list(
+                            artifact.description_evidence_segment_ids
+                        )
+            if not manualize_stale_payload:
+                referenced_evidence_ids = set(resolved_description_evidence_ids)
+                for candidate in resolved_title_candidates:
+                    referenced_evidence_ids.update(candidate.evidence_segment_ids)
+                if not referenced_evidence_ids.issubset(allowed_segment_ids):
+                    raise ValueError("posting metadata referenced an unknown subtitle segment")
+
+            for field_name in posting_fields:
+                if field_name in supplied_posting_fields:
+                    style_updates[field_name] = getattr(request, field_name)
+            if "title_candidates" in supplied_posting_fields:
+                style_updates["title_candidates"] = resolved_title_candidates
+            if "description_evidence_segment_ids" in supplied_posting_fields or (
+                request.post_metadata_source == "codex"
+                and request.post_metadata_revision_hash == prospective_revision_hash
+            ):
+                style_updates["description_evidence_segment_ids"] = (
+                    resolved_description_evidence_ids
+                )
+            stored_metadata_became_stale = (
+                not supplied_posting_fields
+                and clip.post_metadata_revision_hash
+                and clip.post_metadata_revision_hash != prospective_revision_hash
+            )
+            if stored_metadata_became_stale:
+                style_updates.update(
+                    {
+                        "youtube_description": "",
+                        "youtube_hashtags": [],
+                    }
+                )
+            if manualize_stale_payload or stored_metadata_became_stale:
+                style_updates.update(
+                    {
+                        "title_candidates": [],
+                        "recommended_title_id": None,
+                        "selected_title_id": None,
+                        "description_evidence_segment_ids": [],
+                        "post_metadata_source": "manual",
+                        "post_metadata_revision_hash": None,
+                    }
+                )
             document = update_review_clip_content(
                 document,
                 clip_id,

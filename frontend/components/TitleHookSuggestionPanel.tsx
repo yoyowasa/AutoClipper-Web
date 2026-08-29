@@ -9,6 +9,7 @@ type TitleHookSuggestionPanelProps = {
   disabled: boolean;
   previewingSuggestionId: string | null;
   response: TitleHookSuggestionResponse | null;
+  selectedSuggestionId: string | null;
   stale: boolean;
   onApply: (suggestion: TitleHookSuggestion) => void;
   onClearHook: () => void;
@@ -31,12 +32,19 @@ function hasHookScene(suggestion: TitleHookSuggestion): boolean {
   );
 }
 
+const INTENT_LABELS: Record<TitleHookSuggestion["intent"], string> = {
+  factual: "事実重視",
+  engagement: "興味喚起",
+  concise: "短く強い"
+};
+
 export function TitleHookSuggestionPanel({
   busy,
   canPreview,
   disabled,
   previewingSuggestionId,
   response,
+  selectedSuggestionId,
   stale,
   onApply,
   onClearHook,
@@ -49,7 +57,7 @@ export function TitleHookSuggestionPanel({
     ? "現在の字幕から再提案"
     : ready
       ? "別案を再生成"
-      : "現在の字幕からAI案を生成";
+      : "現在の字幕から投稿案を生成";
 
   return (
     <section
@@ -62,10 +70,11 @@ export function TitleHookSuggestionPanel({
             className="text-xs font-semibold text-violet-950"
             id="title-hook-suggestions-heading"
           >
-            AI タイトル・フック案
+            タイトル・フック・投稿案
           </h4>
           <p className="mt-0.5 text-[11px] text-violet-800">
-            ボタンを押した時だけ生成します。案を選ぶまで入力欄は変わりません。
+            3案から選ぶまで入力欄は変わりません。
+            {response?.provider ? ` 生成: ${response.provider}` : ""}
           </p>
         </div>
         <button
@@ -74,19 +83,19 @@ export function TitleHookSuggestionPanel({
           type="button"
           onClick={() => onGenerate(Boolean(response))}
         >
-          {busy || pending ? "AI案を生成中" : generateLabel}
+          {busy || pending ? "投稿案を生成中" : generateLabel}
         </button>
       </div>
 
       <div aria-live="polite">
         {stale ? (
           <p className="border-b border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900">
-            字幕が変更されています。この案は古いため適用できません。
+            字幕が変更されています。タイトル・説明欄案は古いため適用できません。
           </p>
         ) : null}
         {response?.state === "failed" ? (
           <p className="border-b border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
-            AI案を生成できませんでした。手入力はそのまま利用できます。
+            投稿案を生成できませんでした。手入力はそのまま利用できます。
             {response.error ? ` ${response.error}` : ""}
           </p>
         ) : null}
@@ -100,9 +109,31 @@ export function TitleHookSuggestionPanel({
       {ready && response.suggestions.length > 0 ? (
         <div className="grid gap-2 p-2">
           {response.suggestions.map((suggestion, index) => (
-            <article className="border border-neutral-300 bg-white p-3" key={suggestion.id}>
+            <article
+              className={`border bg-white p-3 ${
+                selectedSuggestionId === suggestion.id
+                  ? "border-violet-700 ring-1 ring-violet-700"
+                  : "border-neutral-300"
+              }`}
+              key={suggestion.id}
+            >
               <div className="flex items-center justify-between gap-2">
-                <h5 className="text-xs font-semibold text-neutral-900">案 {index + 1}</h5>
+                <div className="flex flex-wrap items-center gap-1">
+                  <h5 className="text-xs font-semibold text-neutral-900">案 {index + 1}</h5>
+                  <span className="bg-neutral-100 px-1.5 py-0.5 text-[10px] font-semibold text-neutral-700">
+                    {INTENT_LABELS[suggestion.intent] ?? "投稿案"}
+                  </span>
+                  {response.recommendedSuggestionId === suggestion.id ? (
+                    <span className="bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800">
+                      推奨
+                    </span>
+                  ) : null}
+                  {selectedSuggestionId === suggestion.id ? (
+                    <span className="bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-800">
+                      選択中
+                    </span>
+                  ) : null}
+                </div>
                 {hasHookScene(suggestion) ? (
                   <button
                     className="min-h-8 border border-neutral-400 px-2 text-[11px] font-semibold disabled:text-neutral-400"
@@ -156,10 +187,27 @@ export function TitleHookSuggestionPanel({
                 type="button"
                 onClick={() => onApply(suggestion)}
               >
-                この案を使う
+                この案と投稿情報を使う
               </button>
             </article>
           ))}
+          {(response.youtubeDescription || (response.hashtags ?? []).length > 0) ? (
+            <details className="border border-neutral-300 bg-white p-3">
+              <summary className="cursor-pointer text-xs font-semibold text-neutral-900">
+                共通のYouTube説明欄・ハッシュタグ
+              </summary>
+              {response.youtubeDescription ? (
+                <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-neutral-700">
+                  {response.youtubeDescription}
+                </p>
+              ) : null}
+              {(response.hashtags ?? []).length > 0 ? (
+                <p className="mt-2 break-words text-xs font-medium text-sky-800">
+                  {(response.hashtags ?? []).join(" ")}
+                </p>
+              ) : null}
+            </details>
+          ) : null}
         </div>
       ) : null}
 

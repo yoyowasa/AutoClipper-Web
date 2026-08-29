@@ -22,6 +22,7 @@ from app.jobs.subtitle_review import (
     update_review_segment,
     write_subtitle_review,
 )
+from app.posting_metadata import YouTubeTitleCandidate
 
 
 def _candidate(candidate_id: str, candidate_type: str, start: float, end: float) -> Candidate:
@@ -47,6 +48,66 @@ def _review_fixture():
         shorts=[_candidate("short_1", "short", 10.0, 30.0)],
     )
     return transcript, build_subtitle_review("job_review", selection, transcript)
+
+
+def test_posting_metadata_round_trips_from_review_to_selected_candidate(tmp_path: Path) -> None:
+    transcript, review = _review_fixture()
+    selection = CandidateSelection(
+        normalClips=[_candidate("normal_1", "normal", 0.0, 20.0)],
+        shorts=[_candidate("short_1", "short", 10.0, 30.0)],
+    )
+    candidates = [
+        YouTubeTitleCandidate(
+            id="factual",
+            title="事実中心のタイトル",
+            intent="factual",
+            reason="字幕に直接対応",
+            evidenceSegmentIds=["seg_0001"],
+        ),
+        YouTubeTitleCandidate(
+            id="engagement",
+            title="続きを見たくなるタイトル",
+            intent="engagement",
+            reason="結論を言い切らない",
+            evidenceSegmentIds=["seg_0001"],
+        ),
+        YouTubeTitleCandidate(
+            id="concise",
+            title="短いタイトル",
+            intent="concise",
+            reason="短く明確",
+            evidenceSegmentIds=["seg_0001"],
+        ),
+    ]
+
+    review = update_review_clip_content(
+        review,
+        "normal_1",
+        title="動画内タイトル",
+        publication_title="事実中心のタイトル",
+        title_candidates=candidates,
+        recommended_title_id="factual",
+        selected_title_id="factual",
+        youtube_description="動画内容を事実に沿って紹介します。",
+        youtube_hashtags=["#切り抜き", "#Shorts"],
+        description_evidence_segment_ids=["seg_0001"],
+        post_metadata_source="codex",
+        post_metadata_revision_hash="a" * 64,
+    )
+    output_path = tmp_path / "subtitle_review.json"
+    write_subtitle_review(review, output_path)
+    restored = load_subtitle_review(output_path)
+    applied = apply_reviewed_clip_content(selection, restored).normal_clips[0]
+
+    assert restored.clips[0].title_candidates == candidates
+    assert restored.clips[0].description_evidence_segment_ids == ["seg_0001"]
+    assert applied.recommended_title_id == "factual"
+    assert applied.selected_title_id == "factual"
+    assert applied.youtube_description == "動画内容を事実に沿って紹介します。"
+    assert applied.youtube_hashtags == ["#切り抜き", "#Shorts"]
+    assert applied.description_evidence_segment_ids == ["seg_0001"]
+    assert applied.post_metadata_source == "codex"
+    assert applied.post_metadata_revision_hash == "a" * 64
 
 
 def test_review_build_defaults_to_auto_and_exposes_title_expectation_alias() -> None:

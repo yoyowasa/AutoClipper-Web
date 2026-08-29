@@ -16,7 +16,10 @@ import {
   matchingPositionPreset,
   verticalPositionPresets
 } from "../lib/textPositionPresets";
-import { splitSubtitlePreviewLines } from "../lib/subtitlePreview";
+import {
+  fitOverlayPreviewText,
+  splitSubtitlePreviewLines
+} from "../lib/subtitlePreview";
 import type {
   ClipTextFontPreset,
   ClipTextStyle,
@@ -223,21 +226,40 @@ export function ClipTextOverlay({
       ? 20
       : (subtitleMaxCharsPerLine ?? (clipType === "short" ? 16 : 28));
   const maxLines =
-    target === "title" || target === "hook" ? 2 : (subtitleMaxLines ?? 2);
-  const previewText = splitSubtitlePreviewLines(text, lineLimit, maxLines);
+    target === "title" || target === "hook"
+      ? 2
+      : Math.min(2, Math.max(1, subtitleMaxLines ?? 2));
+  const outputWidth = previewWidth ?? (clipType === "short" ? 1080 : 1920);
+  const fontMetrics = assPreviewFontMetrics(style.fontName);
+  const textForFit =
+    target === "subtitle"
+      ? splitSubtitlePreviewLines(text, lineLimit, maxLines)
+      : text;
+  const overlayFit = fitOverlayPreviewText(textForFit, {
+    outputWidth,
+    fontSize: style.fontSize,
+    fontSizeScale: fontMetrics.fontSizeScale,
+    marginX: style.marginX,
+    outlineWidth: style.outlineWidth,
+    shadow: style.shadow,
+    alignment: style.alignment,
+    xPercent: style.xPercent,
+    maxLines
+  });
+  const previewText = overlayFit.lines.join("\n");
   if (!previewText) {
     return null;
   }
-  const outputWidth = previewWidth ?? (clipType === "short" ? 1080 : 1920);
-  const fontMetrics = assPreviewFontMetrics(style.fontName);
+  const effectiveFontSize = overlayFit.effectiveFontSize;
   const fontSizePercent =
-    ((style.fontSize * fontMetrics.fontSizeScale) / outputWidth) * 100;
+    ((effectiveFontSize * fontMetrics.fontSizeScale) / outputWidth) * 100;
   const outlinePercent = (style.outlineWidth / outputWidth) * 100;
   const shadowPercent = (style.shadow / outputWidth) * 100;
   return (
     <p
       aria-hidden="true"
       className="pointer-events-none absolute z-30 m-0 max-w-none whitespace-pre text-center"
+      data-overlay-fits={String(overlayFit.fits)}
       style={{
         color: style.primaryColor,
         fontFamily: subtitleFontFamily(style.fontName),
@@ -301,12 +323,10 @@ export function ClipTextStylePreview({
       ? 20
       : (subtitleMaxCharsPerLine ?? (clipType === "short" ? 16 : 28));
   const previewMaxLines =
-    target === "title" || target === "hook" ? 2 : (subtitleMaxLines ?? 2);
-  const previewText = splitSubtitlePreviewLines(
-    sampleText(target, titleText, hookText, subtitleText),
-    previewLineLimit,
-    previewMaxLines
-  );
+    target === "title" || target === "hook"
+      ? 2
+      : Math.min(2, Math.max(1, subtitleMaxLines ?? 2));
+  const previewSample = sampleText(target, titleText, hookText, subtitleText);
   const titleOutputDisabled =
     clipType === "short" &&
     target === "title" &&
@@ -314,8 +334,29 @@ export function ClipTextStylePreview({
   const outputWidth = previewWidth ?? (clipType === "short" ? 1080 : 1920);
   const outputHeight = previewHeight ?? (clipType === "short" ? 1920 : 1080);
   const fontMetrics = assPreviewFontMetrics(style.fontName);
+  const previewTextForFit =
+    target === "subtitle"
+      ? splitSubtitlePreviewLines(
+          previewSample,
+          previewLineLimit,
+          previewMaxLines
+        )
+      : previewSample;
+  const overlayFit = fitOverlayPreviewText(previewTextForFit, {
+    outputWidth,
+    fontSize: style.fontSize,
+    fontSizeScale: fontMetrics.fontSizeScale,
+    marginX: style.marginX,
+    outlineWidth: style.outlineWidth,
+    shadow: style.shadow,
+    alignment: style.alignment,
+    xPercent: style.xPercent,
+    maxLines: previewMaxLines
+  });
+  const previewText = overlayFit.lines.join("\n");
+  const effectivePreviewFontSize = overlayFit.effectiveFontSize;
   const previewFontSizePercent =
-    ((style.fontSize * fontMetrics.fontSizeScale) / outputWidth) * 100;
+    ((effectivePreviewFontSize * fontMetrics.fontSizeScale) / outputWidth) * 100;
   const previewOutlinePercent = (style.outlineWidth / outputWidth) * 100;
   const previewShadowPercent = (style.shadow / outputWidth) * 100;
   const sizeClass =
@@ -402,28 +443,36 @@ export function ClipTextStylePreview({
           </span>
         </div>
       ) : (
-        <p
-          className="absolute z-30 m-0 max-w-none whitespace-pre text-center"
-          style={{
-            color: style.primaryColor,
-            fontFamily: subtitleFontFamily(style.fontName),
-            fontSize: `${previewFontSizePercent}cqw`,
-            fontWeight:
-              style.fontPreset !== null
-                ? clipTextFontWeight(style.fontPreset)
-                : style.bold
-                  ? 700
-                  : 400,
-            lineHeight: fontMetrics.lineHeight,
-            left: `${style.xPercent}%`,
-            top: `${style.yPercent}%`,
-            transform: alignmentTransform(style.alignment),
-            WebkitTextStroke: `${previewOutlinePercent}cqw ${style.outlineColor}`,
-            textShadow: `${previewShadowPercent}cqw ${previewShadowPercent}cqw 0 rgba(0, 0, 0, 0.5)`
-          }}
-        >
-          {previewText}
-        </p>
+        <>
+          <p
+            className="absolute z-30 m-0 max-w-none whitespace-pre text-center"
+            data-overlay-fits={String(overlayFit.fits)}
+            style={{
+              color: style.primaryColor,
+              fontFamily: subtitleFontFamily(style.fontName),
+              fontSize: `${previewFontSizePercent}cqw`,
+              fontWeight:
+                style.fontPreset !== null
+                  ? clipTextFontWeight(style.fontPreset)
+                  : style.bold
+                    ? 700
+                    : 400,
+              lineHeight: fontMetrics.lineHeight,
+              left: `${style.xPercent}%`,
+              top: `${style.yPercent}%`,
+              transform: alignmentTransform(style.alignment),
+              WebkitTextStroke: `${previewOutlinePercent}cqw ${style.outlineColor}`,
+              textShadow: `${previewShadowPercent}cqw ${previewShadowPercent}cqw 0 rgba(0, 0, 0, 0.5)`
+            }}
+          >
+            {previewText}
+          </p>
+          {!overlayFit.fits ? (
+            <span className="absolute inset-x-2 bottom-2 z-40 bg-red-700/90 px-2 py-1 text-center text-[9px] font-semibold text-white">
+              2行に収まりません。文字を短くするかサイズを調整してください
+            </span>
+          ) : null}
+        </>
       )}
     </div>
   );

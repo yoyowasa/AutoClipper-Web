@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint . --max-warnings=0"
+    "lint": "eslint . --max-warnings=0",
+    "test:overlay-fit": "tsx tests/overlayTextFit.golden.ts"
   },
   "dependencies": {
     "next": "^16.2.9",
@@ -23,6 +24,7 @@
     "eslint-config-next": "^16.2.9",
     "postcss": "^8.5.10",
     "tailwindcss": "^3.4.14",
+    "tsx": "^4.23.12",
     "typescript": "^5.6.0"
   }
 }

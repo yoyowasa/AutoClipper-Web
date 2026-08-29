@@ -24,6 +24,15 @@ export type JobStatus =
 export type ExportType = "normal" | "short";
 export type WorkflowMode = "automatic" | "manual";
 export type AutomationMode = "manual" | "shadow" | "guarded" | "auto";
+export type PostTitleIntent = "factual" | "engagement" | "concise";
+
+export type PostTitleCandidate = {
+  id: string;
+  title: string;
+  intent: PostTitleIntent;
+  reason: string;
+  evidenceSegmentIds: string[];
+};
 export type ManualSubtitleMode = "auto" | "none" | "manual";
 
 export type ClipSelectionPreset =
@@ -201,6 +210,13 @@ export type ResultExportItem = {
   candidateId: string | null;
   title: string;
   titleSource: string | null;
+  titleCandidates: PostTitleCandidate[];
+  recommendedTitleId: string | null;
+  selectedTitleId: string | null;
+  youtubeDescription: string;
+  youtubeHashtags: string[];
+  descriptionEvidenceSegmentIds: string[];
+  postMetadataSource: string | null;
   duration: number;
   score: number;
   finalScore: number | null;
@@ -312,6 +328,14 @@ export type SubtitleReviewClip = {
   type: ExportType;
   title: string;
   publicationTitle?: string | null;
+  titleCandidates: PostTitleCandidate[];
+  recommendedTitleId: string | null;
+  selectedTitleId: string | null;
+  youtubeDescription: string;
+  youtubeHashtags: string[];
+  descriptionEvidenceSegmentIds: string[];
+  postMetadataSource: string | null;
+  postMetadataRevisionHash: string | null;
   originalTitle: string | null;
   titleEdited: boolean;
   overlayTitleExpected: boolean;
@@ -398,6 +422,7 @@ export type SubtitleReviewConvertToShortRequest = {
 
 export type TitleHookSuggestion = {
   id: string;
+  intent: PostTitleIntent;
   publicationTitle: string;
   overlayTitle: string;
   hookText: string;
@@ -405,6 +430,7 @@ export type TitleHookSuggestion = {
   hookSceneStart: number | null;
   hookSceneEnd: number | null;
   reason: string;
+  evidenceSegmentIds: string[];
 };
 
 export type TitleHookSuggestionResponse = {
@@ -412,7 +438,14 @@ export type TitleHookSuggestionResponse = {
   state: "queued" | "generating" | "ready" | "failed";
   inputHash: string | null;
   draftHash?: string | null;
+  revisionHash?: string | null;
   model: string | null;
+  provider: string | null;
+  threadId?: string | null;
+  recommendedSuggestionId: string | null;
+  youtubeDescription: string;
+  hashtags: string[];
+  descriptionEvidenceSegmentIds: string[];
   suggestions: TitleHookSuggestion[];
   error: string | null;
   generatedAt: string | null;

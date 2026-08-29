@@ -9,8 +9,10 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.posting_metadata import PostTitleIntent
 
-TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v1"
+
+TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v2"
 REPRESENTATIVE_FRAME_RATIOS = (0.12, 0.38, 0.62, 0.88)
 TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
 TRANSIENT_ERROR_NAMES = {
@@ -22,16 +24,20 @@ TRANSIENT_ERROR_NAMES = {
 OPENAI_REQUEST_TIMEOUT_SECONDS = 120.0
 
 SYSTEM_PROMPT = """あなたは日本語動画の編集者です。
-与えられた選定済みclipの修正字幕と代表フレームだけを根拠に、次の3案を作成してください。
-- publicationTitle: 公開ページ用。人物・状況・出来事が分かる、事実に基づくタイトル。
-- overlayTitle: 動画内表示用。短く、読みやすく、publicationTitleの丸写しにしない。
-- hookText: 冒頭0〜0.3秒から興味を引く短い文。字幕にない事実や人物名を創作しない。
-- hookSceneStart / hookSceneEnd: clip先頭を0秒とする相対秒。1.5〜3.0秒で、clipの範囲内。
+与えられた選定済みclipの修正字幕と代表フレームだけを根拠に、投稿用セットを作成してください。
+- suggestionsは3案固定。intentをfactual、engagement、conciseで1案ずつ作成する。
+- publicationTitle: YouTube公開用。字幕から確認できる人物・状況・出来事だけを書く。
+- overlayTitle: 動画内表示用。最大2行を想定し、短く読みやすくする。
+- hookText: 冒頭から興味を引く短い文。publicationTitleの丸写しにしない。
+- hookSceneStart / hookSceneEnd: clip先頭を0秒とする相対秒。1.5〜3.0秒でclip内に収める。
+- evidenceSegmentIds: その案を直接裏付ける入力字幕のsegmentIdだけを返す。
+- recommendedSuggestionId: 3案で最も事実性と訴求力の均衡が良い案のid。
+- youtubeDescription: clip内容の短い要約。未提供の元動画URL、人物名、数値、固有名詞を創作しない。
+- hashtags: 字幕から根拠を持てる3〜5個。#から始め、空白を含めない。
+- descriptionEvidenceSegmentIds: 説明欄を直接裏付けるsegmentId。
 根拠のあるフックを作れない案はhookTextを空文字、hookSceneStartとhookSceneEndをnullにしてください。
-3案は表現だけでなく着眼点も変えてください。挨拶、宣伝、長い前置きを優先しないでください。
-画像と字幕が矛盾する場合は字幕の発言内容を優先し、不明な固有名詞を推測しないでください。
+挨拶、宣伝、長い前置きを優先しないでください。画像と字幕が矛盾する場合は字幕を優先します。
 指定されたJSON schemaだけを返してください。"""
-
 
 class TitleHookSuggestion(BaseModel):
     id: str = Field(min_length=1, max_length=40)
@@ -42,6 +48,12 @@ class TitleHookSuggestion(BaseModel):
     hook_scene_start: float | None = Field(ge=0, alias="hookSceneStart")
     hook_scene_end: float | None = Field(gt=0, alias="hookSceneEnd")
     reason: str = Field(min_length=1, max_length=300)
+    intent: PostTitleIntent | None = None
+    evidence_segment_ids: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        alias="evidenceSegmentIds",
+    )
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -64,8 +76,216 @@ class TitleHookSuggestion(BaseModel):
 
 class TitleHookSuggestionResult(BaseModel):
     suggestions: list[TitleHookSuggestion] = Field(min_length=3, max_length=3)
+    recommended_suggestion_id: str | None = Field(
+        default=None,
+        alias="recommendedSuggestionId",
+    )
+    youtube_description: str = Field(
+        default="",
+        max_length=2000,
+        alias="youtubeDescription",
+    )
+    hashtags: list[str] = Field(default_factory=list, max_length=5)
+    description_evidence_segment_ids: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        alias="descriptionEvidenceSegmentIds",
+    )
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    @model_validator(mode="after")
+    def normalize_legacy_contract(self) -> "TitleHookSuggestionResult":
+        suggestion_ids = [item.id for item in self.suggestions]
+        if len(suggestion_ids) != len(set(suggestion_ids)):
+            raise ValueError("suggestion IDs must be unique")
+        intents: tuple[PostTitleIntent, ...] = ("factual", "engagement", "concise")
+        for index, suggestion in enumerate(self.suggestions):
+            if suggestion.intent is None:
+                suggestion.intent = intents[index]
+        if {item.intent for item in self.suggestions} != set(intents):
+            raise ValueError("suggestion intents must contain factual, engagement, and concise")
+        if self.recommended_suggestion_id is None:
+            self.recommended_suggestion_id = self.suggestions[0].id
+        if self.recommended_suggestion_id not in suggestion_ids:
+            raise ValueError("recommended suggestion ID is unknown")
+        if len(self.hashtags) != len(set(self.hashtags)):
+            raise ValueError("hashtags must be unique")
+        if len(self.description_evidence_segment_ids) != len(
+            set(self.description_evidence_segment_ids)
+        ):
+            raise ValueError("description evidence segment IDs must be unique")
+        for suggestion in self.suggestions:
+            if len(suggestion.evidence_segment_ids) != len(
+                set(suggestion.evidence_segment_ids)
+            ):
+                raise ValueError("suggestion evidence segment IDs must be unique")
+        return self
+
+
+class GeneratedTitleHookSuggestion(TitleHookSuggestion):
+    intent: PostTitleIntent
+    evidence_segment_ids: list[str] = Field(
+        max_length=64,
+        alias="evidenceSegmentIds",
+    )
+
+
+class GeneratedTitleHookSuggestionResult(BaseModel):
+    suggestions: list[GeneratedTitleHookSuggestion] = Field(min_length=3, max_length=3)
+    recommended_suggestion_id: str = Field(
+        min_length=1,
+        max_length=40,
+        alias="recommendedSuggestionId",
+    )
+    youtube_description: str = Field(
+        min_length=1,
+        max_length=2000,
+        alias="youtubeDescription",
+    )
+    hashtags: list[str] = Field(min_length=3, max_length=5)
+    description_evidence_segment_ids: list[str] = Field(
+        max_length=64,
+        alias="descriptionEvidenceSegmentIds",
+    )
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    @model_validator(mode="after")
+    def validate_generated_contract(self) -> "GeneratedTitleHookSuggestionResult":
+        compatible = TitleHookSuggestionResult.model_validate(
+            self.model_dump(by_alias=True, mode="json")
+        )
+        if any(
+            not value.startswith("#") or any(char.isspace() for char in value)
+            for value in self.hashtags
+        ):
+            raise ValueError("hashtags must start with # and contain no whitespace")
+        if not compatible.youtube_description:
+            raise ValueError("youtube description must not be empty")
+        return self
+
+    def to_compatible(self) -> TitleHookSuggestionResult:
+        return TitleHookSuggestionResult.model_validate(
+            self.model_dump(by_alias=True, mode="json")
+        )
+
+
+TITLE_HOOK_GENERATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "suggestions": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 3,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "minLength": 1, "maxLength": 40},
+                    "intent": {
+                        "type": "string",
+                        "enum": ["factual", "engagement", "concise"],
+                    },
+                    "publicationTitle": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 100,
+                    },
+                    "overlayTitle": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 80,
+                    },
+                    "hookText": {"type": "string", "maxLength": 120},
+                    "hookDurationSeconds": {
+                        "type": "number",
+                        "minimum": 1.5,
+                        "maximum": 3.0,
+                    },
+                    "hookSceneStart": {
+                        "anyOf": [
+                            {"type": "number", "minimum": 0},
+                            {"type": "null"},
+                        ]
+                    },
+                    "hookSceneEnd": {
+                        "anyOf": [
+                            {"type": "number", "exclusiveMinimum": 0},
+                            {"type": "null"},
+                        ]
+                    },
+                    "reason": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 300,
+                    },
+                    "evidenceSegmentIds": {
+                        "type": "array",
+                        "minItems": 0,
+                        "maxItems": 64,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 128},
+                    },
+                },
+                "required": [
+                    "id",
+                    "intent",
+                    "publicationTitle",
+                    "overlayTitle",
+                    "hookText",
+                    "hookDurationSeconds",
+                    "hookSceneStart",
+                    "hookSceneEnd",
+                    "reason",
+                    "evidenceSegmentIds",
+                ],
+                "additionalProperties": False,
+            },
+        },
+        "recommendedSuggestionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+        },
+        "youtubeDescription": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+        },
+        "hashtags": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 5,
+            "items": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 40,
+                "pattern": r"^#[^#\s]+$",
+            },
+        },
+        "descriptionEvidenceSegmentIds": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 64,
+            "items": {"type": "string", "minLength": 1, "maxLength": 128},
+        },
+    },
+    "required": [
+        "suggestions",
+        "recommendedSuggestionId",
+        "youtubeDescription",
+        "hashtags",
+        "descriptionEvidenceSegmentIds",
+    ],
+    "additionalProperties": False,
+}
 
 
 class OpenAIResponsesResource(Protocol):
@@ -82,7 +302,7 @@ def title_hook_response_format() -> dict[str, Any]:
         "type": "json_schema",
         "name": "title_hook_suggestions",
         "strict": True,
-        "schema": TitleHookSuggestionResult.model_json_schema(by_alias=True),
+        "schema": TITLE_HOOK_GENERATION_SCHEMA,
     }
 
 
@@ -205,9 +425,9 @@ class OpenAITitleHookSuggestionGenerator:
                     text={"format": title_hook_response_format()},
                     store=False,
                 )
-                return TitleHookSuggestionResult.model_validate_json(
+                return GeneratedTitleHookSuggestionResult.model_validate_json(
                     _extract_response_text(response)
-                )
+                ).to_compatible()
             except Exception as exc:
                 status_code = getattr(exc, "status_code", None)
                 retryable = (

@@ -11,6 +11,7 @@ from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPr
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.overlay_text import normalize_overlay_text
+from app.posting_metadata import PostMetadataSource, YouTubeTitleCandidate
 from app.render.subtitles_ass import (
     DEFAULT_NORMAL_HEIGHT,
     DEFAULT_NORMAL_WIDTH,
@@ -92,6 +93,26 @@ class SubtitleReviewClip(BaseModel):
     hook_duration_seconds: float = Field(default=3.0, ge=1, le=8, alias="hookDurationSeconds")
     hook_scene_start: float | None = Field(default=None, ge=0, alias="hookSceneStart")
     hook_scene_end: float | None = Field(default=None, ge=0, alias="hookSceneEnd")
+    title_candidates: list[YouTubeTitleCandidate] = Field(
+        default_factory=list,
+        alias="titleCandidates",
+    )
+    recommended_title_id: str | None = Field(default=None, alias="recommendedTitleId")
+    selected_title_id: str | None = Field(default=None, alias="selectedTitleId")
+    youtube_description: str = Field(default="", max_length=2000, alias="youtubeDescription")
+    youtube_hashtags: list[str] = Field(default_factory=list, max_length=12, alias="youtubeHashtags")
+    description_evidence_segment_ids: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        alias="descriptionEvidenceSegmentIds",
+    )
+    post_metadata_source: PostMetadataSource | None = Field(default=None, alias="postMetadataSource")
+    post_metadata_revision_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        alias="postMetadataRevisionHash",
+    )
     title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
@@ -173,6 +194,17 @@ class SubtitleReviewClip(BaseModel):
 
     @model_validator(mode="after")
     def validate_hook_scene(self) -> "SubtitleReviewClip":
+        title_candidate_ids = [candidate.id for candidate in self.title_candidates]
+        if len(title_candidate_ids) != len(set(title_candidate_ids)):
+            raise ValueError("duplicate YouTube title candidate id")
+        if self.recommended_title_id and self.recommended_title_id not in title_candidate_ids:
+            raise ValueError("recommended title id is not in title candidates")
+        if self.selected_title_id and self.selected_title_id not in title_candidate_ids:
+            raise ValueError("selected title id is not in title candidates")
+        if len(self.youtube_hashtags) != len(set(self.youtube_hashtags)):
+            raise ValueError("duplicate YouTube hashtag")
+        if any(not hashtag.startswith("#") for hashtag in self.youtube_hashtags):
+            raise ValueError("YouTube hashtags must start with #")
         hook_start = self.hook_scene_start
         hook_end = self.hook_scene_end
         if (hook_start is None) != (hook_end is None):
@@ -456,6 +488,14 @@ def build_subtitle_review(
                 hookDurationSeconds=candidate.hook_duration_seconds or 3.0,
                 hookSceneStart=candidate.hook_scene_start,
                 hookSceneEnd=candidate.hook_scene_end,
+                titleCandidates=candidate.title_candidates,
+                recommendedTitleId=candidate.recommended_title_id,
+                selectedTitleId=candidate.selected_title_id,
+                youtubeDescription=candidate.youtube_description or "",
+                youtubeHashtags=candidate.youtube_hashtags,
+                descriptionEvidenceSegmentIds=candidate.description_evidence_segment_ids,
+                postMetadataSource=candidate.post_metadata_source,
+                postMetadataRevisionHash=candidate.post_metadata_revision_hash,
                 titleStyle=candidate.title_style,
                 hookStyle=candidate.hook_style,
                 subtitleStyle=candidate.subtitle_style,
@@ -586,6 +626,14 @@ def update_review_clip_content(
     title_style: ClipTextStyle | None | object = _STYLE_UNSET,
     hook_style: ClipTextStyle | None | object = _STYLE_UNSET,
     subtitle_style: ClipTextStyle | None | object = _STYLE_UNSET,
+    title_candidates: Sequence[YouTubeTitleCandidate] | object = _STYLE_UNSET,
+    recommended_title_id: str | None | object = _STYLE_UNSET,
+    selected_title_id: str | None | object = _STYLE_UNSET,
+    youtube_description: str | object = _STYLE_UNSET,
+    youtube_hashtags: Sequence[str] | object = _STYLE_UNSET,
+    description_evidence_segment_ids: Sequence[str] | object = _STYLE_UNSET,
+    post_metadata_source: PostMetadataSource | None | object = _STYLE_UNSET,
+    post_metadata_revision_hash: str | None | object = _STYLE_UNSET,
 ) -> SubtitleReviewDocument:
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
@@ -618,6 +666,67 @@ def update_review_clip_content(
     next_subtitle_style = (
         clip.subtitle_style if subtitle_style is _STYLE_UNSET else subtitle_style
     )
+    next_title_candidates = (
+        clip.title_candidates
+        if title_candidates is _STYLE_UNSET
+        else [YouTubeTitleCandidate.model_validate(item) for item in title_candidates]
+    )
+    next_recommended_title_id = (
+        clip.recommended_title_id
+        if recommended_title_id is _STYLE_UNSET
+        else recommended_title_id
+    )
+    next_selected_title_id = (
+        clip.selected_title_id if selected_title_id is _STYLE_UNSET else selected_title_id
+    )
+    next_youtube_description = (
+        clip.youtube_description
+        if youtube_description is _STYLE_UNSET
+        else str(youtube_description).strip()
+    )
+    next_youtube_hashtags = (
+        clip.youtube_hashtags
+        if youtube_hashtags is _STYLE_UNSET
+        else [str(hashtag).strip() for hashtag in youtube_hashtags if str(hashtag).strip()]
+    )
+    next_description_evidence_segment_ids = (
+        clip.description_evidence_segment_ids
+        if description_evidence_segment_ids is _STYLE_UNSET
+        else [
+            str(segment_id).strip()
+            for segment_id in description_evidence_segment_ids
+            if str(segment_id).strip()
+        ]
+    )
+    next_post_metadata_source = (
+        clip.post_metadata_source
+        if post_metadata_source is _STYLE_UNSET
+        else post_metadata_source
+    )
+    next_post_metadata_revision_hash = (
+        clip.post_metadata_revision_hash
+        if post_metadata_revision_hash is _STYLE_UNSET
+        else post_metadata_revision_hash
+    )
+    title_candidate_ids = [candidate.id for candidate in next_title_candidates]
+    if len(title_candidate_ids) != len(set(title_candidate_ids)):
+        raise ValueError("duplicate YouTube title candidate id")
+    if next_recommended_title_id and next_recommended_title_id not in title_candidate_ids:
+        raise ValueError("recommended title id is not in title candidates")
+    if next_selected_title_id and next_selected_title_id not in title_candidate_ids:
+        raise ValueError("selected title id is not in title candidates")
+    if len(next_youtube_description) > 2000:
+        raise ValueError("YouTube description must be 2000 characters or fewer")
+    if len(next_youtube_hashtags) > 12:
+        raise ValueError("YouTube hashtags must contain 12 items or fewer")
+    if len(next_youtube_hashtags) != len(set(next_youtube_hashtags)):
+        raise ValueError("duplicate YouTube hashtag")
+    if any(not hashtag.startswith("#") for hashtag in next_youtube_hashtags):
+        raise ValueError("YouTube hashtags must start with #")
+    if len(next_description_evidence_segment_ids) != len(
+        set(next_description_evidence_segment_ids)
+    ):
+        raise ValueError("duplicate description evidence segment id")
 
     changed = (
         clip.title != normalized_title
@@ -627,6 +736,14 @@ def update_review_clip_content(
         or clip.title_style != next_title_style
         or clip.hook_style != next_hook_style
         or clip.subtitle_style != next_subtitle_style
+        or clip.title_candidates != next_title_candidates
+        or clip.recommended_title_id != next_recommended_title_id
+        or clip.selected_title_id != next_selected_title_id
+        or clip.youtube_description != next_youtube_description
+        or clip.youtube_hashtags != next_youtube_hashtags
+        or clip.description_evidence_segment_ids != next_description_evidence_segment_ids
+        or clip.post_metadata_source != next_post_metadata_source
+        or clip.post_metadata_revision_hash != next_post_metadata_revision_hash
     )
     if not changed:
         return _refresh_counts(document)
@@ -643,6 +760,14 @@ def update_review_clip_content(
     clip.subtitle_style = (
         next_subtitle_style if isinstance(next_subtitle_style, ClipTextStyle) else None
     )
+    clip.title_candidates = next_title_candidates
+    clip.recommended_title_id = next_recommended_title_id
+    clip.selected_title_id = next_selected_title_id
+    clip.youtube_description = next_youtube_description
+    clip.youtube_hashtags = next_youtube_hashtags
+    clip.description_evidence_segment_ids = next_description_evidence_segment_ids
+    clip.post_metadata_source = next_post_metadata_source
+    clip.post_metadata_revision_hash = next_post_metadata_revision_hash
     clip.confirmed = False
     return _refresh_counts(document)
 
@@ -808,6 +933,26 @@ def convert_review_clip_to_short(
     document.segments = retained_segments
     clip.segment_ids = [segment.id for segment in retained_segments]
 
+    had_post_metadata = bool(
+        clip.title_candidates
+        or clip.recommended_title_id
+        or clip.selected_title_id
+        or clip.youtube_description
+        or clip.youtube_hashtags
+        or clip.description_evidence_segment_ids
+        or clip.post_metadata_source
+        or clip.post_metadata_revision_hash
+    )
+    clip.title_candidates = []
+    clip.recommended_title_id = None
+    clip.selected_title_id = None
+    clip.youtube_description = ""
+    clip.youtube_hashtags = []
+    clip.description_evidence_segment_ids = []
+    clip.post_metadata_revision_hash = None
+    if had_post_metadata:
+        clip.post_metadata_source = "manual"
+
     # Keep the user's saved text styles. Only resolved values are rebuilt for 9:16.
     clip.resolved_title_style = None
     clip.resolved_hook_style = None
@@ -880,6 +1025,14 @@ def apply_reviewed_clip_content(
         updates["hook_duration_seconds"] = clip.hook_duration_seconds
         updates["hook_scene_start"] = clip.hook_scene_start
         updates["hook_scene_end"] = clip.hook_scene_end
+        updates["title_candidates"] = clip.title_candidates
+        updates["recommended_title_id"] = clip.recommended_title_id
+        updates["selected_title_id"] = clip.selected_title_id
+        updates["youtube_description"] = clip.youtube_description or None
+        updates["youtube_hashtags"] = clip.youtube_hashtags
+        updates["description_evidence_segment_ids"] = clip.description_evidence_segment_ids
+        updates["post_metadata_source"] = clip.post_metadata_source
+        updates["post_metadata_revision_hash"] = clip.post_metadata_revision_hash
         updates["hook_style"] = clip.hook_style
         updates["title_style"] = clip.title_style
         updates["subtitle_style"] = clip.subtitle_style

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.posting_metadata import PostMetadataSource, YouTubeTitleCandidate
 from app.video.scene_detect import SceneSegment
 
 
@@ -105,6 +106,14 @@ class Candidate(BaseModel):
     hook_duration_seconds: float | None = Field(default=None, ge=1, le=8)
     hook_scene_start: float | None = Field(default=None, ge=0)
     hook_scene_end: float | None = Field(default=None, ge=0)
+    title_candidates: list[YouTubeTitleCandidate] = Field(default_factory=list)
+    recommended_title_id: str | None = None
+    selected_title_id: str | None = None
+    youtube_description: str | None = Field(default=None, max_length=2000)
+    youtube_hashtags: list[str] = Field(default_factory=list, max_length=12)
+    description_evidence_segment_ids: list[str] = Field(default_factory=list, max_length=64)
+    post_metadata_source: PostMetadataSource | None = None
+    post_metadata_revision_hash: str | None = Field(default=None, min_length=64, max_length=64)
     title_style: ClipTextStyle | None = None
     hook_style: ClipTextStyle | None = None
     subtitle_style: ClipTextStyle | None = None
@@ -148,6 +157,17 @@ class Candidate(BaseModel):
             raise ValueError("end must be greater than start")
         if round(self.end - self.start, 6) != round(self.duration, 6):
             raise ValueError("duration must equal end - start")
+        title_candidate_ids = [candidate.id for candidate in self.title_candidates]
+        if len(title_candidate_ids) != len(set(title_candidate_ids)):
+            raise ValueError("duplicate YouTube title candidate id")
+        if self.recommended_title_id and self.recommended_title_id not in title_candidate_ids:
+            raise ValueError("recommended title id is not in title candidates")
+        if self.selected_title_id and self.selected_title_id not in title_candidate_ids:
+            raise ValueError("selected title id is not in title candidates")
+        if len(self.youtube_hashtags) != len(set(self.youtube_hashtags)):
+            raise ValueError("duplicate YouTube hashtag")
+        if any(not hashtag.startswith("#") for hashtag in self.youtube_hashtags):
+            raise ValueError("YouTube hashtags must start with #")
         hook_start = self.hook_scene_start
         hook_end = self.hook_scene_end
         if (hook_start is None) != (hook_end is None):

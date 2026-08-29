@@ -8277,3 +8277,53 @@ pip check: pass
 - 音声との再照合による字幕正確性、タイトル／フックの意味品質、人物見切れの自動判定は未接続。現状の`pass`は人のOKと現在のpreview artifact生成済みを組み合わせた証拠に限定する。
 - Windowsではprocess終了後のlease解放、Linux workerでは`fcntl.flock`の競合拒否と解放後再取得を確認済み。Linux workerの異常終了後再取得は未確認。
 - 実際の1時間動画を使ったGPU jobのPhase 3受入確認は未実施。
+
+## 2026-08-29 投稿用タイトル群・YouTube説明欄の自動生成
+
+### 目的
+
+- 字幕確認中のclip内容を根拠に、投稿時に使うタイトル候補群、推奨タイトル、YouTube説明欄、ハッシュタグをCodexで生成し、選択・編集・保存・書き出しまで一続きにする。
+
+### 現在状態・変更
+
+- clipごとに`事実重視 / 興味喚起 / 短文`のタイトル候補3件、推奨候補、YouTube説明欄、3〜5件のハッシュタグ、根拠字幕IDを生成する契約を追加した。
+- 字幕確認画面を開いた時、提案未生成のclipだけを最大2件並列で自動生成する。手動再生成時は同じCodex taskを再利用する。
+- AI案の適用、候補選択、タイトル／説明欄／ハッシュタグの手動編集、個別コピー／一括コピーを追加した。
+- 字幕やclip範囲からrevision hashを作り、古いAI案の保存を`422`で拒否する。字幕変更後に投稿文を未指定で保存した場合も古い投稿文を残さない。
+- 選択結果をsubtitle review、candidate、render metadata、results APIへ伝播する。レンダー時に`youtube_posting_packages.json`と`youtube_posts.md`を生成し、ZIPへ同梱する。
+- タイトル／フックの即時previewとASS焼き込みで同じ幅計算、2行分割、縮小規則を使う共通fit契約を追加した。手動改行は維持し、収まらない場合は切り捨てず警告する。
+- 通常字幕も既存の文字数分割後に同じ実幅fit契約へ通す。解決済みフォント、左右余白、縁取り、影、横位置を使って最大2行の実幅を計算し、必要な長文だけ指定サイズから縮小する。即時previewとASSへ同じ改行・実効文字サイズを反映する。
+- 通常字幕の最小文字サイズもタイトル／フックと同じ既定下限に揃えた。下限でも収まらない極端な長文は1pxまで縮めず、既存の警告契約を維持する。
+- host bridge用JSON SchemaからCodex CLI非対応の`uniqueItems`を除き、証拠IDの一意性は既存Pydantic validatorで維持した。schema固定hashも実体に合わせ、回帰testを追加した。
+- 公開タイトルを手編集した場合は`publicationTitle`を推奨候補より優先し、JSON／Markdownへ同じ採用文を書き出す。候補なしの手動タイトルだけでも投稿artifactを生成する。
+- 字幕revision変更時は旧AI候補、推奨／選択ID、根拠ID、revision hashを失効させる。明示送信された公開タイトル、説明欄、hashtagsは手動値として保持し、`postMetadataSource=manual`へ切り替える。
+- タイトル候補と説明欄の根拠segment IDをreview、candidate、render metadata、results、投稿JSONまで保持する。通常clipからshortへ変換した場合は旧AI投稿情報を引き継がない。
+- 旧job・旧artifactは投稿用項目なしでも読み込める後方互換を維持した。
+
+### 変更ファイル
+
+- backend: `app/posting_metadata.py`、`app/scoring/title_hook_suggestions.py`、`app/scoring/codex_title_hook_suggestions.py`、`app/jobs/title_hook_suggestions.py`、`app/jobs/subtitle_review.py`、`app/jobs/runner.py`、`app/api/jobs.py`、`app/schemas.py`、候補／render／字幕fit関連module
+- frontend: `app/jobs/[jobId]/subtitles/page.tsx`、`components/TitleHookSuggestionPanel.tsx`、`components/ResultVideoCard.tsx`、`components/ClipTextStyleEditor.tsx`、`lib/api.ts`、`lib/types.ts`、`lib/subtitlePreview.ts`
+- host bridge: `launcher/codex_bridge.py`
+- test: 投稿用metadata、Codex bridge、subtitle review、API、overlay text、ASS、frontend golden fixture関連test
+
+### 最小検証
+
+- backend全test: workspace内一時SQLiteを明示して再実行し、`845 passed / 1 skipped / 0 failed`。
+- backend／launcher Ruff、frontend typecheck／lint／build: pass。
+- 通常字幕fitのPython対象testは`43 passed`。frontendの共有golden testを`test:overlay-fit`としてnpm scriptとCIへ接続し、preview／ASSの幅計算差を継続検知できるようにした。
+- 投稿用metadata／Codex bridge／subtitle reviewの対象test: `79 passed`。字幕fitはPythonとfrontendで同じgolden fixtureを使用した。
+- backend／frontend／GPU workerを再構築し、backend healthy、`/health=200`、`/upload=200`、Redis／worker稼働を確認した。
+- host Codex bridgeは`state=ready`で再起動した。
+- 実browserで既存resultsを再読込し、旧metadataの表示互換、画面崩れなし、console error／warning=`0`を確認した。
+- 実動画job `job_de3b8d4bb40f4f299d7a272b92d686fb`で、Codex候補3件生成、推奨案適用、説明欄／hashtags保存、hook付きpreview再生成、字幕確定、GPU再レンダー、results再表示まで完走した。
+- 同jobのZIPに`metadata/youtube_posting_packages.json`と`metadata/youtube_posts.md`が含まれ、候補3件、推奨／採用、説明欄、hashtags 4件、生成元`codex`を確認した。
+- 完成MP4は`1080x1920`、`44.878167秒`。0.5秒frameでhook、3.5秒frameで2行titleへの切替と上下帯を確認した。
+- 再現動画を1本だけ再編集した実job `job_170fa69fed9c49b08d508654b27cd29f`で、長文通常字幕の即時previewは`fits=true`、表示枠360pxに対して実幅約290pxだった。GPU再レンダーは100%完了し、ASSは同字幕を2行・`76px→48px`で出力した。完成MP4の2.9秒frameでも左右約95pxを残し、欠けがないことを確認した。
+- 最終修正後にbackend／frontend／GPU workerを再構築し、backend healthy、frontend／Redis／worker稼働、`/health=ok`を確認した。結果画面も再読込して残した。
+- 手編集優先、stale AI情報失効、根拠ID伝播の独立再監査でP0／P1なし。関連test `96 passed`。
+
+### 未解決事項
+
+- 既に完成済みの旧出力へ投稿用JSON／Markdownを追加するには、そのclipの再編集・再レンダーが必要。
+- 通常字幕のEnter改行はevent分割前に空白へ正規化される既存仕様。previewと完成動画は一致するが、任意位置の改行保持には時間event分割・結合・文字数配分をPython／TypeScript双方で変更する必要があるため、別タスクとする。

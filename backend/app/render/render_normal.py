@@ -252,6 +252,17 @@ def _write_export_metadata(
                 "title": title,
                 "overlay_title": overlay_title,
                 "title_source": candidate.title_source,
+                "title_candidates": [
+                    item.model_dump(by_alias=True, mode="json")
+                    for item in candidate.title_candidates
+                ],
+                "recommended_title_id": candidate.recommended_title_id,
+                "selected_title_id": candidate.selected_title_id,
+                "youtube_description": candidate.youtube_description,
+                "youtube_hashtags": candidate.youtube_hashtags,
+                "description_evidence_segment_ids": candidate.description_evidence_segment_ids,
+                "post_metadata_source": candidate.post_metadata_source,
+                "post_metadata_revision_hash": candidate.post_metadata_revision_hash,
                 "title_rendered": True,
                 "overlay_title_expected": True,
                 "overlay_title_rendered": True,

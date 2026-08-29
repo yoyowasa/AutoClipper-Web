@@ -1,0 +1,140 @@
+[
+  {
+    "name": "jp_balanced",
+    "text": "自動折り返しを維持する既存の一行タイトル",
+    "options": {
+      "outputWidth": 1080,
+      "fontName": "Noto Sans JP Black",
+      "fontSize": 88,
+      "fontSizeScale": 0.6906077348066298,
+      "marginX": 86,
+      "outlineWidth": 5,
+      "shadow": 2,
+      "alignment": 5,
+      "xPercent": 50
+    },
+    "expected": {
+      "lines": ["自動折り返しを維持す", "る既存の一行タイトル"],
+      "effectiveFontSize": 88,
+      "maxWidthPx": 894,
+      "fits": true,
+      "overflowReason": null
+    }
+  },
+  {
+    "name": "manual_break",
+    "text": "ここで改行\n二行目を表示",
+    "options": {
+      "outputWidth": 1080,
+      "fontName": "Noto Sans JP Black",
+      "fontSize": 88,
+      "fontSizeScale": 0.6906077348066298,
+      "marginX": 86,
+      "outlineWidth": 5,
+      "shadow": 2,
+      "alignment": 5,
+      "xPercent": 50
+    },
+    "expected": {
+      "lines": ["ここで改行", "二行目を表示"],
+      "effectiveFontSize": 88,
+      "maxWidthPx": 894,
+      "fits": true,
+      "overflowReason": null
+    }
+  },
+  {
+    "name": "mixed_ascii_full_width",
+    "text": "ReGLOSS 2026で何が変わった？",
+    "options": {
+      "outputWidth": 1080,
+      "fontName": "Noto Sans JP Black",
+      "fontSize": 88,
+      "fontSizeScale": 0.6906077348066298,
+      "marginX": 86,
+      "outlineWidth": 5,
+      "shadow": 2,
+      "alignment": 5,
+      "xPercent": 50
+    },
+    "expected": {
+      "lines": ["ReGLOSS 2026で何が変わった？"],
+      "effectiveFontSize": 88,
+      "maxWidthPx": 894,
+      "fits": true,
+      "overflowReason": null
+    }
+  },
+  {
+    "name": "offset_shrinks",
+    "text": "人物の表情が変わる決定的な瞬間",
+    "options": {
+      "outputWidth": 1080,
+      "fontName": "Noto Sans JP Black",
+      "fontSize": 88,
+      "fontSizeScale": 0.6906077348066298,
+      "marginX": 86,
+      "outlineWidth": 5,
+      "shadow": 2,
+      "alignment": 5,
+      "xPercent": 25
+    },
+    "expected": {
+      "lines": ["人物の表情が変", "わる決定的な瞬間"],
+      "effectiveFontSize": 64,
+      "maxWidthPx": 354,
+      "fits": true,
+      "overflowReason": null
+    }
+  },
+  {
+    "name": "minimum_size_overflow",
+    "text": "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+    "options": {
+      "outputWidth": 1080,
+      "fontName": "Noto Sans JP Black",
+      "fontSize": 88,
+      "fontSizeScale": 0.6906077348066298,
+      "marginX": 86,
+      "outlineWidth": 5,
+      "shadow": 2,
+      "alignment": 5,
+      "xPercent": 50
+    },
+    "expected": {
+      "lines": [
+        "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ",
+        "ああああああああああああああああああああああああああああああああああああああああああああああああああああああああああああ"
+      ],
+      "effectiveFontSize": 48,
+      "maxWidthPx": 894,
+      "fits": false,
+      "overflowReason": "min_font_size"
+    }
+  },
+  {
+    "name": "subtitle_long_default_minimum",
+    "text": "そして私はお手洗いに行って爆速で\\N帰ってくるから、少しだけここで待っていてくださいね",
+    "options": {
+      "outputWidth": 1080,
+      "fontName": "Noto Serif CJK JP",
+      "fontSize": 76,
+      "fontSizeScale": 0.6958942240779401,
+      "marginX": 120,
+      "outlineWidth": 9,
+      "shadow": 7,
+      "alignment": 5,
+      "xPercent": 50
+    },
+    "expected": {
+      "lines": [
+        "そして私はお手洗いに行って爆速で",
+        "帰ってくるから、少しだけここで待っていてくださいね"
+      ],
+      "effectiveFontSize": 46,
+      "maxWidthPx": 808,
+      "fits": true,
+      "overflowReason": null
+    }
+  }
+]

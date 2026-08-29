@@ -1833,7 +1833,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert reviewed_transcript[edited_segment["index"]]["text"] == "ManualEdit"
     ass_text = "\n".join(path.read_text(encoding="utf-8") for path in (storage.job_outputs(created["jobId"]) / "subtitles").rglob("*.ass"))
     assert "ManualEdit" in ass_text
-    assert "魚の耳には、本当に「石」が入ってるらしい" in ass_text
+    assert "魚の耳には、本当に「石」が入ってるらしい" in ass_text.replace(r"\N", "")
     selected_clips = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
     rendered_short = selected_clips["shorts"][0]
     assert rendered_short["title"] == "魚は「耳石」で音を聞く？"

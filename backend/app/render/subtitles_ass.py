@@ -6,7 +6,12 @@ from typing import Any, Literal, Sequence
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
-from app.overlay_text import normalize_overlay_text
+from app.overlay_text import (
+    balanced_overlay_lines,
+    fit_overlay_text,
+    normalize_overlay_text,
+    overlay_text_width_units,
+)
 
 
 SHORT_WIDTH = 1080
@@ -20,6 +25,7 @@ DEFAULT_MIN_SUBTITLE_DURATION = 1.1
 DEFAULT_MAX_SUBTITLE_DURATION = 4.2
 DEFAULT_MIN_GAP_BETWEEN_SUBTITLES = 0.08
 DEFAULT_ASS_FONT = "Noto Sans CJK JP"
+DEFAULT_ASS_TITLE_FONT = "Noto Sans JP Black"
 DEFAULT_SHORT_SUBTITLE_FONT_SIZE = 76
 DEFAULT_SHORT_TITLE_FONT_SIZE = 88
 DEFAULT_SHORT_SUBTITLE_OUTLINE = 5
@@ -62,7 +68,7 @@ class SubtitleRenderSettings:
     max_subtitle_duration: float = DEFAULT_MAX_SUBTITLE_DURATION
     min_gap_between_subtitles: float = DEFAULT_MIN_GAP_BETWEEN_SUBTITLES
     subtitle_font_name: str = DEFAULT_ASS_FONT
-    title_font_name: str = DEFAULT_ASS_FONT
+    title_font_name: str = DEFAULT_ASS_TITLE_FONT
     subtitle_primary_color: str = DEFAULT_SUBTITLE_PRIMARY_COLOR
     subtitle_outline_color: str = DEFAULT_SUBTITLE_OUTLINE_COLOR
     short_font_name: str | None = None
@@ -434,7 +440,10 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
             maximum=2.0,
         ),
         subtitle_font_name=_coerce_str(normalized.get("subtitle_font_name"), DEFAULT_ASS_FONT),
-        title_font_name=_coerce_str(normalized.get("title_font_name"), DEFAULT_ASS_FONT),
+        title_font_name=_coerce_str(
+            normalized.get("title_font_name"),
+            DEFAULT_ASS_TITLE_FONT,
+        ),
         subtitle_primary_color=_coerce_hex_color(
             normalized.get("subtitle_primary_color"),
             DEFAULT_SUBTITLE_PRIMARY_COLOR,
@@ -652,18 +661,16 @@ def split_overlay_lines(
     max_chars_per_line: int = 20,
     max_lines: int = 2,
 ) -> str:
-    """Honor manual breaks for title/hook; auto-wrap legacy one-line text."""
+    """Honor manual breaks and balance legacy one-line title/hook text."""
     clean_text = normalize_overlay_text(text, max_lines=max_lines)
     if not clean_text:
         return ""
     manual_lines = clean_text.split("\n")
     if len(manual_lines) > 1:
         return "\\N".join(manual_lines)
-    return split_subtitle_lines(
-        clean_text,
-        max_chars_per_line=max_chars_per_line,
-        max_lines=max_lines,
-    )
+    if overlay_text_width_units(clean_text) <= max(1, max_chars_per_line):
+        return clean_text
+    return "\\N".join(balanced_overlay_lines(clean_text, max_lines=max_lines))
 
 
 def _escape_ass_text(text: str) -> str:
@@ -983,7 +990,9 @@ def resolve_clip_text_style(
 
     if style is None:
         font_name = fallback_font_name
-        bold = True
+        # Noto Sans JP Black is already the exact heavy face shared with the
+        # browser; synthetic ASS bold would make preview and render diverge.
+        bold = font_name != DEFAULT_ASS_TITLE_FONT
         font_size = fallback_font_size
         primary_color = fallback_primary_color
         outline_color = fallback_outline_color
@@ -1172,6 +1181,17 @@ def build_ass_document(
                 active_layout,
                 role="title",
             )
+            title_fit = fit_overlay_text(
+                title_text,
+                output_width=active_layout.width,
+                font_name=resolved_title_style.font_name,
+                font_size=resolved_title_style.font_size,
+                margin_x=resolved_title_style.margin_x,
+                outline_width=resolved_title_style.outline_width,
+                shadow=resolved_title_style.shadow,
+                alignment=resolved_title_style.alignment,
+                x_percent=resolved_title_style.x_percent,
+            )
             title_position = (
                 _position_tag(
                     resolved_title_style.x_percent,
@@ -1186,7 +1206,8 @@ def build_ass_document(
                 f"1,{format_ass_timestamp(title_start)},{format_ass_timestamp(output_duration)},"
                 f"Title,,0,0,0,,"
                 f"{title_position}"
-                f"{_escape_ass_text(split_overlay_lines(title_text, max_chars_per_line=20, max_lines=2))}"
+                rf"{{\fs{title_fit.effective_font_size}}}"
+                f"{_escape_ass_text(title_fit.ass_text)}"
             )
 
     if include_hook:
@@ -1194,6 +1215,17 @@ def build_ass_document(
             candidate.hook_style,
             active_layout,
             role="hook",
+        )
+        hook_fit = fit_overlay_text(
+            hook_text,
+            output_width=active_layout.width,
+            font_name=resolved_hook_style.font_name,
+            font_size=resolved_hook_style.font_size,
+            margin_x=resolved_hook_style.margin_x,
+            outline_width=resolved_hook_style.outline_width,
+            shadow=resolved_hook_style.shadow,
+            alignment=resolved_hook_style.alignment,
+            x_percent=resolved_hook_style.x_percent,
         )
         hook_position = (
             _position_tag(
@@ -1209,25 +1241,44 @@ def build_ass_document(
             f"2,{format_ass_timestamp(0.0)},{format_ass_timestamp(hook_end)},"
             f"Hook,Hook,0,0,0,,"
             f"{hook_position}"
-            f"{_escape_ass_text(split_overlay_lines(hook_text, max_chars_per_line=20, max_lines=2))}"
+            rf"{{\fs{hook_fit.effective_font_size}}}"
+            f"{_escape_ass_text(hook_fit.ass_text)}"
         )
 
+    resolved_subtitle_style = resolve_clip_text_style(
+        candidate.subtitle_style,
+        active_layout,
+        role="subtitle",
+    )
+    subtitle_position = _subtitle_position_tag(
+        candidate.subtitle_style,
+        active_layout,
+    )
     for event in subtitle_events:
-        subtitle_position = _subtitle_position_tag(
-            candidate.subtitle_style,
-            active_layout,
+        split_text = split_subtitle_lines(
+            event.text,
+            max_chars_per_line=active_layout.max_chars_per_line,
+            max_lines=min(DEFAULT_SUBTITLE_MAX_LINES, active_layout.max_lines),
         )
-        text = _escape_ass_text(
-            split_subtitle_lines(
-                event.text,
-                max_chars_per_line=active_layout.max_chars_per_line,
-                max_lines=active_layout.max_lines,
-            )
+        subtitle_fit = fit_overlay_text(
+            split_text,
+            output_width=active_layout.width,
+            font_name=resolved_subtitle_style.font_name,
+            font_size=resolved_subtitle_style.font_size,
+            margin_x=resolved_subtitle_style.margin_x,
+            outline_width=resolved_subtitle_style.outline_width,
+            shadow=resolved_subtitle_style.shadow,
+            alignment=resolved_subtitle_style.alignment,
+            x_percent=resolved_subtitle_style.x_percent,
+            max_lines=min(DEFAULT_SUBTITLE_MAX_LINES, active_layout.max_lines),
         )
+        text = _escape_ass_text(subtitle_fit.ass_text)
         lines.append(
             "Dialogue: "
             f"0,{format_ass_timestamp(event.start)},{format_ass_timestamp(event.end)},"
-            f"Subtitle,,0,0,0,,{subtitle_position}{text}"
+            f"Subtitle,,0,0,0,,{subtitle_position}"
+            rf"{{\fs{subtitle_fit.effective_font_size}}}"
+            f"{text}"
         )
 
     return "\n".join(lines) + "\n"

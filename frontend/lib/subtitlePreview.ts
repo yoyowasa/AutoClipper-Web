@@ -26,9 +26,219 @@ type SubtitlePreviewEventOptions = {
 const PUNCTUATION_BREAKS = new Set(Array.from("。、！？!?"));
 const PHRASE_BREAKS = new Set(Array.from("、，, "));
 const SOFT_JA_BOUNDARIES = new Set(Array.from("でにはをがともやへ"));
+const OVERLAY_MAX_LINES = 2;
+const OVERLAY_HORIZONTAL_SAFE_RATIO = 0.05;
+const OVERLAY_MIN_FONT_SIZE_RATIO = 0.55;
+const OVERLAY_MIN_FONT_SIZE_PX = 36;
+
+export type OverlayTextFit = {
+  lines: string[];
+  effectiveFontSize: number;
+  maxWidthPx: number;
+  fits: boolean;
+  overflowReason: "min_font_size" | null;
+};
+
+export type OverlayTextFitOptions = {
+  outputWidth: number;
+  fontSize: number;
+  fontSizeScale: number;
+  marginX: number;
+  outlineWidth: number;
+  shadow: number;
+  alignment: number;
+  xPercent: number;
+  maxLines?: number;
+  minFontSize?: number;
+};
 
 function normalizeText(text: string): string {
   return text.trim().split(/\s+/u).filter(Boolean).join(" ");
+}
+
+function normalizeOverlayText(text: string, maxLines: number): string {
+  const lines = text
+    .replace(/\r\n|\r|\u2028|\u2029|\\N/gu, "\n")
+    .split("\n")
+    .map((line) => normalizeText(line))
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return "";
+  }
+  const lineLimit = Math.max(1, Math.trunc(maxLines));
+  if (lines.length > lineLimit) {
+    return [
+      ...lines.slice(0, lineLimit - 1),
+      lines.slice(lineLimit - 1).join(" ")
+    ].join("\n");
+  }
+  return lines.join("\n");
+}
+
+export function overlayCharacterWidth(character: string): number {
+  const codePoint = character.codePointAt(0);
+  if (codePoint === undefined) {
+    return 0;
+  }
+  if (
+    (codePoint >= 0x0300 && codePoint <= 0x036f) ||
+    (codePoint >= 0x1ab0 && codePoint <= 0x1aff) ||
+    (codePoint >= 0x1dc0 && codePoint <= 0x1dff) ||
+    (codePoint >= 0x20d0 && codePoint <= 0x20ff) ||
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
+    (codePoint >= 0xfe20 && codePoint <= 0xfe2f) ||
+    codePoint === 0x200d
+  ) {
+    return 0;
+  }
+  if (/\s/u.test(character)) {
+    return 0.5;
+  }
+  if (codePoint <= 0x7f || (codePoint >= 0xff61 && codePoint <= 0xff9f)) {
+    return 0.55;
+  }
+  if (
+    (codePoint >= 0x1100 && codePoint <= 0x115f) ||
+    (codePoint >= 0x2329 && codePoint <= 0x232a) ||
+    (codePoint >= 0x2e80 && codePoint <= 0xa4cf) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+    (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+    (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
+    (codePoint >= 0xff01 && codePoint <= 0xff60) ||
+    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+    (codePoint >= 0x1f000 && codePoint <= 0x1faff) ||
+    (codePoint >= 0x20000 && codePoint <= 0x3fffd)
+  ) {
+    return 1;
+  }
+  return 0.65;
+}
+
+export function overlayTextWidthUnits(text: string): number {
+  return Array.from(text).reduce(
+    (total, character) => total + overlayCharacterWidth(character),
+    0
+  );
+}
+
+function balancedOverlayLines(text: string, maxLines: number): string[] {
+  const manualLines = text.split("\n");
+  if (manualLines.length > 1 || maxLines <= 1) {
+    return manualLines.slice(0, Math.max(1, maxLines));
+  }
+  const characters = Array.from(text);
+  if (characters.length <= 1) {
+    return [text];
+  }
+
+  const totalWidth = overlayTextWidthUnits(text);
+  let bestIndex = 1;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (let index = 1; index < characters.length; index += 1) {
+    const left = characters.slice(0, index).join("");
+    const leftWidth = overlayTextWidthUnits(left);
+    const rightWidth = totalWidth - leftWidth;
+    const previous = characters[index - 1];
+    const following = characters[index];
+    let boundaryPenalty: number;
+    if (PUNCTUATION_BREAKS.has(previous)) {
+      boundaryPenalty = 0;
+    } else if (/\s/u.test(previous) || /\s/u.test(following)) {
+      boundaryPenalty = totalWidth * 0.02;
+    } else if (SOFT_JA_BOUNDARIES.has(previous)) {
+      boundaryPenalty = totalWidth * 0.04;
+    } else {
+      boundaryPenalty = totalWidth * 0.12;
+    }
+    const score =
+      Math.max(leftWidth, rightWidth) +
+      Math.abs(leftWidth - rightWidth) * 0.2 +
+      boundaryPenalty;
+    if (score < bestScore) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  }
+  return [
+    characters.slice(0, bestIndex).join(""),
+    characters.slice(bestIndex).join("")
+  ];
+}
+
+function overlayMaxWidth(options: OverlayTextFitOptions): number {
+  const outputWidth = Math.max(1, Math.trunc(options.outputWidth));
+  const safeMargin = Math.max(
+    Math.max(0, Math.trunc(options.marginX)),
+    outputWidth * OVERLAY_HORIZONTAL_SAFE_RATIO
+  );
+  const leftEdge = safeMargin;
+  const rightEdge = outputWidth - safeMargin;
+  const anchorX =
+    (outputWidth * Math.min(100, Math.max(0, options.xPercent))) / 100;
+  const column = (Math.min(9, Math.max(1, Math.trunc(options.alignment))) - 1) % 3;
+  let available: number;
+  if (column === 0) {
+    available = rightEdge - anchorX;
+  } else if (column === 2) {
+    available = anchorX - leftEdge;
+  } else {
+    available = 2 * Math.min(anchorX - leftEdge, rightEdge - anchorX);
+  }
+  const edgeEffect =
+    2 * Math.max(0, Math.trunc(options.outlineWidth) + Math.trunc(options.shadow));
+  return Math.max(1, available - edgeEffect);
+}
+
+export function fitOverlayPreviewText(
+  text: string,
+  options: OverlayTextFitOptions
+): OverlayTextFit {
+  const maxLines = Math.max(1, Math.trunc(options.maxLines ?? OVERLAY_MAX_LINES));
+  const cleanText = normalizeOverlayText(text, maxLines);
+  const requestedFontSize = Math.max(1, Math.trunc(options.fontSize));
+  const maxWidthPx = overlayMaxWidth(options);
+  if (!cleanText) {
+    return {
+      lines: [],
+      effectiveFontSize: requestedFontSize,
+      maxWidthPx,
+      fits: true,
+      overflowReason: null
+    };
+  }
+
+  const fontSizeScale = Math.max(0.01, options.fontSizeScale);
+  const oneLineWidth =
+    overlayTextWidthUnits(cleanText) * requestedFontSize * fontSizeScale;
+  const lines =
+    !cleanText.includes("\n") && oneLineWidth <= maxWidthPx
+      ? [cleanText]
+      : balancedOverlayLines(cleanText, maxLines);
+  const widestLineUnits = Math.max(...lines.map(overlayTextWidthUnits));
+  const fittedFontSize =
+    widestLineUnits <= 0
+      ? requestedFontSize
+      : Math.min(
+          requestedFontSize,
+          Math.floor(maxWidthPx / (widestLineUnits * fontSizeScale))
+        );
+  const defaultMinimum = Math.max(
+    OVERLAY_MIN_FONT_SIZE_PX,
+    Math.floor(requestedFontSize * OVERLAY_MIN_FONT_SIZE_RATIO + 0.5)
+  );
+  const resolvedMinimum = Math.min(
+    requestedFontSize,
+    Math.max(1, Math.trunc(options.minFontSize ?? defaultMinimum))
+  );
+  const fits = fittedFontSize >= resolvedMinimum;
+  return {
+    lines,
+    effectiveFontSize: Math.max(resolvedMinimum, fittedFontSize),
+    maxWidthPx,
+    fits,
+    overflowReason: fits ? null : "min_font_size"
+  };
 }
 
 function roundMilliseconds(value: number): number {

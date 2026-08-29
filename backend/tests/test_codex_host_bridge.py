@@ -18,13 +18,16 @@ from app.candidates.codex_initial_selection import (  # noqa: E402
     CodexInitialSelectionHostResponse,
     codex_initial_selection_response_schema,
 )
+from app.scoring.title_hook_suggestions import TITLE_HOOK_GENERATION_SCHEMA  # noqa: E402
 
 from launcher.codex_bridge import (  # noqa: E402
     BRIDGE_PROTOCOL_VERSION,
+    EXPECTED_RESPONSE_SCHEMA_SHA256,
     INITIAL_CLIP_SELECTION_TASK,
     INITIAL_CLIP_SELECTION_TIMEOUT_SECONDS,
     REQUEST_TASK,
     TITLE_HOOK_OUTPUT_SCHEMA,
+    _response_schema_sha256,
     BridgeRequest,
     CodexRunResult,
     atomic_write_json,
@@ -58,6 +61,7 @@ def suggestion_result() -> dict[str, object]:
         "suggestions": [
             {
                 "id": f"suggestion-{index}",
+                "intent": ("factual", "engagement", "concise")[index - 1],
                 "publicationTitle": f"公開タイトル{index}",
                 "overlayTitle": f"表示タイトル{index}",
                 "hookText": f"フック{index}",
@@ -65,9 +69,14 @@ def suggestion_result() -> dict[str, object]:
                 "hookSceneStart": 0.0,
                 "hookSceneEnd": 2.0,
                 "reason": f"理由{index}",
+                "evidenceSegmentIds": [],
             }
             for index in range(1, 4)
-        ]
+        ],
+        "recommendedSuggestionId": "suggestion-1",
+        "youtubeDescription": "動画内の会話を短く紹介します。",
+        "hashtags": ["#会話", "#切り抜き", "#動画"],
+        "descriptionEvidenceSegmentIds": [],
     }
 
 
@@ -87,6 +96,28 @@ def request_payload(
         "threadId": thread_id,
         "threadScope": "job_test",
     }
+
+
+def test_title_hook_bridge_schema_matches_backend_generation_contract() -> None:
+    assert TITLE_HOOK_OUTPUT_SCHEMA == TITLE_HOOK_GENERATION_SCHEMA
+    assert EXPECTED_RESPONSE_SCHEMA_SHA256[REQUEST_TASK] == _response_schema_sha256(
+        TITLE_HOOK_OUTPUT_SCHEMA
+    )
+
+
+def test_title_hook_bridge_schema_avoids_unsupported_unique_items() -> None:
+    def keys_in(value: object) -> set[str]:
+        if isinstance(value, dict):
+            return set(value) | {
+                key
+                for nested in value.values()
+                for key in keys_in(nested)
+            }
+        if isinstance(value, list):
+            return {key for nested in value for key in keys_in(nested)}
+        return set()
+
+    assert "uniqueItems" not in keys_in(TITLE_HOOK_OUTPUT_SCHEMA)
 
 
 def test_initial_codex_command_is_fixed_read_only_and_persistent(tmp_path: Path) -> None:

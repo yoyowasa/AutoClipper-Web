@@ -19,6 +19,11 @@ from app.jobs.subtitle_review import (
 )
 from app.jobs.subtitle_review_preview import subtitle_review_document_lock
 from app.models import Job, Video
+from app.posting_metadata import build_post_metadata_revision_hash
+from app.scoring.codex_title_hook_suggestions import (
+    CodexTitleHookSuggestionError,
+    CodexTitleHookSuggestionGenerator,
+)
 from app.scoring.title_hook_suggestions import (
     TITLE_HOOK_PROMPT_VERSION,
     OpenAITitleHookSuggestionGenerator,
@@ -75,6 +80,13 @@ class TitleHookSuggestionInput(BaseModel):
         max_length=64,
         alias="draftHash",
     )
+    revision_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        alias="revisionHash",
+    )
+    provider: Literal["codex", "openai"] = "openai"
     model: str = Field(min_length=1)
     segments: list[TitleHookSuggestionInputSegment] = Field(default_factory=list)
 
@@ -88,6 +100,7 @@ class TitleHookSuggestionInput(BaseModel):
             "subtitleStatus": "available" if any(item.text.strip() for item in self.segments) else "unavailable",
             "segments": [
                 {
+                    "segmentId": item.segment_id,
                     "start": item.start,
                     "end": item.end,
                     "text": item.text,
@@ -107,8 +120,36 @@ class TitleHookSuggestionsDocument(BaseModel):
         max_length=64,
         alias="draftHash",
     )
+    revision_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        alias="revisionHash",
+    )
+    provider: Literal["codex", "openai"] = "openai"
+    thread_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        alias="threadId",
+    )
     model: str
     suggestions: list[TitleHookSuggestion] = Field(default_factory=list)
+    recommended_suggestion_id: str | None = Field(
+        default=None,
+        alias="recommendedSuggestionId",
+    )
+    youtube_description: str = Field(
+        default="",
+        max_length=2000,
+        alias="youtubeDescription",
+    )
+    hashtags: list[str] = Field(default_factory=list, max_length=5)
+    description_evidence_segment_ids: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        alias="descriptionEvidenceSegmentIds",
+    )
     error: str | None = None
     generated_at: str | None = Field(default=None, alias="generatedAt")
 
@@ -172,6 +213,7 @@ def build_title_hook_suggestion_input(
     drafts: Sequence[TitleHookDraftSegment],
     *,
     model: str,
+    provider: Literal["codex", "openai"] = "codex",
 ) -> TitleHookSuggestionInput:
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
@@ -207,16 +249,18 @@ def build_title_hook_suggestion_input(
         )
 
     normalized_model = model.strip() or "gpt-5.5"
+    revision_hash = build_post_metadata_revision_hash(
+        clip_id=clip.id,
+        clip_type=clip.type,
+        start=clip.start,
+        end=clip.end,
+        segments=input_segments,
+    )
     hash_payload = {
         "promptVersion": TITLE_HOOK_PROMPT_VERSION,
-        "jobId": document.job_id,
-        "clipId": clip.id,
-        "clipType": clip.type,
-        "clipStart": round(clip.start, 3),
-        "clipEnd": round(clip.end, 3),
-        "clipDuration": round(clip.duration, 3),
+        "provider": provider,
         "model": normalized_model,
-        "segments": [item.model_dump(by_alias=True, mode="json") for item in input_segments],
+        "revisionHash": revision_hash,
     }
     encoded = json.dumps(
         hash_payload,
@@ -248,17 +292,26 @@ def build_title_hook_suggestion_input(
         clipDuration=clip.duration,
         inputHash=input_hash,
         draftHash=draft_hash,
+        revisionHash=revision_hash,
+        provider=provider,
         model=normalized_model,
         segments=input_segments,
     )
 
 
-def queued_title_hook_suggestions(request: TitleHookSuggestionInput) -> TitleHookSuggestionsDocument:
+def queued_title_hook_suggestions(
+    request: TitleHookSuggestionInput,
+    *,
+    thread_id: str | None = None,
+) -> TitleHookSuggestionsDocument:
     return TitleHookSuggestionsDocument(
         clipId=request.clip_id,
         state="queued",
         inputHash=request.input_hash,
         draftHash=request.draft_hash,
+        revisionHash=request.revision_hash,
+        provider=request.provider,
+        threadId=thread_id,
         model=request.model,
     )
 
@@ -272,6 +325,8 @@ def failed_title_hook_suggestions(
         state="failed",
         inputHash=request.input_hash,
         draftHash=request.draft_hash,
+        revisionHash=request.revision_hash,
+        provider=request.provider,
         model=request.model,
         error=error,
         generatedAt=_utc_iso(),
@@ -296,6 +351,8 @@ SessionFactory = Callable[[], Session]
 
 
 def _safe_generation_error(exc: Exception) -> str:
+    if isinstance(exc, CodexTitleHookSuggestionError):
+        return f"title/hook generation failed ({exc.code})"
     if isinstance(exc, RuntimeError) and str(exc) == "OPENAI_API_KEY is not configured":
         return str(exc)
     return f"title/hook generation failed ({exc.__class__.__name__})"
@@ -327,6 +384,30 @@ def _cancelled_title_hook_suggestions(
     )
 
 
+def _validate_suggestion_evidence(
+    result: TitleHookSuggestionResult,
+    request: TitleHookSuggestionInput,
+) -> None:
+    allowed_ids = {item.segment_id for item in request.segments}
+    referenced_ids = set(result.description_evidence_segment_ids)
+    for suggestion in result.suggestions:
+        referenced_ids.update(suggestion.evidence_segment_ids)
+    unknown_ids = referenced_ids - allowed_ids
+    if unknown_ids:
+        raise ValueError("title/hook suggestion referenced an unknown subtitle segment")
+
+
+def _same_generation_context(
+    state: TitleHookSuggestionsDocument,
+    request: TitleHookSuggestionInput,
+) -> bool:
+    return (
+        state.draft_hash == request.draft_hash
+        and state.revision_hash == request.revision_hash
+        and state.provider == request.provider
+    )
+
+
 def run_title_hook_suggestion_generation(
     job_id: str,
     clip_id: str,
@@ -351,7 +432,7 @@ def run_title_hook_suggestion_generation(
             state.state not in {"queued", "generating"}
             or state.input_hash != input_hash
             or request.input_hash != input_hash
-            or state.draft_hash != request.draft_hash
+            or not _same_generation_context(state, request)
         ):
             return ["superseded"]
         if not _generation_context_is_active(session_factory, job_id, review_path):
@@ -364,12 +445,18 @@ def run_title_hook_suggestion_generation(
             update={
                 "state": "generating",
                 "suggestions": [],
+                "recommended_suggestion_id": None,
+                "youtube_description": "",
+                "hashtags": [],
+                "description_evidence_segment_ids": [],
                 "error": None,
                 "generated_at": None,
             }
         )
         write_title_hook_suggestions(generating, state_path)
 
+    active_generator = generator
+    generation_thread_id = state.thread_id
     try:
         with session_factory() as db:
             job = db.get(Job, job_id)
@@ -395,8 +482,6 @@ def run_title_hook_suggestion_generation(
                 frame_paths = []
             if not frame_paths and not any(item.text.strip() for item in request.segments):
                 raise ValueError("title/hook generation requires subtitles or representative frames")
-            if not openai_api_key_is_configured() and generator is None:
-                raise RuntimeError("OPENAI_API_KEY is not configured")
             with subtitle_review_document_lock(job_dir):
                 if not state_path.is_file() or not input_request_path.is_file():
                     return ["superseded"]
@@ -406,7 +491,7 @@ def run_title_hook_suggestion_generation(
                     active_state.state not in {"queued", "generating"}
                     or active_state.input_hash != input_hash
                     or active_request.input_hash != input_hash
-                    or active_state.draft_hash != active_request.draft_hash
+                    or not _same_generation_context(active_state, active_request)
                 ):
                     return ["superseded"]
                 if not _generation_context_is_active(
@@ -420,25 +505,67 @@ def run_title_hook_suggestion_generation(
                     )
                     return ["cancelled"]
                 request = active_request
-            active_generator = generator or OpenAITitleHookSuggestionGenerator(model=request.model)
+                generation_thread_id = active_state.thread_id
+            if active_generator is None and request.provider == "openai":
+                if not openai_api_key_is_configured():
+                    raise RuntimeError("OPENAI_API_KEY is not configured")
+                active_generator = OpenAITitleHookSuggestionGenerator(model=request.model)
+            if active_generator is None:
+                active_generator = CodexTitleHookSuggestionGenerator(
+                    storage_root=storage_paths.root,
+                    job_id=job_id,
+                    clip_id=clip_id,
+                    model=request.model,
+                    thread_id=generation_thread_id,
+                )
             result = active_generator.generate(request.prompt_payload(), frame_paths)
+            generation_thread_id = getattr(
+                active_generator,
+                "last_thread_id",
+                generation_thread_id,
+            )
 
+        _validate_suggestion_evidence(result, request)
         suggestions = normalize_title_hook_suggestions(
             result,
             clip_duration=request.clip_duration,
+        )
+        recommended_index = next(
+            (
+                index
+                for index, suggestion in enumerate(result.suggestions)
+                if suggestion.id == result.recommended_suggestion_id
+            ),
+            0,
         )
         next_state = TitleHookSuggestionsDocument(
             clipId=clip_id,
             state="ready",
             inputHash=input_hash,
             draftHash=request.draft_hash,
+            revisionHash=request.revision_hash,
+            provider=request.provider,
+            threadId=generation_thread_id,
             model=request.model,
             suggestions=suggestions,
+            recommendedSuggestionId=suggestions[recommended_index].id,
+            youtubeDescription=result.youtube_description,
+            hashtags=result.hashtags,
+            descriptionEvidenceSegmentIds=result.description_evidence_segment_ids,
             generatedAt=_utc_iso(),
         )
         result_state = "ready"
     except Exception as exc:
-        next_state = failed_title_hook_suggestions(request, _safe_generation_error(exc))
+        if active_generator is not None:
+            generation_thread_id = getattr(
+                active_generator,
+                "last_thread_id",
+                generation_thread_id,
+            )
+        next_state = failed_title_hook_suggestions(
+            request,
+            _safe_generation_error(exc),
+        ).model_copy(update={"thread_id": generation_thread_id})
         result_state = "failed"
 
     with subtitle_review_document_lock(job_dir):
@@ -452,7 +579,7 @@ def run_title_hook_suggestion_generation(
             active_state.state not in {"queued", "generating"}
             or active_state.input_hash != input_hash
             or active_request.input_hash != input_hash
-            or active_state.draft_hash != active_request.draft_hash
+            or not _same_generation_context(active_state, active_request)
         ):
             return ["superseded"]
         if not _generation_context_is_active(session_factory, job_id, review_path):
@@ -462,7 +589,11 @@ def run_title_hook_suggestion_generation(
             )
             return ["cancelled"]
         next_state = next_state.model_copy(
-            update={"draft_hash": active_request.draft_hash}
+            update={
+                "draft_hash": active_request.draft_hash,
+                "revision_hash": active_request.revision_hash,
+                "provider": active_request.provider,
+            }
         )
         write_title_hook_suggestions(next_state, state_path)
     return [result_state]

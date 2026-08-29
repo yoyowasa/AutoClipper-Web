@@ -109,6 +109,10 @@ TITLE_HOOK_OUTPUT_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "id": {"type": "string", "minLength": 1, "maxLength": 40},
+                    "intent": {
+                        "type": "string",
+                        "enum": ["factual", "engagement", "concise"],
+                    },
                     "publicationTitle": {
                         "type": "string",
                         "minLength": 1,
@@ -142,9 +146,20 @@ TITLE_HOOK_OUTPUT_SCHEMA: dict[str, Any] = {
                         "minLength": 1,
                         "maxLength": 300,
                     },
+                    "evidenceSegmentIds": {
+                        "type": "array",
+                        "minItems": 0,
+                        "maxItems": 64,
+                        "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 128,
+                        },
+                    },
                 },
                 "required": [
                     "id",
+                    "intent",
                     "publicationTitle",
                     "overlayTitle",
                     "hookText",
@@ -152,16 +167,54 @@ TITLE_HOOK_OUTPUT_SCHEMA: dict[str, Any] = {
                     "hookSceneStart",
                     "hookSceneEnd",
                     "reason",
+                    "evidenceSegmentIds",
                 ],
                 "additionalProperties": False,
             },
-        }
+        },
+        "recommendedSuggestionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+        },
+        "youtubeDescription": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+        },
+        "hashtags": {
+            "type": "array",
+            "minItems": 3,
+            "maxItems": 5,
+            "items": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 40,
+                "pattern": r"^#[^#\s]+$",
+            },
+        },
+        "descriptionEvidenceSegmentIds": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 64,
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+            },
+        },
     },
-    "required": ["suggestions"],
+    "required": [
+        "suggestions",
+        "recommendedSuggestionId",
+        "youtubeDescription",
+        "hashtags",
+        "descriptionEvidenceSegmentIds",
+    ],
     "additionalProperties": False,
 }
 EXPECTED_RESPONSE_SCHEMA_SHA256 = {
-    REQUEST_TASK: "faf33f30dde85fd36e8e88b952aba7b99dff6cb16245627f08b1107ab2b06a03",
+    REQUEST_TASK: "7eeb4af17402f17cf3f01e075d0cc74d1d2720c2bbee3b621d4230f9e7f920a1",
     INITIAL_CLIP_SELECTION_TASK: (
         "a419f3346e5a666d393a6c22a55ee980a1db1f48646b3c545c596b34962165e3"
     ),

@@ -12,6 +12,7 @@ import type {
   JobCreateResponse,
   JobResultsResponse,
   JobStatusResponse,
+  PostTitleCandidate,
   StorageCleanupResponse,
   StorageStatusResponse,
   SubtitleReviewDocument,
@@ -544,6 +545,14 @@ export async function applySubtitleReviewClip(
   content: {
     title: string;
     publicationTitle: string;
+    titleCandidates: PostTitleCandidate[];
+    recommendedTitleId: string | null;
+    selectedTitleId: string | null;
+    youtubeDescription: string;
+    youtubeHashtags: string[];
+    descriptionEvidenceSegmentIds: string[];
+    postMetadataSource: string | null;
+    postMetadataRevisionHash: string | null;
     hookText: string;
     hookDurationSeconds: number;
     hookSceneStart: number | null;

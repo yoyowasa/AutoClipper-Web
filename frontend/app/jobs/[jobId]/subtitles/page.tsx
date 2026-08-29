@@ -30,6 +30,7 @@ import { subtitlePreviewEvents } from "../../../../lib/subtitlePreview";
 import type {
   ClipTextStyle,
   ExportType,
+  PostTitleCandidate,
   SubtitleReviewClip,
   SubtitleReviewClipFramingUpdateRequest,
   SubtitleReviewConvertToShortRequest,
@@ -116,6 +117,38 @@ function canonicalSuggestionDraft(
   );
 }
 
+function normalizeYoutubeHashtags(values: string[]): string[] {
+  return Array.from(
+    new Set(
+      values
+        .flatMap((value) => value.split(/[\s,、]+/u))
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .map((value) => (value.startsWith("#") ? value : `#${value}`))
+    )
+  ).slice(0, 12);
+}
+
+function hashtagsFromText(value: string): string[] {
+  return normalizeYoutubeHashtags([value]);
+}
+
+function postCopyText(title: string, description: string, hashtags: string[]): string {
+  return [title.trim(), description.trim(), normalizeYoutubeHashtags(hashtags).join(" ")]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function postMetadataSourceForProvider(provider: string | null | undefined): string | null {
+  if (provider === "codex") {
+    return "codex";
+  }
+  if (provider) {
+    return "manual";
+  }
+  return null;
+}
+
 async function sha256Hex(value: string): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest(
     "SHA-256",
@@ -151,6 +184,14 @@ function shortTitleOutputExpected({
 
 type ClipContentDraft = {
   publicationTitle: string;
+  titleCandidates: PostTitleCandidate[];
+  recommendedTitleId: string | null;
+  selectedTitleId: string | null;
+  youtubeDescription: string;
+  youtubeHashtagsText: string;
+  descriptionEvidenceSegmentIds: string[];
+  postMetadataSource: string | null;
+  postMetadataRevisionHash: string | null;
   title: string;
   hookText: string;
   hookDurationSeconds: number;
@@ -160,6 +201,47 @@ type ClipContentDraft = {
   hookStyle: ClipTextStyle | null;
   subtitleStyle: ClipTextStyle | null;
 };
+
+type PostMetadataApplyPayload = {
+  titleCandidates: PostTitleCandidate[];
+  recommendedTitleId: string | null;
+  selectedTitleId: string | null;
+  youtubeDescription: string;
+  youtubeHashtags: string[];
+  descriptionEvidenceSegmentIds: string[];
+  postMetadataSource: string | null;
+  postMetadataRevisionHash: string | null;
+};
+
+function postMetadataApplyPayload(
+  draft: ClipContentDraft,
+  invalidateAiEvidence: boolean
+): PostMetadataApplyPayload {
+  const youtubeDescription = draft.youtubeDescription.trim();
+  const youtubeHashtags = hashtagsFromText(draft.youtubeHashtagsText);
+  if (invalidateAiEvidence) {
+    return {
+      titleCandidates: [],
+      recommendedTitleId: null,
+      selectedTitleId: null,
+      youtubeDescription,
+      youtubeHashtags,
+      descriptionEvidenceSegmentIds: [],
+      postMetadataSource: "manual",
+      postMetadataRevisionHash: null
+    };
+  }
+  return {
+    titleCandidates: draft.titleCandidates,
+    recommendedTitleId: draft.recommendedTitleId,
+    selectedTitleId: draft.selectedTitleId,
+    youtubeDescription,
+    youtubeHashtags,
+    descriptionEvidenceSegmentIds: draft.descriptionEvidenceSegmentIds,
+    postMetadataSource: draft.postMetadataSource,
+    postMetadataRevisionHash: draft.postMetadataRevisionHash
+  };
+}
 
 type ShortFramingDrafts = Record<
   string,
@@ -240,6 +322,14 @@ function ShortFramingRange({
 function contentDraftForClip(clip: SubtitleReviewClip): ClipContentDraft {
   return {
     publicationTitle: clip.publicationTitle ?? clip.title,
+    titleCandidates: clip.titleCandidates ?? [],
+    recommendedTitleId: clip.recommendedTitleId ?? null,
+    selectedTitleId: clip.selectedTitleId ?? null,
+    youtubeDescription: clip.youtubeDescription ?? "",
+    youtubeHashtagsText: (clip.youtubeHashtags ?? []).join(" "),
+    descriptionEvidenceSegmentIds: clip.descriptionEvidenceSegmentIds ?? [],
+    postMetadataSource: clip.postMetadataSource ?? null,
+    postMetadataRevisionHash: clip.postMetadataRevisionHash ?? null,
     title: clip.title,
     hookText: clip.hookText,
     hookDurationSeconds: clip.hookDurationSeconds,
@@ -284,6 +374,16 @@ function isClipContentDirty(
     draft &&
       (draft.title !== clip.title ||
         draft.publicationTitle !== (clip.publicationTitle ?? clip.title) ||
+        JSON.stringify(draft.titleCandidates) !== JSON.stringify(clip.titleCandidates ?? []) ||
+        draft.recommendedTitleId !== (clip.recommendedTitleId ?? null) ||
+        draft.selectedTitleId !== (clip.selectedTitleId ?? null) ||
+        draft.youtubeDescription !== (clip.youtubeDescription ?? "") ||
+        JSON.stringify(hashtagsFromText(draft.youtubeHashtagsText)) !==
+          JSON.stringify(normalizeYoutubeHashtags(clip.youtubeHashtags ?? [])) ||
+        JSON.stringify(draft.descriptionEvidenceSegmentIds) !==
+          JSON.stringify(clip.descriptionEvidenceSegmentIds ?? []) ||
+        draft.postMetadataSource !== (clip.postMetadataSource ?? null) ||
+        draft.postMetadataRevisionHash !== (clip.postMetadataRevisionHash ?? null) ||
         draft.hookText !== clip.hookText ||
         draft.hookDurationSeconds !== clip.hookDurationSeconds ||
         draft.hookSceneStart !== clip.hookSceneStart ||
@@ -304,6 +404,7 @@ export default function SubtitleReviewPage() {
   const segmentRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const suggestionPlaybackEndRef = useRef<number | null>(null);
   const suggestionRequestGenerationRef = useRef<Record<string, number>>({});
+  const autoSuggestionAttemptedClipIdsRef = useRef<Set<string>>(new Set());
   const reviewRequestGenerationRef = useRef(0);
   const reviewMutationCountRef = useRef(0);
   const shortFramingSaveInFlightRef = useRef<Set<string>>(new Set());
@@ -363,9 +464,12 @@ export default function SubtitleReviewPage() {
   const [requestingSuggestionClipId, setRequestingSuggestionClipId] = useState<
     string | null
   >(null);
+  const [autoGeneratingSuggestionClipIds, setAutoGeneratingSuggestionClipIds] =
+    useState<Set<string>>(new Set());
   const [previewingSuggestionId, setPreviewingSuggestionId] = useState<
     string | null
   >(null);
+  const [copiedPostField, setCopiedPostField] = useState<string | null>(null);
   const [suggestionHydrationRetryVersion, setSuggestionHydrationRetryVersion] =
     useState(0);
 
@@ -424,6 +528,11 @@ export default function SubtitleReviewPage() {
     return () => {
       active = false;
     };
+  }, [jobId]);
+
+  useEffect(() => {
+    autoSuggestionAttemptedClipIdsRef.current = new Set();
+    setAutoGeneratingSuggestionClipIds(new Set());
   }, [jobId]);
 
   useEffect(() => {
@@ -609,6 +718,114 @@ export default function SubtitleReviewPage() {
       (!selectedSuggestionRecord.draftHashVerified ||
         selectedSuggestionRecord.inputSnapshot !== selectedSuggestionInputSnapshot)
   );
+
+  useEffect(() => {
+    if (
+      !jobId ||
+      !review ||
+      review.jobId !== jobId ||
+      review.state !== "awaiting_review" ||
+      review.clips.length === 0 ||
+      review.segments.some((segment) => !(segment.id in drafts))
+    ) {
+      return;
+    }
+    const pendingClips = review.clips.filter(
+      (clip) => !autoSuggestionAttemptedClipIdsRef.current.has(clip.id)
+    );
+    if (pendingClips.length === 0) {
+      return;
+    }
+    for (const clip of pendingClips) {
+      autoSuggestionAttemptedClipIdsRef.current.add(clip.id);
+    }
+    const queue = [...pendingClips];
+    const runNext = async () => {
+      while (true) {
+        const clip = queue.shift();
+        if (!clip) {
+          return;
+        }
+        const segments = clip.segmentIds
+          .map((segmentId) => review.segments.find((segment) => segment.id === segmentId))
+          .filter((segment): segment is SubtitleReviewSegment => Boolean(segment))
+          .sort((left, right) => left.index - right.index)
+          .map((segment) => ({
+            segmentId: segment.id,
+            text: drafts[segment.id] ?? segment.text
+          }));
+        const inputSnapshot = JSON.stringify(segments);
+        setAutoGeneratingSuggestionClipIds((current) =>
+          new Set(current).add(clip.id)
+        );
+        try {
+          const existing = await getTitleHookSuggestions(jobId, clip.id);
+          const response =
+            existing ??
+            (await requestTitleHookSuggestions(jobId, clip.id, {
+              segments,
+              forceRegenerate: false
+            }));
+          const currentDraftHash = await sha256Hex(canonicalSuggestionDraft(segments));
+          const requestGeneration =
+            (suggestionRequestGenerationRef.current[clip.id] ?? 0) + 1;
+          suggestionRequestGenerationRef.current[clip.id] = requestGeneration;
+          setTitleHookSuggestionRecords((current) => ({
+            ...current,
+            [clip.id]: {
+              response,
+              draftHashVerified:
+                Boolean(response.draftHash) && response.draftHash === currentDraftHash,
+              inputSnapshot,
+              requestGeneration
+            }
+          }));
+        } catch (caught) {
+          const requestGeneration =
+            (suggestionRequestGenerationRef.current[clip.id] ?? 0) + 1;
+          suggestionRequestGenerationRef.current[clip.id] = requestGeneration;
+          setTitleHookSuggestionRecords((current) => ({
+            ...current,
+            [clip.id]: {
+              draftHashVerified: false,
+              inputSnapshot,
+              requestGeneration,
+              response: {
+                clipId: clip.id,
+                state: "failed",
+                inputHash: null,
+                draftHash: null,
+                revisionHash: null,
+                model: null,
+                provider: null,
+                recommendedSuggestionId: null,
+                youtubeDescription: "",
+                hashtags: [],
+                descriptionEvidenceSegmentIds: [],
+                suggestions: [],
+                error:
+                  caught instanceof Error
+                    ? caught.message
+                    : "投稿案を生成できませんでした",
+                generatedAt: null
+              }
+            }
+          }));
+        } finally {
+          setAutoGeneratingSuggestionClipIds((current) => {
+            const next = new Set(current);
+            next.delete(clip.id);
+            return next;
+          });
+        }
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(2, pendingClips.length) },
+      () => runNext()
+    );
+    void Promise.all(workers);
+  }, [drafts, jobId, review]);
 
   useEffect(() => {
     if (
@@ -1084,6 +1301,7 @@ export default function SubtitleReviewPage() {
     setLastSelectedClipIds((current) => ({ ...current, [clip.type]: clip.id }));
     setSelectedTextStyleTarget("title");
     setShowSavedPreview(false);
+    setCopiedPostField(null);
     setError(null);
   }
 
@@ -1528,6 +1746,12 @@ export default function SubtitleReviewPage() {
           inputHash: null,
           draftHash: null,
           model: null,
+          provider: null,
+          revisionHash: null,
+          recommendedSuggestionId: null,
+          youtubeDescription: "",
+          hashtags: [],
+          descriptionEvidenceSegmentIds: [],
           suggestions: [],
           error: null,
           generatedAt: null
@@ -1574,11 +1798,17 @@ export default function SubtitleReviewPage() {
             inputHash: null,
             draftHash: null,
             model: null,
+            provider: null,
+            revisionHash: null,
+            recommendedSuggestionId: null,
+            youtubeDescription: "",
+            hashtags: [],
+            descriptionEvidenceSegmentIds: [],
             suggestions: [],
             error:
               caught instanceof Error
                 ? caught.message
-                : "AI案を生成できませんでした",
+                : "投稿案を生成できませんでした",
             generatedAt: null
           }
         }
@@ -1596,6 +1826,15 @@ export default function SubtitleReviewPage() {
     if (!selectedClip || selectedSuggestionsAreStale) {
       return;
     }
+    const suggestionResponse = selectedSuggestionRecord?.response;
+    const titleCandidates =
+      suggestionResponse?.suggestions.map((item) => ({
+        id: item.id,
+        title: item.publicationTitle,
+        intent: item.intent,
+        reason: item.reason,
+        evidenceSegmentIds: item.evidenceSegmentIds
+      })) ?? [];
     const suggestedHookStart = clamp(
       suggestion.hookSceneStart ?? 0,
       0,
@@ -1618,6 +1857,15 @@ export default function SubtitleReviewPage() {
         .filter(Boolean)
         .join(" ")
         .slice(0, 100),
+      titleCandidates,
+      recommendedTitleId: suggestionResponse?.recommendedSuggestionId ?? null,
+      selectedTitleId: suggestion.id,
+      youtubeDescription: suggestionResponse?.youtubeDescription ?? "",
+      youtubeHashtagsText: (suggestionResponse?.hashtags ?? []).join(" "),
+      descriptionEvidenceSegmentIds:
+        suggestionResponse?.descriptionEvidenceSegmentIds ?? [],
+      postMetadataSource: postMetadataSourceForProvider(suggestionResponse?.provider),
+      postMetadataRevisionHash: suggestionResponse?.revisionHash ?? null,
       title: limitToTwoTextLines(suggestion.overlayTitle).slice(0, 80),
       hookText: limitToTwoTextLines(suggestion.hookText).slice(0, 120),
       hookDurationSeconds: clamp(suggestion.hookDurationSeconds, 1, 8),
@@ -1629,6 +1877,19 @@ export default function SubtitleReviewPage() {
         : null
     });
     setSelectedTextStyleTarget("title");
+  }
+
+  async function copyPostField(field: string, value: string) {
+    if (!value.trim()) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedPostField(field);
+      setError(null);
+    } catch {
+      setError("クリップボードへコピーできませんでした。");
+    }
   }
 
   function clearSelectedHook() {
@@ -1717,7 +1978,7 @@ export default function SubtitleReviewPage() {
     }
     if (dirtySegmentIds.size > 0 || hasDirtyClipContent) {
       setError(
-        "未保存のタイトル、フック文字、文字スタイル、または字幕を先に保存してください。"
+        "未保存のタイトル、投稿情報、フック文字、文字スタイル、または字幕を先に保存してください。"
       );
       return;
     }
@@ -1770,6 +2031,10 @@ export default function SubtitleReviewPage() {
         text: drafts[segment.id] ?? segment.text
       }));
     const savedSegmentIds = new Set(segmentUpdates.map((segment) => segment.segmentId));
+    const postMetadata = postMetadataApplyPayload(
+      selectedClipContentDraft,
+      segmentUpdates.length > 0 || selectedSuggestionsAreStale
+    );
     const mutationGeneration = beginReviewMutation();
     setConfirmingClipId(selectedClip.id);
     setError(null);
@@ -1777,6 +2042,7 @@ export default function SubtitleReviewPage() {
       const updated = await applySubtitleReviewClip(jobId, selectedClip.id, {
         title,
         publicationTitle: selectedClipContentDraft.publicationTitle.trim() || title,
+        ...postMetadata,
         hookText: selectedClipContentDraft.hookText.trim(),
         hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
         hookSceneStart: selectedClipContentDraft.hookSceneStart,
@@ -1859,16 +2125,21 @@ export default function SubtitleReviewPage() {
     const savedSegmentIds = new Set(
       segmentUpdates.map((segment) => segment.segmentId)
     );
+    const postMetadata = postMetadataApplyPayload(
+      selectedClipContentDraft,
+      segmentUpdates.length > 0 || selectedSuggestionsAreStale
+    );
     const mutationGeneration = beginReviewMutation();
     setIsConvertingToShort(true);
     setError(null);
     try {
       if (selectedClipHasDirtySegments || selectedClipHasDirtyContent) {
-        const saved = await applySubtitleReviewClip(jobId, selectedClip.id, {
-          title,
-          publicationTitle:
-            selectedClipContentDraft.publicationTitle.trim() || title,
-          hookText: selectedClipContentDraft.hookText.trim(),
+          const saved = await applySubtitleReviewClip(jobId, selectedClip.id, {
+            title,
+            publicationTitle:
+              selectedClipContentDraft.publicationTitle.trim() || title,
+            ...postMetadata,
+            hookText: selectedClipContentDraft.hookText.trim(),
           hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
           hookSceneStart: selectedClipContentDraft.hookSceneStart,
           hookSceneEnd: selectedClipContentDraft.hookSceneEnd,
@@ -1958,7 +2229,7 @@ export default function SubtitleReviewPage() {
       return;
     }
     if (!review || dirtySegmentIds.size > 0 || hasDirtyClipContent) {
-      setError("未保存のタイトル、フック、または字幕があります。先に保存してください。");
+      setError("未保存のタイトル、投稿情報、フック、または字幕があります。先に保存してください。");
       return;
     }
     if (!allPreviewsReady) {
@@ -2762,7 +3033,10 @@ export default function SubtitleReviewPage() {
                         value={selectedClipContentDraft?.publicationTitle ?? ""}
                         onChange={(event) =>
                           updateClipContentDraft(selectedClip.id, {
-                            publicationTitle: event.target.value
+                            publicationTitle: event.target.value,
+                            selectedTitleId: null,
+                            postMetadataSource: "manual",
+                            postMetadataRevisionHash: null
                           })
                         }
                       />
@@ -2895,12 +3169,128 @@ export default function SubtitleReviewPage() {
                       </p>
                     ) : null}
 
+                    <section className="mt-3 border-t border-neutral-300 pt-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <h4 className="text-xs font-semibold text-neutral-800">
+                          YouTube投稿用
+                        </h4>
+                        {selectedClipContentDraft?.postMetadataSource ? (
+                          <span className="text-[10px] text-neutral-500">
+                            {selectedClipContentDraft.postMetadataSource}
+                          </span>
+                        ) : null}
+                      </div>
+                      <label className="mt-2 block text-xs font-semibold text-neutral-700">
+                        説明欄
+                        <textarea
+                          className="mt-1 min-h-28 w-full resize-y border border-neutral-300 bg-white px-2 py-2 text-sm leading-5 outline-none focus:border-sky-600"
+                          disabled={!isEditable}
+                          maxLength={2000}
+                          placeholder="動画の要約・見どころ"
+                          value={selectedClipContentDraft?.youtubeDescription ?? ""}
+                          onChange={(event) =>
+                            updateClipContentDraft(selectedClip.id, {
+                              youtubeDescription: event.target.value,
+                              descriptionEvidenceSegmentIds: [],
+                              postMetadataSource: "manual",
+                              postMetadataRevisionHash: null
+                            })
+                          }
+                        />
+                      </label>
+                      <p className="mt-1 text-right text-[10px] text-neutral-500">
+                        {selectedClipContentDraft?.youtubeDescription.length ?? 0} / 2000
+                      </p>
+                      <label className="mt-2 block text-xs font-semibold text-neutral-700">
+                        ハッシュタグ
+                        <input
+                          className="mt-1 min-h-9 w-full border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-sky-600"
+                          disabled={!isEditable}
+                          maxLength={500}
+                          placeholder="#切り抜き #ショート"
+                          type="text"
+                          value={selectedClipContentDraft?.youtubeHashtagsText ?? ""}
+                          onChange={(event) =>
+                            updateClipContentDraft(selectedClip.id, {
+                              youtubeHashtagsText: event.target.value,
+                              postMetadataSource: "manual",
+                              postMetadataRevisionHash: null
+                            })
+                          }
+                        />
+                      </label>
+                      <p className="mt-1 text-[10px] text-neutral-500">
+                        空白またはカンマ区切り・最大12個
+                      </p>
+                      <div className="mt-2 grid grid-cols-3 gap-1">
+                        <button
+                          className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
+                          disabled={!selectedClipContentDraft?.publicationTitle.trim()}
+                          type="button"
+                          onClick={() =>
+                            void copyPostField(
+                              "title",
+                              selectedClipContentDraft?.publicationTitle ?? ""
+                            )
+                          }
+                        >
+                          {copiedPostField === "title" ? "コピー済み" : "タイトルをコピー"}
+                        </button>
+                        <button
+                          className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
+                          disabled={!selectedClipContentDraft?.youtubeDescription.trim()}
+                          type="button"
+                          onClick={() =>
+                            void copyPostField(
+                              "description",
+                              selectedClipContentDraft?.youtubeDescription ?? ""
+                            )
+                          }
+                        >
+                          {copiedPostField === "description"
+                            ? "コピー済み"
+                            : "説明欄をコピー"}
+                        </button>
+                        <button
+                          className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
+                          disabled={
+                            !postCopyText(
+                              selectedClipContentDraft?.publicationTitle ?? "",
+                              selectedClipContentDraft?.youtubeDescription ?? "",
+                              hashtagsFromText(
+                                selectedClipContentDraft?.youtubeHashtagsText ?? ""
+                              )
+                            )
+                          }
+                          type="button"
+                          onClick={() =>
+                            void copyPostField(
+                              "all",
+                              postCopyText(
+                                selectedClipContentDraft?.publicationTitle ?? "",
+                                selectedClipContentDraft?.youtubeDescription ?? "",
+                                hashtagsFromText(
+                                  selectedClipContentDraft?.youtubeHashtagsText ?? ""
+                                )
+                              )
+                            )
+                          }
+                        >
+                          {copiedPostField === "all" ? "コピー済み" : "全部コピー"}
+                        </button>
+                      </div>
+                    </section>
+
                     <TitleHookSuggestionPanel
-                      busy={requestingSuggestionClipId === selectedClip.id}
+                      busy={
+                        requestingSuggestionClipId === selectedClip.id ||
+                        autoGeneratingSuggestionClipIds.has(selectedClip.id)
+                      }
                       canPreview={selectedPlayerReady}
                       disabled={!isEditable}
                       previewingSuggestionId={previewingSuggestionId}
                       response={selectedSuggestionRecord?.response ?? null}
+                      selectedSuggestionId={selectedClipContentDraft?.selectedTitleId ?? null}
                       stale={selectedSuggestionsAreStale}
                       onApply={applyTitleHookSuggestion}
                       onClearHook={clearSelectedHook}
@@ -2913,7 +3303,7 @@ export default function SubtitleReviewPage() {
                     (selectedClipContentDraft.hookSceneStart !== selectedClip.hookSceneStart ||
                       selectedClipContentDraft.hookSceneEnd !== selectedClip.hookSceneEnd) ? (
                       <p className="mt-2 border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-medium text-violet-900">
-                        AI案のフック映像区間は、右下のOKでタイトル・字幕とまとめて保存します。
+                        投稿案のフック映像区間は、右下のOKでタイトル・字幕とまとめて保存します。
                       </p>
                     ) : null}
 

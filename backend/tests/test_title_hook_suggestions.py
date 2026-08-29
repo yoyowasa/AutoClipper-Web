@@ -41,6 +41,7 @@ from app.jobs.title_hook_suggestions import (
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.main import app
 from app.models import Job, Video
+from app.posting_metadata import write_youtube_posting_artifacts
 from app.scoring.title_hook_suggestions import (
     OPENAI_REQUEST_TIMEOUT_SECONDS,
     OpenAITitleHookSuggestionGenerator,
@@ -78,6 +79,7 @@ def _suggestion_result() -> TitleHookSuggestionResult:
             "suggestions": [
                 {
                     "id": "model-a",
+                    "intent": "factual",
                     "publicationTitle": "会話の意外な展開を振り返る",
                     "overlayTitle": "まさかの展開",
                     "hookText": "その一言で流れが変わった",
@@ -85,9 +87,11 @@ def _suggestion_result() -> TitleHookSuggestionResult:
                     "hookSceneStart": 0.2,
                     "hookSceneEnd": 2.2,
                     "reason": "発言直後の反応が伝わる",
+                    "evidenceSegmentIds": [],
                 },
                 {
                     "id": "model-b",
+                    "intent": "engagement",
                     "publicationTitle": "思わず聞き返した会話",
                     "overlayTitle": "聞き間違い？",
                     "hookText": "今、なんて言った？",
@@ -95,9 +99,11 @@ def _suggestion_result() -> TitleHookSuggestionResult:
                     "hookSceneStart": 28.0,
                     "hookSceneEnd": 31.0,
                     "reason": "clip終端付近のやり取りを使う",
+                    "evidenceSegmentIds": [],
                 },
                 {
                     "id": "model-c",
+                    "intent": "concise",
                     "publicationTitle": "予想外の返答に笑ってしまう",
                     "overlayTitle": "予想外の返答",
                     "hookText": "答えが想像と違いすぎた",
@@ -105,8 +111,13 @@ def _suggestion_result() -> TitleHookSuggestionResult:
                     "hookSceneStart": 4.0,
                     "hookSceneEnd": 4.4,
                     "reason": "短すぎる提案は正規化対象",
+                    "evidenceSegmentIds": [],
                 },
-            ]
+            ],
+            "recommendedSuggestionId": "model-a",
+            "youtubeDescription": "会話中に起きた意外な展開を振り返る切り抜きです。",
+            "hashtags": ["#会話", "#切り抜き", "#動画"],
+            "descriptionEvidenceSegmentIds": [],
         }
     )
 
@@ -231,17 +242,27 @@ def test_title_hook_api_queues_caches_force_regenerates_and_gets(
 
     first = client.post(url, json={"segments": drafts, "forceRegenerate": False})
     cached = client.post(url, json={"segments": list(reversed(drafts)), "forceRegenerate": False})
+    state_path = title_hook_suggestions_path(
+        title_hook_api["storage"].job_outputs(job_id),
+        "short_1",
+    )
+    previous = load_title_hook_suggestions(state_path).model_copy(
+        update={"thread_id": "thread-existing"}
+    )
+    write_title_hook_suggestions(previous, state_path)
     forced = client.post(url, json={"segments": drafts, "forceRegenerate": True})
     fetched = client.get(url)
 
     assert first.status_code == 200
     assert first.json()["state"] == "queued"
-    assert first.json()["model"] == "gpt-test-title-hook"
+    assert first.json()["model"] == "codex-default"
+    assert first.json()["provider"] == "codex"
     assert len(first.json()["inputHash"]) == 64
     assert len(first.json()["draftHash"]) == 64
     assert cached.json()["inputHash"] == first.json()["inputHash"]
     assert cached.json()["draftHash"] == first.json()["draftHash"]
     assert forced.json()["inputHash"] == first.json()["inputHash"]
+    assert forced.json()["threadId"] == "thread-existing"
     assert fetched.json() == forced.json()
     assert len(title_hook_api["queued"]) == 4
 
@@ -316,7 +337,7 @@ def test_get_reenqueues_pending_artifact_for_automatic_recovery(
 
     response = client.get(url)
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert response.json()["state"] == pending_state
     assert title_hook_api["queued"] == [(job_id, "short_1", pending.input_hash)]
 
@@ -386,6 +407,65 @@ def test_draft_hash_preserves_raw_text_while_prompt_text_is_stripped(
     ]
 
 
+def test_revision_hash_tracks_reviewed_content_not_provider_or_model(
+    title_hook_api: dict[str, Any],
+) -> None:
+    review = title_hook_api["review"]
+    drafts = [
+        TitleHookDraftSegment.model_validate(item)
+        for item in _short_drafts(review)
+    ]
+    codex_input = build_title_hook_suggestion_input(
+        review,
+        "short_1",
+        drafts,
+        model="codex-default",
+        provider="codex",
+    )
+    openai_input = build_title_hook_suggestion_input(
+        review,
+        "short_1",
+        drafts,
+        model="gpt-test",
+        provider="openai",
+    )
+    changed_drafts = [item.model_copy(deep=True) for item in drafts]
+    changed_drafts[0].text += "変更"
+    changed_input = build_title_hook_suggestion_input(
+        review,
+        "short_1",
+        changed_drafts,
+        model="codex-default",
+        provider="codex",
+    )
+
+    assert codex_input.revision_hash == openai_input.revision_hash
+    assert codex_input.input_hash != openai_input.input_hash
+    assert changed_input.revision_hash != codex_input.revision_hash
+
+
+def test_queued_document_can_preserve_codex_thread_for_regeneration(
+    title_hook_api: dict[str, Any],
+) -> None:
+    review = title_hook_api["review"]
+    request = build_title_hook_suggestion_input(
+        review,
+        "short_1",
+        [
+            TitleHookDraftSegment.model_validate(item)
+            for item in _short_drafts(review)
+        ],
+        model="codex-default",
+    )
+
+    queued = queued_title_hook_suggestions(
+        request,
+        thread_id="a" * 32,
+    )
+
+    assert queued.thread_id == "a" * 32
+
+
 def test_title_hook_api_rejects_incomplete_or_foreign_draft_snapshot(
     title_hook_api: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
@@ -411,7 +491,7 @@ def test_title_hook_api_rejects_incomplete_or_foreign_draft_snapshot(
     assert foreign.json()["detail"] == "subtitle segment does not belong to the selected clip"
 
 
-def test_title_hook_api_missing_key_returns_failed_without_queue(
+def test_title_hook_api_codex_default_does_not_require_openai_key(
     title_hook_api: dict[str, Any],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -424,9 +504,9 @@ def test_title_hook_api_missing_key_returns_failed_without_queue(
     )
 
     assert response.status_code == 200
-    assert response.json()["state"] == "failed"
-    assert response.json()["error"] == "OPENAI_API_KEY is not configured"
-    assert title_hook_api["queued"] == []
+    assert response.json()["state"] == "queued"
+    assert response.json()["provider"] == "codex"
+    assert title_hook_api["queued"]
 
 
 def test_subtitleless_clip_allows_empty_snapshot_and_generates_from_frame(
@@ -573,6 +653,178 @@ def test_review_selection_separates_publication_and_overlay_titles(
     assert applied.shorts[0].overlay_title == "新しい表示タイトル"
     assert applied.shorts[0].hook_scene_start == 12
     assert applied.shorts[0].hook_scene_end == 14
+
+
+@pytest.mark.parametrize("post_metadata_source", ["codex", "manual"])
+def test_apply_manualizes_ai_posting_copy_when_subtitles_change_in_same_save(
+    title_hook_api: dict[str, Any],
+    post_metadata_source: str,
+) -> None:
+    review = title_hook_api["review"]
+    drafts = _short_drafts(review)
+    generation_input = build_title_hook_suggestion_input(
+        review,
+        "short_1",
+        [TitleHookDraftSegment.model_validate(item) for item in drafts],
+        model="codex-default",
+    )
+    changed_drafts = [dict(item) for item in drafts]
+    changed_drafts[0]["text"] += " 修正"
+
+    response = title_hook_api["client"].post(
+        f"/api/jobs/{title_hook_api['job_id']}/subtitle-review/clips/short_1/apply",
+        json={
+            "title": "動画内表示タイトル",
+            "publicationTitle": "公開用タイトル",
+            "hookText": "冒頭フック",
+            "hookDurationSeconds": 2,
+            "segments": changed_drafts,
+            "titleCandidates": [
+                {
+                    "id": "candidate-a",
+                    "title": "公開用タイトル",
+                    "intent": "factual",
+                    "reason": "字幕に基づく",
+                }
+            ],
+            "recommendedTitleId": "candidate-a",
+            "selectedTitleId": "candidate-a",
+            "youtubeDescription": "説明欄",
+            "youtubeHashtags": ["#切り抜き"],
+            "postMetadataSource": post_metadata_source,
+            "postMetadataRevisionHash": generation_input.revision_hash,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = next(item for item in response.json()["clips"] if item["id"] == "short_1")
+    assert saved["publicationTitle"] == "公開用タイトル"
+    assert saved["titleCandidates"] == []
+    assert saved["recommendedTitleId"] is None
+    assert saved["selectedTitleId"] is None
+    assert saved["youtubeDescription"] == "説明欄"
+    assert saved["youtubeHashtags"] == ["#切り抜き"]
+    assert saved["descriptionEvidenceSegmentIds"] == []
+    assert saved["postMetadataSource"] == "manual"
+    assert saved["postMetadataRevisionHash"] is None
+
+
+def test_apply_rejects_codex_posting_copy_already_stale_before_save(
+    title_hook_api: dict[str, Any],
+) -> None:
+    review = title_hook_api["review"]
+    short = next(item for item in review.clips if item.id == "short_1")
+    segment_by_id = {segment.id: segment for segment in review.segments}
+    unchanged_drafts = [
+        {"segmentId": segment_id, "text": segment_by_id[segment_id].text}
+        for segment_id in short.segment_ids
+    ]
+
+    response = title_hook_api["client"].post(
+        f"/api/jobs/{title_hook_api['job_id']}/subtitle-review/clips/short_1/apply",
+        json={
+            "title": "動画内表示タイトル",
+            "publicationTitle": "公開用タイトル",
+            "hookText": "冒頭フック",
+            "hookDurationSeconds": 2,
+            "segments": unchanged_drafts,
+            "titleCandidates": [],
+            "youtubeDescription": "説明欄",
+            "youtubeHashtags": ["#切り抜き"],
+            "postMetadataSource": "codex",
+            "postMetadataRevisionHash": "f" * 64,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == (
+        "AI proposal is stale; regenerate it from the current subtitles"
+    )
+
+
+def test_apply_rehydrates_evidence_ids_from_ready_codex_artifact(
+    title_hook_api: dict[str, Any],
+) -> None:
+    review = title_hook_api["review"]
+    short = next(item for item in review.clips if item.id == "short_1")
+    segment_by_id = {segment.id: segment for segment in review.segments}
+    segment_id = short.segment_ids[0]
+    drafts = [
+        {"segmentId": item_id, "text": segment_by_id[item_id].text}
+        for item_id in short.segment_ids
+    ]
+    generation_input = build_title_hook_suggestion_input(
+        review,
+        "short_1",
+        [TitleHookDraftSegment.model_validate(item) for item in drafts],
+        model="codex-default",
+    )
+    result_payload = _suggestion_result().model_dump(by_alias=True, mode="json")
+    for suggestion in result_payload["suggestions"]:
+        suggestion["evidenceSegmentIds"] = [segment_id]
+    result_payload["descriptionEvidenceSegmentIds"] = [segment_id]
+    result = TitleHookSuggestionResult.model_validate(result_payload)
+    suggestions = normalize_title_hook_suggestions(result, clip_duration=short.duration)
+    ready = queued_title_hook_suggestions(generation_input).model_copy(
+        update={
+            "state": "ready",
+            "suggestions": suggestions,
+            "recommended_suggestion_id": "suggestion_1",
+            "youtube_description": result.youtube_description,
+            "hashtags": result.hashtags,
+            "description_evidence_segment_ids": result.description_evidence_segment_ids,
+        }
+    )
+    output_dir = title_hook_api["storage"].job_outputs(title_hook_api["job_id"])
+    write_title_hook_suggestions(
+        ready,
+        title_hook_suggestions_path(output_dir, "short_1"),
+    )
+
+    response = title_hook_api["client"].post(
+        f"/api/jobs/{title_hook_api['job_id']}/subtitle-review/clips/short_1/apply",
+        json={
+            "title": suggestions[0].overlay_title,
+            "publicationTitle": suggestions[0].publication_title,
+            "hookText": suggestions[0].hook_text,
+            "hookDurationSeconds": suggestions[0].hook_duration_seconds,
+            "hookSceneStart": short.start + (suggestions[0].hook_scene_start or 0),
+            "hookSceneEnd": short.start + (suggestions[0].hook_scene_end or 0),
+            "segments": drafts,
+            "titleCandidates": [
+                {
+                    "id": suggestion.id,
+                    "title": suggestion.publication_title,
+                    "intent": suggestion.intent,
+                    "reason": suggestion.reason,
+                }
+                for suggestion in suggestions
+            ],
+            "recommendedTitleId": "suggestion_1",
+            "selectedTitleId": None,
+            "youtubeDescription": result.youtube_description,
+            "youtubeHashtags": result.hashtags,
+            "postMetadataSource": "codex",
+            "postMetadataRevisionHash": generation_input.revision_hash,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    saved = next(item for item in response.json()["clips"] if item["id"] == "short_1")
+    assert saved["titleCandidates"][0]["evidenceSegmentIds"] == [segment_id]
+    assert saved["descriptionEvidenceSegmentIds"] == [segment_id]
+
+    restored = load_subtitle_review(subtitle_review_output_path(output_dir))
+    applied = apply_reviewed_clip_content(title_hook_api["selection"], restored).shorts[0]
+    assert applied.title_candidates[0].evidence_segment_ids == [segment_id]
+    assert applied.description_evidence_segment_ids == [segment_id]
+    json_path, _markdown_path = write_youtube_posting_artifacts(
+        [applied],
+        output_dir / "posting_assertion",
+    )
+    posting = json.loads(json_path.read_text(encoding="utf-8"))["clips"][0]
+    assert posting["titleCandidates"][0]["evidenceSegmentIds"] == [segment_id]
+    assert posting["descriptionEvidenceSegmentIds"] == [segment_id]
 
 
 def test_legacy_review_without_publication_title_falls_back_to_display_title(
@@ -868,6 +1120,43 @@ def test_worker_uses_text_only_fallback_and_normalizes_clip_relative_scene(
     assert artifact.suggestions[1].hook_scene_start == 17
     assert artifact.suggestions[1].hook_scene_end == 20
     assert artifact.suggestions[2].hook_scene_end - artifact.suggestions[2].hook_scene_start == 1.5
+    assert artifact.recommended_suggestion_id == "suggestion_1"
+    assert artifact.youtube_description == _suggestion_result().youtube_description
+    assert artifact.hashtags == ["#会話", "#切り抜き", "#動画"]
+    assert artifact.provider == "codex"
+    assert artifact.revision_hash == request.revision_hash
+
+
+def test_worker_rejects_unknown_evidence_segment_id(
+    title_hook_api: dict[str, Any],
+) -> None:
+    case = _prepare_worker_case(title_hook_api)
+
+    class UnknownEvidenceGenerator:
+        def generate(
+            self,
+            _payload: dict[str, Any],
+            _frame_paths: list[Path],
+        ) -> TitleHookSuggestionResult:
+            payload = _suggestion_result().model_dump(by_alias=True, mode="json")
+            payload["suggestions"][0]["evidenceSegmentIds"] = ["segment_unknown"]
+            return TitleHookSuggestionResult.model_validate(payload)
+
+    result = run_title_hook_suggestion_generation(
+        case["job_id"],
+        "short_1",
+        case["request"].input_hash,
+        session_factory=title_hook_api["session_factory"],
+        paths=case["storage"],
+        generator=UnknownEvidenceGenerator(),
+        frame_extractor=lambda *_args, **_kwargs: [],
+    )
+    artifact = load_title_hook_suggestions(case["state_path"])
+
+    assert result == ["failed"]
+    assert artifact.state == "failed"
+    assert artifact.error == "title/hook generation failed (ValueError)"
+    assert artifact.suggestions == []
 
 
 def test_worker_does_not_overwrite_newer_input_hash(
@@ -1138,7 +1427,43 @@ def test_legacy_suggestion_artifact_without_draft_hash_is_accepted() -> None:
             model="gpt-5.5",
         )
     ).model_dump(by_alias=True, mode="json")
-    payload.pop("draftHash")
+    for key in (
+        "draftHash",
+        "revisionHash",
+        "provider",
+        "threadId",
+        "recommendedSuggestionId",
+        "youtubeDescription",
+        "hashtags",
+        "descriptionEvidenceSegmentIds",
+    ):
+        payload.pop(key)
 
     restored = TitleHookSuggestionsDocument.model_validate(payload)
     assert restored.draft_hash is None
+    assert restored.revision_hash is None
+    assert restored.provider == "openai"
+    assert restored.youtube_description == ""
+
+
+def test_legacy_suggestion_result_fills_intents_and_recommendation() -> None:
+    payload = _suggestion_result().model_dump(by_alias=True, mode="json")
+    for suggestion in payload["suggestions"]:
+        suggestion.pop("intent")
+        suggestion.pop("evidenceSegmentIds")
+    for key in (
+        "recommendedSuggestionId",
+        "youtubeDescription",
+        "hashtags",
+        "descriptionEvidenceSegmentIds",
+    ):
+        payload.pop(key)
+
+    restored = TitleHookSuggestionResult.model_validate(payload)
+
+    assert [item.intent for item in restored.suggestions] == [
+        "factual",
+        "engagement",
+        "concise",
+    ]
+    assert restored.recommended_suggestion_id == "model-a"

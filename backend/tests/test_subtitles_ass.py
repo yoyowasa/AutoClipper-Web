@@ -3,12 +3,18 @@ from pathlib import Path
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.select_candidates import CandidateSelection
-from app.overlay_text import normalize_overlay_text
+from app.overlay_text import (
+    fit_overlay_text,
+    normalize_overlay_text,
+    overlay_font_size_scale,
+    overlay_text_width_units,
+)
 from app.render.subtitles_ass import (
     SubtitleLayout,
     build_ass_document,
     clipped_transcript_segments,
     format_ass_timestamp,
+    resolve_clip_text_style,
     split_overlay_lines,
     split_subtitle_lines,
     split_subtitle_text,
@@ -63,6 +69,54 @@ def test_overlay_lines_keep_legacy_single_line_auto_wrap() -> None:
 
     assert rendered.count("\\N") == 1
     assert rendered.replace("\\N", "") == text
+
+
+def test_ass_title_and_hook_apply_the_same_balanced_fit_contract() -> None:
+    title = "自動折り返しを維持する既存の一行タイトル"
+    hook = "ここで改行\n二行目も指定どおり表示"
+    candidate = make_candidate(
+        "short_1",
+        "short",
+        0.0,
+        8.0,
+        overlay_title=title,
+    ).model_copy(update={"hook_text": hook})
+    layout = SubtitleLayout.short()
+    expected_title = fit_overlay_text(
+        title,
+        output_width=layout.width,
+        font_name=layout.title_font_name,
+        font_size=layout.title_font_size,
+        margin_x=layout.margin_x,
+        outline_width=layout.outline,
+        shadow=layout.shadow,
+        alignment=layout.title_alignment,
+        x_percent=50,
+    )
+    expected_hook = fit_overlay_text(
+        hook,
+        output_width=layout.width,
+        font_name=layout.title_font_name,
+        font_size=layout.title_font_size,
+        margin_x=layout.margin_x,
+        outline_width=layout.outline,
+        shadow=layout.shadow,
+        alignment=layout.title_alignment,
+        x_percent=50,
+    )
+
+    ass = build_ass_document(candidate, [], layout=layout)
+
+    assert (
+        f"{{\\fs{expected_title.effective_font_size}}}{expected_title.ass_text}"
+        in ass
+    )
+    assert (
+        f"{{\\fs{expected_hook.effective_font_size}}}{expected_hook.ass_text}"
+        in ass
+    )
+    assert "".join(expected_title.lines) == title
+    assert expected_hook.lines == ("ここで改行", "二行目も指定どおり表示")
 
 
 def test_japanese_long_sentence_splits_into_two_line_chunks() -> None:
@@ -140,7 +194,7 @@ def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None
     assert "PlayResX: 1080" in ass
     assert "PlayResY: 1920" in ass
     assert "Style: Subtitle,Noto Sans CJK JP" in ass
-    assert "Style: Title,Noto Sans CJK JP" in ass
+    assert "Style: Title,Noto Sans JP Black" in ass
     assert "Dialogue: 1,0:00:00.00,0:00:10.00,Title" in ass
     assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle" in ass
     assert "Dialogue: 0,0:00:05.00,0:00:07.06,Subtitle" in ass
@@ -242,8 +296,8 @@ def test_hook_scene_suppresses_regular_subtitles_and_shifts_body_timeline() -> N
     )
 
     assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle" not in ass
-    assert "Dialogue: 0,0:00:02.00,0:00:04.00,Subtitle,,0,0,0,,本編冒頭" in ass
-    assert "Dialogue: 0,0:00:06.00,0:00:08.00,Subtitle,,0,0,0,,見せ場" in ass
+    assert "Dialogue: 0,0:00:02.00,0:00:04.00,Subtitle,,0,0,0,,{\\fs76}本編冒頭" in ass
+    assert "Dialogue: 0,0:00:06.00,0:00:08.00,Subtitle,,0,0,0,,{\\fs76}見せ場" in ass
     assert "Dialogue: 1,0:00:00.00,0:00:12.00,Title,," in ass
 
 
@@ -389,7 +443,7 @@ def test_short_subtitle_style_defaults_remain_stable() -> None:
     ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
 
     assert "Style: Subtitle,Noto Sans CJK JP,76" in ass
-    assert "Style: Title,Noto Sans CJK JP,88" in ass
+    assert "Style: Title,Noto Sans JP Black,88" in ass
     assert ",1,5,2,2,86,86,250,1" in ass
     assert ",1,5,2,8,86,86,150,1" in ass
 
@@ -468,9 +522,11 @@ def test_clip_title_hook_and_subtitle_styles_are_independent() -> None:
     assert "Style: Title,Source Han Sans JP Heavy,96,&H0000F2FF" in ass
     assert "Style: Hook,Noto Serif CJK JP,84,&H00AB8FFF" in ass
     assert "Style: Subtitle,Noto Sans Mono CJK JP,70,&H00F7E75E" in ass
-    assert r"{\an5\pos(270,288)}本編タイトル" in ass
-    assert r"{\an5\pos(810,480)}冒頭フック" in ass
-    assert r"{\an5\pos(540,1536)}確認字幕" in ass
+    assert r"{\an5\pos(270,288)}{\fs" in ass
+    assert r"{\an5\pos(810,480)}{\fs" in ass
+    assert "本編タイトル" in ass
+    assert "冒頭フック" in ass
+    assert r"{\an5\pos(540,1536)}{\fs70}確認字幕" in ass
 
 
 def test_job_subtitle_position_percent_is_used_without_clip_override() -> None:
@@ -498,9 +554,11 @@ def test_job_subtitle_position_percent_is_used_without_clip_override() -> None:
 
     assert layout.subtitle_x_percent == 40
     assert layout.subtitle_y_percent == 68.75
-    assert r"{\an5\pos(540,240)}タイトル" in ass
-    assert r"{\an5\pos(540,360)}フック" in ass
-    assert r"{\an5\pos(432,1320)}会話字幕" in ass
+    assert r"{\an5\pos(540,240)}{\fs" in ass
+    assert r"{\an5\pos(540,360)}{\fs" in ass
+    assert "タイトル" in ass
+    assert "フック" in ass
+    assert r"{\an5\pos(432,1320)}{\fs76}会話字幕" in ass
 
 
 def test_clip_subtitle_position_takes_priority_over_job_position() -> None:
@@ -522,7 +580,7 @@ def test_clip_subtitle_position_takes_priority_over_job_position() -> None:
 
     ass = build_ass_document(candidate, segments, layout=layout)
 
-    assert r"{\an5\pos(648,1100)}ツッコミ" in ass
+    assert r"{\an5\pos(648,1100)}{\fs76}ツッコミ" in ass
     assert r"{\an5\pos(432,1320)}" not in ass
 
 
@@ -584,7 +642,7 @@ def test_layout_position_mode_uses_job_percent_instead_of_stored_coordinates() -
 
     ass = build_ass_document(candidate, segments, layout=layout)
 
-    assert r"{\an5\pos(432,1320)}位置を保持" in ass
+    assert r"{\an5\pos(432,1320)}{\fs76}位置を保持" in ass
     assert r"{\an5\pos(972,192)}" not in ass
 
 
@@ -683,8 +741,8 @@ def test_short_and_normal_subtitle_styles_use_independent_fonts_and_colors() -> 
         "Style: Subtitle,Noto Serif CJK JP,65,&H00BADCFE,&H000000FF,&H00302010"
         in normal_ass
     )
-    assert "Style: Title,Noto Sans CJK JP,88,&H00FFFFFF,&H000000FF,&H00000000" in short_ass
-    assert "Style: Title,Noto Sans CJK JP,76,&H00FFFFFF,&H000000FF,&H00000000" in normal_ass
+    assert "Style: Title,Noto Sans JP Black,88,&H00FFFFFF,&H000000FF,&H00000000" in short_ass
+    assert "Style: Title,Noto Sans JP Black,76,&H00FFFFFF,&H000000FF,&H00000000" in normal_ass
 
 
 def test_subtitle_layout_preserves_zero_margin_overrides() -> None:
@@ -769,6 +827,81 @@ def test_build_ass_document_limits_short_subtitles_to_two_lines() -> None:
     assert subtitle_lines
     assert all(line.split(",", 9)[9].count("\\N") <= 1 for line in subtitle_lines)
     assert all("Subtitle" in line for line in subtitle_lines)
+
+
+def test_ass_subtitle_fit_uses_resolved_font_position_margin_outline_and_shadow() -> None:
+    text = "そして私はお手洗いに行って爆速で帰ってくるから、少しだけここで待っていてくださいね"
+    layout = SubtitleLayout.short(
+        settings={
+            "short_shadow": 7,
+            "short_margin_x": 120,
+            "short_subtitle_x_percent": 50,
+            "short_subtitle_y_percent": 72,
+        }
+    )
+    candidate = make_candidate("short_1", "short", 0.0, 1.0).model_copy(
+        update={
+            "subtitle_style": ClipTextStyle(
+                fontPreset=None,
+                fontName="Noto Serif CJK JP",
+                bold=False,
+                fontSize=76,
+                primaryColor="#12AB34",
+                outlineColor="#102030",
+                outlineWidth=9,
+                positionMode="layout",
+            )
+        }
+    )
+    segments = [TranscriptSegment(start=0.0, end=1.0, text=text)]
+    resolved = resolve_clip_text_style(
+        candidate.subtitle_style,
+        layout,
+        role="subtitle",
+    )
+    split_text = split_subtitle_lines(
+        text,
+        max_chars_per_line=layout.max_chars_per_line,
+        max_lines=layout.max_lines,
+    )
+    expected = fit_overlay_text(
+        split_text,
+        output_width=layout.width,
+        font_name=resolved.font_name,
+        font_size=resolved.font_size,
+        margin_x=resolved.margin_x,
+        outline_width=resolved.outline_width,
+        shadow=resolved.shadow,
+        alignment=resolved.alignment,
+        x_percent=resolved.x_percent,
+        max_lines=2,
+    )
+
+    ass = build_ass_document(candidate, segments, layout=layout)
+    subtitle_line = next(
+        line for line in ass.splitlines() if line.startswith("Dialogue: 0,")
+    )
+    rendered_text = subtitle_line.split(",", 9)[9]
+
+    assert "Style: Subtitle,Noto Serif CJK JP,76" in ass
+    assert ",0,0,0,0,100,100,0,0,1,9,7,2,120,120,250,1" in ass
+    assert rendered_text == (
+        rf"{{\an5\pos(540,1382)}}{{\fs{expected.effective_font_size}}}"
+        f"{expected.ass_text}"
+    )
+    assert len(text) == 41
+    assert expected.effective_font_size < resolved.font_size
+    assert expected.effective_font_size >= 42
+    assert expected.fits is True
+    assert len(expected.lines) == 2
+    assert "".join(expected.lines) == text
+    assert all(
+        overlay_text_width_units(line)
+        * expected.effective_font_size
+        * overlay_font_size_scale(resolved.font_name)
+        <= expected.max_width_px
+        for line in expected.lines
+    )
 
 
 def test_write_ass_for_selected_clips_generates_file_for_each_clip(tmp_path: Path) -> None:
