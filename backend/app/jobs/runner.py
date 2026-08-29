@@ -3,7 +3,7 @@ import os
 import re
 import shutil
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -114,7 +114,24 @@ from app.jobs.clip_plan import (
 from app.jobs.automation import (
     automation_manifest_path,
     build_automation_manifest,
+    load_automation_manifest,
     write_automation_manifest,
+)
+from app.jobs.quality_gate import (
+    QualityGateDecision,
+    QualityGateMode,
+    evaluate_content_quality_gate,
+    evaluate_post_render_quality_gate,
+    evaluate_selection_quality_gate,
+    invalidate_quality_gate_decisions,
+    quality_gate_decision_path,
+    unknown_quality_gate_decision,
+    write_quality_gate_decision,
+)
+from app.jobs.publication_state import (
+    clear_rerender_publication_unresolved,
+    mark_rerender_publication_unresolved,
+    rerender_publication_is_unresolved,
 )
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.jobs.manual_workflow import (
@@ -671,7 +688,7 @@ def _format_diagnostic_message(message: str, details: dict[str, Any]) -> str:
     return f"{message} Diagnostics: {json.dumps(details, sort_keys=True)}"
 
 
-def _set_status(db: Session, job: Job, status: str) -> None:
+def _assign_status(job: Job, status: str) -> None:
     job.status = status
     job.progress = PROGRESS_MAP[status]
     job.current_step = CURRENT_STEP_MAP[status]
@@ -679,8 +696,83 @@ def _set_status(db: Session, job: Job, status: str) -> None:
     if status != "failed":
         job.error_code = None
         job.error_message = None
+
+
+def _set_status(db: Session, job: Job, status: str) -> None:
+    _assign_status(job, status)
     db.commit()
     db.refresh(job)
+
+
+def _try_write_quality_gate_decision(
+    document: QualityGateDecision,
+    output_path: Path,
+) -> Path | None:
+    try:
+        return write_quality_gate_decision(document, output_path)
+    except OSError:
+        return None
+
+
+def _active_quality_gate_mode(
+    job_dir: Path,
+    settings: Mapping[str, Any],
+) -> QualityGateMode | None:
+    requested_mode = str(settings.get("automationMode") or "manual").strip()
+    manifest_path = automation_manifest_path(job_dir)
+    if manifest_path.is_file():
+        try:
+            effective_mode = load_automation_manifest(manifest_path).effective_mode
+        except (OSError, ValueError):
+            pass
+        else:
+            return effective_mode if effective_mode in {"shadow", "guarded"} else None
+    return requested_mode if requested_mode in {"shadow", "guarded"} else None
+
+
+def _evaluate_selection_quality_gate_for_mode(
+    *,
+    job_id: str,
+    job_dir: Path,
+    selection: CandidateSelection,
+    transcript_segments: Sequence[TranscriptSegment],
+    settings: Mapping[str, Any],
+    source_duration: float,
+    mode: QualityGateMode,
+) -> tuple[QualityGateDecision, Path | None]:
+    invalidate_quality_gate_decisions(
+        job_dir,
+        ("selection", "content", "post_render"),
+    )
+    try:
+        decision = evaluate_selection_quality_gate(
+            job_id=job_id,
+            selection=selection,
+            transcript_segments=transcript_segments,
+            settings=settings,
+            source_duration=source_duration,
+            mode=mode,
+        )
+    except Exception as exc:
+        decision = unknown_quality_gate_decision(
+            job_id=job_id,
+            stage="selection",
+            reason_code="selection_gate_evaluation_failed",
+            evidence={"errorType": exc.__class__.__name__},
+            mode=mode,
+        )
+    decision_path = _try_write_quality_gate_decision(
+        decision,
+        quality_gate_decision_path(job_dir, "selection"),
+    )
+    if decision_path is None and mode == "guarded":
+        decision = unknown_quality_gate_decision(
+            job_id=job_id,
+            stage="selection",
+            reason_code="selection_gate_record_unavailable",
+            mode=mode,
+        )
+    return decision, decision_path
 
 
 def _heartbeat_job(db: Session, job: Job) -> None:
@@ -2393,6 +2485,31 @@ def _render_selected_outputs(
     return normal_result, short_result, exports, render_failures_path
 
 
+def _discard_unpublished_exports(
+    db: Session,
+    exports: Sequence[ExportItem],
+    *,
+    job_dir: Path,
+) -> None:
+    resolved_job_dir = job_dir.resolve()
+    for export in exports:
+        for value in (export.video_path, export.subtitle_path, export.metadata_path):
+            if not value:
+                continue
+            candidate_path = Path(value)
+            try:
+                resolved_path = candidate_path.resolve()
+                resolved_path.relative_to(resolved_job_dir)
+            except (OSError, ValueError):
+                continue
+            try:
+                resolved_path.unlink(missing_ok=True)
+            except OSError:
+                continue
+        db.delete(export)
+    db.commit()
+
+
 @dataclass(frozen=True)
 class _RerenderStoragePaths(StoragePaths):
     def ensure(self) -> None:
@@ -2414,8 +2531,12 @@ def _prepare_subtitle_rerender_staging(
     job_id: str,
     render_revision: int,
 ) -> StoragePaths:
-    staging_root = storage_paths.temp / "rr" / f"{job_id[-12:]}_r{render_revision}"
-    shutil.rmtree(staging_root, ignore_errors=True)
+    attempt_suffix = make_id("attempt")[-8:]
+    staging_root = (
+        storage_paths.temp
+        / "rr"
+        / f"{job_id[-12:]}_r{render_revision}_{attempt_suffix}"
+    )
     staging_paths = _RerenderStoragePaths(staging_root)
     staging_paths.ensure()
     return staging_paths
@@ -2426,15 +2547,104 @@ def _promote_staged_export_file(
     *,
     staging_job_dir: Path,
     canonical_job_dir: Path,
+    promotion: "_SubtitleRerenderPromotion",
 ) -> str | None:
     if source_value is None:
         return None
     source = Path(source_value)
     relative_path = source.resolve().relative_to(staging_job_dir.resolve())
     destination = canonical_job_dir / relative_path
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    source.replace(destination)
+    promotion.publish(source, destination)
     return str(destination)
+
+
+@dataclass
+class _RerenderFileChange:
+    destination: Path
+    backup: Path
+    original_backed_up: bool = False
+    new_published: bool = False
+
+
+@dataclass
+class _SubtitleRerenderPromotion:
+    staging_root: Path
+    canonical_job_dir: Path
+    changes: list[_RerenderFileChange]
+
+    @property
+    def backup_root(self) -> Path:
+        return self.staging_root / ".canonical_backup"
+
+    def publish(self, source: Path, destination: Path) -> None:
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        resolved_destination = destination.resolve(strict=False)
+        resolved_destination.relative_to(self.canonical_job_dir.resolve(strict=False))
+        if any(change.destination == resolved_destination for change in self.changes):
+            raise ValueError(f"duplicate rerender promotion destination: {resolved_destination}")
+
+        backup = self.backup_root / f"{len(self.changes):04d}" / destination.name
+        change = _RerenderFileChange(
+            destination=resolved_destination,
+            backup=backup,
+        )
+        self.changes.append(change)
+        resolved_destination.parent.mkdir(parents=True, exist_ok=True)
+        if resolved_destination.exists():
+            if not resolved_destination.is_file():
+                raise ValueError(f"rerender promotion destination is not a file: {resolved_destination}")
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            resolved_destination.replace(backup)
+            change.original_backed_up = True
+        source.replace(resolved_destination)
+        change.new_published = True
+
+    def rollback(self) -> None:
+        failures: list[str] = []
+        for change in reversed(self.changes):
+            try:
+                if change.new_published:
+                    change.destination.unlink(missing_ok=True)
+                if change.original_backed_up:
+                    if not change.backup.is_file():
+                        raise FileNotFoundError(change.backup)
+                    change.destination.parent.mkdir(parents=True, exist_ok=True)
+                    change.backup.replace(change.destination)
+            except OSError as exc:
+                failures.append(f"{change.destination}: {exc.__class__.__name__}")
+        if failures:
+            raise RuntimeError("; ".join(failures))
+
+    def finalize(self) -> None:
+        shutil.rmtree(self.canonical_job_dir / "audit", ignore_errors=True)
+        shutil.rmtree(self.staging_root, ignore_errors=True)
+
+
+class _SubtitleRerenderRollbackError(RuntimeError):
+    pass
+
+
+def _project_staged_exports_for_quality_gate(
+    staged_exports: Sequence[ExportItem],
+    *,
+    staging_job_dir: Path,
+    canonical_job_dir: Path,
+) -> list[dict[str, Any]]:
+    projected: list[dict[str, Any]] = []
+    resolved_staging_dir = staging_job_dir.resolve()
+    for export in staged_exports:
+        source_path = Path(export.video_path)
+        relative_path = source_path.resolve().relative_to(resolved_staging_dir)
+        projected.append(
+            {
+                "id": export.id,
+                "candidateId": export.candidate_id,
+                "type": export.type,
+                "videoPath": str(canonical_job_dir / relative_path),
+            }
+        )
+    return projected
 
 
 def _rewrite_export_metadata_paths(export: ExportItem) -> None:
@@ -2460,47 +2670,80 @@ def _promote_subtitle_rerender(
     staged_render_failures_path: Path,
     staging_paths: StoragePaths,
     storage_paths: StoragePaths,
-) -> tuple[list[ExportItem], Path]:
+) -> tuple[list[ExportItem], Path, _SubtitleRerenderPromotion]:
     staging_job_dir = staging_paths.job_outputs(job.id)
     canonical_job_dir = storage_paths.job_outputs(job.id)
+    promotion = _SubtitleRerenderPromotion(
+        staging_root=staging_paths.root,
+        canonical_job_dir=canonical_job_dir,
+        changes=[],
+    )
 
-    for export in staged_exports:
-        export.video_path = (
-            _promote_staged_export_file(
-                export.video_path,
+    try:
+        for export in staged_exports:
+            export.video_path = (
+                _promote_staged_export_file(
+                    export.video_path,
+                    staging_job_dir=staging_job_dir,
+                    canonical_job_dir=canonical_job_dir,
+                    promotion=promotion,
+                )
+                or export.video_path
+            )
+            export.subtitle_path = _promote_staged_export_file(
+                export.subtitle_path,
                 staging_job_dir=staging_job_dir,
                 canonical_job_dir=canonical_job_dir,
+                promotion=promotion,
             )
-            or export.video_path
-        )
-        export.subtitle_path = _promote_staged_export_file(
-            export.subtitle_path,
-            staging_job_dir=staging_job_dir,
-            canonical_job_dir=canonical_job_dir,
-        )
-        export.metadata_path = _promote_staged_export_file(
-            export.metadata_path,
-            staging_job_dir=staging_job_dir,
-            canonical_job_dir=canonical_job_dir,
-        )
-        _rewrite_export_metadata_paths(export)
+            export.metadata_path = _promote_staged_export_file(
+                export.metadata_path,
+                staging_job_dir=staging_job_dir,
+                canonical_job_dir=canonical_job_dir,
+                promotion=promotion,
+            )
+            _rewrite_export_metadata_paths(export)
 
-    successful_candidate_ids = {export.candidate_id for export in staged_exports if export.candidate_id is not None}
-    for previous in previous_exports:
-        if previous.candidate_id in successful_candidate_ids:
-            db.delete(previous)
+        successful_candidate_ids = {
+            export.candidate_id
+            for export in staged_exports
+            if export.candidate_id is not None
+        }
+        preserved_exports: list[ExportItem] = []
+        for previous in previous_exports:
+            if previous.candidate_id in successful_candidate_ids:
+                db.delete(previous)
+            else:
+                preserved_exports.append(previous)
 
-    canonical_render_failures_path = canonical_job_dir / "render_failures.json"
-    if staged_render_failures_path.is_file():
-        staged_render_failures_path.replace(canonical_render_failures_path)
+        canonical_render_failures_path = canonical_job_dir / "render_failures.json"
+        if staged_render_failures_path.is_file():
+            promotion.publish(
+                staged_render_failures_path,
+                canonical_render_failures_path,
+            )
 
-    db.commit()
-    current_exports = list(
-        db.scalars(select(ExportItem).where(ExportItem.job_id == job.id).order_by(ExportItem.type, ExportItem.video_path)).all()
-    )
-    shutil.rmtree(canonical_job_dir / "audit", ignore_errors=True)
-    shutil.rmtree(staging_paths.root, ignore_errors=True)
-    return current_exports, canonical_render_failures_path
+        db.flush()
+        current_exports = sorted(
+            [*preserved_exports, *staged_exports],
+            key=lambda export: (export.type, export.video_path),
+        )
+        return current_exports, canonical_render_failures_path, promotion
+    except Exception as exc:
+        rollback_failures: list[Exception] = []
+        try:
+            db.rollback()
+        except Exception as rollback_exc:
+            rollback_failures.append(rollback_exc)
+        try:
+            promotion.rollback()
+        except Exception as rollback_exc:
+            rollback_failures.append(rollback_exc)
+        if rollback_failures:
+            raise _SubtitleRerenderRollbackError(
+                "Subtitle re-render promotion rollback failed."
+            ) from rollback_failures[0]
+        raise exc
 
 
 def _discard_subtitle_rerender_staging(
@@ -2509,13 +2752,34 @@ def _discard_subtitle_rerender_staging(
     job_id: str,
     previous_export_ids: set[str],
     staging_paths: StoragePaths,
+    remove_files: bool = True,
 ) -> None:
     current_exports = db.scalars(select(ExportItem).where(ExportItem.job_id == job_id)).all()
     for export in current_exports:
         if export.id not in previous_export_ids:
             db.delete(export)
     db.commit()
-    shutil.rmtree(staging_paths.root, ignore_errors=True)
+    if remove_files:
+        shutil.rmtree(staging_paths.root, ignore_errors=True)
+
+
+def _rollback_subtitle_rerender_publication(
+    *,
+    db: Session,
+    promotion: _SubtitleRerenderPromotion | None,
+    error: Exception,
+) -> bool:
+    rollback_succeeded = not isinstance(error, _SubtitleRerenderRollbackError)
+    try:
+        db.rollback()
+    except Exception:
+        rollback_succeeded = False
+    if promotion is not None:
+        try:
+            promotion.rollback()
+        except Exception:
+            rollback_succeeded = False
+    return rollback_succeeded
 
 
 def _restore_subtitle_rerender_for_retry(
@@ -2565,10 +2829,19 @@ def _read_transcript_segments(path: Path) -> list[TranscriptSegment]:
 
 
 def _top_level_metadata_files(job_dir: Path) -> list[Path]:
-    return sorted(
-        (path for path in job_dir.iterdir() if path.is_file() and path.suffix.lower() in {".json", ".md"}),
-        key=lambda path: path.name,
-    )
+    metadata_files = [
+        path
+        for path in job_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {".json", ".md"}
+    ]
+    quality_dir = job_dir / "quality_gate"
+    if quality_dir.is_dir():
+        metadata_files.extend(
+            path
+            for path in quality_dir.iterdir()
+            if path.is_file() and path.suffix.lower() == ".json"
+        )
+    return sorted(metadata_files, key=lambda path: (path.parent.name, path.name))
 
 
 def _next_clip_plan_revision(job_dir: Path) -> int:
@@ -2825,6 +3098,7 @@ def run_autoclipper_job(
             raise ValueError(f"video not found for job: {job_id}")
 
         settings = dict(job.settings_json or {})
+        automation_mode = str(settings.get("automationMode") or "manual").strip()
         manual_workflow = is_manual_workflow(settings)
         active_manual_subtitle_mode = manual_subtitle_mode(settings)
         skip_automatic_transcription = manual_workflow and active_manual_subtitle_mode in {"none", "manual"}
@@ -2877,14 +3151,16 @@ def run_autoclipper_job(
             )
 
         try:
+            automation_manifest = build_automation_manifest(
+                job_id=job.id,
+                video_id=video.id,
+                stored_path=video.stored_path,
+                settings=settings,
+            )
+            automation_mode = automation_manifest.effective_mode
             metadata_files.append(
                 write_automation_manifest(
-                    build_automation_manifest(
-                        job_id=job.id,
-                        video_id=video.id,
-                        stored_path=video.stored_path,
-                        settings=settings,
-                    ),
+                    automation_manifest,
                     automation_manifest_path(job_dir),
                 )
             )
@@ -3792,6 +4068,22 @@ def run_autoclipper_job(
                     "Pipeline completed analysis but selection produced no usable clips.",
                 )
 
+            selection_gate = None
+            if automation_mode in {"shadow", "guarded"}:
+                selection_gate, selection_gate_path = (
+                    _evaluate_selection_quality_gate_for_mode(
+                        job_id=job.id,
+                        job_dir=job_dir,
+                        selection=selection,
+                        transcript_segments=transcript_segments,
+                        settings=settings,
+                        source_duration=duration,
+                        mode=automation_mode,
+                    )
+                )
+                if selection_gate_path is not None:
+                    metadata_files.append(selection_gate_path)
+
             if manual_workflow:
                 manual_plan_path = clip_plan_output_path(job_dir)
                 manual_document = (
@@ -3810,11 +4102,18 @@ def run_autoclipper_job(
                     manual_plan_path,
                 )
 
-            if (
-                bool(settings.get("requireClipPlanReview", False))
+            guarded_selection_needs_review = bool(
+                automation_mode == "guarded"
+                and selection_gate is not None
+                and selection_gate.route != "continue"
+            )
+            manual_clip_plan_review = bool(
+                automation_mode != "guarded"
+                and bool(settings.get("requireClipPlanReview", False))
                 and bool(settings.get("requireSubtitleReview", False))
                 and bool(settings.get("burnSubtitles", True))
-            ):
+            )
+            if guarded_selection_needs_review or manual_clip_plan_review:
                 plan_path = _prepare_clip_plan_review(
                     db=db,
                     job=job,
@@ -3834,6 +4133,8 @@ def run_autoclipper_job(
             subtitle_review_requested = bool(settings.get("requireSubtitleReview", False)) and (
                 bool(settings.get("burnSubtitles", True)) or (manual_workflow and active_manual_subtitle_mode in {"none", "manual"})
             )
+            content_gate: QualityGateDecision | None = None
+            guarded_content_auto_passed = False
             if subtitle_review_requested:
                 review_document = build_subtitle_review(
                     job.id,
@@ -3898,11 +4199,52 @@ def run_autoclipper_job(
                     subtitle_review_summary_path(job_dir),
                 )
                 metadata_files.extend([review_path, review_summary_path])
+
+                if automation_mode in {"shadow", "guarded"}:
+                    invalidate_quality_gate_decisions(
+                        job_dir,
+                        ("content", "post_render"),
+                    )
+                    try:
+                        content_gate = evaluate_content_quality_gate(
+                            job_id=job.id,
+                            document=review_document,
+                            settings=settings,
+                            mode=automation_mode,
+                        )
+                    except Exception as exc:
+                        content_gate = unknown_quality_gate_decision(
+                            job_id=job.id,
+                            stage="content",
+                            reason_code="content_gate_evaluation_failed",
+                            evidence={"errorType": exc.__class__.__name__},
+                            mode=automation_mode,
+                        )
+                    content_gate_path = _try_write_quality_gate_decision(
+                        content_gate,
+                        quality_gate_decision_path(job_dir, "content"),
+                    )
+                    if content_gate_path is not None:
+                        metadata_files.append(content_gate_path)
+                    elif automation_mode == "guarded":
+                        content_gate = unknown_quality_gate_decision(
+                            job_id=job.id,
+                            stage="content",
+                            reason_code="content_gate_record_unavailable",
+                            mode=automation_mode,
+                        )
+
                 summary_files = write_summaries()
                 metadata_files.extend(path for path in summary_files if path not in metadata_files)
-                _set_status(db, job, "awaiting_subtitle_review")
-                visited_statuses.append("awaiting_subtitle_review")
-                return visited_statuses
+                guarded_content_auto_passed = bool(
+                    automation_mode == "guarded"
+                    and content_gate is not None
+                    and content_gate.route == "continue"
+                )
+                if subtitle_review_requested and not guarded_content_auto_passed:
+                    _set_status(db, job, "awaiting_subtitle_review")
+                    visited_statuses.append("awaiting_subtitle_review")
+                    return visited_statuses
 
             normal_result, short_result, exports, render_failures_path = _render_selected_outputs(
                 db=db,
@@ -3917,6 +4259,110 @@ def run_autoclipper_job(
                 visited_statuses=visited_statuses,
             )
             metadata_files.append(render_failures_path)
+            if automation_mode in {"shadow", "guarded"}:
+                invalidate_quality_gate_decisions(job_dir, ("post_render",))
+                try:
+                    post_render_gate = evaluate_post_render_quality_gate(
+                        job_id=job.id,
+                        expected_export_count=(
+                            len(selection.normal_clips) + len(selection.shorts)
+                        ),
+                        exports=exports,
+                        render_failures=[
+                            *normal_result.failures,
+                            *short_result.failures,
+                        ],
+                        mode=automation_mode,
+                    )
+                except Exception as exc:
+                    post_render_gate = unknown_quality_gate_decision(
+                        job_id=job.id,
+                        stage="post_render",
+                        reason_code="post_render_gate_evaluation_failed",
+                        evidence={"errorType": exc.__class__.__name__},
+                        mode=automation_mode,
+                    )
+                post_render_gate_path = _try_write_quality_gate_decision(
+                    post_render_gate,
+                    quality_gate_decision_path(job_dir, "post_render"),
+                )
+                if post_render_gate_path is not None:
+                    metadata_files.append(post_render_gate_path)
+                elif automation_mode == "guarded":
+                    _discard_unpublished_exports(
+                        db,
+                        exports,
+                        job_dir=job_dir,
+                    )
+                    raise PipelineExpectedError(
+                        "quality_gate_record_failed",
+                        "Guarded post-render quality decision could not be recorded.",
+                    )
+                if automation_mode == "guarded" and post_render_gate.route != "continue":
+                    _discard_unpublished_exports(
+                        db,
+                        exports,
+                        job_dir=job_dir,
+                    )
+                    raise PipelineExpectedError(
+                        "quality_gate_render_failed",
+                        "Guarded quality gate rejected incomplete rendered output.",
+                        details={
+                            "qualityGateStage": "post_render",
+                            "qualityGateOutcome": post_render_gate.outcome,
+                            "qualityGateInputHash": post_render_gate.input_hash,
+                        },
+                    )
+            if guarded_content_auto_passed:
+                review_document = mark_review_completed(review_document)
+                write_subtitle_review(
+                    review_document,
+                    subtitle_review_output_path(job_dir),
+                )
+                write_subtitle_review_summary(
+                    review_document,
+                    subtitle_review_summary_path(job_dir),
+                )
+                invalidate_quality_gate_decisions(job_dir, ("content",))
+                try:
+                    content_gate = evaluate_content_quality_gate(
+                        job_id=job.id,
+                        document=review_document,
+                        settings=settings,
+                        mode="guarded",
+                    )
+                except Exception as exc:
+                    content_gate = unknown_quality_gate_decision(
+                        job_id=job.id,
+                        stage="content",
+                        reason_code="content_gate_evaluation_failed",
+                        evidence={"errorType": exc.__class__.__name__},
+                        mode="guarded",
+                    )
+                content_gate_path = _try_write_quality_gate_decision(
+                    content_gate,
+                    quality_gate_decision_path(job_dir, "content"),
+                )
+                if content_gate_path is None or content_gate.route != "continue":
+                    invalidate_quality_gate_decisions(job_dir, ("post_render",))
+                    _discard_unpublished_exports(
+                        db,
+                        exports,
+                        job_dir=job_dir,
+                    )
+                    raise PipelineExpectedError(
+                        (
+                            "quality_gate_record_failed"
+                            if content_gate_path is None
+                            else "quality_gate_render_failed"
+                        ),
+                        "Guarded content decision changed before packaging.",
+                        details={
+                            "qualityGateStage": "content",
+                            "qualityGateOutcome": content_gate.outcome,
+                            "qualityGateInputHash": content_gate.input_hash,
+                        },
+                    )
             summary_files = write_summaries()
             metadata_files.extend(path for path in summary_files if path not in metadata_files)
             if not exports:
@@ -4144,6 +4590,10 @@ def run_clip_plan_boundary_update(
                 preview_clip_ids=available_clip_ids,
             )
             write_clip_plan(document, plan_path)
+            invalidate_quality_gate_decisions(
+                job_dir,
+                ("selection", "content", "post_render"),
+            )
             _set_status(db, job, "awaiting_clip_review")
             job.error_code = None
             job.error_message = None
@@ -4266,6 +4716,10 @@ def run_clip_plan_hook_scene_update(
                 preview_clip_ids=available_clip_ids,
             )
             write_clip_plan(document, plan_path)
+            invalidate_quality_gate_decisions(
+                job_dir,
+                ("selection", "content", "post_render"),
+            )
             _set_status(db, job, "awaiting_clip_review")
             job.error_code = None
             job.error_message = None
@@ -4483,6 +4937,11 @@ def run_subtitle_review_hook_scene_update(
                             path.write_bytes(payload)
                     raise
 
+            invalidate_quality_gate_decisions(
+                job_dir,
+                ("selection", "content", "post_render"),
+            )
+
             _set_status(db, job, "awaiting_subtitle_review")
             visited_statuses.append("awaiting_subtitle_review")
         except Exception as exc:
@@ -4534,6 +4993,9 @@ def run_clip_plan_reselection(
             job_dir / "rejection_summary.json",
             job_dir / "selected_clips_summary.json",
             job_dir / "heatmap_validation_summary.json",
+            quality_gate_decision_path(job_dir, "selection"),
+            quality_gate_decision_path(job_dir, "content"),
+            quality_gate_decision_path(job_dir, "post_render"),
         ]
         previous_artifacts = {path: path.read_bytes() if path.is_file() else None for path in previous_artifact_paths}
 
@@ -4744,6 +5206,24 @@ def run_clip_plan_reselection(
                 job_dir / "scored_candidates.json",
             )
             write_selected_clips(selection, job_dir / "selected_clips.json")
+            quality_gate_mode = _active_quality_gate_mode(job_dir, settings)
+            if quality_gate_mode is None:
+                invalidate_quality_gate_decisions(
+                    job_dir,
+                    ("selection", "content", "post_render"),
+                )
+            else:
+                _evaluate_selection_quality_gate_for_mode(
+                    job_id=job.id,
+                    job_dir=job_dir,
+                    selection=selection,
+                    transcript_segments=transcript_segments,
+                    settings=settings,
+                    source_duration=float(
+                        video.duration or visual_quality.duration
+                    ),
+                    mode=quality_gate_mode,
+                )
 
             openai_summary_path = job_dir / "openai_scoring_summary.json"
             if openai_scoring_summary is None:
@@ -4827,14 +5307,26 @@ def run_subtitle_review_render(
         input_path = storage_paths.resolve_stored_file(video.stored_path)
         review_document: SubtitleReviewDocument | None = None
         rerender_staging_paths: StoragePaths | None = None
+        rerender_promotion: _SubtitleRerenderPromotion | None = None
         previous_export_ids: set[str] = set()
-        rerender_promoted = False
+        rerender_publication_committed = False
         is_rerender = False
         pending_rerender_zip: Path | None = None
+        rerender_publication_was_unresolved = False
 
         try:
             review_document = load_subtitle_review(review_path)
             is_rerender = review_document.render_revision > 1
+            if is_rerender:
+                rerender_publication_was_unresolved = (
+                    rerender_publication_is_unresolved(job_dir)
+                )
+                if not rerender_publication_was_unresolved:
+                    mark_rerender_publication_unresolved(
+                        job_dir,
+                        job_id=job.id,
+                        render_revision=review_document.render_revision,
+                    )
             if review_document.state not in {"render_queued", "rendering"}:
                 raise PipelineExpectedError(
                     "subtitle_review_not_ready",
@@ -4863,6 +5355,42 @@ def run_subtitle_review_render(
             selection = CandidateSelection.model_validate(selection_payload)
             selection = apply_reviewed_clip_content(selection, review_document)
             write_selected_clips(selection, job_dir / "selected_clips.json")
+            invalidate_quality_gate_decisions(
+                job_dir,
+                ("selection", "content", "post_render"),
+            )
+            effective_automation_mode = _active_quality_gate_mode(
+                job_dir,
+                settings,
+            )
+            if effective_automation_mode is not None:
+                try:
+                    content_gate = evaluate_content_quality_gate(
+                        job_id=job.id,
+                        document=review_document,
+                        settings=settings,
+                        mode=effective_automation_mode,
+                    )
+                except Exception as exc:
+                    content_gate = unknown_quality_gate_decision(
+                        job_id=job.id,
+                        stage="content",
+                        reason_code="content_gate_evaluation_failed",
+                        evidence={"errorType": exc.__class__.__name__},
+                        mode=effective_automation_mode,
+                    )
+                content_gate_path = _try_write_quality_gate_decision(
+                    content_gate,
+                    quality_gate_decision_path(job_dir, "content"),
+                )
+                if (
+                    content_gate_path is None
+                    and effective_automation_mode == "guarded"
+                ):
+                    raise PipelineExpectedError(
+                        "quality_gate_record_failed",
+                        "Guarded content quality decision could not be recorded.",
+                    )
             previous_exports = list(db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all())
             previous_export_ids = {export.id for export in previous_exports}
             render_paths = storage_paths
@@ -4885,6 +5413,61 @@ def run_subtitle_review_render(
                 dependencies=deps,
                 visited_statuses=visited_statuses,
             )
+            post_render_gate: QualityGateDecision | None = None
+            if effective_automation_mode is not None:
+                gate_exports: Sequence[Any] = exports
+                if rerender_staging_paths is not None:
+                    gate_exports = _project_staged_exports_for_quality_gate(
+                        exports,
+                        staging_job_dir=rerender_staging_paths.job_outputs(job.id),
+                        canonical_job_dir=storage_paths.job_outputs(job.id),
+                    )
+                try:
+                    post_render_gate = evaluate_post_render_quality_gate(
+                        job_id=job.id,
+                        expected_export_count=(
+                            len(selection.normal_clips) + len(selection.shorts)
+                        ),
+                        exports=gate_exports,
+                        render_failures=[
+                            *normal_result.failures,
+                            *short_result.failures,
+                        ],
+                        mode=effective_automation_mode,
+                    )
+                except Exception as exc:
+                    post_render_gate = unknown_quality_gate_decision(
+                        job_id=job.id,
+                        stage="post_render",
+                        reason_code="post_render_gate_evaluation_failed",
+                        evidence={"errorType": exc.__class__.__name__},
+                        mode=effective_automation_mode,
+                    )
+                post_render_gate_path = _try_write_quality_gate_decision(
+                    post_render_gate,
+                    quality_gate_decision_path(job_dir, "post_render"),
+                )
+                if (
+                    post_render_gate_path is None
+                    and effective_automation_mode == "guarded"
+                ):
+                    raise PipelineExpectedError(
+                        "quality_gate_record_failed",
+                        "Guarded post-render quality decision could not be recorded.",
+                    )
+                if (
+                    effective_automation_mode == "guarded"
+                    and post_render_gate.route != "continue"
+                ):
+                    raise PipelineExpectedError(
+                        "quality_gate_render_failed",
+                        "Guarded quality gate rejected incomplete rendered output.",
+                        details={
+                            "qualityGateStage": "post_render",
+                            "qualityGateOutcome": post_render_gate.outcome,
+                            "qualityGateInputHash": post_render_gate.input_hash,
+                        },
+                    )
             if not exports:
                 raise PipelineExpectedError(
                     "no_usable_output",
@@ -4896,7 +5479,7 @@ def run_subtitle_review_render(
                     "Re-render did not complete for every existing clip. Previous outputs were kept.",
                 )
             if rerender_staging_paths is not None:
-                exports, _render_failures_path = _promote_subtitle_rerender(
+                exports, _render_failures_path, rerender_promotion = _promote_subtitle_rerender(
                     db=db,
                     job=job,
                     previous_exports=previous_exports,
@@ -4905,7 +5488,6 @@ def run_subtitle_review_render(
                     staging_paths=rerender_staging_paths,
                     storage_paths=storage_paths,
                 )
-                rerender_promoted = True
 
             audio_features_payload = _read_json_file(job_dir / "audio_features.json")
             audio_features = AudioFeatures.model_validate(audio_features_payload)
@@ -4938,7 +5520,10 @@ def run_subtitle_review_render(
                 transcription_diagnostics=transcript_summary.get("transcription_runtime"),
             )
 
-            _set_status(db, job, "packaging_zip")
+            if is_rerender:
+                _assign_status(job, "packaging_zip")
+            else:
+                _set_status(db, job, "packaging_zip")
             visited_statuses.append("packaging_zip")
             review_document = mark_review_completed(review_document)
             write_subtitle_review(review_document, review_path)
@@ -4948,6 +5533,8 @@ def run_subtitle_review_render(
             )
             zip_path = storage_paths.zip_path(job.id)
             if is_rerender:
+                if rerender_promotion is None:
+                    raise RuntimeError("subtitle rerender promotion is unavailable")
                 pending_rerender_zip = job_dir / f".download_revision_{review_document.render_revision}.tmp.zip"
                 pending_rerender_zip.unlink(missing_ok=True)
                 _create_zip(
@@ -4955,8 +5542,13 @@ def run_subtitle_review_render(
                     exports,
                     metadata_files=_top_level_metadata_files(job_dir),
                 )
-                pending_rerender_zip.replace(zip_path)
+                rerender_promotion.publish(pending_rerender_zip, zip_path)
                 pending_rerender_zip = None
+                _assign_status(job, "completed")
+                db.commit()
+                rerender_publication_committed = True
+                rerender_promotion.finalize()
+                clear_rerender_publication_unresolved(job_dir)
             else:
                 _create_zip(
                     zip_path,
@@ -4964,26 +5556,45 @@ def run_subtitle_review_render(
                     metadata_files=_top_level_metadata_files(job_dir),
                 )
 
-            _set_status(db, job, "completed")
+                _set_status(db, job, "completed")
             visited_statuses.append("completed")
         except PipelineExpectedError as exc:
             if pending_rerender_zip is not None:
                 pending_rerender_zip.unlink(missing_ok=True)
             if is_rerender and review_document is not None:
-                if rerender_staging_paths is not None and not rerender_promoted:
+                rollback_succeeded = True
+                if not rerender_publication_committed:
+                    rollback_succeeded = _rollback_subtitle_rerender_publication(
+                        db=db,
+                        promotion=rerender_promotion,
+                        error=exc,
+                    )
+                if rerender_staging_paths is not None and not rerender_publication_committed:
                     _discard_subtitle_rerender_staging(
                         db=db,
                         job_id=job.id,
                         previous_export_ids=previous_export_ids,
                         staging_paths=rerender_staging_paths,
+                        remove_files=rollback_succeeded,
                     )
+                if rollback_succeeded and not rerender_publication_was_unresolved:
+                    clear_rerender_publication_unresolved(job_dir)
+                invalidate_quality_gate_decisions(job_dir, ("post_render",))
                 _restore_subtitle_rerender_for_retry(
                     db=db,
                     job=job,
                     review_document=review_document,
                     review_path=review_path,
-                    code=exc.code,
-                    message=exc.message,
+                    code=(
+                        exc.code
+                        if rollback_succeeded
+                        else "subtitle_rerender_rollback_failed"
+                    ),
+                    message=(
+                        exc.message
+                        if rollback_succeeded
+                        else "Subtitle re-render rollback failed; recovery files were preserved."
+                    ),
                 )
             else:
                 _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
@@ -4991,20 +5602,39 @@ def run_subtitle_review_render(
             if pending_rerender_zip is not None:
                 pending_rerender_zip.unlink(missing_ok=True)
             if is_rerender and review_document is not None:
-                if rerender_staging_paths is not None and not rerender_promoted:
+                rollback_succeeded = True
+                if not rerender_publication_committed:
+                    rollback_succeeded = _rollback_subtitle_rerender_publication(
+                        db=db,
+                        promotion=rerender_promotion,
+                        error=exc,
+                    )
+                if rerender_staging_paths is not None and not rerender_publication_committed:
                     _discard_subtitle_rerender_staging(
                         db=db,
                         job_id=job.id,
                         previous_export_ids=previous_export_ids,
                         staging_paths=rerender_staging_paths,
+                        remove_files=rollback_succeeded,
                     )
+                if rollback_succeeded and not rerender_publication_was_unresolved:
+                    clear_rerender_publication_unresolved(job_dir)
+                invalidate_quality_gate_decisions(job_dir, ("post_render",))
                 _restore_subtitle_rerender_for_retry(
                     db=db,
                     job=job,
                     review_document=review_document,
                     review_path=review_path,
-                    code="subtitle_review_render_failed",
-                    message=str(exc),
+                    code=(
+                        "subtitle_review_render_failed"
+                        if rollback_succeeded
+                        else "subtitle_rerender_rollback_failed"
+                    ),
+                    message=(
+                        str(exc)
+                        if rollback_succeeded
+                        else "Subtitle re-render rollback failed; recovery files were preserved."
+                    ),
                 )
             else:
                 _fail_job(db, job_id, "subtitle_review_render_failed", str(exc))

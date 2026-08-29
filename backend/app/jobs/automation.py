@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 AutomationMode = Literal["manual", "shadow", "guarded", "auto"]
-EffectiveAutomationMode = Literal["manual", "shadow"]
+EffectiveAutomationMode = Literal["manual", "shadow", "guarded"]
 AUTOMATION_MANIFEST_FILENAME = "automation_manifest.json"
 
 
@@ -17,9 +17,13 @@ class AutomationRoleAssignments(BaseModel):
         default="manual_request",
         alias="titleHook",
     )
-    clip_review: Literal["manual", "skipped"] = Field(alias="clipReview")
-    subtitle_review: Literal["manual", "skipped"] = Field(alias="subtitleReview")
-    final_quality_gate: Literal["not_connected"] = Field(
+    clip_review: Literal["manual", "guarded", "skipped"] = Field(alias="clipReview")
+    subtitle_review: Literal["manual", "guarded", "skipped"] = Field(alias="subtitleReview")
+    final_quality_gate: Literal[
+        "not_connected",
+        "shadow_structural",
+        "guarded_structural",
+    ] = Field(
         default="not_connected",
         alias="finalQualityGate",
     )
@@ -89,14 +93,14 @@ def build_automation_manifest(
     )
 
     fallback_reason: str | None = None
-    if requested_mode == "shadow" and burn_subtitles and clip_review and subtitle_review:
-        effective_mode: EffectiveAutomationMode = "shadow"
+    if requested_mode in {"shadow", "guarded"} and burn_subtitles and clip_review and subtitle_review:
+        effective_mode: EffectiveAutomationMode = requested_mode
     else:
         effective_mode = "manual"
-        if requested_mode in {"guarded", "auto"}:
-            fallback_reason = "quality_gate_not_connected"
-        elif requested_mode == "shadow":
-            fallback_reason = "shadow_review_stops_incomplete"
+        if requested_mode == "auto":
+            fallback_reason = "final_quality_gate_not_connected"
+        elif requested_mode in {"shadow", "guarded"}:
+            fallback_reason = f"{requested_mode}_review_stops_incomplete"
         elif raw_mode != requested_mode:
             fallback_reason = "unknown_mode"
 
@@ -118,12 +122,28 @@ def build_automation_manifest(
             initialSelection=(
                 "codex" if initial_selection == "codex" else "legacy"
             ),
-            clipReview="manual" if clip_review else "skipped",
-            subtitleReview="manual" if subtitle_review else "skipped",
+            clipReview=(
+                "guarded"
+                if effective_mode == "guarded"
+                else "manual" if clip_review else "skipped"
+            ),
+            subtitleReview=(
+                "guarded"
+                if effective_mode == "guarded"
+                else "manual" if subtitle_review else "skipped"
+            ),
+            finalQualityGate=(
+                "guarded_structural"
+                if effective_mode == "guarded"
+                else "shadow_structural"
+                if effective_mode == "shadow"
+                else "not_connected"
+            ),
         ),
         limitations=[
             "automated_title_hook_not_connected",
-            "automated_final_quality_gate_not_connected",
+            "semantic_subtitle_accuracy_not_connected",
+            "visual_framing_and_layout_quality_not_connected",
         ],
     )
 

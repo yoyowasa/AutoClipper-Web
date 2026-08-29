@@ -1925,7 +1925,13 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         rerendered_selection["shorts"][0]["hook_scene_start"],
         rerendered_selection["shorts"][0]["hook_scene_end"],
     ) == (hook_start, hook_end)
-    assert not (storage.temp / "rr" / f"{created['jobId'][-12:]}_r2").exists()
+    assert not list(
+        (storage.temp / "rr").glob(f"{created['jobId'][-12:]}_r2_*")
+    )
+    assert not (
+        storage.job_outputs(created["jobId"])
+        / ".rerender_publication_unresolved"
+    ).exists()
 
     reopened_again = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/reopen").json()
     reopened_again = render_queued_previews(reopened_again)
@@ -1957,6 +1963,10 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert len(preserved_results["normalClips"]) == 1
     assert len(preserved_results["shorts"]) == 1
     assert preserved_results["shorts"][0]["title"] == "完成後に変更したタイトル"
+    assert not (
+        storage.job_outputs(created["jobId"])
+        / ".rerender_publication_unresolved"
+    ).exists()
 
 
 def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_duration_settings(

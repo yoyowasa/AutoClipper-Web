@@ -13,6 +13,8 @@ const errorLabels: Record<string, string> = {
   no_usable_selection: "選定基準を満たす候補がありません",
   no_usable_selection_retry_exhausted: "再処理は終了しています",
   no_usable_output: "切り抜き動画を生成できませんでした",
+  quality_gate_render_failed: "完成動画の自動確認で問題を検出しました",
+  quality_gate_record_failed: "自動確認の判定記録を保存できませんでした",
 };
 
 export function JobProgress({ job }: { job: JobStatusResponse }) {
@@ -32,6 +34,36 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
   const correctionTargetsCompleted = detailNumber("correctionTargetsCompleted");
   const correctionTargetsTotal = detailNumber("correctionTargetsTotal");
   const transcriptSegmentCount = detailNumber("transcriptSegmentCount");
+  const guardedAutomation = job.details.automationEffectiveMode === "guarded";
+  const automationGateAutoPassedClips = detailNumber("automationGateAutoPassedClips");
+  const automationGateAttentionClips = detailNumber("automationGateAttentionClips");
+  const automationGateStage =
+    typeof job.details.automationGateStage === "string"
+      ? job.details.automationGateStage
+      : null;
+  const automationGateReasonCodes = Array.isArray(job.details.automationGateReasonCodes)
+    ? [
+        ...new Set(
+          job.details.automationGateReasonCodes.filter(
+            (value): value is string => typeof value === "string" && value.length > 0
+          )
+        )
+      ]
+    : [];
+  const automationGateStageLabel =
+    automationGateStage === "selection"
+      ? "切り抜き予定"
+      : automationGateStage === "content"
+        ? "タイトル・字幕"
+        : automationGateStage === "post_render"
+          ? "完成動画"
+          : automationGateStage;
+  const showAutomationGateSummary =
+    guardedAutomation &&
+    (automationGateStageLabel !== null ||
+      automationGateAutoPassedClips !== null ||
+      automationGateAttentionClips !== null ||
+      automationGateReasonCodes.length > 0);
   const heatmapStatus =
     typeof job.details.heatmapStatus === "string" ? job.details.heatmapStatus : null;
   const heatmapSegmentCount = detailNumber("heatmapSegmentCount") ?? 0;
@@ -117,9 +149,13 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
     job.status === "awaiting_manual_edit"
       ? "元動画から切り抜く範囲を指定してください"
       : job.status === "awaiting_clip_review"
-      ? "切り抜き予定を確認してください"
+      ? guardedAutomation
+        ? "自動判定で確認が必要な切り抜き予定があります"
+        : "切り抜き予定を確認してください"
       : job.status === "awaiting_subtitle_review"
-        ? "字幕を確認してください"
+        ? guardedAutomation
+          ? "自動判定できない項目を確認してください"
+          : "字幕を確認してください"
         : job.currentStep;
 
   return (
@@ -177,6 +213,29 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
           >
             {codexSelectionLabel}
           </p>
+        ) : null}
+
+        {showAutomationGateSummary ? (
+          <div
+            className="border-t border-amber-200 pt-4 text-xs text-amber-900"
+            data-testid="automation-gate-summary"
+          >
+            <p className="font-semibold">
+              自動判定{automationGateStageLabel ? `: ${automationGateStageLabel}` : ""}
+            </p>
+            {automationGateAutoPassedClips !== null ||
+            automationGateAttentionClips !== null ? (
+              <p className="mt-1 tabular-nums">
+                自動通過 {automationGateAutoPassedClips ?? 0}件 ・ 要確認{" "}
+                {automationGateAttentionClips ?? 0}件
+              </p>
+            ) : null}
+            {automationGateReasonCodes.length > 0 ? (
+              <p className="mt-1 break-words text-amber-800">
+                理由: {automationGateReasonCodes.join(" / ")}
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         {showCorrectionProgress ? (

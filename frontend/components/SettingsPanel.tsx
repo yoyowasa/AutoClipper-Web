@@ -380,14 +380,16 @@ export function SettingsPanel({
               <input
                 checked={settings.burnSubtitles}
                 className="h-4 w-4"
-                disabled={disabled}
+                disabled={disabled || settings.automationMode === "guarded"}
                 type="checkbox"
                 onChange={(event) =>
                   onChange({
                     ...settings,
                     burnSubtitles: event.target.checked,
                     automationMode:
-                      !event.target.checked && settings.automationMode === "shadow"
+                      !event.target.checked &&
+                      (settings.automationMode === "shadow" ||
+                        settings.automationMode === "guarded")
                         ? "manual"
                         : settings.automationMode
                   })
@@ -404,7 +406,9 @@ export function SettingsPanel({
               <span className="ml-1 inline-flex w-[calc(100%_-_1.25rem)] items-center justify-between gap-3 align-middle">
                 <span>開始後の確認</span>
                 <span className="text-xs font-normal text-neutral-500">
-                  {!settings.burnSubtitles
+                  {settings.automationMode === "guarded"
+                    ? "自動判定できない項目または問題時のみ確認"
+                    : !settings.burnSubtitles
                     ? "なし"
                     : [
                         settings.requireClipPlanReview ? "予定確認" : null,
@@ -424,32 +428,44 @@ export function SettingsPanel({
                   value={settings.automationMode}
                   onChange={(event) => {
                     const automationMode = event.target.value as ClipSettings["automationMode"];
+                    const requiresReviewPipeline =
+                      automationMode === "shadow" || automationMode === "guarded";
                     onChange({
                       ...settings,
                       automationMode,
-                      burnSubtitles:
-                        automationMode === "shadow" ? true : settings.burnSubtitles,
-                      requireClipPlanReview:
-                        automationMode === "shadow" ? true : settings.requireClipPlanReview,
-                      requireSubtitleReview:
-                        automationMode === "shadow" ? true : settings.requireSubtitleReview
+                      burnSubtitles: requiresReviewPipeline ? true : settings.burnSubtitles,
+                      requireClipPlanReview: requiresReviewPipeline
+                        ? true
+                        : settings.requireClipPlanReview,
+                      requireSubtitleReview: requiresReviewPipeline
+                        ? true
+                        : settings.requireSubtitleReview
                     });
                   }}
                 >
                   <option value="manual">手動確認（現行）</option>
                   <option value="shadow">Shadow（自動判断を保存し、全件確認）</option>
-                  <option disabled value="guarded">問題だけ確認（準備中）</option>
+                  <option value="guarded">問題だけ確認</option>
                   <option disabled value="auto">完全自動（準備中）</option>
                 </select>
                 <span className="text-xs text-neutral-600">
-                  Shadowは処理結果を変えず、判断記録を残して全工程を確認します。
+                  {settings.automationMode === "guarded"
+                    ? "自動判定できない項目または問題時のみ確認します。"
+                    : "Shadowは処理結果を変えず、判断記録を残して全工程を確認します。"}
                 </span>
               </label>
               <label className="flex items-start gap-2">
                 <input
-                  checked={settings.requireClipPlanReview}
+                  checked={
+                    settings.automationMode === "guarded" || settings.requireClipPlanReview
+                  }
                   className="mt-0.5 h-4 w-4"
-                  disabled={disabled || !settings.burnSubtitles || !settings.requireSubtitleReview}
+                  disabled={
+                    disabled ||
+                    settings.automationMode === "guarded" ||
+                    !settings.burnSubtitles ||
+                    !settings.requireSubtitleReview
+                  }
                   type="checkbox"
                   onChange={(event) =>
                     onChange({
@@ -473,9 +489,13 @@ export function SettingsPanel({
               </label>
               <label className="flex items-start gap-2">
                 <input
-                  checked={settings.requireSubtitleReview}
+                  checked={
+                    settings.automationMode === "guarded" || settings.requireSubtitleReview
+                  }
                   className="mt-0.5 h-4 w-4"
-                  disabled={disabled || !settings.burnSubtitles}
+                  disabled={
+                    disabled || settings.automationMode === "guarded" || !settings.burnSubtitles
+                  }
                   type="checkbox"
                   onChange={(event) =>
                     onChange({

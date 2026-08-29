@@ -25,6 +25,17 @@ from app.config import Settings, get_settings
 from app.db import get_db
 from app.ids import make_id
 from app.jobs.automation import automation_manifest_path, load_automation_manifest
+from app.jobs.quality_gate import (
+    QualityGateMode,
+    QualityGateStage,
+    evaluate_content_quality_gate,
+    invalidate_quality_gate_decisions,
+    load_quality_gate_decision,
+    quality_gate_decision_path,
+    unknown_quality_gate_decision,
+    write_quality_gate_decision,
+)
+from app.jobs.publication_state import rerender_publication_is_unresolved
 from app.jobs.clip_plan import (
     ClipPlanClip,
     ClipPlanDocument,
@@ -297,6 +308,7 @@ def _write_subtitle_review_unlocked(
     paths: StoragePaths,
 ) -> None:
     output_dir = paths.job_outputs(document.job_id)
+    invalidate_quality_gate_decisions(output_dir, ("content", "post_render"))
     write_subtitle_review(document, subtitle_review_output_path(output_dir))
     write_subtitle_review_summary(document, subtitle_review_summary_path(output_dir))
 
@@ -527,6 +539,31 @@ def _selected_clips_by_candidate(output_dir: Path) -> dict[str, dict[str, Any]]:
             if isinstance(candidate_id, str) and candidate_id:
                 by_candidate[candidate_id] = item
     return by_candidate
+
+
+def _export_is_published(
+    export: ExportItem,
+    output_dir: Path,
+    paths: StoragePaths,
+) -> bool:
+    try:
+        paths.resolve_stored_file(export.video_path).resolve(strict=False).relative_to(
+            output_dir.resolve(strict=False)
+        )
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _job_publication_unresolved(job: Job, paths: StoragePaths) -> bool:
+    return job.status in {
+        "rendering_normal_clips",
+        "rendering_shorts",
+        "packaging_zip",
+    } or job.error_code in {
+        "subtitle_rerender_rollback_failed",
+        "worker_terminated_unexpectedly",
+    } or rerender_publication_is_unresolved(paths.job_outputs(job.id))
 
 
 def _read_export_metadata(export: ExportItem, paths: StoragePaths) -> dict[str, Any]:
@@ -1053,6 +1090,132 @@ def _has_terminal_retry_child(db: Session, source_job_id: str) -> bool:
     return child_status in TERMINAL_STATUSES
 
 
+def _quality_gate_attention_clip_ids(
+    checks: list[Any],
+    *,
+    all_clip_ids: set[str],
+) -> set[str]:
+    clip_ids: set[str] = set()
+    has_global_attention = False
+    list_keys = {
+        "invalidClipIds",
+        "missingClipIds",
+        "uncoveredClipIds",
+        "failedClipIds",
+        "unknownClipIds",
+        "incompleteClipIds",
+    }
+    for check in checks:
+        if getattr(check, "outcome", "pass") == "pass":
+            continue
+        evidence = getattr(check, "evidence", {})
+        found_for_check = False
+        if isinstance(evidence, dict):
+            for key in list_keys:
+                values = evidence.get(key)
+                if isinstance(values, list):
+                    valid_values = {
+                        value
+                        for value in values
+                        if isinstance(value, str) and value in all_clip_ids
+                    }
+                    clip_ids.update(valid_values)
+                    found_for_check = found_for_check or bool(valid_values)
+            flags = evidence.get("flagsByClipId")
+            if isinstance(flags, dict):
+                valid_values = {
+                    value
+                    for value in flags
+                    if isinstance(value, str) and value in all_clip_ids
+                }
+                clip_ids.update(valid_values)
+                found_for_check = found_for_check or bool(valid_values)
+            for item_key in ("problems", "duplicates"):
+                items = evidence.get(item_key)
+                if not isinstance(items, list):
+                    continue
+                for item in items:
+                    if not isinstance(item, dict):
+                        continue
+                    for key in ("clipId", "duplicateOf"):
+                        value = item.get(key)
+                        if isinstance(value, str) and value in all_clip_ids:
+                            clip_ids.add(value)
+                            found_for_check = True
+        if not found_for_check:
+            has_global_attention = True
+    return set(all_clip_ids) if has_global_attention else clip_ids
+
+
+def _job_quality_gate_mode(
+    job: Job,
+    output_dir: Path,
+) -> QualityGateMode | None:
+    manifest_path = automation_manifest_path(output_dir)
+    if manifest_path.is_file():
+        try:
+            effective_mode = load_automation_manifest(manifest_path).effective_mode
+        except (OSError, ValueError):
+            pass
+        else:
+            return effective_mode if effective_mode in {"shadow", "guarded"} else None
+    requested_mode = str(
+        (job.settings_json or {}).get("automationMode") or "manual"
+    ).strip()
+    return requested_mode if requested_mode in {"shadow", "guarded"} else None
+
+
+def _write_content_quality_gate(
+    *,
+    job: Job,
+    document: SubtitleReviewDocument,
+    output_dir: Path,
+) -> bool:
+    mode = _job_quality_gate_mode(job, output_dir)
+    if mode is None:
+        return False
+    try:
+        content_gate = evaluate_content_quality_gate(
+            job_id=job.id,
+            document=document,
+            settings=dict(job.settings_json or {}),
+            mode=mode,
+        )
+    except Exception as exc:
+        content_gate = unknown_quality_gate_decision(
+            job_id=job.id,
+            stage="content",
+            reason_code="content_gate_evaluation_failed",
+            evidence={"errorType": exc.__class__.__name__},
+            mode=mode,
+        )
+    try:
+        write_quality_gate_decision(
+            content_gate,
+            quality_gate_decision_path(output_dir, "content"),
+        )
+    except OSError:
+        return False
+    return True
+
+
+def _quality_gate_stage_order(job_status: str) -> tuple[QualityGateStage, ...]:
+    if job_status in {"preparing_clip_review", "awaiting_clip_review"}:
+        return ("selection",)
+    if job_status in {"preparing_subtitle_review", "awaiting_subtitle_review"}:
+        return ("content",)
+    if job_status in {
+        "rendering_normal_clips",
+        "rendering_shorts",
+        "packaging_zip",
+        "completed",
+    }:
+        return ("post_render",)
+    if job_status == "failed":
+        return ("post_render", "content", "selection")
+    return ("selection",)
+
+
 def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
     details: dict[str, Any] = {}
     output_dir = paths.job_outputs(job.id)
@@ -1065,6 +1228,7 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
         if initial_selection_provider in {"legacy", "codex"}
         else "legacy"
     )
+    effective_automation_mode: str | None = None
     manifest_path = automation_manifest_path(output_dir)
     if manifest_path.is_file():
         try:
@@ -1076,9 +1240,72 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
             details["automationManifestAvailable"] = True
             details["automationMode"] = automation_manifest.requested_mode
             details["automationEffectiveMode"] = automation_manifest.effective_mode
+            effective_automation_mode = automation_manifest.effective_mode
             details["automationDecisionInputHash"] = (
                 automation_manifest.decision_input_hash
             )
+
+    selected_payload = _read_json_if_exists(output_dir / "selected_clips.json")
+    all_clip_ids: set[str] = set()
+    if isinstance(selected_payload, dict):
+        for key in ("normalClips", "shorts"):
+            clips = selected_payload.get(key)
+            if not isinstance(clips, list):
+                continue
+            all_clip_ids.update(
+                str(item.get("id"))
+                for item in clips
+                if isinstance(item, dict) and item.get("id")
+            )
+    quality_decision = None
+    gate_document_found = False
+    for stage in _quality_gate_stage_order(job.status):
+        decision_path = quality_gate_decision_path(output_dir, stage)
+        if not decision_path.is_file():
+            continue
+        gate_document_found = True
+        try:
+            quality_decision = load_quality_gate_decision(decision_path)
+            if quality_decision.job_id != job.id or quality_decision.stage != stage:
+                raise ValueError("quality gate decision identity does not match its job and stage")
+            if (
+                effective_automation_mode in {"shadow", "guarded"}
+                and quality_decision.mode != effective_automation_mode
+            ):
+                raise ValueError("quality gate decision mode does not match the active automation mode")
+        except (OSError, ValueError):
+            quality_decision = None
+            details["automationGateState"] = "fallback_manual"
+            details["automationGateInvalid"] = True
+        break
+    if quality_decision is not None:
+        attention_clip_ids = _quality_gate_attention_clip_ids(
+            quality_decision.checks,
+            all_clip_ids=all_clip_ids,
+        )
+        details["automationGateState"] = (
+            "passed" if quality_decision.outcome == "pass" else "needs_attention"
+        )
+        details["automationGateStage"] = quality_decision.stage
+        details["automationGateOutcome"] = quality_decision.outcome
+        details["automationGateInputHash"] = quality_decision.input_hash
+        details["automationGateAutoPassedClips"] = max(
+            0,
+            len(all_clip_ids) - len(attention_clip_ids),
+        )
+        details["automationGateAttentionClips"] = len(attention_clip_ids)
+        details["automationGateAttentionClipIds"] = sorted(attention_clip_ids)
+        details["automationGateReasonCodes"] = [
+            check.reason_code
+            for check in quality_decision.checks
+            if check.reason_code is not None
+        ]
+    elif effective_automation_mode == "guarded" and not gate_document_found:
+        if job.status in {"awaiting_clip_review", "awaiting_subtitle_review", "completed"}:
+            details["automationGateState"] = "fallback_manual"
+            details["automationGateMissing"] = True
+        else:
+            details["automationGateState"] = "evaluating"
 
     codex_summary = _read_json_if_exists(
         output_dir / "codex_initial_selection_summary.json"
@@ -2279,12 +2506,17 @@ def approve_clip_plan(
             document=review_document,
             paths=paths,
         )
-    _enqueue_subtitle_review_previews(
+    review_document = _enqueue_subtitle_review_previews(
         job_id=job.id,
         document=review_document,
         queued=queued_previews,
         paths=paths,
         enqueue_preview=enqueue_preview,
+    )
+    _write_content_quality_gate(
+        job=job,
+        document=review_document,
+        output_dir=output_dir,
     )
     return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
@@ -2305,6 +2537,7 @@ def get_subtitle_review(
         )
     output_dir = paths.job_outputs(job_id)
     queued_previews: list[tuple[str, str]] = []
+    refresh_quality_gate = False
     with subtitle_review_document_lock(output_dir):
         db.refresh(job)
         document = _get_subtitle_review_or_404(job_id, paths)
@@ -2322,6 +2555,7 @@ def get_subtitle_review(
             )
             if settings_changed or preview_changed:
                 _write_subtitle_review_unlocked(document, paths)
+                refresh_quality_gate = True
         else:
             document = document.model_copy(deep=True)
             document, _settings_changed = _hydrate_subtitle_review_render_settings(
@@ -2333,13 +2567,24 @@ def get_subtitle_review(
                 document,
                 paths,
             )
-    return _enqueue_subtitle_review_previews(
+    document = _enqueue_subtitle_review_previews(
         job_id=job.id,
         document=document,
         queued=queued_previews,
         paths=paths,
         enqueue_preview=enqueue_preview,
     )
+    refresh_quality_gate = refresh_quality_gate or bool(queued_previews)
+    if (
+        refresh_quality_gate
+        or not quality_gate_decision_path(output_dir, "content").is_file()
+    ):
+        _write_content_quality_gate(
+            job=job,
+            document=document,
+            output_dir=output_dir,
+        )
+    return document
 
 
 @router.get(
@@ -3360,6 +3605,7 @@ def convert_subtitle_review_clip_to_short(
             write_candidates([short_candidate], output_dir / "candidates.json")
             write_candidates([short_candidate], output_dir / "scored_candidates.json")
             write_selected_clips(selection, output_dir / "selected_clips.json")
+            invalidate_quality_gate_decisions(output_dir, ("selection",))
             _write_json_payload(output_dir / "candidate_generation_summary.json", summary)
             job.settings_json = settings
             job.updated_at = utc_now()
@@ -3785,7 +4031,15 @@ def get_job_results(
             detail="source video record is unavailable",
         )
     output_dir = paths.job_outputs(job.id)
-    exports = db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all()
+    exports = []
+    if not _job_publication_unresolved(job, paths):
+        exports = [
+            export
+            for export in db.scalars(
+                select(ExportItem).where(ExportItem.job_id == job.id)
+            ).all()
+            if _export_is_published(export, output_dir, paths)
+        ]
     selected_by_candidate = _selected_clips_by_candidate(output_dir)
     audit = _audit_report(output_dir)
     audit_by_candidate = _audit_clips_by_candidate(audit)
@@ -3817,7 +4071,12 @@ def download_job_zip(
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
 ) -> FileResponse:
-    _get_job_or_404(db, job_id)
+    job = _get_job_or_404(db, job_id)
+    if _job_publication_unresolved(job, paths):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="zip is unavailable while re-render publication is unresolved",
+        )
     zip_path = paths.zip_path(job_id)
     if not zip_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="zip not found")

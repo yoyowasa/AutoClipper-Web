@@ -59,7 +59,34 @@ def test_shadow_manifest_round_trip_records_roles(tmp_path) -> None:
     assert loaded.roles.initial_selection == "codex"
     assert loaded.roles.clip_review == "manual"
     assert loaded.roles.subtitle_review == "manual"
-    assert loaded.roles.final_quality_gate == "not_connected"
+    assert loaded.roles.final_quality_gate == "shadow_structural"
+
+
+def test_guarded_manifest_connects_structural_quality_roles(tmp_path) -> None:
+    settings = {
+        "automationMode": "guarded",
+        "initialSelectionProvider": "codex",
+        "burnSubtitles": True,
+        "requireClipPlanReview": True,
+        "requireSubtitleReview": True,
+    }
+    output_path = write_automation_manifest(
+        build_automation_manifest(
+            job_id="job_1",
+            video_id="video_1",
+            stored_path="videos/source.mp4",
+            settings=settings,
+        ),
+        automation_manifest_path(tmp_path),
+    )
+
+    loaded = load_automation_manifest(output_path)
+
+    assert loaded.requested_mode == "guarded"
+    assert loaded.effective_mode == "guarded"
+    assert loaded.roles.clip_review == "guarded"
+    assert loaded.roles.subtitle_review == "guarded"
+    assert loaded.roles.final_quality_gate == "guarded_structural"
 
 
 @pytest.mark.parametrize(

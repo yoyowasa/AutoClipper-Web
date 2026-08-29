@@ -21,6 +21,10 @@ from app.jobs.queue import (
     get_enqueue_subtitle_review_hook_scene_update,
     get_enqueue_subtitle_review_preview,
 )
+from app.jobs.publication_state import (
+    mark_rerender_publication_unresolved,
+    rerender_publication_is_unresolved,
+)
 from app.jobs.runner import (
     AutoClipperPipelineDependencies,
     run_dummy_autoclipper_job,
@@ -2525,7 +2529,11 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["transcriptionLanguage"] == "ja"
 
 
-def test_create_job_persists_shadow_automation_mode(client: TestClient) -> None:
+@pytest.mark.parametrize("automation_mode", ["shadow", "guarded"])
+def test_create_job_persists_review_based_automation_mode(
+    client: TestClient,
+    automation_mode: str,
+) -> None:
     upload = client.post(
         "/api/videos/upload",
         files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
@@ -2536,7 +2544,7 @@ def test_create_job_persists_shadow_automation_mode(client: TestClient) -> None:
         json={
             "videoId": upload["videoId"],
             "settings": {
-                "automationMode": "shadow",
+                "automationMode": automation_mode,
                 "burnSubtitles": True,
                 "requireClipPlanReview": True,
                 "requireSubtitleReview": True,
@@ -2548,12 +2556,12 @@ def test_create_job_persists_shadow_automation_mode(client: TestClient) -> None:
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, response.json()["jobId"])
         assert job is not None
-        assert job.settings_json["automationMode"] == "shadow"
+        assert job.settings_json["automationMode"] == automation_mode
         assert job.settings_json["requireClipPlanReview"] is True
         assert job.settings_json["requireSubtitleReview"] is True
 
 
-@pytest.mark.parametrize("automation_mode", ["guarded", "auto", "automatic", "future"])
+@pytest.mark.parametrize("automation_mode", ["auto", "automatic", "future"])
 def test_create_job_rejects_unavailable_or_unknown_automation_mode(
     client: TestClient,
     automation_mode: str,
@@ -2583,7 +2591,11 @@ def test_create_job_rejects_unavailable_or_unknown_automation_mode(
         assert len(list(db.scalars(select(Job)).all())) == jobs_before
 
 
-def test_create_job_rejects_shadow_without_both_review_stops(client: TestClient) -> None:
+@pytest.mark.parametrize("automation_mode", ["shadow", "guarded"])
+def test_create_job_rejects_review_based_mode_without_both_review_stops(
+    client: TestClient,
+    automation_mode: str,
+) -> None:
     upload = client.post(
         "/api/videos/upload",
         files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
@@ -2594,7 +2606,7 @@ def test_create_job_rejects_shadow_without_both_review_stops(client: TestClient)
         json={
             "videoId": upload["videoId"],
             "settings": {
-                "automationMode": "shadow",
+                "automationMode": automation_mode,
                 "burnSubtitles": True,
                 "requireClipPlanReview": False,
                 "requireSubtitleReview": True,
@@ -3709,6 +3721,132 @@ def test_results_zip_download_and_export_download(client: TestClient) -> None:
     short_download = client.get("/api/exports/exp_short/download")
     assert short_download.status_code == 200
     assert short_download.content == b"short mp4"
+
+
+def test_unpublished_rerender_exports_are_hidden_and_active_publication_is_blocked(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(created["jobId"])
+    published_path = output_dir / "normal.mp4"
+    published_path.write_bytes(b"published")
+    storage.zip_path(created["jobId"]).write_bytes(b"published zip")
+    staging_path = storage.temp / "rr" / "attempt" / "normal.mp4"
+    staging_path.parent.mkdir(parents=True, exist_ok=True)
+    staging_path.write_bytes(b"staging")
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        db.add_all(
+            [
+                ExportItem(
+                    id="exp_published",
+                    job_id=created["jobId"],
+                    video_id=upload["videoId"],
+                    type="normal",
+                    title="Published",
+                    duration=10,
+                    score=1,
+                    video_path=str(published_path),
+                ),
+                ExportItem(
+                    id="exp_staging",
+                    job_id=created["jobId"],
+                    video_id=upload["videoId"],
+                    type="normal",
+                    title="Staging",
+                    duration=10,
+                    score=1,
+                    video_path=str(staging_path),
+                ),
+            ]
+        )
+        db.commit()
+
+    results = client.get(f"/api/jobs/{created['jobId']}/results")
+    assert results.status_code == 200
+    assert [item["id"] for item in results.json()["normalClips"]] == [
+        "exp_published"
+    ]
+    assert client.get("/api/exports/exp_staging/download").status_code == 404
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        job.status = "rendering_normal_clips"
+        db.commit()
+
+    active_results = client.get(f"/api/jobs/{created['jobId']}/results")
+    assert active_results.status_code == 200
+    assert active_results.json()["normalClips"] == []
+    assert client.get("/api/exports/exp_published/download").status_code == 409
+    assert client.get(f"/api/jobs/{created['jobId']}/download.zip").status_code == 409
+
+
+def test_rollback_failed_publication_stays_blocked_during_hook_updates(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    storage.zip_path(job_id).write_bytes(b"possibly mixed zip")
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    mark_rerender_publication_unresolved(
+        output_dir,
+        job_id=job_id,
+        render_revision=2,
+    )
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.error_code = "subtitle_rerender_rollback_failed"
+        db.commit()
+
+    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = (
+        lambda: lambda _job_id, _clip_id, _start, _end: None
+    )
+    queued = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/hook-scene",
+        json={"start": 1, "end": 3},
+    )
+    assert queued.status_code == 202
+    assert rerender_publication_is_unresolved(output_dir)
+    assert client.get("/api/exports/exp_reedit_upload/download").status_code == 409
+    assert client.get(f"/api/jobs/{job_id}/download.zip").status_code == 409
+    assert client.get(f"/api/jobs/{job_id}/results").json()["shorts"] == []
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.status = "awaiting_subtitle_review"
+        db.commit()
+
+    def fail_enqueue(
+        _job_id: str,
+        _clip_id: str,
+        _start: float | None,
+        _end: float | None,
+    ) -> None:
+        raise RuntimeError("queue unavailable")
+
+    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = (
+        lambda: fail_enqueue
+    )
+    queue_failed = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/hook-scene",
+        json={"start": 2, "end": 4},
+    )
+    assert queue_failed.status_code == 503
+    assert rerender_publication_is_unresolved(output_dir)
+    assert client.get("/api/exports/exp_reedit_upload/download").status_code == 409
+    assert client.get(f"/api/jobs/{job_id}/download.zip").status_code == 409
 
 
 def test_dummy_job_completes_and_results_are_downloadable(client: TestClient) -> None:

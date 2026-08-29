@@ -460,17 +460,17 @@ class JobSettings(BaseModel):
     def validate_duration_ranges(self) -> "JobSettings":
         if self.workflow_mode == "manual":
             self.automation_mode = "manual"
-        elif self.automation_mode in {"guarded", "auto"}:
+        elif self.automation_mode == "auto":
             raise ValueError(
-                "automationMode guarded/auto is unavailable until the quality gate is implemented"
+                "automationMode auto is unavailable until the final quality gate is implemented"
             )
-        elif self.automation_mode == "shadow" and not (
+        elif self.automation_mode in {"shadow", "guarded"} and not (
             self.burn_subtitles
             and self.require_clip_plan_review
             and self.require_subtitle_review
         ):
             raise ValueError(
-                "automationMode shadow requires subtitle burn-in and both review stops"
+                f"automationMode {self.automation_mode} requires subtitle burn-in and both review stops"
             )
         if self.workflow_mode != "manual" and self.normal_clip_count + self.short_count <= 0:
             raise ValueError("at least one normal clip or short must be requested")

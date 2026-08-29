@@ -8203,3 +8203,42 @@ pip check: pass
 - `guarded / auto`に必要なローカル品質ゲートは未実装。
 - タイトル／フックの自動決定、最終画角・帯・字幕・音声の自動品質判定は未接続。
 - 実際の1時間動画を使ったGPU jobのPhase 1受入確認は未実施。
+
+## 2026-08-29 Guarded品質ゲート（Phase 2）
+
+### 目的
+
+- 全件手動確認から、構造的に安全と判定できた工程だけを自動通過させ、問題・不明点だけ人へ戻す。
+
+### 現在状態・変更
+
+- `guarded`を選択可能にした。字幕焼き込み、切り抜き予定確認、字幕確認を必須とし、`auto`は引き続き選択不可・API `422`でfail closedにした。
+- `selection / content / post_render`の3段階で、`pass / fail / unknown`、route、check、入力hashを`quality_gate/*.json`へ原子的に保存する。
+- selectionの本数、範囲、長さ、hard重複、JSON条件を構造判定する。`guarded`でselectionがpassなら切り抜き予定確認を省略し、fail／unknownは確認画面へ戻す。
+- 現時点の内容正確性、タイトル／フック妥当性、字幕正確性、最終画角は未接続のため`unknown`となり、字幕確認で停止する。`shadow`は判断を記録するだけで従来遷移を変えない。
+- post-renderは要求本数との完全一致、render failure 0件、公開先MP4の存在・hashを検証し、不完全な出力を完成扱いにしない。
+- 再レンダーは一意なstagingへ出力し、動画、字幕、metadata、render failure、ZIP、DB行を一括昇格する。途中失敗は旧出力へrollbackする。
+- rollback失敗またはworker異常終了時は永続publication markerを残し、job status／error文言がフック編集で変わってもresults、個別export、ZIPを公開しない。既存marker付き再試行は完全成功時だけ解除する。
+- job詳細に現在の品質ゲート段階、判定、理由を返し、進捗画面に自動通過／人手確認の理由を表示する。
+
+### 変更ファイル
+
+- backend: `app/jobs/quality_gate.py`、`app/jobs/publication_state.py`、`app/jobs/automation.py`、`app/jobs/runner.py`、`app/api/jobs.py`、`app/api/exports.py`、`app/schemas.py`
+- frontend: `app/jobs/[jobId]/page.tsx`、`components/JobProgress.tsx`、`components/SettingsPanel.tsx`
+- test: `tests/test_guarded_quality_gate.py`、`tests/test_guarded_quality_gate_integration.py`、`tests/test_guarded_rerender_promotion_gate.py`、`tests/test_api_routes.py`、`tests/test_automation_contract.py`、`tests/test_real_pipeline.py`
+
+### 最小検証
+
+- backend全test: `796 passed / 1 skipped`。
+- backend Ruff、frontend typecheck／lint／build: pass。
+- rollback失敗、既存marker付き再試行失敗、フック更新成功／queue失敗、staging非公開、ZIPを含むrollbackの回帰test: pass。
+- `docker compose config --quiet`、`git diff --check`: pass。
+- backend／frontend／GPU workerを再構築し、backend healthy、frontend、Redis、workerが稼働。`/health=200`、`/upload=200`。
+- 実browserで`問題だけ確認`を選択し、説明文、切り抜き予定確認・字幕確認の強制ON／無効化を確認。再構築後の`/upload`表示とconsole error／warning=`0`も確認した。
+- 独立差分監査: P0／P1なし。
+
+### 未解決事項
+
+- 内容正確性、タイトル／フック、字幕、最終画角の自動判定は未接続。このため現行`guarded`は字幕確認を自動通過しない。
+- 同一jobの再レンダーworkerが二重実行された場合のattempt所有leaseは未実装。通常の単一RQ workerでは低頻度だが、Phase 3でjob単位leaseまたはattempt ID付きmarkerへ更新する。
+- 実際の1時間動画を使ったGPU jobのPhase 2受入確認は未実施。

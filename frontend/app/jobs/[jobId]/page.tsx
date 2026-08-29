@@ -82,6 +82,16 @@ export default function JobPage() {
     };
   }, [jobId]);
 
+  const guardedAutomation = job?.details.automationEffectiveMode === "guarded";
+  const guardedAutoPassedClips =
+    typeof job?.details.automationGateAutoPassedClips === "number"
+      ? job.details.automationGateAutoPassedClips
+      : null;
+  const guardedAttentionClips =
+    typeof job?.details.automationGateAttentionClips === "number"
+      ? job.details.automationGateAttentionClips
+      : null;
+
   return (
     <main className="min-h-screen bg-[#f7f7f4] px-6 py-8 text-neutral-950">
       <section className="mx-auto flex w-full max-w-5xl flex-col gap-5">
@@ -155,35 +165,58 @@ export default function JobPage() {
                 <p className="text-sm font-semibold text-blue-950">
                   {job.status === "awaiting_manual_edit"
                     ? "元動画の準備ができました。手動で切り抜く範囲を作成できます。"
-                    : "切り抜き候補が決まりました。字幕を作る前に範囲を確認できます。"}
+                    : guardedAutomation
+                      ? "自動判定で確認が必要な切り抜き予定があります。"
+                      : "切り抜き候補が決まりました。字幕を作る前に範囲を確認できます。"}
                 </p>
                 <p className="mt-1 text-sm text-blue-800">
                   {job.status === "awaiting_manual_edit"
                     ? "元動画を再生し、通常切り抜きとショートの開始・終了を指定してください。"
-                    : "各予定clipを再生し、合わなければ狙う場面を変更して再選定してください。"}
+                    : guardedAutomation
+                      ? "自動判定の結果を確認し、必要なら範囲を調整してください。"
+                      : "各予定clipを再生し、合わなければ狙う場面を変更して再選定してください。"}
                 </p>
                 <Link
                   className="mt-4 inline-flex min-h-11 items-center bg-blue-700 px-5 text-sm font-semibold text-white"
                   href={`/jobs/${job.id}/clips`}
                 >
-                  {job.status === "awaiting_manual_edit" ? "手動切り抜きを開く" : "切り抜き予定を確認"}
+                  {job.status === "awaiting_manual_edit"
+                    ? "手動切り抜きを開く"
+                    : guardedAutomation
+                      ? "確認が必要な切り抜き予定を開く"
+                      : "切り抜き予定を確認"}
                 </Link>
               </section>
             ) : null}
             {job.status === "awaiting_subtitle_review" ? (
               <section className="border border-sky-300 bg-sky-50 px-5 py-5">
                 <p className="text-sm font-semibold text-sky-950">
-                  clip選定が完了しました。次は字幕確認です。
+                  {guardedAutomation
+                    ? "自動判定できない項目があります。"
+                    : "clip選定が完了しました。次は字幕確認です。"}
                 </p>
                 <p className="mt-1 text-sm text-sky-800">
-                  確認済み {Number(job.details.subtitleReviewConfirmedClips ?? 0)} /{" "}
-                  {Number(job.details.subtitleReviewTotalClips ?? 0)}
+                  {guardedAutomation ? (
+                    guardedAutoPassedClips !== null || guardedAttentionClips !== null ? (
+                      <>
+                        自動通過 {guardedAutoPassedClips ?? 0}件 ・ 要確認{" "}
+                        {guardedAttentionClips ?? 0}件
+                      </>
+                    ) : (
+                      <>自動判定の確認対象を開いてください。</>
+                    )
+                  ) : (
+                    <>
+                      確認済み {Number(job.details.subtitleReviewConfirmedClips ?? 0)} /{" "}
+                      {Number(job.details.subtitleReviewTotalClips ?? 0)}
+                    </>
+                  )}
                 </p>
                 <Link
                   className="mt-4 inline-flex min-h-11 items-center bg-sky-700 px-5 text-sm font-semibold text-white"
                   href={`/jobs/${job.id}/subtitles`}
                 >
-                  字幕確認へ進む
+                  {guardedAutomation ? "確認が必要な項目を開く" : "字幕確認へ進む"}
                 </Link>
               </section>
             ) : null}
