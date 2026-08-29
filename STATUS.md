@@ -8327,3 +8327,32 @@ pip check: pass
 
 - 既に完成済みの旧出力へ投稿用JSON／Markdownを追加するには、そのclipの再編集・再レンダーが必要。
 - 通常字幕のEnter改行はevent分割前に空白へ正規化される既存仕様。previewと完成動画は一致するが、任意位置の改行保持には時間event分割・結合・文字数配分をPython／TypeScript双方で変更する必要があるため、別タスクとする。
+
+## 2026-08-29 frontend依存脆弱性の解消
+
+### 目的
+
+- `npm audit`が報告したhigh 6件を修正版へ更新し、frontendの依存監査を0件にする。
+
+### 現在状態・変更
+
+- `npm audit fix`のmajor更新を伴わない範囲で依存を更新した。
+- 直接依存の最低版をNext.js `16.3.3`、PostCSS `8.5.23`へ更新し、`eslint-config-next`もNext.jsと同じ`16.3.3`へ揃えた。
+- 間接依存はSharp `0.35.4`、Nano ID `3.3.18`、js-yaml `4.3.2`、brace-expansion `5.0.9`／`1.1.18`へ更新した。
+- `package-lock.json`を更新し、`npm ci`でも修正版が再現されるよう固定した。
+
+### 変更ファイル
+
+- `frontend/package.json`
+- `package-lock.json`
+
+### 最小検証
+
+- `npm audit --audit-level=high`: `found 0 vulnerabilities`。
+- frontend overlay fit test、typecheck、lint、Next.js `16.3.3` build: pass。
+- backend全test: `845 passed / 1 skipped`。backend／launcher Ruff、`docker compose config --quiet`: pass。
+- frontendコンテナを再構築し、コンテナ内Next.js `16.3.3`、`npm ci`監査0件、`/upload=200`、backend `/health=ok`を確認した。
+
+### 未解決事項
+
+- なし。新しいadvisory追加時は`npm audit`で再確認する。

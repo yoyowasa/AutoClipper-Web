@@ -11,7 +11,7 @@
     "test:overlay-fit": "tsx tests/overlayTextFit.golden.ts"
   },
   "dependencies": {
-    "next": "^16.2.9",
+    "next": "^16.3.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -21,8 +21,8 @@
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.39.1",
-    "eslint-config-next": "^16.2.9",
-    "postcss": "^8.5.10",
+    "eslint-config-next": "^16.3.3",
+    "postcss": "^8.5.23",
     "tailwindcss": "^3.4.14",
     "tsx": "^4.23.12",
     "typescript": "^5.6.0"
