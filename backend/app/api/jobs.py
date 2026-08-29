@@ -24,6 +24,7 @@ from app.candidates.select_candidates import CandidateSelection, write_selected_
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.ids import make_id
+from app.jobs.automation import automation_manifest_path, load_automation_manifest
 from app.jobs.clip_plan import (
     ClipPlanClip,
     ClipPlanDocument,
@@ -149,7 +150,7 @@ from app.schemas import (
     TitleHookSuggestionRequest,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
-from app.video.heatmap import HeatmapSidecarError, heatmap_sidecar_path, parse_heatmap_sidecar
+from app.video.heatmap import HeatmapSidecarError, parse_heatmap_sidecar
 
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -888,6 +889,7 @@ def _create_isolated_reedit_job(
     child_settings.update(
         {
             "workflowMode": "manual",
+            "automationMode": "manual",
             "manualEditFinalized": True,
             "reeditOf": source_job.id,
             "reeditSourceClipId": clip_id,
@@ -917,6 +919,7 @@ def _create_isolated_reedit_job(
             "requireSubtitleReview": True,
             "requireClipPlanReview": False,
             "heatmapIntervalMode": False,
+            "initialSelectionProvider": "legacy",
             "useOpenAIScoring": False,
             "ensureSelectedOpenAIScored": False,
         }
@@ -1053,6 +1056,86 @@ def _has_terminal_retry_child(db: Session, source_job_id: str) -> bool:
 def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
     details: dict[str, Any] = {}
     output_dir = paths.job_outputs(job.id)
+    job_settings = job.settings_json if isinstance(job.settings_json, dict) else {}
+    initial_selection_provider = str(
+        job_settings.get("initialSelectionProvider") or "legacy"
+    ).strip()
+    details["initialSelectionProvider"] = (
+        initial_selection_provider
+        if initial_selection_provider in {"legacy", "codex"}
+        else "legacy"
+    )
+    manifest_path = automation_manifest_path(output_dir)
+    if manifest_path.is_file():
+        try:
+            automation_manifest = load_automation_manifest(manifest_path)
+        except (OSError, ValueError):
+            details["automationManifestAvailable"] = False
+            details["automationManifestInvalid"] = True
+        else:
+            details["automationManifestAvailable"] = True
+            details["automationMode"] = automation_manifest.requested_mode
+            details["automationEffectiveMode"] = automation_manifest.effective_mode
+            details["automationDecisionInputHash"] = (
+                automation_manifest.decision_input_hash
+            )
+
+    codex_summary = _read_json_if_exists(
+        output_dir / "codex_initial_selection_summary.json"
+    )
+    if isinstance(codex_summary, dict):
+        details["codexInitialSelectionSummaryAvailable"] = True
+        details["codexInitialSelectionStatus"] = _first_value(
+            codex_summary.get("status"),
+            codex_summary.get("state"),
+        )
+        details["codexInitialSelectionFallbackUsed"] = bool(
+            _first_value(
+                codex_summary.get("fallback_used"),
+                codex_summary.get("fallbackUsed"),
+                False,
+            )
+        )
+        details["codexInitialSelectionFallbackReason"] = _first_value(
+            codex_summary.get("fallback_reason"),
+            codex_summary.get("fallbackReason"),
+        )
+        details["codexInitialSelectionRequestedNormalCount"] = _first_value(
+            codex_summary.get("requested_normal_count"),
+            codex_summary.get("requestedNormalCount"),
+            job_settings.get("normalClipCount"),
+        )
+        details["codexInitialSelectionRequestedShortCount"] = _first_value(
+            codex_summary.get("requested_short_count"),
+            codex_summary.get("requestedShortCount"),
+            job_settings.get("shortCount"),
+        )
+        normal_clips = _first_value(
+            codex_summary.get("normal_clips"),
+            codex_summary.get("normalClips"),
+        )
+        shorts = codex_summary.get("shorts")
+        details["codexInitialSelectionSelectedNormalCount"] = _first_value(
+            codex_summary.get("selected_normal_count"),
+            codex_summary.get("selectedNormalCount"),
+            len(normal_clips) if isinstance(normal_clips, list) else None,
+        )
+        details["codexInitialSelectionSelectedShortCount"] = _first_value(
+            codex_summary.get("selected_short_count"),
+            codex_summary.get("selectedShortCount"),
+            len(shorts) if isinstance(shorts, list) else None,
+        )
+        summary_error = codex_summary.get("error")
+        if isinstance(summary_error, dict):
+            details["codexInitialSelectionError"] = _first_value(
+                summary_error.get("message"),
+                summary_error.get("code"),
+            )
+        elif summary_error is not None:
+            details["codexInitialSelectionError"] = str(summary_error)
+    else:
+        details["codexInitialSelectionSummaryAvailable"] = False
+
     audio_features = _read_json_if_exists(output_dir / "audio_features.json")
     if isinstance(audio_features, dict):
         for key in ("duration", "silence_ratio", "speech_seconds", "speech_density", "volume_peak"):
@@ -1305,7 +1388,7 @@ def create_job(
         and settings.heatmap_interval_mode
         and automatic_output
     ):
-        sidecar_path = heatmap_sidecar_path(paths.resolve_stored_file(video.stored_path))
+        sidecar_path = paths.resolve_video_heatmap(video.id, video.stored_path)
         unavailable_reason = "heatmap_sidecar_not_provided"
         try:
             if sidecar_path.stat().st_size > app_settings.max_heatmap_sidecar_size_bytes:
@@ -1390,7 +1473,7 @@ def retry_job(
         settings.short_count > 0 and not settings.short_clip_time_ranges
     )
     if settings.heatmap_interval_mode and automatic_output:
-        sidecar_path = heatmap_sidecar_path(paths.resolve_stored_file(video.stored_path))
+        sidecar_path = paths.resolve_video_heatmap(video.id, video.stored_path)
         if not sidecar_path.is_file():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

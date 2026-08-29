@@ -113,6 +113,11 @@ class Candidate(BaseModel):
     framing_zoom: float = Field(default=1.0, ge=1.0, le=1.6)
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
+    moment_key: str | None = Field(default=None, min_length=1, max_length=80)
+    parent_start: float | None = Field(default=None, ge=0)
+    parent_end: float | None = Field(default=None, ge=0)
+    evidence_segment_ids: list[str] | None = Field(default=None, max_length=128)
+    heatmap_segment_ids: list[str] | None = Field(default=None, max_length=16)
     reject_reason: str | None = None
     hard_gate_passed: bool | None = None
     below_quality_threshold: bool | None = None
@@ -154,6 +159,11 @@ class Candidate(BaseModel):
                 raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
             if hook_start < self.start - 0.001 or hook_end > self.end + 0.001:
                 raise ValueError("hook scene must stay within the selected clip")
+        if (self.parent_start is None) != (self.parent_end is None):
+            raise ValueError("parent range requires both start and end")
+        if self.parent_start is not None and self.parent_end is not None:
+            if self.parent_end <= self.parent_start:
+                raise ValueError("parent end must be greater than start")
         return self
 
 
@@ -406,9 +416,7 @@ def transcript_text_for_range(
     end: float,
 ) -> str:
     texts = [
-        segment.text.strip()
-        for segment in transcript_segments
-        if segment.text.strip() and segment.end > start and segment.start < end
+        segment.text.strip() for segment in transcript_segments if segment.text.strip() and segment.end > start and segment.start < end
     ]
     return " ".join(texts).strip()
 
@@ -442,12 +450,7 @@ def _candidate_rank_score(
     speech_density = min(1.0, speech_seconds / max(duration, 1.0))
     text_signal = min(1.0, transcript_char_count / 600)
     silence_signal = max(0.0, 1.0 - silence_ratio)
-    return (
-        speech_density * 30.0
-        + text_signal * 15.0
-        + duration_fit * 45.0
-        + silence_signal * 10.0
-    )
+    return speech_density * 30.0 + text_signal * 15.0 + duration_fit * 45.0 + silence_signal * 10.0
 
 
 def _materialize_candidate(
@@ -539,9 +542,7 @@ class _BoundedCandidateKeeper:
             return True
 
         same_start_bucket = [
-            (key, item)
-            for key, item in bucket.items()
-            if self.start_bucket_index(item.start) == self.start_bucket_index(candidate.start)
+            (key, item) for key, item in bucket.items() if self.start_bucket_index(item.start) == self.start_bucket_index(candidate.start)
         ]
         if len(same_start_bucket) >= self.settings.max_candidates_per_start_bucket:
             worst_key, worst_candidate = min(
@@ -582,11 +583,7 @@ class _BoundedCandidateKeeper:
         return True
 
     def materialize(self, transcript_index: _TranscriptIndex) -> list[Candidate]:
-        lightweight_candidates = [
-            candidate
-            for bucket in self.buckets.values()
-            for candidate in bucket.values()
-        ]
+        lightweight_candidates = [candidate for bucket in self.buckets.values() for candidate in bucket.values()]
         candidates = [
             materialized
             for candidate in lightweight_candidates
@@ -722,10 +719,7 @@ def _spread_across_timeline(values: Sequence[float], limit: int) -> list[float]:
         return list(values)
     if limit == 1:
         return [values[len(values) // 2]]
-    indices = {
-        round(index * (len(values) - 1) / (limit - 1))
-        for index in range(limit)
-    }
+    indices = {round(index * (len(values) - 1) / (limit - 1)) for index in range(limit)}
     return [values[index] for index in sorted(indices)]
 
 
@@ -790,16 +784,8 @@ def _raw_start_candidates(
     chunk_start: float,
     chunk_end: float,
 ) -> list[float]:
-    starts = {
-        boundary
-        for boundary in boundaries[:-1]
-        if chunk_start <= boundary < chunk_end
-    }
-    starts.update(
-        segment.start
-        for segment in transcript_segments
-        if chunk_start <= segment.start < chunk_end
-    )
+    starts = {boundary for boundary in boundaries[:-1] if chunk_start <= boundary < chunk_end}
+    starts.update(segment.start for segment in transcript_segments if chunk_start <= segment.start < chunk_end)
     return sorted(starts)
 
 
@@ -891,8 +877,7 @@ def generate_window_candidates_with_summary(
     base_raw_candidate_cap = parsed_settings.max_raw_candidates_per_type // chunk_count
     raw_candidate_cap_remainder = parsed_settings.max_raw_candidates_per_type % chunk_count
     raw_candidate_caps_by_chunk = [
-        max(1, base_raw_candidate_cap + (1 if index < raw_candidate_cap_remainder else 0))
-        for index in range(chunk_count)
+        max(1, base_raw_candidate_cap + (1 if index < raw_candidate_cap_remainder else 0)) for index in range(chunk_count)
     ]
     for chunk_index, (chunk_start, chunk_end) in enumerate(chunk_ranges):
         keeper.chunks_processed += 1
@@ -913,11 +898,7 @@ def generate_window_candidates_with_summary(
                 transcript_segments,
                 tolerance=speech_boundary_tolerance,
             )
-            if (
-                start in seen_starts
-                or start >= timeline_duration
-                or is_inside_speech(start, transcript_segments)
-            ):
+            if start in seen_starts or start >= timeline_duration or is_inside_speech(start, transcript_segments):
                 continue
             seen_starts.add(start)
             adjusted_starts.append(start)
@@ -1059,12 +1040,8 @@ def merge_candidate_generation_summaries(
             candidate_type: int((summary.get("candidates_kept_by_type") or {}).get(candidate_type, 0))
             for candidate_type, summary in by_type.items()
         },
-        "candidates_dropped_due_to_cap": sum(
-            int(summary.get("candidates_dropped_due_to_cap") or 0) for summary in summaries
-        ),
-        "candidates_dropped_due_to_duplicate": sum(
-            int(summary.get("candidates_dropped_due_to_duplicate") or 0) for summary in summaries
-        ),
+        "candidates_dropped_due_to_cap": sum(int(summary.get("candidates_dropped_due_to_cap") or 0) for summary in summaries),
+        "candidates_dropped_due_to_duplicate": sum(int(summary.get("candidates_dropped_due_to_duplicate") or 0) for summary in summaries),
         "candidates_dropped_due_to_no_transcript": sum(
             int(summary.get("candidates_dropped_due_to_no_transcript") or 0) for summary in summaries
         ),

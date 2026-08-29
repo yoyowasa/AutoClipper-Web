@@ -23,6 +23,7 @@ export type JobStatus =
 
 export type ExportType = "normal" | "short";
 export type WorkflowMode = "automatic" | "manual";
+export type AutomationMode = "manual" | "shadow" | "guarded" | "auto";
 export type ManualSubtitleMode = "auto" | "none" | "manual";
 
 export type ClipSelectionPreset =
@@ -40,6 +41,7 @@ export type ClipTimeRange = {
 
 export type ClipSettings = {
   workflowMode: WorkflowMode;
+  automationMode: AutomationMode;
   manualSubtitleMode: ManualSubtitleMode;
   mode: "fast" | "high_quality";
   profile: "auto" | "talk" | "gameplay" | "lecture";
@@ -60,6 +62,7 @@ export type ClipSettings = {
   selectionPolicy: "fill_requested" | "strict_quality";
   crossTypeOverlapDedupe: boolean;
   heatmapIntervalMode: boolean;
+  initialSelectionProvider: "legacy" | "codex";
   useOpenAIScoring: boolean;
   openaiCandidateLimit: number;
   openaiModel: string;
@@ -142,6 +145,26 @@ export type ClipSettings = {
 export type VideoUploadResponse = {
   videoId: string;
   filename: string;
+};
+
+export type StorageStatusResponse = {
+  storageBytes: number;
+  storageLimitBytes: number;
+  diskFreeBytes: number;
+  diskTotalBytes: number;
+  diskFreePercent: number;
+  warning: boolean;
+  reasons: string[];
+  cleanupEligibleJobs: number;
+  cleanupEligibleVideos: number;
+};
+
+export type StorageCleanupResponse = {
+  removedJobs: number;
+  removedVideos: number;
+  removedFiles: number;
+  reclaimedBytes: number;
+  errors: string[];
 };
 
 export type CompletedVideoReeditResponse = {

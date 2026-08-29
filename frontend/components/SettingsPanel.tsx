@@ -19,6 +19,7 @@ type SettingsPanelProps = {
 
 export const DEFAULT_SETTINGS: ClipSettings = {
   workflowMode: "automatic",
+  automationMode: "manual",
   manualSubtitleMode: "auto",
   mode: "high_quality",
   profile: "auto",
@@ -39,6 +40,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   selectionPolicy: "strict_quality",
   crossTypeOverlapDedupe: false,
   heatmapIntervalMode: false,
+  initialSelectionProvider: "codex",
   useOpenAIScoring: false,
   openaiCandidateLimit: 8,
   openaiModel: "gpt-5.5",
@@ -237,7 +239,7 @@ export function SettingsPanel({
               type="number"
               value={settings.normalClipCount}
               onChange={(event) => {
-                const count = Math.max(1, Number(event.target.value) || 1);
+                const count = Math.min(12, Math.max(1, Number(event.target.value) || 1));
                 onChange(resizeManualRanges({
                   ...settings,
                   normalClipCount: count
@@ -266,7 +268,7 @@ export function SettingsPanel({
               type="number"
               value={settings.shortCount}
               onChange={(event) => {
-                const count = Math.max(1, Number(event.target.value) || 1);
+                const count = Math.min(24, Math.max(1, Number(event.target.value) || 1));
                 onChange(resizeManualRanges({
                   ...settings,
                   shortCount: count
@@ -383,7 +385,11 @@ export function SettingsPanel({
                 onChange={(event) =>
                   onChange({
                     ...settings,
-                    burnSubtitles: event.target.checked
+                    burnSubtitles: event.target.checked,
+                    automationMode:
+                      !event.target.checked && settings.automationMode === "shadow"
+                        ? "manual"
+                        : settings.automationMode
                   })
                 }
               />
@@ -410,6 +416,35 @@ export function SettingsPanel({
               </span>
             </summary>
             <div className="grid gap-3 border-x border-b border-neutral-200 p-3 md:grid-cols-2">
+              <label className="flex flex-col gap-1 md:col-span-2">
+                <span className="text-sm font-semibold text-neutral-900">自動化レベル</span>
+                <select
+                  className="min-h-10 border border-neutral-300 bg-white px-3 text-sm"
+                  disabled={disabled}
+                  value={settings.automationMode}
+                  onChange={(event) => {
+                    const automationMode = event.target.value as ClipSettings["automationMode"];
+                    onChange({
+                      ...settings,
+                      automationMode,
+                      burnSubtitles:
+                        automationMode === "shadow" ? true : settings.burnSubtitles,
+                      requireClipPlanReview:
+                        automationMode === "shadow" ? true : settings.requireClipPlanReview,
+                      requireSubtitleReview:
+                        automationMode === "shadow" ? true : settings.requireSubtitleReview
+                    });
+                  }}
+                >
+                  <option value="manual">手動確認（現行）</option>
+                  <option value="shadow">Shadow（自動判断を保存し、全件確認）</option>
+                  <option disabled value="guarded">問題だけ確認（準備中）</option>
+                  <option disabled value="auto">完全自動（準備中）</option>
+                </select>
+                <span className="text-xs text-neutral-600">
+                  Shadowは処理結果を変えず、判断記録を残して全工程を確認します。
+                </span>
+              </label>
               <label className="flex items-start gap-2">
                 <input
                   checked={settings.requireClipPlanReview}
@@ -419,7 +454,11 @@ export function SettingsPanel({
                   onChange={(event) =>
                     onChange({
                       ...settings,
-                      requireClipPlanReview: event.target.checked
+                      requireClipPlanReview: event.target.checked,
+                      automationMode:
+                        !event.target.checked && settings.automationMode === "shadow"
+                          ? "manual"
+                          : settings.automationMode
                     })
                   }
                 />
@@ -444,7 +483,11 @@ export function SettingsPanel({
                       requireSubtitleReview: event.target.checked,
                       requireClipPlanReview: event.target.checked
                         ? settings.requireClipPlanReview
-                        : false
+                        : false,
+                      automationMode:
+                        !event.target.checked && settings.automationMode === "shadow"
+                          ? "manual"
+                          : settings.automationMode
                     })
                   }
                 />

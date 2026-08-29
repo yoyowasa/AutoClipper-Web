@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
-  allRequestedOutputsUseManualTime,
   clearManualRanges,
   isManualTimeMode,
   manualRangeRows,
@@ -90,9 +89,16 @@ function ManualRangeGroup({
   const label = type === "normal" ? "通常切り抜き" : "ショート";
 
   function emit(next: ClipSettings) {
+    const hasManualRanges =
+      next.normalClipTimeRanges.length > 0 || next.shortClipTimeRanges.length > 0;
     onChange(
-      allRequestedOutputsUseManualTime(next)
-        ? { ...next, useOpenAIScoring: false }
+      hasManualRanges
+        ? {
+            ...next,
+            initialSelectionProvider: "legacy",
+            useOpenAIScoring: false,
+            ensureSelectedOpenAIScored: false
+          }
         : next
     );
   }

@@ -36,7 +36,6 @@ from app.render.render_short import (
     DEFAULT_SHORT_TOP_BANNER_PATH,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
-from app.video.heatmap import heatmap_sidecar_path
 
 
 @pytest.fixture()
@@ -148,7 +147,7 @@ def test_upload_video_accepts_and_stores_valid_heatmap_sidecar(client: TestClien
     with next(app.dependency_overrides[get_db]()) as db:
         video = db.get(Video, response.json()["videoId"])
         assert video is not None
-        stored_sidecar = heatmap_sidecar_path(Path(video.stored_path))
+        stored_sidecar = app.dependency_overrides[get_storage_paths]().video_heatmap(video.id)
     payload = json.loads(stored_sidecar.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
     assert payload["media"]["filename"] == "sample.mp4"
@@ -175,7 +174,8 @@ def test_upload_video_accepts_unavailable_heatmap_for_existing_fallback(
     with next(app.dependency_overrides[get_db]()) as db:
         video = db.get(Video, response.json()["videoId"])
         assert video is not None
-        payload = json.loads(heatmap_sidecar_path(Path(video.stored_path)).read_text(encoding="utf-8"))
+        sidecar_path = app.dependency_overrides[get_storage_paths]().video_heatmap(video.id)
+        payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
     assert payload["heatmap_available"] is False
     assert payload["heatmap"] == []
 
@@ -250,6 +250,108 @@ def test_create_job_persists_enabled_heatmap_interval_mode(client: TestClient) -
         job = db.get(Job, response.json()["jobId"])
         assert job is not None
         assert job.settings_json["heatmapIntervalMode"] is True
+
+
+def test_create_job_keeps_legacy_initial_selection_for_older_clients(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"legacy selection video", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, response.json()["jobId"])
+        assert job is not None
+        assert job.settings_json["initialSelectionProvider"] == "legacy"
+
+
+def test_create_manual_job_forces_legacy_initial_selection(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"manual selection video", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "workflowMode": "manual",
+                "normalClipCount": 0,
+                "shortCount": 0,
+                "initialSelectionProvider": "codex",
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, response.json()["jobId"])
+        assert job is not None
+        assert job.settings_json["initialSelectionProvider"] == "legacy"
+
+
+def test_create_job_persists_codex_initial_selection_and_exposes_summary(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"codex selection video", "video/mp4")},
+    ).json()
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "initialSelectionProvider": "codex",
+                "useOpenAIScoring": True,
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    job_id = response.json()["jobId"]
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.settings_json["initialSelectionProvider"] == "codex"
+        assert job.settings_json["useOpenAIScoring"] is False
+        assert job.settings_json["ensureSelectedOpenAIScored"] is False
+
+    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "codex_initial_selection_summary.json").write_text(
+        json.dumps(
+            {
+                "status": "completed",
+                "fallback_used": False,
+                "requested_normal_count": 2,
+                "requested_short_count": 3,
+                "selected_normal_count": 2,
+                "selected_short_count": 3,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status_response = client.get(f"/api/jobs/{job_id}")
+
+    assert status_response.status_code == 200
+    details = status_response.json()["details"]
+    assert details["initialSelectionProvider"] == "codex"
+    assert details["codexInitialSelectionStatus"] == "completed"
+    assert details["codexInitialSelectionFallbackUsed"] is False
+    assert details["codexInitialSelectionRequestedNormalCount"] == 2
+    assert details["codexInitialSelectionRequestedShortCount"] == 3
+    assert details["codexInitialSelectionSelectedNormalCount"] == 2
+    assert details["codexInitialSelectionSelectedShortCount"] == 3
 
 
 def test_upload_video_rejects_invalid_heatmap_and_cleans_up_media(client: TestClient) -> None:
@@ -1385,6 +1487,8 @@ def test_isolated_normal_reedit_can_convert_to_one_short(
         assert source is not None
         assert child.settings_json["normalClipCount"] == 0
         assert child.settings_json["shortCount"] == 1
+        assert child.settings_json["automationMode"] == "manual"
+        assert child.settings_json["initialSelectionProvider"] == "legacy"
         assert source.status == "completed"
 
 
@@ -2374,7 +2478,10 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         "status": "queued",
         "progress": 5,
         "currentStep": "Queued",
-        "details": {},
+        "details": {
+            "initialSelectionProvider": "legacy",
+            "codexInitialSelectionSummaryAvailable": False,
+        },
         "error": None,
     }
 
@@ -2383,6 +2490,7 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job is not None
         assert job.video_id == upload["videoId"]
         assert job.settings_json["mode"] == "high_quality"
+        assert job.settings_json["automationMode"] == "manual"
         assert job.settings_json["normalMinDuration"] == 90.0
         assert job.settings_json["normalMaxDuration"] == 600.0
         assert job.settings_json["shortMinDuration"] == 20.0
@@ -2404,6 +2512,7 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["selectionPolicy"] == "fill_requested"
         assert job.settings_json["crossTypeOverlapDedupe"] is False
         assert job.settings_json["heatmapIntervalMode"] is False
+        assert job.settings_json["initialSelectionProvider"] == "legacy"
         assert job.settings_json["shortOverlayTitleMode"] == "auto"
         assert job.settings_json["shortTopBannerEnabled"] is True
         assert job.settings_json["shortBottomBannerEnabled"] is True
@@ -2414,6 +2523,86 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["ensureSelectedOpenAIScored"] is True
         assert job.settings_json["openaiFinalistScoringLimit"] == 20
         assert job.settings_json["transcriptionLanguage"] == "ja"
+
+
+def test_create_job_persists_shadow_automation_mode(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "automationMode": "shadow",
+                "burnSubtitles": True,
+                "requireClipPlanReview": True,
+                "requireSubtitleReview": True,
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, response.json()["jobId"])
+        assert job is not None
+        assert job.settings_json["automationMode"] == "shadow"
+        assert job.settings_json["requireClipPlanReview"] is True
+        assert job.settings_json["requireSubtitleReview"] is True
+
+
+@pytest.mark.parametrize("automation_mode", ["guarded", "auto", "automatic", "future"])
+def test_create_job_rejects_unavailable_or_unknown_automation_mode(
+    client: TestClient,
+    automation_mode: str,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        jobs_before = len(list(db.scalars(select(Job)).all()))
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "automationMode": automation_mode,
+                "burnSubtitles": True,
+                "requireClipPlanReview": True,
+                "requireSubtitleReview": True,
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    with next(app.dependency_overrides[get_db]()) as db:
+        assert len(list(db.scalars(select(Job)).all())) == jobs_before
+
+
+def test_create_job_rejects_shadow_without_both_review_stops(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "automationMode": "shadow",
+                "burnSubtitles": True,
+                "requireClipPlanReview": False,
+                "requireSubtitleReview": True,
+            },
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_retry_no_usable_selection_reuses_source_and_settings_once(
@@ -2447,12 +2636,14 @@ def test_retry_no_usable_selection_reuses_source_and_settings_once(
         legacy_settings.pop("shortTopBannerEnabled", None)
         legacy_settings.pop("shortBottomBannerEnabled", None)
         legacy_settings.pop("shortSubtitleYPercent", None)
+        legacy_settings.pop("automationMode", None)
         source_job.settings_json = legacy_settings
         expected_settings = {
             **legacy_settings,
             "shortTopBannerEnabled": False,
             "shortBottomBannerEnabled": False,
             "shortSubtitleYPercent": None,
+            "automationMode": "manual",
         }
         db.commit()
 
@@ -3199,6 +3390,8 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     payload = client.get("/openapi.json").json()
     properties = payload["components"]["schemas"]["JobSettings"]["properties"]
 
+    assert properties["automationMode"]["default"] == "manual"
+    assert properties["automationMode"]["enum"] == ["manual", "shadow", "guarded", "auto"]
     assert properties["normalMinDuration"]["default"] == 90.0
     assert properties["normalMaxDuration"]["default"] == 600.0
     assert properties["shortMinDuration"]["default"] == 20.0

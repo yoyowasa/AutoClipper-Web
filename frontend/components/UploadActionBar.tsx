@@ -61,7 +61,11 @@ export function UploadActionBar({
                 ? `完成MP4を照合して元の編集データを開きます・${formatFileSize(file.size)}`
                 : mode === "manual"
                   ? `元動画から手動で範囲を作成・${manualSubtitleSummary(settings)}・${formatFileSize(file.size)}`
-                : `${outputSummary(settings)}・${formatFileSize(file.size)}`
+                  : `${outputSummary(settings)}・${
+                      settings.initialSelectionProvider === "codex"
+                        ? "Codex初期選定"
+                        : "従来初期選定"
+                    }・${formatFileSize(file.size)}`
             : "左の入力欄で動画を選ぶと処理を開始できます。"}
         </p>
       </div>

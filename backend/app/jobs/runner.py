@@ -63,6 +63,13 @@ from app.audio.volume_features import (
 )
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.boundary_refinement import refine_selected_candidates
+from app.candidates.codex_initial_selection import (
+    CodexInitialSelectionError,
+    CodexInitialSelectionResult,
+    codex_initial_selection_summary_output_path,
+    request_codex_initial_selection,
+    write_codex_initial_selection_summary,
+)
 from app.candidates.generate_normal_candidates import generate_normal_candidates_with_summary
 from app.candidates.generate_short_candidates import generate_short_candidates_with_summary
 from app.candidates.generate_heatmap_candidates import generate_heatmap_candidates_with_summary
@@ -76,6 +83,7 @@ from app.candidates.manual_ranges import (
 )
 from app.candidates.merge_boundaries import (
     Candidate,
+    CandidateGenerationResult,
     CandidateGenerationMemoryLimitError,
     CandidateType,
     OpenAIScoreSource,
@@ -83,6 +91,7 @@ from app.candidates.merge_boundaries import (
     write_candidates,
 )
 from app.candidates.select_candidates import (
+    CandidateRejection,
     CandidateSelection,
     parse_selection_settings,
     select_candidates,
@@ -102,6 +111,11 @@ from app.jobs.clip_plan import (
     update_clip_plan_hook_scene,
     write_clip_plan,
 )
+from app.jobs.automation import (
+    automation_manifest_path,
+    build_automation_manifest,
+    write_automation_manifest,
+)
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.jobs.manual_workflow import (
     apply_manual_clip_metadata,
@@ -109,6 +123,11 @@ from app.jobs.manual_workflow import (
     is_manual_workflow,
     manual_edit_is_finalized,
     manual_subtitle_mode,
+)
+from app.candidates.short_diversity import (
+    ShortDiversityResult,
+    ShortDiversitySettings,
+    select_diverse_shorts,
 )
 from app.jobs.summaries import write_generation_summaries
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
@@ -244,11 +263,10 @@ class AutoClipperPipelineDependencies:
     short_renderer: Callable[..., Any] = render_short_clip
     manual_source_proxy_renderer: Callable[..., Path] = render_manual_source_proxy
     subtitle_review_preview_renderer: Callable[..., Path] = render_review_preview
-    subtitle_review_exact_preview_renderer: Callable[..., ExactPreviewResult] = (
-        render_exact_subtitle_review_preview
-    )
+    subtitle_review_exact_preview_renderer: Callable[..., ExactPreviewResult] = render_exact_subtitle_review_preview
     openai_scorer: OpenAICandidateScorer | None = None
     transcript_corrector: OpenAITranscriptCorrector | None = None
+    codex_initial_selector: Callable[..., Any] = request_codex_initial_selection
 
 
 class PipelineExpectedError(Exception):
@@ -307,11 +325,7 @@ def _subtitle_correction_model_setting(settings: dict[str, Any]) -> str:
 
 
 def _subtitle_correction_reasoning_effort_setting(settings: dict[str, Any]) -> str:
-    value = (
-        settings.get("subtitleCorrectionReasoningEffort")
-        or settings.get("subtitle_correction_reasoning_effort")
-        or "default"
-    )
+    value = settings.get("subtitleCorrectionReasoningEffort") or settings.get("subtitle_correction_reasoning_effort") or "default"
     normalized = str(value).strip().lower()
     return normalized if normalized in SUBTITLE_CORRECTION_REASONING_EFFORTS else "default"
 
@@ -414,12 +428,8 @@ def _bool_setting(settings: dict[str, Any], key: str, default: bool) -> bool:
 
 
 def _has_automatic_clip_output(settings: dict[str, Any]) -> bool:
-    normal_automatic = _int_setting(settings, "normalClipCount", 2) > 0 and not settings.get(
-        "normalClipTimeRanges"
-    )
-    short_automatic = _int_setting(settings, "shortCount", 3) > 0 and not settings.get(
-        "shortClipTimeRanges"
-    )
+    normal_automatic = _int_setting(settings, "normalClipCount", 2) > 0 and not settings.get("normalClipTimeRanges")
+    short_automatic = _int_setting(settings, "shortCount", 3) > 0 and not settings.get("shortClipTimeRanges")
     return normal_automatic or short_automatic
 
 
@@ -436,18 +446,12 @@ def _heatmap_summary_for_selection_mode(
     usable_positive_segments = sum(
         1
         for segment in segments
-        if segment.value > 0
-        and min(float(segment.end_time), video_duration)
-        > max(float(segment.start_time), 0.0)
+        if segment.value > 0 and min(float(segment.end_time), video_duration) > max(float(segment.start_time), 0.0)
     )
     available = usable_positive_segments > 0
     interval_mode_applied = requested and automatic_output and available
     selection_behavior = (
-        "heatmap_intervals"
-        if interval_mode_applied
-        else "manual_ranges"
-        if requested and not automatic_output
-        else "supporting_score"
+        "heatmap_intervals" if interval_mode_applied else "manual_ranges" if requested and not automatic_output else "supporting_score"
     )
     updated = {
         **summary,
@@ -460,13 +464,8 @@ def _heatmap_summary_for_selection_mode(
     }
     should_fail = requested and automatic_output and not available
     if should_fail:
-        updated["interval_mode_unavailable_reason"] = (
-            summary.get("fallback_reason")
-            or (
-                "heatmap_has_no_positive_segments_in_video"
-                if positive_segments > 0
-                else "heatmap_has_no_positive_segments"
-            )
+        updated["interval_mode_unavailable_reason"] = summary.get("fallback_reason") or (
+            "heatmap_has_no_positive_segments_in_video" if positive_segments > 0 else "heatmap_has_no_positive_segments"
         )
     return updated, should_fail
 
@@ -586,11 +585,7 @@ def _generate_candidates_for_reselection_mode(
 
     if not normal_candidates and not short_candidates:
         raise PipelineExpectedError(
-            (
-                "heatmap_interval_mode_no_candidates"
-                if heatmap_interval_mode
-                else "no_candidates_found"
-            ),
+            ("heatmap_interval_mode_no_candidates" if heatmap_interval_mode else "no_candidates_found"),
             (
                 "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。"
                 if heatmap_interval_mode
@@ -608,11 +603,23 @@ def _openai_model_setting(settings: dict[str, Any]) -> str:
 
 
 def _openai_enabled(settings: dict[str, Any]) -> bool:
-    return bool(
-        settings.get("useOpenAIScoring")
-        or settings.get("openaiScoring")
-        or settings.get("enableOpenAIScoring")
-    )
+    return bool(settings.get("useOpenAIScoring") or settings.get("openaiScoring") or settings.get("enableOpenAIScoring"))
+
+
+def _codex_initial_selection_enabled(
+    settings: dict[str, Any],
+    *,
+    manual_workflow: bool,
+    has_manual_ranges: bool,
+) -> bool:
+    provider = str(settings.get("initialSelectionProvider") or "legacy").strip().lower()
+    return provider == "codex" and not manual_workflow and not has_manual_ranges
+
+
+def _require_all_requested_heatmap_candidate_types(
+    codex_selection: CandidateSelection | None,
+) -> bool:
+    return not (codex_selection is not None and codex_selection.selection_policy == "strict_quality")
 
 
 def _ensure_selected_openai_scored(settings: dict[str, Any]) -> bool:
@@ -712,9 +719,7 @@ def _set_clip_plan_preview_progress(
     bounded_completed = max(0, min(completed, bounded_total))
     job.status = "preparing_clip_review"
     job.progress = 73 + int(2 * bounded_completed / bounded_total)
-    job.current_step = (
-        f"切り抜き予定の確認動画を準備中 ({bounded_completed}/{total})"
-    )
+    job.current_step = f"切り抜き予定の確認動画を準備中 ({bounded_completed}/{total})"
     job.updated_at = utc_now()
     job.error_code = None
     job.error_message = None
@@ -809,10 +814,7 @@ def _raise_if_stream_durations_mismatch(metadata: VideoMetadata) -> None:
 
     difference = abs(video_duration - audio_duration)
     relative_difference = difference / max(1.0, min(video_duration, audio_duration))
-    if (
-        difference <= MAX_AV_STREAM_DURATION_DRIFT_SECONDS
-        or relative_difference <= MAX_AV_STREAM_DURATION_DRIFT_RATIO
-    ):
+    if difference <= MAX_AV_STREAM_DURATION_DRIFT_SECONDS or relative_difference <= MAX_AV_STREAM_DURATION_DRIFT_RATIO:
         return
 
     raise PipelineExpectedError(
@@ -895,15 +897,9 @@ def _audio_is_silent_or_unusable(audio_features: AudioFeatures) -> bool:
         return True
     if audio_features.volume_peak <= MIN_AUDIO_VOLUME_PEAK:
         return True
-    if (
-        audio_features.silence_ratio >= MAX_AUDIO_SILENCE_RATIO
-        and audio_features.speech_seconds <= MIN_AUDIO_SPEECH_SECONDS
-    ):
+    if audio_features.silence_ratio >= MAX_AUDIO_SILENCE_RATIO and audio_features.speech_seconds <= MIN_AUDIO_SPEECH_SECONDS:
         return True
-    return (
-        audio_features.speech_density <= MIN_AUDIO_SPEECH_DENSITY
-        and audio_features.speech_seconds <= MIN_AUDIO_SPEECH_SECONDS
-    )
+    return audio_features.speech_density <= MIN_AUDIO_SPEECH_DENSITY and audio_features.speech_seconds <= MIN_AUDIO_SPEECH_SECONDS
 
 
 def _raise_if_audio_unusable(audio_features: AudioFeatures) -> None:
@@ -946,11 +942,7 @@ def _normalized_segment_text(text: str) -> str:
 
 
 def _repeated_segment_diagnostics(segments: Sequence[TranscriptSegment]) -> dict[str, Any]:
-    normalized_texts = [
-        normalized
-        for segment in segments
-        if (normalized := _normalized_segment_text(segment.text))
-    ]
+    normalized_texts = [normalized for segment in segments if (normalized := _normalized_segment_text(segment.text))]
     if not normalized_texts:
         return {
             "dominant_segment_count": 0,
@@ -966,11 +958,7 @@ def _repeated_segment_diagnostics(segments: Sequence[TranscriptSegment]) -> dict
     dominant_text, dominant_count = counts.most_common(1)[0]
     dominant_ratio = dominant_count / len(normalized_texts)
     unique_ratio = len(counts) / len(normalized_texts)
-    clustered_count = sum(
-        count
-        for _text, count in counts.most_common(3)
-        if count >= MIN_REPEATED_SEGMENT_COUNT
-    )
+    clustered_count = sum(count for _text, count in counts.most_common(3) if count >= MIN_REPEATED_SEGMENT_COUNT)
     clustered_ratio = clustered_count / len(normalized_texts)
     return {
         "dominant_segment_count": dominant_count,
@@ -1057,8 +1045,7 @@ def _transcript_unusable_reasons(
         and timeline_duration >= LONG_FORM_TRANSCRIPTION_SECONDS
         and average_confidence is not None
         and average_confidence < 0.5
-        and details.get("transcript_audio_coverage", 1.0)
-        < MIN_LONG_FORM_TRANSCRIPT_AUDIO_COVERAGE
+        and details.get("transcript_audio_coverage", 1.0) < MIN_LONG_FORM_TRANSCRIPT_AUDIO_COVERAGE
         and details.get("characters_per_minute", MIN_LONG_FORM_TRANSCRIPT_CHARACTERS_PER_MINUTE)
         < MIN_LONG_FORM_TRANSCRIPT_CHARACTERS_PER_MINUTE
     ):
@@ -1113,10 +1100,7 @@ def _raise_if_transcript_unusable(
 
     raise PipelineExpectedError(
         "transcript_unusable",
-        (
-            "音声から信頼できる字幕を生成できませんでした。"
-            "日本語固定またはGPU推奨設定で再試行してください。"
-        ),
+        ("音声から信頼できる字幕を生成できませんでした。日本語固定またはGPU推奨設定で再試行してください。"),
         details=details,
     )
 
@@ -1128,12 +1112,7 @@ def _should_retry_transcription_with_small(
     diagnostics: dict[str, Any],
     reasons: Sequence[str],
 ) -> bool:
-    return bool(
-        reasons
-        and model == "turbo"
-        and language == "ja"
-        and diagnostics.get("actual_device") == "cuda"
-    )
+    return bool(reasons and model == "turbo" and language == "ja" and diagnostics.get("actual_device") == "cuda")
 
 
 def _should_retry_long_form_transcription_in_chunks(
@@ -1142,11 +1121,7 @@ def _should_retry_long_form_transcription_in_chunks(
     diagnostics: dict[str, Any],
     reasons: Sequence[str],
 ) -> bool:
-    return bool(
-        duration >= LONG_FORM_TRANSCRIPTION_SECONDS
-        and reasons
-        and diagnostics.get("actual_device") == "cuda"
-    )
+    return bool(duration >= LONG_FORM_TRANSCRIPTION_SECONDS and reasons and diagnostics.get("actual_device") == "cuda")
 
 
 def _transcribe_with_faster_whisper(
@@ -1204,11 +1179,7 @@ def _chunked_transcription_diagnostics(
     primary_transcription_seconds = float(primary.get("transcription_seconds") or 0.0)
     chunked_load_seconds = float(chunked.get("model_load_seconds") or 0.0)
     chunked_transcription_seconds = float(chunked.get("transcription_seconds") or 0.0)
-    peak_values = [
-        int(value)
-        for value in (primary.get("peak_vram_mb"), chunked.get("peak_vram_mb"))
-        if isinstance(value, (int, float))
-    ]
+    peak_values = [int(value) for value in (primary.get("peak_vram_mb"), chunked.get("peak_vram_mb")) if isinstance(value, (int, float))]
     return {
         **chunked,
         "requested_model": primary.get("model"),
@@ -1242,11 +1213,7 @@ def _fallback_transcription_diagnostics(
     primary_transcription_seconds = float(primary.get("transcription_seconds") or 0.0)
     fallback_load_seconds = float(fallback.get("model_load_seconds") or 0.0)
     fallback_transcription_seconds = float(fallback.get("transcription_seconds") or 0.0)
-    peak_values = [
-        int(value)
-        for value in (primary.get("peak_vram_mb"), fallback.get("peak_vram_mb"))
-        if isinstance(value, (int, float))
-    ]
+    peak_values = [int(value) for value in (primary.get("peak_vram_mb"), fallback.get("peak_vram_mb")) if isinstance(value, (int, float))]
     return {
         **fallback,
         "requested_model": primary.get("model"),
@@ -1259,11 +1226,7 @@ def _fallback_transcription_diagnostics(
         "peak_vram_mb": max(peak_values) if peak_values else None,
         "quality_fallback_used": True,
         "quality_fallback_reason": "primary_transcript_unusable",
-        "selected_attempt": (
-            "small_ja_chunked"
-            if fallback.get("chunked")
-            else "small_ja_whole_file"
-        ),
+        "selected_attempt": ("small_ja_chunked" if fallback.get("chunked") else "small_ja_whole_file"),
         "selected_attempt_reason": "previous_transcript_unusable",
         "primary_transcription": primary,
         "primary_transcript_quality": primary_quality,
@@ -1418,9 +1381,7 @@ def _openai_summary(
         }
     summary["initial_candidate_limit"] = initial_candidate_limit if initial_candidate_limit is not None else candidate_limit
     summary["finalist_scoring_limit"] = finalist_scoring_limit
-    summary["candidates_sent_preselection"] = (
-        preselection_candidates_sent if preselection_candidates_sent is not None else candidates_sent
-    )
+    summary["candidates_sent_preselection"] = preselection_candidates_sent if preselection_candidates_sent is not None else candidates_sent
     summary["candidates_sent_as_finalists"] = finalist_candidates_sent
     return summary
 
@@ -1460,11 +1421,7 @@ def _openai_cluster_diverse_order(candidates: Sequence[Candidate], requested_cou
 
     cluster_order = sorted(
         grouped,
-        key=lambda cluster: (
-            _candidate_rank_value(grouped[cluster][0])
-            if grouped[cluster]
-            else (0.0, 0.0, 0.0, 0, 0.0)
-        ),
+        key=lambda cluster: _candidate_rank_value(grouped[cluster][0]) if grouped[cluster] else (0.0, 0.0, 0.0, 0, 0.0),
         reverse=True,
     )
     ordered: list[Candidate] = []
@@ -1573,8 +1530,7 @@ def _build_openai_scoring_pool(
     if len(selected) < candidate_limit:
         selected_ids = {candidate.id for candidate in selected}
         remaining = [
-            candidate for candidate in _openai_cluster_diverse_order(hard_gate_passed, candidate_limit)
-            if candidate.id not in selected_ids
+            candidate for candidate in _openai_cluster_diverse_order(hard_gate_passed, candidate_limit) if candidate.id not in selected_ids
         ]
         _append_openai_pool_candidates(
             selected,
@@ -1671,9 +1627,7 @@ def _score_candidate_list(
     )
     use_openai = _openai_enabled(settings)
     if not use_openai:
-        return ScoringResult(
-            candidates=[candidate.model_copy(update={"final_score": candidate.rule_score}) for candidate in rule_scored]
-        )
+        return ScoringResult(candidates=[candidate.model_copy(update={"final_score": candidate.rule_score}) for candidate in rule_scored])
 
     if scorer is None and not os.getenv("OPENAI_API_KEY"):
         raise PipelineExpectedError(
@@ -1743,22 +1697,20 @@ def _score_candidate_list(
         ]
         fallback_scores = len(candidates_for_openai)
 
-    failed_candidates = [
-        candidate for candidate in openai_scored if "openai_scoring_failed" in candidate.risk_flags
-    ]
+    failed_candidates = [candidate for candidate in openai_scored if "openai_scoring_failed" in candidate.risk_flags]
     if failed_candidates and not fallback_enabled:
         summary = _openai_summary(
             active_scorer,
             candidate_limit=candidate_limit,
             candidates_considered=len(rule_scored),
-                skipped_due_to_limit=skipped_due_to_limit,
-                fallback_scores=0,
-                rule_score_only_candidates=skipped_due_to_limit,
-                candidates_sent=len(candidates_for_openai),
-                initial_candidate_limit=candidate_limit,
-                finalist_scoring_limit=_openai_finalist_scoring_limit(settings),
-                preselection_candidates_sent=len(candidates_for_openai),
-            )
+            skipped_due_to_limit=skipped_due_to_limit,
+            fallback_scores=0,
+            rule_score_only_candidates=skipped_due_to_limit,
+            candidates_sent=len(candidates_for_openai),
+            initial_candidate_limit=candidate_limit,
+            finalist_scoring_limit=_openai_finalist_scoring_limit(settings),
+            preselection_candidates_sent=len(candidates_for_openai),
+        )
         raise PipelineExpectedError(
             "openai_scoring_failed",
             "OpenAI scoring failed for one or more candidates.",
@@ -1815,12 +1767,8 @@ def _selection_with_replacements(
         update={
             "normal_clips": normal_clips,
             "shorts": shorts,
-            "selected_above_threshold_count": sum(
-                1 for candidate in selected if candidate.below_quality_threshold is False
-            ),
-            "selected_below_threshold_backfill_count": sum(
-                1 for candidate in selected if candidate.below_quality_threshold is True
-            ),
+            "selected_above_threshold_count": sum(1 for candidate in selected if candidate.below_quality_threshold is False),
+            "selected_below_threshold_backfill_count": sum(1 for candidate in selected if candidate.below_quality_threshold is True),
         }
     )
 
@@ -1851,11 +1799,7 @@ def _selection_with_refined_boundaries(
     heatmap_segments: Sequence[HeatmapSegment] = (),
 ) -> tuple[CandidateSelection, list[Candidate]]:
     def refine_unlocked(candidates: Sequence[Candidate]) -> list[Candidate]:
-        unlocked = [
-            candidate
-            for candidate in candidates
-            if candidate.selection_reason != MANUAL_SELECTION_REASON
-        ]
+        unlocked = [candidate for candidate in candidates if candidate.selection_reason != MANUAL_SELECTION_REASON]
         refined = refine_selected_candidates(
             unlocked,
             transcript_segments=transcript_segments,
@@ -1876,6 +1820,249 @@ def _selection_with_refined_boundaries(
         selection.model_copy(update={"normal_clips": normal_clips, "shorts": shorts}),
         _replace_scored_candidates(scored_candidates, replacements),
     )
+
+
+def _codex_selection_with_diverse_refined_shorts(
+    result: CodexInitialSelectionResult,
+    *,
+    transcript_segments: Sequence[TranscriptSegment],
+    silence_segments: Sequence[SilenceSegment],
+    scene_segments: Sequence[SceneSegment],
+    settings: dict[str, Any],
+    timeline_duration: float,
+    heatmap_segments: Sequence[HeatmapSegment] = (),
+) -> tuple[CandidateSelection, list[Candidate], ShortDiversityResult]:
+    def rank_key(candidate: Candidate) -> tuple[float, str]:
+        score = candidate.final_score
+        if score is None:
+            score = candidate.ai_score
+        return (-(score if score is not None else 0.0), candidate.id)
+
+    candidate_pool = list(result.candidates)
+    short_pool = sorted(
+        (candidate for candidate in candidate_pool if candidate.type == "short"),
+        key=rank_key,
+    )
+    pool_selection = result.selection.model_copy(update={"shorts": short_pool})
+    refined_pool_selection, refined_candidates = _selection_with_refined_boundaries(
+        pool_selection,
+        candidate_pool,
+        transcript_segments=transcript_segments,
+        silence_segments=silence_segments,
+        scene_segments=scene_segments,
+        settings=settings,
+        timeline_duration=timeline_duration,
+        heatmap_segments=heatmap_segments,
+    )
+
+    cross_type_rejections: list[CandidateRejection] = []
+    eligible_shorts: list[Candidate] = []
+    parsed_settings = parse_selection_settings(settings)
+    for candidate in refined_pool_selection.shorts:
+        conflicting_normal = next(
+            (
+                normal
+                for normal in refined_pool_selection.normal_clips
+                if parsed_settings.cross_type_overlap_dedupe and time_overlap_ratio(candidate, normal) >= parsed_settings.max_overlap_ratio
+            ),
+            None,
+        )
+        if conflicting_normal is None:
+            eligible_shorts.append(candidate)
+            continue
+        cross_type_rejections.append(
+            CandidateRejection(
+                candidateId=candidate.id,
+                type="short",
+                reasons=["post_refinement_cross_type_overlap"],
+                details={"overlapWith": conflicting_normal.id},
+            )
+        )
+
+    diversity = select_diverse_shorts(
+        eligible_shorts,
+        requested_count=result.selection.requested_short_count,
+        settings=ShortDiversitySettings(
+            enforce_heatmap_segment_uniqueness=_bool_setting(
+                settings,
+                "heatmapIntervalMode",
+                False,
+            )
+        ),
+    )
+    diversity_rejections = [
+        CandidateRejection(
+            candidateId=rejection.candidate_id,
+            type="short",
+            reasons=[f"post_refinement_{reason}" for reason in rejection.reasons],
+            details={
+                "duplicateOf": rejection.duplicate_of,
+                "overlapSeconds": rejection.overlap_seconds,
+                "parentOverlapRatio": rejection.parent_overlap_ratio,
+                "textSimilarity": rejection.text_similarity,
+                "evidenceSimilarity": rejection.evidence_similarity,
+            },
+        )
+        for rejection in diversity.rejected
+    ]
+    normal_unfilled = max(
+        0,
+        result.selection.requested_normal_count - len(refined_pool_selection.normal_clips),
+    )
+    short_unfilled = diversity.unfilled_count
+    unfilled_reason_counts: dict[str, dict[str, int]] = {}
+    if normal_unfilled:
+        unfilled_reason_counts["normal"] = {"insufficient_codex_candidates": normal_unfilled}
+    if short_unfilled:
+        unfilled_reason_counts["short"] = {
+            "insufficient_distinct_moments": short_unfilled,
+            "post_refinement_duplicate": len(diversity.rejected),
+            "post_refinement_cross_type_overlap": len(cross_type_rejections),
+        }
+
+    final_selection = refined_pool_selection.model_copy(
+        update={
+            "shorts": list(diversity.selected),
+            "rejected_candidates": [
+                *refined_pool_selection.rejected_candidates,
+                *cross_type_rejections,
+                *diversity_rejections,
+            ],
+            "cross_type_overlap_rejected_count": len(cross_type_rejections),
+            "unfilled_requested_counts": {
+                "normal": normal_unfilled,
+                "short": short_unfilled,
+            },
+            "unfilled_reason_counts": unfilled_reason_counts,
+        }
+    )
+    return final_selection, refined_candidates, diversity
+
+
+def _automatic_selection_with_diverse_refined_shorts(
+    scored_candidates: Sequence[Candidate],
+    *,
+    transcript_segments: Sequence[TranscriptSegment],
+    silence_segments: Sequence[SilenceSegment],
+    scene_segments: Sequence[SceneSegment],
+    settings: dict[str, Any],
+    timeline_duration: float,
+    audio_features: AudioFeatures,
+    heatmap_segments: Sequence[HeatmapSegment] = (),
+) -> tuple[CandidateSelection, list[Candidate], ShortDiversityResult]:
+    """境界補正後の自動候補だけを再選定し、ショートの重複をhard除外する。"""
+
+    automatic_candidates = [
+        candidate
+        for candidate in scored_candidates
+        if candidate.selection_reason != MANUAL_SELECTION_REASON
+    ]
+    pool_selection = CandidateSelection(
+        normalClips=[
+            candidate for candidate in automatic_candidates if candidate.type == "normal"
+        ],
+        shorts=[
+            candidate for candidate in automatic_candidates if candidate.type == "short"
+        ],
+    )
+    _, refined_candidates = _selection_with_refined_boundaries(
+        pool_selection,
+        automatic_candidates,
+        transcript_segments=transcript_segments,
+        silence_segments=silence_segments,
+        scene_segments=scene_segments,
+        settings=settings,
+        timeline_duration=timeline_duration,
+        heatmap_segments=heatmap_segments,
+    )
+
+    parsed_settings = parse_selection_settings(settings)
+    diversity_settings = ShortDiversitySettings(
+        enforce_heatmap_segment_uniqueness=_bool_setting(
+            settings,
+            "heatmapIntervalMode",
+            False,
+        )
+    )
+    excluded_short_ids: set[str] = set()
+    diversity_rejections = []
+
+    while True:
+        selectable_candidates = [
+            candidate
+            for candidate in refined_candidates
+            if candidate.type != "short" or candidate.id not in excluded_short_ids
+        ]
+        selection = select_candidates(
+            selectable_candidates,
+            settings=settings,
+            audio_features=audio_features,
+            silence_segments=silence_segments,
+        )
+        diversity = select_diverse_shorts(
+            selection.shorts,
+            requested_count=parsed_settings.short_count,
+            settings=diversity_settings,
+        )
+        new_rejections = [
+            rejection
+            for rejection in diversity.rejected
+            if rejection.candidate_id not in excluded_short_ids
+        ]
+        if not new_rejections:
+            break
+        diversity_rejections.extend(new_rejections)
+        excluded_short_ids.update(
+            rejection.candidate_id for rejection in new_rejections
+        )
+
+    translated_rejections = [
+        CandidateRejection(
+            candidateId=rejection.candidate_id,
+            type="short",
+            reasons=[f"post_refinement_{reason}" for reason in rejection.reasons],
+            details={
+                "duplicateOf": rejection.duplicate_of,
+                "overlapSeconds": rejection.overlap_seconds,
+                "parentOverlapRatio": rejection.parent_overlap_ratio,
+                "textSimilarity": rejection.text_similarity,
+                "evidenceSimilarity": rejection.evidence_similarity,
+            },
+        )
+        for rejection in diversity_rejections
+    ]
+    short_unfilled = max(
+        0,
+        parsed_settings.short_count - len(diversity.selected),
+    )
+    unfilled_requested_counts = dict(selection.unfilled_requested_counts)
+    unfilled_requested_counts["short"] = short_unfilled
+    unfilled_reason_counts = {
+        candidate_type: dict(counts)
+        for candidate_type, counts in selection.unfilled_reason_counts.items()
+    }
+    if short_unfilled:
+        short_reasons = unfilled_reason_counts.setdefault("short", {})
+        short_reasons["post_refinement_duplicate"] = len(diversity_rejections)
+        short_reasons["insufficient_distinct_moments"] = short_unfilled
+
+    final_selection = selection.model_copy(
+        update={
+            "shorts": list(diversity.selected),
+            "rejected_candidates": [
+                *selection.rejected_candidates,
+                *translated_rejections,
+            ],
+            "unfilled_requested_counts": unfilled_requested_counts,
+            "unfilled_reason_counts": unfilled_reason_counts,
+        }
+    )
+    aggregate_diversity = ShortDiversityResult(
+        selected=tuple(diversity.selected),
+        rejected=tuple(diversity_rejections),
+        requested_count=parsed_settings.short_count,
+    )
+    return final_selection, refined_candidates, aggregate_diversity
 
 
 def _candidate_needs_finalist_scoring(candidate: Candidate) -> bool:
@@ -1916,11 +2103,10 @@ def _ensure_selected_candidates_openai_scored(
     needs_scoring = [candidate for candidate in selected if _candidate_needs_finalist_scoring(candidate)]
     finalist_limit = _openai_finalist_scoring_limit(settings)
     finalists = needs_scoring[:finalist_limit] if finalist_limit > 0 else []
-    not_scored_due_to_limit = needs_scoring[len(finalists):]
+    not_scored_due_to_limit = needs_scoring[len(finalists) :]
     fallback_enabled = _bool_setting(settings, "openaiFallbackToRuleScore", True)
     replacements: dict[str, Candidate] = {
-        candidate.id: _candidate_not_scored(candidate, "finalist_scoring_limit")
-        for candidate in not_scored_due_to_limit
+        candidate.id: _candidate_not_scored(candidate, "finalist_scoring_limit") for candidate in not_scored_due_to_limit
     }
     finalist_fallback_scores = 0
 
@@ -1944,9 +2130,7 @@ def _ensure_selected_candidates_openai_scored(
         finalist_scored = [_fallback_candidate(candidate, "finalist_on_demand") for candidate in finalists]
         finalist_fallback_scores = len(finalists)
 
-    failed_finalists = [
-        candidate for candidate in finalist_scored if "openai_scoring_failed" in candidate.risk_flags
-    ]
+    failed_finalists = [candidate for candidate in finalist_scored if "openai_scoring_failed" in candidate.risk_flags]
     if failed_finalists and not fallback_enabled:
         summary = dict(openai_summary)
         summary["finalist_candidate_ids"] = [candidate.id for candidate in finalists]
@@ -1965,8 +2149,7 @@ def _ensure_selected_candidates_openai_scored(
             continue
         replacements[candidate.id] = _candidate_with_openai_source(candidate, "finalist_on_demand")
     replacements = {
-        candidate_id: _candidate_with_final_quality_metadata(candidate, settings)
-        for candidate_id, candidate in replacements.items()
+        candidate_id: _candidate_with_final_quality_metadata(candidate, settings) for candidate_id, candidate in replacements.items()
     }
 
     updated_selection = _selection_with_replacements(selection, replacements)
@@ -2008,14 +2191,10 @@ def _render_failures_to_jsonable(
     payload: list[dict[str, str]] = []
     if normal_result is not None:
         payload.extend(
-            {"type": "normal", "candidate_id": failure.candidate_id, "error": failure.error}
-            for failure in normal_result.failures
+            {"type": "normal", "candidate_id": failure.candidate_id, "error": failure.error} for failure in normal_result.failures
         )
     if short_result is not None:
-        payload.extend(
-            {"type": "short", "candidate_id": failure.candidate_id, "error": failure.error}
-            for failure in short_result.failures
-        )
+        payload.extend({"type": "short", "candidate_id": failure.candidate_id, "error": failure.error} for failure in short_result.failures)
     return payload
 
 
@@ -2235,11 +2414,7 @@ def _prepare_subtitle_rerender_staging(
     job_id: str,
     render_revision: int,
 ) -> StoragePaths:
-    staging_root = (
-        storage_paths.temp
-        / "rr"
-        / f"{job_id[-12:]}_r{render_revision}"
-    )
+    staging_root = storage_paths.temp / "rr" / f"{job_id[-12:]}_r{render_revision}"
     shutil.rmtree(staging_root, ignore_errors=True)
     staging_paths = _RerenderStoragePaths(staging_root)
     staging_paths.ensure()
@@ -2290,11 +2465,14 @@ def _promote_subtitle_rerender(
     canonical_job_dir = storage_paths.job_outputs(job.id)
 
     for export in staged_exports:
-        export.video_path = _promote_staged_export_file(
-            export.video_path,
-            staging_job_dir=staging_job_dir,
-            canonical_job_dir=canonical_job_dir,
-        ) or export.video_path
+        export.video_path = (
+            _promote_staged_export_file(
+                export.video_path,
+                staging_job_dir=staging_job_dir,
+                canonical_job_dir=canonical_job_dir,
+            )
+            or export.video_path
+        )
         export.subtitle_path = _promote_staged_export_file(
             export.subtitle_path,
             staging_job_dir=staging_job_dir,
@@ -2307,11 +2485,7 @@ def _promote_subtitle_rerender(
         )
         _rewrite_export_metadata_paths(export)
 
-    successful_candidate_ids = {
-        export.candidate_id
-        for export in staged_exports
-        if export.candidate_id is not None
-    }
+    successful_candidate_ids = {export.candidate_id for export in staged_exports if export.candidate_id is not None}
     for previous in previous_exports:
         if previous.candidate_id in successful_candidate_ids:
             db.delete(previous)
@@ -2322,11 +2496,7 @@ def _promote_subtitle_rerender(
 
     db.commit()
     current_exports = list(
-        db.scalars(
-            select(ExportItem)
-            .where(ExportItem.job_id == job.id)
-            .order_by(ExportItem.type, ExportItem.video_path)
-        ).all()
+        db.scalars(select(ExportItem).where(ExportItem.job_id == job.id).order_by(ExportItem.type, ExportItem.video_path)).all()
     )
     shutil.rmtree(canonical_job_dir / "audit", ignore_errors=True)
     shutil.rmtree(staging_paths.root, ignore_errors=True)
@@ -2340,9 +2510,7 @@ def _discard_subtitle_rerender_staging(
     previous_export_ids: set[str],
     staging_paths: StoragePaths,
 ) -> None:
-    current_exports = db.scalars(
-        select(ExportItem).where(ExportItem.job_id == job_id)
-    ).all()
+    current_exports = db.scalars(select(ExportItem).where(ExportItem.job_id == job_id)).all()
     for export in current_exports:
         if export.id not in previous_export_ids:
             db.delete(export)
@@ -2398,11 +2566,7 @@ def _read_transcript_segments(path: Path) -> list[TranscriptSegment]:
 
 def _top_level_metadata_files(job_dir: Path) -> list[Path]:
     return sorted(
-        (
-            path
-            for path in job_dir.iterdir()
-            if path.is_file() and path.suffix.lower() in {".json", ".md"}
-        ),
+        (path for path in job_dir.iterdir() if path.is_file() and path.suffix.lower() in {".json", ".md"}),
         key=lambda path: path.name,
     )
 
@@ -2597,10 +2761,7 @@ def _prepare_clip_plan_review(
         except Exception as exc:
             raise PipelineExpectedError(
                 "clip_plan_preview_failed",
-                (
-                    "Could not prepare clip plan preview for "
-                    f"clip {preview_index}/{total}: {exc}"
-                ),
+                (f"Could not prepare clip plan preview for clip {preview_index}/{total}: {exc}"),
             ) from exc
         available_clip_ids.append(candidate.id)
         _set_clip_plan_preview_progress(
@@ -2645,6 +2806,7 @@ def run_autoclipper_job(
     scored_candidates: list[Candidate] = []
     selection: CandidateSelection | None = None
     openai_scoring_summary: dict[str, Any] | None = None
+    codex_initial_selection_result: Any | None = None
     exports: list[ExportItem] = []
     transcription_engine = "not_run"
     transcription_model: str | None = None
@@ -2665,10 +2827,7 @@ def run_autoclipper_job(
         settings = dict(job.settings_json or {})
         manual_workflow = is_manual_workflow(settings)
         active_manual_subtitle_mode = manual_subtitle_mode(settings)
-        skip_automatic_transcription = (
-            manual_workflow
-            and active_manual_subtitle_mode in {"none", "manual"}
-        )
+        skip_automatic_transcription = manual_workflow and active_manual_subtitle_mode in {"none", "manual"}
         skip_automatic_audio_analysis = skip_automatic_transcription
         configured_transcription_model = _whisper_model_size_setting(settings)
         configured_transcription_language = _transcription_language_setting(settings)
@@ -2718,6 +2877,17 @@ def run_autoclipper_job(
             )
 
         try:
+            metadata_files.append(
+                write_automation_manifest(
+                    build_automation_manifest(
+                        job_id=job.id,
+                        video_id=video.id,
+                        stored_path=video.stored_path,
+                        settings=settings,
+                    ),
+                    automation_manifest_path(job_dir),
+                )
+            )
             _set_status(db, job, "probing")
             visited_statuses.append("probing")
             try:
@@ -2755,9 +2925,7 @@ def run_autoclipper_job(
                     editor_video_url=manual_source_proxy_url(job.id),
                 )
                 document.state = "manual_editing"
-                metadata_files.append(
-                    write_clip_plan(document, clip_plan_output_path(job_dir))
-                )
+                metadata_files.append(write_clip_plan(document, clip_plan_output_path(job_dir)))
                 _set_status(db, job, "awaiting_manual_edit")
                 visited_statuses.append("awaiting_manual_edit")
                 return visited_statuses
@@ -2768,6 +2936,10 @@ def run_autoclipper_job(
                     original_filename=video.original_filename,
                     actual_duration=duration,
                     max_sidecar_size_bytes=get_settings().max_heatmap_sidecar_size_bytes,
+                    sidecar_path=storage_paths.resolve_video_heatmap(
+                        video.id,
+                        video.stored_path,
+                    ),
                 )
                 heatmap_segments = heatmap_result.segments
                 heatmap_summary, heatmap_mode_unavailable = _heatmap_summary_for_selection_mode(
@@ -2950,16 +3122,14 @@ def run_autoclipper_job(
                         _heartbeat_job(db, job)
                         primary_diagnostics = dict(transcription_diagnostics)
                         try:
-                            chunked_segments, chunked_diagnostics = (
-                                _transcribe_with_faster_whisper_in_chunks(
-                                    deps.transcription_engine_factory,
-                                    audio_path,
-                                    model=configured_transcription_model,
-                                    language=configured_transcription_language,
-                                    device=configured_transcription_device,
-                                    compute_type=configured_transcription_compute_type,
-                                    progress_callback=transcription_chunk_progress,
-                                )
+                            chunked_segments, chunked_diagnostics = _transcribe_with_faster_whisper_in_chunks(
+                                deps.transcription_engine_factory,
+                                audio_path,
+                                model=configured_transcription_model,
+                                language=configured_transcription_language,
+                                device=configured_transcription_device,
+                                compute_type=configured_transcription_compute_type,
+                                progress_callback=transcription_chunk_progress,
                             )
                         except Exception as exc:
                             transcription_diagnostics = {
@@ -3011,16 +3181,14 @@ def run_autoclipper_job(
                         try:
                             if fallback_is_chunked:
                                 chunk_progress_label = "small + ja で分割文字起こしを再試行中"
-                                fallback_segments, fallback_diagnostics = (
-                                    _transcribe_with_faster_whisper_in_chunks(
-                                        deps.transcription_engine_factory,
-                                        audio_path,
-                                        model="small",
-                                        language="ja",
-                                        device=configured_transcription_device,
-                                        compute_type=configured_transcription_compute_type,
-                                        progress_callback=transcription_chunk_progress,
-                                    )
+                                fallback_segments, fallback_diagnostics = _transcribe_with_faster_whisper_in_chunks(
+                                    deps.transcription_engine_factory,
+                                    audio_path,
+                                    model="small",
+                                    language="ja",
+                                    device=configured_transcription_device,
+                                    compute_type=configured_transcription_compute_type,
+                                    progress_callback=transcription_chunk_progress,
                                 )
                             else:
                                 fallback_segments, fallback_diagnostics = _transcribe_with_faster_whisper(
@@ -3163,9 +3331,7 @@ def run_autoclipper_job(
                     visited_statuses.append("correcting_subtitles")
                     batch_size = _subtitle_correction_batch_size_setting(settings)
                     target_segment_count = (
-                        len(correction_target_indices)
-                        if correction_target_indices is not None
-                        else len(transcript_segments)
+                        len(correction_target_indices) if correction_target_indices is not None else len(transcript_segments)
                     )
                     total_batches = (target_segment_count + batch_size - 1) // batch_size
                     _record_subtitle_correction_progress(
@@ -3218,9 +3384,7 @@ def run_autoclipper_job(
                         completed_batches=correction_progress_state["completed"],
                         total_batches=correction_progress_state["total"],
                         retry_count=correction_progress_state["retries"],
-                        target_segments_completed=(
-                            0 if correction_result.summary.get("fallback_used") else final_target_total
-                        ),
+                        target_segments_completed=(0 if correction_result.summary.get("fallback_used") else final_target_total),
                         target_segments_total=final_target_total,
                         transcript_segment_count=len(transcript_segments),
                         finished=True,
@@ -3249,9 +3413,7 @@ def run_autoclipper_job(
 
             if manual_workflow:
                 scene_segments = []
-                metadata_files.append(
-                    write_scene_segments(scene_segments, scene_output_path(job_dir))
-                )
+                metadata_files.append(write_scene_segments(scene_segments, scene_output_path(job_dir)))
                 visual_quality = build_visual_quality(duration, [])
                 metadata_files.append(
                     write_visual_quality(
@@ -3287,9 +3449,90 @@ def run_autoclipper_job(
                 manual_short=bool(short_manual_ranges),
             )
             heatmap_interval_mode = _bool_setting(settings, "heatmapIntervalMode", False)
+            codex_summary_path = codex_initial_selection_summary_output_path(job_dir)
+            codex_requested = _codex_initial_selection_enabled(
+                settings,
+                manual_workflow=manual_workflow,
+                has_manual_ranges=bool(normal_manual_ranges or short_manual_ranges),
+            )
+            if codex_requested:
+                job.current_step = "Codexで初期選定中"
+                _heartbeat_job(db, job)
+
+                def codex_selection_heartbeat(summary: dict[str, Any]) -> None:
+                    write_codex_initial_selection_summary(summary, codex_summary_path)
+                    job.current_step = "Codexで初期選定中"
+                    _heartbeat_job(db, job)
+
+                try:
+                    codex_initial_selection_result = deps.codex_initial_selector(
+                        job_id=job.id,
+                        storage_root=storage_paths.root,
+                        transcript_segments=transcript_segments,
+                        heatmap_segments=heatmap_segments,
+                        video_duration=duration,
+                        settings=settings,
+                        heartbeat=codex_selection_heartbeat,
+                    )
+                    metadata_files.append(
+                        write_codex_initial_selection_summary(
+                            codex_initial_selection_result.summary,
+                            codex_summary_path,
+                        )
+                    )
+                except CodexInitialSelectionError as exc:
+                    metadata_files.append(
+                        write_codex_initial_selection_summary(
+                            exc.fallback_summary(
+                                requested_normal_count=_int_setting(settings, "normalClipCount", 2),
+                                requested_short_count=_int_setting(settings, "shortCount", 3),
+                            ),
+                            codex_summary_path,
+                        )
+                    )
+                except Exception:
+                    metadata_files.append(
+                        write_codex_initial_selection_summary(
+                            {
+                                "provider": "codex",
+                                "status": "fallback",
+                                "fallbackUsed": True,
+                                "error": {
+                                    "code": "codex_initial_selection_unexpected_error",
+                                    "message": "Codex初期選定を完了できなかったため、従来選定へ切り替えました。",
+                                },
+                                "requestedNormalCount": _int_setting(settings, "normalClipCount", 2),
+                                "requestedShortCount": _int_setting(settings, "shortCount", 3),
+                                "selectedNormalCount": 0,
+                                "selectedShortCount": 0,
+                                "threadId": None,
+                            },
+                            codex_summary_path,
+                        )
+                    )
+            codex_normal_candidates = (
+                [candidate for candidate in codex_initial_selection_result.candidates if candidate.type == "normal"]
+                if codex_initial_selection_result is not None
+                else []
+            )
+            codex_short_candidates = (
+                [candidate for candidate in codex_initial_selection_result.candidates if candidate.type == "short"]
+                if codex_initial_selection_result is not None
+                else []
+            )
             try:
                 normal_generation_result = (
-                    build_manual_candidates(
+                    CandidateGenerationResult(
+                        candidates=codex_normal_candidates,
+                        summary={
+                            "type": "normal",
+                            "strategy": "codex_initial_selection",
+                            "raw_candidates_considered": len(codex_normal_candidates),
+                            "candidates_kept_by_type": {"normal": len(codex_normal_candidates)},
+                        },
+                    )
+                    if codex_initial_selection_result is not None
+                    else build_manual_candidates(
                         "normal",
                         normal_manual_ranges,
                         transcript_segments,
@@ -3322,7 +3565,17 @@ def run_autoclipper_job(
                     )
                 )
                 short_generation_result = (
-                    build_manual_candidates(
+                    CandidateGenerationResult(
+                        candidates=codex_short_candidates,
+                        summary={
+                            "type": "short",
+                            "strategy": "codex_initial_selection",
+                            "raw_candidates_considered": len(codex_short_candidates),
+                            "candidates_kept_by_type": {"short": len(codex_short_candidates)},
+                        },
+                    )
+                    if codex_initial_selection_result is not None
+                    else build_manual_candidates(
                         "short",
                         short_manual_ranges,
                         transcript_segments,
@@ -3382,7 +3635,8 @@ def run_autoclipper_job(
                     short_candidates,
                     settings,
                 )
-            if heatmap_interval_mode:
+            codex_selection = codex_initial_selection_result.selection if codex_initial_selection_result is not None else None
+            if heatmap_interval_mode and _require_all_requested_heatmap_candidate_types(codex_selection):
                 missing_candidate_types = [
                     candidate_type
                     for candidate_type, requested_count, manual_ranges, candidates in (
@@ -3417,11 +3671,7 @@ def run_autoclipper_job(
             )
             if not all_candidates:
                 raise PipelineExpectedError(
-                    (
-                        "heatmap_interval_mode_no_candidates"
-                        if heatmap_interval_mode
-                        else "no_candidates_found"
-                    ),
+                    ("heatmap_interval_mode_no_candidates" if heatmap_interval_mode else "no_candidates_found"),
                     (
                         "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。"
                         if heatmap_interval_mode
@@ -3442,6 +3692,28 @@ def run_autoclipper_job(
                 selection = build_manual_selection(
                     normal_candidates,
                     short_candidates,
+                )
+            elif codex_initial_selection_result is not None:
+                _set_status(db, job, "selecting_clips")
+                if "selecting_clips" not in visited_statuses:
+                    visited_statuses.append("selecting_clips")
+                selection, scored_candidates, _ = _codex_selection_with_diverse_refined_shorts(
+                    codex_initial_selection_result,
+                    transcript_segments=transcript_segments,
+                    silence_segments=silence_segments,
+                    scene_segments=scene_segments,
+                    settings=settings,
+                    timeline_duration=duration,
+                    heatmap_segments=heatmap_segments,
+                )
+                final_codex_summary = {
+                    **codex_initial_selection_result.summary,
+                    "selectedNormalCount": len(selection.normal_clips),
+                    "selectedShortCount": len(selection.shorts),
+                }
+                write_codex_initial_selection_summary(
+                    final_codex_summary,
+                    codex_summary_path,
                 )
             else:
                 _set_status(db, job, "scoring_candidates")
@@ -3469,47 +3741,40 @@ def run_autoclipper_job(
                     audio_features=audio_features,
                     silence_segments=silence_segments,
                 )
-                automatic_selection, automatic_scored, openai_scoring_summary = (
-                    _ensure_selected_candidates_openai_scored(
-                        automatic_selection,
-                        scoring_result.candidates,
+                automatic_selection, automatic_scored, openai_scoring_summary = _ensure_selected_candidates_openai_scored(
+                    automatic_selection,
+                    scoring_result.candidates,
+                    settings=automatic_settings,
+                    audio_features=audio_features,
+                    visual_quality=visual_quality,
+                    scorer=scoring_result.openai_scorer,
+                    openai_summary=openai_scoring_summary,
+                )
+                automatic_selection, automatic_scored, _ = (
+                    _automatic_selection_with_diverse_refined_shorts(
+                        automatic_scored,
+                        transcript_segments=transcript_segments,
+                        silence_segments=silence_segments,
+                        scene_segments=scene_segments,
                         settings=automatic_settings,
+                        timeline_duration=duration,
                         audio_features=audio_features,
-                        visual_quality=visual_quality,
-                        scorer=scoring_result.openai_scorer,
-                        openai_summary=openai_scoring_summary,
+                        heatmap_segments=heatmap_segments,
                     )
                 )
                 scored_candidates = [*automatic_scored, *manual_candidates]
                 selection = merge_manual_candidates_into_selection(
                     automatic_selection,
                     settings=settings,
-                    manual_normal_candidates=(
-                        normal_candidates if normal_manual_ranges else []
-                    ),
-                    manual_short_candidates=(
-                        short_candidates if short_manual_ranges else []
-                    ),
-                )
-                selection, scored_candidates = _selection_with_refined_boundaries(
-                    selection,
-                    scored_candidates,
-                    transcript_segments=transcript_segments,
-                    silence_segments=silence_segments,
-                    scene_segments=scene_segments,
-                    settings=settings,
-                    timeline_duration=duration,
-                    heatmap_segments=heatmap_segments,
+                    manual_normal_candidates=(normal_candidates if normal_manual_ranges else []),
+                    manual_short_candidates=(short_candidates if short_manual_ranges else []),
                 )
             selection, scored_candidates = _selection_with_fallback_titles(
                 selection,
                 scored_candidates,
                 transcript_segments,
             )
-            if (
-                manual_workflow
-                and active_manual_subtitle_mode == "manual"
-            ):
+            if manual_workflow and active_manual_subtitle_mode == "manual":
                 transcript_segments = build_manual_subtitle_segments(selection)
                 transcript_path = write_transcript_segments(
                     transcript_segments,
@@ -3562,43 +3827,27 @@ def run_autoclipper_job(
                 )
                 metadata_files.append(plan_path)
                 summary_files = write_summaries()
-                metadata_files.extend(
-                    path for path in summary_files if path not in metadata_files
-                )
-                visited_statuses.extend(
-                    ["preparing_clip_review", "awaiting_clip_review"]
-                )
+                metadata_files.extend(path for path in summary_files if path not in metadata_files)
+                visited_statuses.extend(["preparing_clip_review", "awaiting_clip_review"])
                 return visited_statuses
 
-            subtitle_review_requested = bool(
-                settings.get("requireSubtitleReview", False)
-            ) and (
-                bool(settings.get("burnSubtitles", True))
-                or (
-                    manual_workflow
-                    and active_manual_subtitle_mode in {"none", "manual"}
-                )
+            subtitle_review_requested = bool(settings.get("requireSubtitleReview", False)) and (
+                bool(settings.get("burnSubtitles", True)) or (manual_workflow and active_manual_subtitle_mode in {"none", "manual"})
             )
             if subtitle_review_requested:
                 review_document = build_subtitle_review(
                     job.id,
                     selection,
                     transcript_segments,
-                    short_max_duration=float(
-                        settings.get("shortMaxDuration", 75.0)
-                    ),
+                    short_max_duration=float(settings.get("shortMaxDuration", 75.0)),
                     render_mode=str(settings.get("mode", "high_quality")),
                     short_overlay_title_mode=settings.get(
                         "shortOverlayTitleMode",
                         "auto",
                     ),
                     short_layout=settings.get("shortLayout", "auto"),
-                    short_top_banner_enabled=bool(
-                        settings.get("shortTopBannerEnabled", False)
-                    ),
-                    short_bottom_banner_enabled=bool(
-                        settings.get("shortBottomBannerEnabled", False)
-                    ),
+                    short_top_banner_enabled=bool(settings.get("shortTopBannerEnabled", False)),
+                    short_bottom_banner_enabled=bool(settings.get("shortBottomBannerEnabled", False)),
                     render_settings=settings,
                     source_width=video.width,
                     source_height=video.height,
@@ -3736,22 +3985,10 @@ def _candidate_with_clip_plan_boundary(
     start: float,
     end: float,
 ) -> Candidate:
-    overlapping = [
-        (index, segment)
-        for index, segment in enumerate(transcript_segments)
-        if segment.end > start and segment.start < end
-    ]
+    overlapping = [(index, segment) for index, segment in enumerate(transcript_segments) if segment.end > start and segment.start < end]
     transcript_text = _transcript_text([segment for _, segment in overlapping])
-    recommended_start = (
-        candidate.clip_plan_recommended_start
-        if candidate.clip_plan_recommended_start is not None
-        else candidate.start
-    )
-    recommended_end = (
-        candidate.clip_plan_recommended_end
-        if candidate.clip_plan_recommended_end is not None
-        else candidate.end
-    )
+    recommended_start = candidate.clip_plan_recommended_start if candidate.clip_plan_recommended_start is not None else candidate.start
+    recommended_end = candidate.clip_plan_recommended_end if candidate.clip_plan_recommended_end is not None else candidate.end
     updated = candidate.model_dump()
     updated.update(
         {
@@ -3761,15 +3998,12 @@ def _candidate_with_clip_plan_boundary(
             "transcript_text": transcript_text,
             "segment_start_index": overlapping[0][0] if overlapping else None,
             "segment_end_index": overlapping[-1][0] + 1 if overlapping else None,
-            "transcript_char_count": sum(
-                len(segment.text.strip()) for _, segment in overlapping
-            ),
+            "transcript_char_count": sum(len(segment.text.strip()) for _, segment in overlapping),
             "speech_seconds": round(
                 sum(
                     max(
                         0.0,
-                        min(float(segment.end), end)
-                        - max(float(segment.start), start),
+                        min(float(segment.end), end) - max(float(segment.start), start),
                     )
                     for _, segment in overlapping
                     if segment.text.strip()
@@ -3778,10 +4012,7 @@ def _candidate_with_clip_plan_boundary(
             ),
             "clip_plan_recommended_start": recommended_start,
             "clip_plan_recommended_end": recommended_end,
-            "clip_plan_boundary_adjusted": not (
-                abs(start - recommended_start) < 0.001
-                and abs(end - recommended_end) < 0.001
-            ),
+            "clip_plan_boundary_adjusted": not (abs(start - recommended_start) < 0.001 and abs(end - recommended_end) < 0.001),
         }
     )
     return Candidate.model_validate(updated)
@@ -3847,20 +4078,12 @@ def run_clip_plan_boundary_update(
         selected_path = job_dir / "selected_clips.json"
         preview_path = subtitle_review_preview_path(job_dir, clip_id)
         document = None
-        selected_payload = (
-            selected_path.read_bytes() if selected_path.is_file() else None
-        )
-        preview_payload = (
-            preview_path.read_bytes() if preview_path.is_file() else None
-        )
+        selected_payload = selected_path.read_bytes() if selected_path.is_file() else None
+        preview_payload = preview_path.read_bytes() if preview_path.is_file() else None
         try:
             document = load_clip_plan(plan_path)
-            selection = CandidateSelection.model_validate(
-                _read_json_file(selected_path)
-            )
-            transcript_segments = _read_transcript_segments(
-                transcript_output_path(job_dir)
-            )
+            selection = CandidateSelection.model_validate(_read_json_file(selected_path))
+            transcript_segments = _read_transcript_segments(transcript_output_path(job_dir))
             planned_clip = next(
                 (clip for clip in document.clips if clip.id == clip_id),
                 None,
@@ -3875,15 +4098,9 @@ def run_clip_plan_boundary_update(
             if candidate is None:
                 raise ValueError(f"selected clip not found: {clip_id}")
 
-            source_duration = float(
-                video.duration
-                or document.source_duration
-                or max((clip.end for clip in document.clips), default=0.0)
-            )
+            source_duration = float(video.duration or document.source_duration or max((clip.end for clip in document.clips), default=0.0))
             if start < 0 or end <= start or end > source_duration + 0.001:
-                raise ValueError(
-                    "requested clip boundary is outside the source video"
-                )
+                raise ValueError("requested clip boundary is outside the source video")
 
             _set_status(db, job, "preparing_clip_review")
             job.current_step = "調整した範囲の確認動画を準備中"
@@ -3908,16 +4125,8 @@ def run_clip_plan_boundary_update(
                 preview_path,
                 updated_candidate,
             )
-            target_collection = (
-                selection.normal_clips
-                if updated_candidate.type == "normal"
-                else selection.shorts
-            )
-            target_index = next(
-                index
-                for index, item in enumerate(target_collection)
-                if item.id == clip_id
-            )
+            target_collection = selection.normal_clips if updated_candidate.type == "normal" else selection.shorts
+            target_index = next(index for index, item in enumerate(target_collection) if item.id == clip_id)
             target_collection[target_index] = updated_candidate
             write_selected_clips(selection, selected_path)
 
@@ -3929,11 +4138,7 @@ def run_clip_plan_boundary_update(
                 transcript_excerpt=updated_candidate.transcript_text,
             )
             document.source_duration = source_duration
-            available_clip_ids = [
-                clip.id
-                for clip in document.clips
-                if subtitle_review_preview_path(job_dir, clip.id).is_file()
-            ]
+            available_clip_ids = [clip.id for clip in document.clips if subtitle_review_preview_path(job_dir, clip.id).is_file()]
             mark_clip_plan_awaiting_review(
                 document,
                 preview_clip_ids=available_clip_ids,
@@ -3989,28 +4194,18 @@ def run_clip_plan_hook_scene_update(
         selected_path = job_dir / "selected_clips.json"
         preview_path = subtitle_review_preview_path(job_dir, clip_id)
         document = None
-        selected_payload = (
-            selected_path.read_bytes() if selected_path.is_file() else None
-        )
-        preview_payload = (
-            preview_path.read_bytes() if preview_path.is_file() else None
-        )
+        selected_payload = selected_path.read_bytes() if selected_path.is_file() else None
+        preview_payload = preview_path.read_bytes() if preview_path.is_file() else None
         try:
             document = load_clip_plan(plan_path)
-            selection = CandidateSelection.model_validate(
-                _read_json_file(selected_path)
-            )
+            selection = CandidateSelection.model_validate(_read_json_file(selected_path))
             planned_clip = next(
                 (clip for clip in document.clips if clip.id == clip_id),
                 None,
             )
             if planned_clip is None:
                 raise ValueError(f"clip plan item not found: {clip_id}")
-            target_candidates = (
-                selection.shorts
-                if planned_clip.type == "short"
-                else selection.normal_clips
-            )
+            target_candidates = selection.shorts if planned_clip.type == "short" else selection.normal_clips
             candidate = next(
                 (item for item in target_candidates if item.id == clip_id),
                 None,
@@ -4022,27 +4217,16 @@ def run_clip_plan_hook_scene_update(
             if start is not None and end is not None:
                 hook_duration = end - start
                 if not 0.5 <= hook_duration <= 3.0:
-                    raise ValueError(
-                        "hook scene duration must be between 0.5 and 3 seconds"
-                    )
-                if (
-                    start < candidate.start - 0.001
-                    or end > candidate.end + 0.001
-                ):
-                    raise ValueError(
-                        "hook scene must stay within the selected clip"
-                    )
-                short_max_duration = float(
-                    (job.settings_json or {}).get("shortMaxDuration", 75.0)
-                )
+                    raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+                if start < candidate.start - 0.001 or end > candidate.end + 0.001:
+                    raise ValueError("hook scene must stay within the selected clip")
+                short_max_duration = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
                 if candidate.type == "short" and hook_scene_newly_exceeds_short_limit(
                     clip_duration=candidate.duration,
                     hook_duration=hook_duration,
                     short_max_duration=short_max_duration,
                 ):
-                    raise ValueError(
-                        "hook scene would exceed the configured short maximum duration"
-                    )
+                    raise ValueError("hook scene would exceed the configured short maximum duration")
 
             candidate_payload = candidate.model_dump(mode="python")
             candidate_payload["hook_scene_start"] = start
@@ -4066,11 +4250,7 @@ def run_clip_plan_hook_scene_update(
                 preview_path,
                 updated_candidate,
             )
-            target_index = next(
-                index
-                for index, item in enumerate(target_candidates)
-                if item.id == clip_id
-            )
+            target_index = next(index for index, item in enumerate(target_candidates) if item.id == clip_id)
             target_candidates[target_index] = updated_candidate
             write_selected_clips(selection, selected_path)
 
@@ -4080,11 +4260,7 @@ def run_clip_plan_hook_scene_update(
                 start=start,
                 end=end,
             )
-            available_clip_ids = [
-                clip.id
-                for clip in document.clips
-                if subtitle_review_preview_path(job_dir, clip.id).is_file()
-            ]
+            available_clip_ids = [clip.id for clip in document.clips if subtitle_review_preview_path(job_dir, clip.id).is_file()]
             mark_clip_plan_awaiting_review(
                 document,
                 preview_clip_ids=available_clip_ids,
@@ -4108,10 +4284,7 @@ def run_clip_plan_hook_scene_update(
                 preview_payload=preview_payload,
                 code="clip_plan_hook_scene_update_failed",
                 message=str(exc),
-                current_step=(
-                    "冒頭フック映像の更新に失敗しました。"
-                    "時間を確認して再試行してください"
-                ),
+                current_step=("冒頭フック映像の更新に失敗しました。時間を確認して再試行してください"),
             )
             raise
 
@@ -4235,24 +4408,17 @@ def run_subtitle_review_hook_scene_update(
         try:
             with subtitle_review_document_lock(job_dir):
                 stored_payloads = {
-                    path: path.read_bytes() if path.is_file() else None
-                    for path in (review_path, summary_path, selected_path)
+                    path: path.read_bytes() if path.is_file() else None for path in (review_path, summary_path, selected_path)
                 }
                 document = load_subtitle_review(review_path)
-                selection = CandidateSelection.model_validate(
-                    _read_json_file(selected_path)
-                )
+                selection = CandidateSelection.model_validate(_read_json_file(selected_path))
                 reviewed_clip = next(
                     (item for item in document.clips if item.id == clip_id),
                     None,
                 )
                 if reviewed_clip is None:
                     raise ValueError(f"subtitle review clip not found: {clip_id}")
-                target_candidates = (
-                    selection.shorts
-                    if reviewed_clip.type == "short"
-                    else selection.normal_clips
-                )
+                target_candidates = selection.shorts if reviewed_clip.type == "short" else selection.normal_clips
                 candidate = next(
                     (item for item in target_candidates if item.id == clip_id),
                     None,
@@ -4261,9 +4427,7 @@ def run_subtitle_review_hook_scene_update(
                     raise ValueError(f"selected clip not found: {clip_id}")
 
                 next_document = document.model_copy(deep=True)
-                next_document.short_max_duration = float(
-                    (job.settings_json or {}).get("shortMaxDuration", 75.0)
-                )
+                next_document.short_max_duration = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
                 update_review_hook_scene(
                     next_document,
                     clip_id,
@@ -4299,26 +4463,13 @@ def run_subtitle_review_hook_scene_update(
                 spec_hash=result.spec_hash,
                 live_spec_hash=result.live_spec_hash,
             )
-            target_index = next(
-                index
-                for index, item in enumerate(target_candidates)
-                if item.id == clip_id
-            )
+            target_index = next(index for index, item in enumerate(target_candidates) if item.id == clip_id)
             target_candidates[target_index] = updated_candidate
             with subtitle_review_document_lock(job_dir):
-                current_review_payload = (
-                    review_path.read_bytes() if review_path.is_file() else None
-                )
-                current_selected_payload = (
-                    selected_path.read_bytes() if selected_path.is_file() else None
-                )
-                if (
-                    current_review_payload != stored_payloads[review_path]
-                    or current_selected_payload != stored_payloads[selected_path]
-                ):
-                    raise RuntimeError(
-                        "subtitle review changed while hook preview was rendering"
-                    )
+                current_review_payload = review_path.read_bytes() if review_path.is_file() else None
+                current_selected_payload = selected_path.read_bytes() if selected_path.is_file() else None
+                if current_review_payload != stored_payloads[review_path] or current_selected_payload != stored_payloads[selected_path]:
+                    raise RuntimeError("subtitle review changed while hook preview was rendering")
                 try:
                     write_selected_clips(selection, selected_path)
                     write_subtitle_review(next_document, review_path)
@@ -4337,10 +4488,7 @@ def run_subtitle_review_hook_scene_update(
         except Exception as exc:
             job.status = "awaiting_subtitle_review"
             job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
-            job.current_step = (
-                "冒頭フック映像の更新に失敗しました。"
-                "時間を確認して再試行してください"
-            )
+            job.current_step = "冒頭フック映像の更新に失敗しました。時間を確認して再試行してください"
             job.error_code = "subtitle_review_hook_scene_update_failed"
             job.error_message = str(exc)
             job.updated_at = utc_now()
@@ -4373,11 +4521,7 @@ def run_clip_plan_reselection(
         settings = dict(job.settings_json or {})
         input_path = storage_paths.resolve_stored_file(video.stored_path)
         previous_plan_path = clip_plan_output_path(job_dir)
-        previous_plan = (
-            load_clip_plan(previous_plan_path)
-            if previous_plan_path.is_file()
-            else None
-        )
+        previous_plan = load_clip_plan(previous_plan_path) if previous_plan_path.is_file() else None
         previous_artifact_paths = [
             job_dir / "normal_candidates.json",
             job_dir / "short_candidates.json",
@@ -4391,36 +4535,25 @@ def run_clip_plan_reselection(
             job_dir / "selected_clips_summary.json",
             job_dir / "heatmap_validation_summary.json",
         ]
-        previous_artifacts = {
-            path: path.read_bytes() if path.is_file() else None
-            for path in previous_artifact_paths
-        }
+        previous_artifacts = {path: path.read_bytes() if path.is_file() else None for path in previous_artifact_paths}
 
         try:
             _set_status(db, job, "reselecting_clips")
             visited_statuses.append("reselecting_clips")
-            transcript_segments = _read_transcript_segments(
-                transcript_output_path(job_dir)
-            )
-            audio_features = AudioFeatures.model_validate(
-                _read_json_file(job_dir / "audio_features.json")
-            )
-            silence_segments = [
-                SilenceSegment.model_validate(item)
-                for item in _read_json_file(job_dir / "silence_segments.json")
-            ]
-            scene_segments = [
-                SceneSegment.model_validate(item)
-                for item in _read_json_file(job_dir / "scene_segments.json")
-            ]
-            visual_quality = VisualQuality.model_validate(
-                _read_json_file(job_dir / "visual_quality.json")
-            )
+            transcript_segments = _read_transcript_segments(transcript_output_path(job_dir))
+            audio_features = AudioFeatures.model_validate(_read_json_file(job_dir / "audio_features.json"))
+            silence_segments = [SilenceSegment.model_validate(item) for item in _read_json_file(job_dir / "silence_segments.json")]
+            scene_segments = [SceneSegment.model_validate(item) for item in _read_json_file(job_dir / "scene_segments.json")]
+            visual_quality = VisualQuality.model_validate(_read_json_file(job_dir / "visual_quality.json"))
             heatmap_result = load_heatmap_for_video(
                 input_path,
                 original_filename=video.original_filename,
                 actual_duration=float(video.duration or visual_quality.duration),
                 max_sidecar_size_bytes=get_settings().max_heatmap_sidecar_size_bytes,
+                sidecar_path=storage_paths.resolve_video_heatmap(
+                    video.id,
+                    video.stored_path,
+                ),
             )
             heatmap_summary, heatmap_mode_unavailable = _heatmap_summary_for_selection_mode(
                 heatmap_result.summary,
@@ -4445,11 +4578,7 @@ def run_clip_plan_reselection(
                 manual_normal=bool(normal_manual_ranges),
                 manual_short=bool(short_manual_ranges),
             )
-            previous_settings = (
-                dict(previous_plan.settings)
-                if previous_plan is not None
-                else {}
-            )
+            previous_settings = dict(previous_plan.settings) if previous_plan is not None else {}
             previous_heatmap_interval_mode = _bool_setting(
                 previous_settings,
                 "heatmapIntervalMode",
@@ -4460,14 +4589,10 @@ def run_clip_plan_reselection(
                 "heatmapIntervalMode",
                 False,
             )
-            heatmap_interval_mode_changed = (
-                heatmap_interval_mode != previous_heatmap_interval_mode
-            )
+            heatmap_interval_mode_changed = heatmap_interval_mode != previous_heatmap_interval_mode
 
             if heatmap_interval_mode_changed:
-                candidate_generation_summary_path = (
-                    job_dir / "candidate_generation_summary.json"
-                )
+                candidate_generation_summary_path = job_dir / "candidate_generation_summary.json"
 
                 def candidate_generation_heartbeat(summary: dict[str, Any]) -> None:
                     _write_json(candidate_generation_summary_path, summary)
@@ -4484,9 +4609,7 @@ def run_clip_plan_reselection(
                         scene_segments=scene_segments,
                         silence_segments=silence_segments,
                         heatmap_segments=heatmap_result.segments,
-                        video_duration=float(
-                            video.duration or visual_quality.duration
-                        ),
+                        video_duration=float(video.duration or visual_quality.duration),
                         heartbeat=candidate_generation_heartbeat,
                     )
                 except CandidateGenerationMemoryLimitError as exc:
@@ -4537,11 +4660,7 @@ def run_clip_plan_reselection(
                         transcript_segments,
                     ).candidates
                     if normal_manual_ranges
-                    else [
-                        candidate
-                        for candidate in base_candidates
-                        if candidate.type == "normal"
-                    ]
+                    else [candidate for candidate in base_candidates if candidate.type == "normal"]
                 )
                 short_candidates = (
                     build_manual_candidates(
@@ -4550,11 +4669,7 @@ def run_clip_plan_reselection(
                         transcript_segments,
                     ).candidates
                     if short_manual_ranges
-                    else [
-                        candidate
-                        for candidate in base_candidates
-                        if candidate.type == "short"
-                    ]
+                    else [candidate for candidate in base_candidates if candidate.type == "short"]
                 )
                 normal_candidates = annotate_candidates_with_heatmap(
                     normal_candidates,
@@ -4591,37 +4706,33 @@ def run_clip_plan_reselection(
                 audio_features=audio_features,
                 silence_segments=silence_segments,
             )
-            automatic_selection, automatic_scored, openai_scoring_summary = (
-                _ensure_selected_candidates_openai_scored(
-                    automatic_selection,
-                    scoring_result.candidates,
+            automatic_selection, automatic_scored, openai_scoring_summary = _ensure_selected_candidates_openai_scored(
+                automatic_selection,
+                scoring_result.candidates,
+                settings=automatic_settings,
+                audio_features=audio_features,
+                visual_quality=visual_quality,
+                scorer=scoring_result.openai_scorer,
+                openai_summary=scoring_result.openai_summary,
+            )
+            automatic_selection, automatic_scored, _ = (
+                _automatic_selection_with_diverse_refined_shorts(
+                    automatic_scored,
+                    transcript_segments=transcript_segments,
+                    silence_segments=silence_segments,
+                    scene_segments=scene_segments,
                     settings=automatic_settings,
+                    timeline_duration=float(video.duration or visual_quality.duration),
                     audio_features=audio_features,
-                    visual_quality=visual_quality,
-                    scorer=scoring_result.openai_scorer,
-                    openai_summary=scoring_result.openai_summary,
+                    heatmap_segments=heatmap_result.segments,
                 )
             )
             scored_candidates = [*automatic_scored, *manual_candidates]
             selection = merge_manual_candidates_into_selection(
                 automatic_selection,
                 settings=settings,
-                manual_normal_candidates=(
-                    normal_candidates if normal_manual_ranges else []
-                ),
-                manual_short_candidates=(
-                    short_candidates if short_manual_ranges else []
-                ),
-            )
-            selection, scored_candidates = _selection_with_refined_boundaries(
-                selection,
-                scored_candidates,
-                transcript_segments=transcript_segments,
-                silence_segments=silence_segments,
-                scene_segments=scene_segments,
-                settings=settings,
-                timeline_duration=float(video.duration or visual_quality.duration),
-                heatmap_segments=heatmap_result.segments,
+                manual_normal_candidates=(normal_candidates if normal_manual_ranges else []),
+                manual_short_candidates=(short_candidates if short_manual_ranges else []),
             )
             selection, scored_candidates = _selection_with_fallback_titles(
                 selection,
@@ -4637,15 +4748,9 @@ def run_clip_plan_reselection(
             openai_summary_path = job_dir / "openai_scoring_summary.json"
             if openai_scoring_summary is None:
                 openai_summary_path.unlink(missing_ok=True)
-            candidate_generation_summary = _read_json_file(
-                job_dir / "candidate_generation_summary.json"
-            )
+            candidate_generation_summary = _read_json_file(job_dir / "candidate_generation_summary.json")
             transcript_summary_path = job_dir / "transcript_summary.json"
-            transcript_summary = (
-                _read_json_file(transcript_summary_path)
-                if transcript_summary_path.is_file()
-                else {}
-            )
+            transcript_summary = _read_json_file(transcript_summary_path) if transcript_summary_path.is_file() else {}
             write_generation_summaries(
                 job_dir,
                 transcript_segments=transcript_segments,
@@ -4656,21 +4761,11 @@ def run_clip_plan_reselection(
                 scored_candidates=scored_candidates,
                 selection=selection,
                 openai_scoring_summary=openai_scoring_summary,
-                transcription_engine=str(
-                    transcript_summary.get("transcription_engine", "not_run")
-                ),
-                used_fixture_transcript=bool(
-                    transcript_summary.get("used_fixture_transcript", False)
-                ),
-                transcription_model=transcript_summary.get(
-                    "transcription_model"
-                ),
-                transcription_language=transcript_summary.get(
-                    "transcription_language"
-                ),
-                transcription_diagnostics=transcript_summary.get(
-                    "transcription_runtime"
-                ),
+                transcription_engine=str(transcript_summary.get("transcription_engine", "not_run")),
+                used_fixture_transcript=bool(transcript_summary.get("used_fixture_transcript", False)),
+                transcription_model=transcript_summary.get("transcription_model"),
+                transcription_language=transcript_summary.get("transcription_language"),
+                transcription_diagnostics=transcript_summary.get("transcription_runtime"),
             )
             _prepare_clip_plan_review(
                 db=db,
@@ -4682,9 +4777,7 @@ def run_clip_plan_reselection(
                 preview_renderer=deps.subtitle_review_preview_renderer,
                 source_duration=float(video.duration or visual_quality.duration),
             )
-            visited_statuses.extend(
-                ["preparing_clip_review", "awaiting_clip_review"]
-            )
+            visited_statuses.extend(["preparing_clip_review", "awaiting_clip_review"])
         except PipelineExpectedError as exc:
             _restore_clip_plan_after_reselection_failure(
                 db,
@@ -4770,11 +4863,7 @@ def run_subtitle_review_render(
             selection = CandidateSelection.model_validate(selection_payload)
             selection = apply_reviewed_clip_content(selection, review_document)
             write_selected_clips(selection, job_dir / "selected_clips.json")
-            previous_exports = list(
-                db.scalars(
-                    select(ExportItem).where(ExportItem.job_id == job.id)
-                ).all()
-            )
+            previous_exports = list(db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all())
             previous_export_ids = {export.id for export in previous_exports}
             render_paths = storage_paths
             if is_rerender:
@@ -4801,9 +4890,7 @@ def run_subtitle_review_render(
                     "no_usable_output",
                     "Selected clips did not produce usable rendered output.",
                 )
-            if rerender_staging_paths is not None and (
-                normal_result.failures or short_result.failures
-            ):
+            if rerender_staging_paths is not None and (normal_result.failures or short_result.failures):
                 raise PipelineExpectedError(
                     "subtitle_rerender_incomplete",
                     "Re-render did not complete for every existing clip. Previous outputs were kept.",
@@ -4829,11 +4916,7 @@ def run_subtitle_review_render(
             openai_summary_path = job_dir / "openai_scoring_summary.json"
             openai_scoring_summary = _read_json_file(openai_summary_path) if openai_summary_path.is_file() else None
             transcript_summary_path = job_dir / "transcript_summary.json"
-            transcript_summary = (
-                _read_json_file(transcript_summary_path)
-                if transcript_summary_path.is_file()
-                else {}
-            )
+            transcript_summary = _read_json_file(transcript_summary_path) if transcript_summary_path.is_file() else {}
 
             write_generation_summaries(
                 job_dir,
@@ -4865,10 +4948,7 @@ def run_subtitle_review_render(
             )
             zip_path = storage_paths.zip_path(job.id)
             if is_rerender:
-                pending_rerender_zip = (
-                    job_dir
-                    / f".download_revision_{review_document.render_revision}.tmp.zip"
-                )
+                pending_rerender_zip = job_dir / f".download_revision_{review_document.render_revision}.tmp.zip"
                 pending_rerender_zip.unlink(missing_ok=True)
                 _create_zip(
                     pending_rerender_zip,

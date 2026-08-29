@@ -12,6 +12,8 @@ import type {
   JobCreateResponse,
   JobResultsResponse,
   JobStatusResponse,
+  StorageCleanupResponse,
+  StorageStatusResponse,
   SubtitleReviewDocument,
   SubtitleReviewClipFramingUpdateRequest,
   SubtitleReviewConvertToShortRequest,
@@ -64,6 +66,23 @@ export function toApiUrl(pathOrUrl: string): string {
     return pathOrUrl;
   }
   return `${API_BASE_URL}${pathOrUrl}`;
+}
+
+export async function getStorageStatus(): Promise<StorageStatusResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/storage/status`, {
+    cache: "no-store"
+  });
+  return parseJsonResponse<StorageStatusResponse>(response);
+}
+
+export async function cleanupExpiredStorage(): Promise<StorageCleanupResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/storage/cleanup`, {
+    method: "POST",
+    headers: {
+      "X-AutoClipper-Action": "storage-cleanup"
+    }
+  });
+  return parseJsonResponse<StorageCleanupResponse>(response);
 }
 
 export async function getSubtitleStylePresets(): Promise<SubtitleStylePresetDocument> {

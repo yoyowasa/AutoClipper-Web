@@ -7842,6 +7842,229 @@ pip check: pass
 
 - 許可済み実動画で改行を保存し、exact previewから最終MP4まで目視する実E2Eとユーザー受入は未確認。
 
+## 2026-08-28 storage容量整理
+
+### 目的
+
+- `C:\BOT\AutoClipper Web` の動画・一時生成物・Git object蓄積を切り分け、DB参照と完成物を壊さず`C:`の空きを回復する。
+
+### 観測事実・原因
+
+- 整理前はworkspace=`123.44GB`、`storage/temp=8.34GB`、`.git=18.71GB`。
+- `storage/uploads`、`outputs`、`temp`、`youtube`、`ID146_*`の100MB以上をSHA-256照合し、同一内容=`90ファイル / 26組`、1コピーだけ残す場合の重複候補=`53.02GB`を確認した。
+- upload APIは毎回新しい`video_id`と保存先を作る。DBは動画168件に対し、同名再投入の追加行が136件あった。
+- Gitはloose object=`17.87GiB`、garbage=`854.83MiB`。現行indexの`youtube`追跡は0件だが、到達可能な履歴にMP4 7 object / `10.52GB`、到達不能なlarge blob 4 object / `7.48GB`が残っていた。
+
+### 変更
+
+- AutoClipper関連process 0件、Git lock 0件、非完了job 31件を確認し、非完了job名と一致するtempを保護した。
+- `storage/temp`の30日超対象`312ファイル / 13フォルダ / 7.90GB`を、削除失敗時に戻せるよう`E:\BOT_DATA_ARCHIVE\AutoClipper_Web_cleanup_20260828\temp`へ退避した。`Y:`は確認時に切断中だったため使用していない。
+- `.gitignore`へ`youtube/`を追加し、未追跡動画の再混入を防止した。
+- 履歴を書き換えず`git gc --prune=now`を実行し、到達不能objectとgarbageを整理した。
+- `storage/uploads`、`storage/outputs`、`youtube`、`ID146_*`、DB、非完了jobのtempは削除していない。
+
+### 検証
+
+- `storage/temp`: `8.34GB -> 0.44GB`。退避先=`1498ファイル / 7.90GB`、移動失敗0件。
+- `.git`: `18.71GB -> 10.47GB`。`count=0`、`in-pack=2343`、`size-pack=10.46GiB`、`garbage=0`。
+- workspace: `123.44GB -> 107.31GB`、今回のAutoClipper整理分=`16.13GB`。
+- `git fsck --full`: exit 0、non-dangling problem 0件。`git check-ignore`で`youtube/`適用を確認。
+- SQLite `PRAGMA integrity_check=ok`。`export_items=337`の実動画欠損0件。
+- `C:`空きは最終`177.8GB / 19.2%`。整理開始時`110.7GB / 11.9%`からの差には、今回の`16.13GB`以外の同時変動も含む。`pagefile.sys=74.05GB`は未変更。
+
+### 未解決・制限
+
+- ハッシュ一致の重複候補`53.02GB`はDB参照を壊すため未削除。削減にはvideo/job/export参照とheatmap sidecarを保つDB-aware dedupが必要。
+- Git履歴内の到達可能なMP4約`10.52GB`は残る。削除には履歴書き換えが必要なため未実施。
+- `vid_ce03f95de3a549e08f28f868b1f0ae14.mp4`は整理前から欠損し、2026-06-28のfailed job 1件が参照している。今回のtemp/Git整理による欠損ではない。
+
+## 2026-08-28 完了済みJobのsource-only整理
+
+### 目的
+
+- 完成後のJobは再編集しない運用に合わせ、元YouTube動画を残して完了・失敗Jobの作業コピーと生成物を整理する。
+
+### 観測事実・対象
+
+- 整理前のJob=`177件`。保護対象は`awaiting_clip_review=16`、`awaiting_subtitle_review=14`、`generating_candidates=1`の計`31件`。
+- 整理対象は`completed=128`、`failed=18`の計`146件`、これらだけが参照するvideo record=`140件`。
+- 整理対象のupload実体=`139ファイル / 18.14GB`。うち既存`youtube`と一致しない元素材=`17組 / 4.10GB`。
+- 整理対象のoutput=`154対象 / 11.48GB`、非保護temp=`0.34GB`。
+
+### 変更
+
+- 整理前DBを`E:\BOT_DATA_ARCHIVE\AutoClipper_Web_cleanup_20260828\autoclipper_before_terminal_cleanup.db`へ退避した。
+- 既存`youtube`と一致しない元素材17本を`youtube\_source_archive\<SHA-256先頭16桁>\`へ移動し、同じ素材のheatmap sidecarも同じ単位へ退避した。
+- 完了・失敗Job=`146件`、それらだけが参照するvideo record=`140件`、関連export record=`318件`をDBから削除した。
+- 対応するupload作業コピー、output、非保護tempを削除した。C:上の対象は恒久削除、DBと固有元素材は上記退避先から復旧可能。
+- 作業中31件のupload、output、temp、DB参照は維持した。Git履歴は変更していない。
+
+### 検証
+
+- workspace: `107.31GB -> 81.45GB`、削減=`25.86GB`。
+- 現在値: `storage/uploads=37.19GB`、`storage/outputs=2.22GB`、`storage/temp=0.10GB`、`youtube=22.63GB`、`.git=10.47GB`。
+- 現行DB: `integrity_check=ok`、foreign key違反0件、Job=`31件`、video=`28件`、export=`19件`。
+- 作業中31件は元動画欠損0件、output folder欠損0件。exportのvideo/subtitle/metadata欠損0件。
+- 固有元素材=`17本 / 4.10GB`、整理前DB backup=`integrity_check=ok`。
+- 再計画結果はterminal job、削除候補、未退避素材とも0件。`git diff --check`と`git fsck --full`はexit 0。
+- `C:`空き=`215.71GB / 23.3%`。
+
+### 未解決・制限
+
+- 作業中31件が終端状態になるまでは、そのupload=`37.19GB`、output=`2.22GB`、temp=`0.10GB`を保持する。
+- Git履歴内の到達可能なMP4約`10.52GB`は残る。削除には履歴書き換えが必要。
+- 完了・失敗Jobの編集状態と生成物は現行DBから除去したため、画面から再表示・再ダウンロードできない。必要時は退避DBと元素材から再生成する。
+
+## 2026-08-28 完成済みID146 project退避
+
+- `ID146_【警告】2026年、この工務店に頼むと家が建たなくなります-20260708T195305Z-3-001`は`69ファイル / 7.565GB`、Git未追跡、`youtube`・作業中uploadとの完全一致0件だった。
+- 完成用script 3本から絶対パス参照が残るが、完成後は再編集しない運用に基づき、folder全体を`E:\BOT_DATA_ARCHIVE\SSD_cleanup_20260828\AutoClipper_Web_completed_project\`へ退避した。
+- 検証: 退避先=`69ファイル / 7.565GB`、C:側folderなし。AutoClipperのDB・作業中31件・`youtube`は変更していない。
+- 制限: 上記3本の旧完成用scriptを再実行する場合は、退避先から戻すか絶対パスの変更が必要。
+
+## 2026-08-28 Git履歴MP4除去
+
+### 目的
+
+- 元YouTube動画をworkspace側に残し、Git履歴だけに重複保存されたMP4を除去して`C:`を削減する。
+
+### 変更
+
+- 書き換え前の全refを`E:\BOT_DATA_ARCHIVE\SSD_cleanup_20260828\AutoClipper_Web_git_history_before_mp4_rewrite\AutoClipper_Web_all_refs_before_mp4_rewrite.bundle`へ退避した。bundle=`10.469GB`、`git bundle verify`成功。
+- `git-filter-repo 2.47.0`を導入し、`*.mp4`／`*.MP4`を全履歴から除外した。全ref合算の対象はunique MP4 object=`8件 / 約10.52GB`。
+- filter対象外だったCodex checkpoint tree ref 2本もtreeを再構築し、各refのMP4 7件を除外した。
+- 書き換え前の構成に合わせ、local branch=`44`、remote ref=`72`、tag=`29`、Codex ref=`2`を維持した。`origin`設定も復元した。remoteへのpushは実施していない。
+- reflogを失効し、`git gc --prune=now`で旧MP4 objectを物理削除した。
+
+### 検証
+
+- `.git`: `10.469GB -> 0.025GB`、pack=`25.24MiB`。削減=`約10.44GB`。
+- `git rev-list --objects --all`のMP4=`0件`。対象8 objectは全て`missing`、`git fsck --full`はexit 0。
+- `git diff --check`はexit 0。current branch=`codex/task-124-ai-title-hooks`、作業中だった`.gitignore`と`STATUS.md`は履歴書き換え前の内容を保持してから本記録だけを追記した。
+- SQLiteは`integrity_check=ok`、foreign key違反0件。Job=`31件`、video=`28件`、export=`19件`で変更なし。
+
+### 未解決・制限
+
+- remote側の旧履歴は未変更。remoteの容量も削減する場合は、影響範囲を確認した上で履歴のforce pushが必要。
+- 書き換え前履歴は上記bundleから復旧可能。共有HDD上で`10.469GB`を使用する。
+
+## 2026-08-28 新規作業前source-only全整理
+
+### 目的
+
+- 新しい動画作業を空のJob一覧から開始できるよう、作業中31件を含む全Jobと作業copy／生成物を整理し、元素材だけを残す。
+
+### 観測事実・保護計画
+
+- 整理前DBはJob=`31件`、video=`28件`、export=`19件`。状態は`awaiting_clip_review=16`、`awaiting_subtitle_review=14`、`generating_candidates=1`。
+- 作業領域は`uploads=37.19GB`、`outputs=2.22GB`、`temp=0.10GB`、transcript 8件。
+- upload動画28本を既存`youtube`とSHA-256照合した。既存source一致=`24本 / 37.00GB`、upload内重複=`2本 / 0.10GB`、既存sourceなし=`2本 / 101,549,497 bytes`。
+- 整理前DBとhash計画を`E:\BOT_DATA_ARCHIVE\AutoClipper_Web_cleanup_20260828\before_new_work_cleanup_20260828_151445\`へ退避し、backup DBの`integrity_check=ok`、foreign key違反0件を確認した。
+
+### 変更
+
+- 既存sourceなしの2本を`youtube\_source_archive\<SHA-256先頭16桁>\`へ移動し、hash一致を確認した。
+- 現行DBからexport、Job、videoを全削除して`VACUUM`した。
+- `storage\uploads`、`outputs`、`temp`、`transcripts`の未追跡作業fileを削除した。削除=`1,032ファイル / 42,334,028,690 bytes（約39.43GB）`、失敗0件。
+- 各作業folderのtracked `.gitkeep`は維持した。Docker Desktopは停止状態を維持した。
+
+### 検証
+
+- 現行DBは`integrity_check=ok`、foreign key違反0件、Job=`0`、video=`0`、export=`0`。
+- 元uploadの全unique hashが現行`youtube`に存在し、欠損hash=`0件`。新規退避2本も個別SHA-256一致。
+- `uploads`、`outputs`、`temp`、`transcripts`は`.gitkeep`各1件だけ。`git diff --check`はexit 0。
+- workspace=`63.44GB -> 24.01GB`。`C:`空き=`412.95GB / 44.6%`。
+
+### 制限
+
+- 削除した作業copy、編集状態、生成物は復元不可。共有HDDのDB backupはJob metadataの確認用で、削除済みoutput実体は含まない。
+- 元素材は`youtube`と`youtube\_source_archive`に保持しているため、必要時は新規Jobとして再投入する。
+
+## 2026-08-28 AutoClipper保存ライフサイクル改善
+
+### 目的
+
+- 同一動画の重複保存と完了後データの無期限保持を防ぎ、容量増加を画面で把握できるようにする。
+
+### 現在状態・変更
+
+- uploadをSHA-256単位の`storage/uploads/.blobs/<sha256><拡張子>`へ集約した。同一bytes・同一拡張子は複数Videoで1実体を共有し、APIとVideo IDは従来どおりuploadごとに分離する。
+- blob作成はhardlinkを優先し、非対応filesystemでは排他copyへ自動fallbackする。既存blobはsizeとSHA-256を再検証し、不一致時は共有しない。
+- heatmap sidecarを`storage/heatmaps/<video_id>.heatmap.json`へ分離した。旧Videoは従来の隣接sidecarをfallback参照する。
+- `completed`／`failed`かつ更新から7日超のJobだけを整理対象とした。処理中・確認待ちJobは対象外。Job削除後に参照がなく、作成から24時間超のVideo、関連output／temp／heatmapを整理する。
+- cleanup対象Jobは削除直前にstatusと期限を再確認してclaimし、同時に再編集へ戻ったJobを削除しない。削除失敗fileはDBなし残骸として次回cleanupで再検出する。
+- uploadのblob公開からVideo DB commitまでとcleanup全体を`storage/.storage-lifecycle.lock`で直列化し、copy fallback中の未登録blobを並行cleanupが削除しないようにした。
+- 孤立Videoは削除時にJob／Export不存在と期限を再確認する。SQLite全connectionで外部キー制約を有効化し、同時Job作成による参照切れを防止する。
+- Docker構成では成功したupload後に期限切れcleanupを実行する。明示cleanupは`POST /api/storage/cleanup`、画面の`期限切れを整理`から実行する。破壊POSTには専用headerを必須化し、公開portを`127.0.0.1`へ限定した。
+- 容量表示は`storage`と`youtube`を合算し、物理hardlinkを二重計上しない。警告基準=`50GiB`、SSD空き=`20%未満`。upload画面に使用量、空き、整理対象Job／元動画を表示する。
+- Docker build contextから`youtube`、runtime DB、heatmapを除外した。設定値を`.env.example`と`docker-compose.yml`へ追加した。
+- Docker bind mount上の一部directoryが`OSError`になる場合、容量走査全体を500にせず読取可能範囲を集計し、画面へ「一部の保存先を読み取れないため、使用量は参考値です。」と表示する。
+
+### 変更ファイル
+
+- backend: `app/api/storage.py`、`app/api/videos.py`、`app/api/jobs.py`、`app/storage/content.py`、`app/storage/lifecycle.py`、`app/storage/locking.py`、`app/storage/usage.py`、`app/storage/paths.py`、`app/video/heatmap.py`、`app/jobs/runner.py`、`app/config.py`、`app/db.py`、`app/schemas.py`、`app/main.py`
+- frontend: `app/upload/page.tsx`、`lib/api.ts`、`lib/types.ts`
+- 運用: `.dockerignore`、`.env.example`、`.gitignore`、`docker-compose.yml`、`storage/heatmaps/.gitkeep`
+- test: storage lifecycle／dedup／容量API／storage lock／SQLite外部キーの新規testとheatmap参照先の回帰test
+
+### 最小検証
+
+- backend pytest: `667 passed / 1 skipped`。既知のStarlette deprecation warning 1件のみ。
+- backend Ruff: pass。
+- frontend typecheck／lint／build: pass。
+- `docker compose config --quiet`: pass。`git diff --check`: pass。
+- Docker DesktopのAF_UNIX socket残骸をworkspace外で退避後、`docker compose up -d --build`を実行。backend healthy、frontend、Redis、workerの4containerが起動した。
+- 実API: `/health=200`。`/api/storage/status=200`、AutoClipper保存=`24,258,268,383 bytes`、空き=`433,681,666,048 bytes / 43.58%`、整理対象Job=`0`、元動画=`0`。読取不能領域があるため参考値警告あり。
+- 実画面: `http://localhost:3000/upload`で使用量、SSD空き、整理対象0件、参考値警告、無効化された`期限切れを整理`buttonを確認。console error／warning=`0`。
+- 隔離container E2E: 本番DB・storageを使わずtmpfsへ1件uploadし、`201`、整理対象=`1`、cleanupでVideo=`1`／file=`1`／`58 bytes`削減、error=`0`、整理後対象=`0`を確認。隔離containerとtmpfsは削除済み。
+
+### 未解決事項
+
+- `youtube\_source_archive\ceb121c1febb20a7`はWindows側で読めるが、Docker bind mount内のdirectory列挙が`OSError: [Errno 5] Input/output error`になる。容量表示は当該領域を除外し警告する。動画実体は変更していない。
+- schedulerは追加していない。期限切れ整理は成功upload後、または画面の明示操作で実行する。
+
+## 2026-08-28 Docker Desktop更新後の再確認
+
+- Docker Desktopを`4.78.0`から`4.88.1`へ更新後、Engine=`29.7.2 / API 1.55`、Compose=`v5.4.0`でCompose構成を再作成した。
+- backend healthy、frontend、Redis、workerの4containerが起動。`/upload=200`、`/health=ok`、容量API成功、整理対象Job=`0`、元動画=`0`、直近Traceback／ERROR／Exception=`0`。
+- 本番DB・storageを使わないtmpfs隔離containerで再検証し、upload=`201`、整理対象動画=`1`、cleanupで動画=`1`／file=`1`削除、error=`0`、整理後対象=`0`を確認した。隔離containerとtmpfsは削除済み。
+- AutoClipperのsource、image、volume、DB、storage実体は更新していない。既知の`_source_archive` bind mount読取警告は継続する。
+
+## 2026-08-28 loopback容量表示・archive filename修復
+
+### 目的
+
+- `http://127.0.0.1:3000/upload`でも容量情報を表示し、Dockerから読めなかったarchive 1件を内容を失わず利用可能にする。
+
+### 原因・変更
+
+- backend CORSが`http://localhost:3000`だけを許可していたため、`127.0.0.1`で開いたfrontendから`http://localhost:8000`への容量API取得がbrowserに拒否されていた。既定値、`.env.example`、Compose環境値へ`http://127.0.0.1:3000`を追加した。許可先はlocal 2 originだけで、外部originへ拡大していない。
+- Next.js開発server用に`allowedDevOrigins: ["127.0.0.1"]`を追加した。production APIのCORS制御には使用しない。
+- `youtube\_source_archive\ceb121c1febb20a7`の旧MP4名は`136文字 / UTF-8 316 bytes`で、Docker/Linuxの1 filename上限`255 bytes`を超えていた。archive 19file中の超過はこの1件だけだった。
+- MP4を同一directory内で`ceb121c1febb20a7.mp4`へ原子的にrenameした。file内容、file ID、作成日時、更新日時は変更していない。旧filenameは既存の実動画E2E履歴に残る。
+
+### 変更ファイル
+
+- `.env.example`
+- `backend/app/config.py`
+- `backend/tests/test_config.py`
+- `docker-compose.yml`
+- `frontend/next.config.ts`
+- source rename: `youtube/_source_archive/ceb121c1febb20a7/ceb121c1febb20a7.mp4`
+
+### 検証
+
+- CORS: `http://localhost:3000`と`http://127.0.0.1:3000`の両方で`200`、`Access-Control-Allow-Origin`が要求originと一致。
+- 実browser: `http://127.0.0.1:3000/upload`で保存=`22.8GB`、SSD空き=`43.5%`、整理対象Job／元動画=`0 / 0`を表示。参考値警告なし、console error／warning=`0`。
+- source保全: size=`204,999,257 bytes`、SHA-256=`CEB121C1FEBB20A70E6764E7C0BCDC90912D7FB399E3FA20B69FFC63E47A17D4`がrename前後・Windows・Dockerで一致。削除・複製・DB変更なし。
+- Docker backendでarchive directory列挙、MP4読込、全SHA-256計算に成功。容量API=`24,463,267,640 bytes`、`warning=False`、reason空、整理対象=`0 / 0`。
+- backend pytest=`668 passed / 1 skipped`、Ruff=pass。frontend typecheck／lint／build=pass。`docker compose config --quiet`、`git diff --check`=pass。
+- Composeはbackend healthy、frontend、Redis、workerの4serviceが稼働。
+
+### 未解決事項
+
+- 今回の2件に未解決なし。期限切れcleanupの実行条件は従来どおり成功upload後または画面操作。
+
 ## 2026-08-28 Windows LauncherのGPU起動待機短縮
 
 ### 目的
@@ -7868,3 +8091,115 @@ pip check: pass
 ### 未解決事項
 
 - Docker Desktop停止状態からのcold startは、稼働serviceを停止しないため今回は未実施。既存の自動起動経路とtestは維持している。
+
+## 2026-08-29 Codex初期clip選定をアップロード工程へ統合
+
+### 目的
+
+- 再提案ではなく、新規動画のアップロード工程からChatGPT認証済みCodexを使い、通常切り抜きとショートの初期区間を直接選定する。
+
+### 現在状態・変更
+
+- 新規の自動作成は`Codexで初期選定`を既定ONにした。手動作成・完成動画の再編集は従来選定を維持する。
+- ローカルで動画確認、文字起こし、scene検出、人気区間JSON読込を終えた後、時刻付き全文字幕・heatmap・作成本数・狙う場面・除外条件をCodexへ渡す。
+- JSON区間モードONではJSON区間との重なりを必須条件、OFFでは補助情報として扱う。Codexが返した区間は字幕時刻、動画長、本数、重複、JSON条件をbackendで再検証してから既存の境界補正へ渡す。
+- `品質優先`は信頼度`0.6`未満を採用せず、本数不足を許可する。品質優先OFFは指定本数の一致を必須にする。
+- `品質優先`で通常／ショートの片方が0本になっても、もう片方に有効な候補があればJSON区間モードの誤失敗にしない。全種類0本は従来どおり停止する。
+- Docker内の処理からWindowsホストのChatGPTログイン済みCodex CLIへ、`storage/codex_bridge`のrequest／responseを介して接続する。API keyをDockerへ渡さず、job単位のCodex会話IDをホスト専用台帳へ保存する。
+- bridgeはread-onlyで実行し、shell・browser・MCP・plugin等を無効化した。bridge停止、timeout、出力不正時は理由を記録して従来選定へfallbackし、本体起動は継続する。
+- bridgeは処理中に1秒間隔でrequest ID付きheartbeatを共有する。未起動は約12秒、terminal状態は約2秒、処理中heartbeat停止は約17秒で検出し、正常な長時間処理は待機を継続する。
+- 進捗画面にCodexの待機中・選定中・完了・fallbackと選定本数を表示する。
+
+### 変更ファイル
+
+- backend: `app/candidates/codex_initial_selection.py`、`app/jobs/runner.py`、`app/api/jobs.py`、`app/schemas.py`
+- frontend: `app/upload/page.tsx`、`components/ClipSelectionEditor.tsx`、`components/JobProgress.tsx`、`components/SettingsPanel.tsx`、`components/UploadActionBar.tsx`、`lib/types.ts`
+- Windows Launcher: `launcher/codex_bridge.py`、`launcher/controller.py`
+- test: `tests/test_codex_initial_selection.py`、`tests/test_codex_host_bridge.py`、`tests/test_real_pipeline.py`、`tests/test_api_routes.py`、`tests/test_windows_launcher.py`
+
+### 最小検証
+
+- backend pytest: `716 passed / 1 skipped`。
+- backend Ruff、launcher Ruff、frontend typecheck／lint／build: pass。
+- `docker compose config --quiet`、`git diff --check`: pass。
+- ChatGPTログイン済みCodex CLIの実接続smokeで、架空字幕から通常`18.0-108.0秒`、ショート`108.0-144.0秒`を構造化出力し、job会話IDの保存を確認した。
+- `docker compose up -d --build backend frontend worker`後、backend healthy、frontend、Redis、workerが稼働。`/health=200`、`/upload=200`。
+- 実browserの`/upload`で`初期選定: Codex（文字起こし後）`、checkedの`Codexで初期選定`、通常`2本`、ショート`3本`を確認。console error／warning=`0`。
+
+### 未解決事項
+
+- 第1段階では動画frameそのものをCodexへ送らず、時刻付き文字起こし、scene境界、人気区間JSONで選定する。映像内容の直接判定は未実装。
+- Windows Launcher経由のhost bridgeが稼働していない場合は従来選定へfallbackする。
+
+## 2026-08-29 ショート候補の重複防止と自動補充
+
+### 目的
+
+- Codex初期選定で、数秒ずれただけの同じ場面を複数のショートとして採用しない。
+
+### 現在状態・変更
+
+- 要求本数の最大3倍、上限24件までショート候補をCodexへ要求する。例: 3本作成時は最大9候補。
+- 各ショート候補へ`momentKey`、完成区間を含む親区間、根拠字幕ID、heatmap区間IDを保持する。
+- 全候補の境界補正後に、完成区間の重複が1秒超、同一moment、親区間の高重複、根拠字幕／本文の高類似を除外する。
+- JSON区間モードONでは同じheatmap区間の重複採用も除外する。OFFではheatmap一致だけを除外理由にしない。
+- 上位候補が重複した場合は次順位の独立候補で補充する。独立候補が足りない場合は重複で水増しせず、本数不足と理由を記録する。
+- Codex候補のうち、元動画範囲、親区間、字幕根拠、heatmap根拠、ID等が不正なshortはその候補だけを除外し、他の有効候補を維持する。normal候補の不正は従来どおり全体エラーとする。
+- Codex停止時の従来選定と切り抜き予定の再選定も、全自動候補の境界補正後に同じhard重複判定を実行する。重複を除外して再選定し、次候補で補充する。
+- 通常clip、手動候補、hook複製はショート同士の重複判定対象外とした。通常との重複検査は既存の`crossTypeOverlapDedupe=true`時だけ維持する。
+- Codexの全候補poolを候補fileへ保持し、最終選定後の本数をsummaryへ反映する。Codex失敗時の従来選定fallbackは維持する。
+
+### 変更ファイル
+
+- backend: `app/candidates/codex_initial_selection.py`、`app/candidates/merge_boundaries.py`、`app/candidates/short_diversity.py`、`app/jobs/runner.py`
+- Windows Launcher: `launcher/codex_bridge.py`
+- test: `tests/test_codex_initial_selection.py`、`tests/test_short_diversity.py`、`tests/test_real_pipeline.py`
+
+### 最小検証
+
+- 対象test: `141 passed`。
+- backend全test: `741 passed / 1 skipped`。
+- backend／launcher Ruff、frontend typecheck／lint／build: pass。
+- response schema hashはbackend／host bridgeで`a419f3346e5a666d393a6c22a55ee980a1db1f48646b3c545c596b34962165e3`に一致。
+- Compose再構築後、backendはhealthy、workerは`autoclipperweb-worker-gpu`かつGPU device requestあり、`/health=ok`。
+- host bridgeを再起動し、`schemaVersion=1`、`state=ready`、処理中requestなしを確認した。
+
+### 未解決事項
+
+- 実際の1時間動画を使った新規jobで、3本すべてが内容面でも独立するかの受入確認は未実施。
+- 再選定はCodexを再呼出ししない既存仕様のまま。保存済み候補を使う再選定にも最終重複排除は適用する。
+
+## 2026-08-29 自動化モード契約と判断manifest（Phase 1）
+
+### 目的
+
+- 既存の手動確認フローを保ったまま、段階的な完全自動化へ進む共通モードと判断追跡契約を追加する。
+
+### 現在状態・変更
+
+- `automationMode`を`manual / shadow / guarded / auto`で共通定義した。既定は`manual`。
+- `manual`は既存のreview flagと処理遷移を変更しない。
+- `shadow`は選択可能。字幕焼き込み、切り抜き予定確認、字幕確認を必須にし、既存出力を変えず自動判断の入力・役割・制限を記録する。
+- `guarded / auto`は品質ゲート未実装のため、frontendで選択不可、backend APIでも`422`としてfail closedにした。
+- job開始時に`automation_manifest.json`を原子的に保存し、`schemaVersion`、要求／実効モード、`decisionInputHash`、工程別の担当、未接続機能を記録する。ZIPとjob詳細からも追跡できる。
+- manual upload、manual workflow、完成clip再編集は`manual`へ固定し、旧payloadで`automationMode`が欠ける場合も`manual`として互換処理する。
+
+### 変更ファイル
+
+- backend: `app/schemas.py`、`app/jobs/automation.py`、`app/jobs/runner.py`、`app/api/jobs.py`
+- frontend: `lib/types.ts`、`components/SettingsPanel.tsx`、`app/upload/page.tsx`
+- test: `tests/test_automation_contract.py`、`tests/test_api_routes.py`、`tests/test_real_pipeline.py`
+
+### 最小検証
+
+- backend全test: `754 passed / 1 skipped`。
+- backend／launcher Ruff、frontend typecheck／lint／build: pass。
+- `docker compose config --quiet`、`git diff --check`: pass。
+- frontend／backend／GPU workerを再構築し、backend healthy、worker runtime=`gpu`、`/health=ok`を確認した。
+- 実browserで`manual / shadow`選択、`shadow`時の確認項目強制、確認解除時の`manual`復帰、`guarded / auto`無効、fresh tabのconsole error／warning=`0`を確認した。
+
+### 未解決事項
+
+- `guarded / auto`に必要なローカル品質ゲートは未実装。
+- タイトル／フックの自動決定、最終画角・帯・字幕・音声の自動品質判定は未接続。
+- 実際の1時間動画を使ったGPU jobのPhase 1受入確認は未実施。

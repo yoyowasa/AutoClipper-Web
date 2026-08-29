@@ -6,12 +6,20 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import urllib.request
 import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .codex_bridge import (
+    BRIDGE_PROTOCOL_VERSION,
+    atomic_write_json,
+    bridge_paths,
+    process_is_running,
+)
 
 
 REQUIRED_SERVICES = ("backend", "frontend", "worker", "redis")
@@ -179,6 +187,8 @@ GpuChecker = Callable[[], HostGpu]
 DockerDesktopFinder = Callable[[], Path | None]
 DesktopApplicationStarter = Callable[[Path], None]
 MonotonicClock = Callable[[], float]
+BackgroundProcessStarter = Callable[[Sequence[str], Path], None]
+ProcessChecker = Callable[[int], bool]
 
 
 def find_docker_executable() -> str | None:
@@ -246,6 +256,18 @@ def start_desktop_application(executable: Path) -> None:
     subprocess.Popen(
         [str(executable)],
         cwd=executable.parent,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        close_fds=True,
+    )
+
+
+def start_background_process(command: Sequence[str], cwd: Path) -> None:
+    subprocess.Popen(
+        list(command),
+        cwd=cwd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -389,6 +411,8 @@ class LauncherController:
         gpu_checker: GpuChecker = query_host_nvidia_gpu,
         sleeper: Callable[[float], None] = time.sleep,
         monotonic_clock: MonotonicClock = time.monotonic,
+        background_process_starter: BackgroundProcessStarter = start_background_process,
+        process_checker: ProcessChecker = process_is_running,
     ) -> None:
         self.project_root = Path(project_root).resolve()
         self.command_runner = command_runner
@@ -402,9 +426,14 @@ class LauncherController:
         self.gpu_checker = gpu_checker
         self.sleeper = sleeper
         self.monotonic_clock = monotonic_clock
+        self.background_process_starter = background_process_starter
+        self.process_checker = process_checker
         self.compose_file = self.project_root / "docker-compose.yml"
         self.gpu_compose_file = self.project_root / "docker-compose.gpu.yml"
         self.env_file = self.project_root / ".env"
+        self.codex_bridge_module = self.project_root / "launcher" / "codex_bridge.py"
+        self.codex_bridge_paths = bridge_paths(self.project_root)
+        self.codex_bridge_error: LauncherError | None = None
         self._docker_executable: str | None = None
 
     @property
@@ -449,6 +478,112 @@ class LauncherController:
         if not executable:
             return CommandResult(127, "", "docker executable not found")
         return self._run([executable, *args], timeout=timeout)
+
+    def _codex_bridge_status(self) -> dict[str, object]:
+        path = self.codex_bridge_paths.status
+        if not path.is_file():
+            return {}
+        try:
+            decoded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+
+    def codex_bridge_ready(self) -> bool:
+        status = self._codex_bridge_status()
+        try:
+            pid = int(status.get("pid") or 0)
+        except (TypeError, ValueError):
+            return False
+        return (
+            status.get("schemaVersion") == BRIDGE_PROTOCOL_VERSION
+            and status.get("state") == "ready"
+            and pid > 0
+            and self.process_checker(pid)
+        )
+
+    def ensure_codex_bridge_running(
+        self, *, timeout: float = 20.0, poll_interval: float = 0.25
+    ) -> bool:
+        if not self.codex_bridge_module.is_file():
+            return False
+        if self.codex_bridge_ready():
+            return False
+
+        self.codex_bridge_paths.root.mkdir(parents=True, exist_ok=True)
+        self.codex_bridge_paths.stop_request.unlink(missing_ok=True)
+        baseline_status = self._codex_bridge_status()
+        command = [
+            sys.executable,
+            str(self.codex_bridge_module),
+            "serve",
+            "--project-root",
+            str(self.project_root),
+        ]
+        try:
+            self.background_process_starter(command, self.project_root)
+        except OSError as exc:
+            raise LauncherError(
+                "codex_bridge_start_failed",
+                "Codex bridgeを起動できませんでした。",
+                self.redact(str(exc)),
+            ) from exc
+
+        safe_interval = max(0.05, poll_interval)
+        attempts = max(1, math.ceil(max(0.0, timeout) / safe_interval))
+        for attempt in range(attempts):
+            if self.codex_bridge_ready():
+                return True
+            status = self._codex_bridge_status()
+            if status.get("state") == "error" and status != baseline_status:
+                error_code = str(status.get("errorCode") or "codex_bridge_error")
+                messages = {
+                    "codex_cli_missing": "Codex CLIが見つかりません。",
+                    "codex_login_missing": "Codex CLIへChatGPTでログインしてください。",
+                }
+                raise LauncherError(
+                    error_code,
+                    messages.get(error_code, "Codex bridgeの起動前確認に失敗しました。"),
+                )
+            if attempt < attempts - 1:
+                self.sleeper(safe_interval)
+        raise LauncherError(
+            "codex_bridge_start_timeout",
+            "Codex bridgeの起動待機がtimeoutしました。",
+        )
+
+    def stop_codex_bridge(
+        self, *, timeout: float = 10.0, poll_interval: float = 0.25
+    ) -> bool:
+        if not self.codex_bridge_module.is_file():
+            return False
+        status = self._codex_bridge_status()
+        try:
+            pid = int(status.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid <= 0 or not self.process_checker(pid):
+            self.codex_bridge_paths.stop_request.unlink(missing_ok=True)
+            return False
+
+        atomic_write_json(
+            self.codex_bridge_paths.stop_request,
+            {"requestedAt": time.time()},
+        )
+        safe_interval = max(0.05, poll_interval)
+        attempts = max(1, math.ceil(max(0.0, timeout) / safe_interval))
+        for attempt in range(attempts):
+            if not self.process_checker(pid):
+                return True
+            current = self._codex_bridge_status()
+            if current.get("state") == "stopped":
+                return True
+            if attempt < attempts - 1:
+                self.sleeper(safe_interval)
+        raise LauncherError(
+            "codex_bridge_stop_timeout",
+            "Codex bridgeを停止できませんでした。",
+        )
 
     def ensure_docker_daemon_ready(
         self, *, timeout: float = 180.0, poll_interval: float = 2.0
@@ -834,6 +969,11 @@ class LauncherController:
         selected_profile, fallback_reason = self._select_profile(
             requested_profile, report
         )
+        self.codex_bridge_error = None
+        try:
+            self.ensure_codex_bridge_running(timeout=min(max(timeout, 1.0), 30.0))
+        except LauncherError as exc:
+            self.codex_bridge_error = exc
         compatible_running_profile = report.runtime_status.worker_profile
         already_compatible = report.already_running and (
             compatible_running_profile == selected_profile.key
@@ -947,6 +1087,10 @@ class LauncherController:
 
     def stop(self) -> CommandResult:
         result = self._compose(["stop"], timeout=120.0)
+        try:
+            self.stop_codex_bridge()
+        except LauncherError as exc:
+            self.codex_bridge_error = exc
         if result.returncode != 0:
             raise LauncherError(
                 "compose_stop_failed",

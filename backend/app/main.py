@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import exports, jobs, preferences, videos
+from app.api import exports, jobs, preferences, storage, videos
 from app.config import get_settings
 from app.db import init_db
 
@@ -32,6 +32,7 @@ app.include_router(videos.router)
 app.include_router(jobs.router)
 app.include_router(exports.router)
 app.include_router(preferences.router)
+app.include_router(storage.router)
 
 
 @app.get("/health")

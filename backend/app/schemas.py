@@ -34,9 +34,11 @@ ExportType = Literal["normal", "short"]
 ClipMode = Literal["low_cost", "fast", "high_quality"]
 ClipProfile = Literal["auto", "talk", "gameplay", "lecture"]
 WorkflowMode = Literal["automatic", "manual"]
+AutomationMode = Literal["manual", "shadow", "guarded", "auto"]
 ManualSubtitleMode = Literal["auto", "none", "manual"]
 ShortLayout = Literal["auto", "face_tracking_crop", "center_crop", "blur_background"]
 SelectionPolicy = Literal["fill_requested", "strict_quality"]
+InitialSelectionProvider = Literal["legacy", "codex"]
 ClipSelectionPreset = Literal[
     "auto",
     "highlights",
@@ -245,6 +247,7 @@ class SubtitleStylePresetDocument(BaseModel):
 
 class JobSettings(BaseModel):
     workflow_mode: WorkflowMode = Field(default="automatic", alias="workflowMode")
+    automation_mode: AutomationMode = Field(default="manual", alias="automationMode")
     manual_edit_finalized: bool = Field(default=False, alias="manualEditFinalized")
     manual_subtitle_mode: ManualSubtitleMode = Field(
         default="auto",
@@ -252,8 +255,8 @@ class JobSettings(BaseModel):
     )
     mode: ClipMode = "high_quality"
     profile: ClipProfile = "auto"
-    normal_clip_count: int = Field(default=2, ge=0, alias="normalClipCount")
-    short_count: int = Field(default=3, ge=0, alias="shortCount")
+    normal_clip_count: int = Field(default=2, ge=0, le=12, alias="normalClipCount")
+    short_count: int = Field(default=3, ge=0, le=24, alias="shortCount")
     normal_min_duration: float = Field(default=90.0, gt=0, alias="normalMinDuration")
     normal_max_duration: float = Field(default=600.0, gt=0, alias="normalMaxDuration")
     short_min_duration: float = Field(default=20.0, gt=0, alias="shortMinDuration")
@@ -424,6 +427,10 @@ class JobSettings(BaseModel):
     selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
     cross_type_overlap_dedupe: bool = Field(default=False, alias="crossTypeOverlapDedupe")
     heatmap_interval_mode: bool = Field(default=False, alias="heatmapIntervalMode")
+    initial_selection_provider: InitialSelectionProvider = Field(
+        default="legacy",
+        alias="initialSelectionProvider",
+    )
     use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")
     openai_candidate_limit: int = Field(default=40, ge=0, alias="openaiCandidateLimit")
     openai_model: str = Field(default="gpt-5.5", min_length=1, alias="openaiModel")
@@ -451,6 +458,20 @@ class JobSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_duration_ranges(self) -> "JobSettings":
+        if self.workflow_mode == "manual":
+            self.automation_mode = "manual"
+        elif self.automation_mode in {"guarded", "auto"}:
+            raise ValueError(
+                "automationMode guarded/auto is unavailable until the quality gate is implemented"
+            )
+        elif self.automation_mode == "shadow" and not (
+            self.burn_subtitles
+            and self.require_clip_plan_review
+            and self.require_subtitle_review
+        ):
+            raise ValueError(
+                "automationMode shadow requires subtitle burn-in and both review stops"
+            )
         if self.workflow_mode != "manual" and self.normal_clip_count + self.short_count <= 0:
             raise ValueError("at least one normal clip or short must be requested")
         if self.normal_max_duration < self.normal_min_duration:
@@ -472,7 +493,14 @@ class JobSettings(BaseModel):
         has_automatic_output = (self.normal_clip_count > 0 and not self.normal_clip_time_ranges) or (
             self.short_count > 0 and not self.short_clip_time_ranges
         )
-        if self.workflow_mode == "manual" or not has_automatic_output:
+        has_manual_ranges = bool(
+            self.normal_clip_time_ranges or self.short_clip_time_ranges
+        )
+        if self.workflow_mode == "manual" or not has_automatic_output or has_manual_ranges:
+            self.initial_selection_provider = "legacy"
+            self.use_openai_scoring = False
+            self.ensure_selected_openai_scored = False
+        if self.initial_selection_provider == "codex":
             self.use_openai_scoring = False
             self.ensure_selected_openai_scored = False
         if self.ensure_selected_openai_scored is None:
@@ -811,3 +839,23 @@ class JobResultsResponse(BaseModel):
     audit_summary: JobAuditSummary | None = Field(default=None, alias="auditSummary")
     normal_clips: list[ResultExportItem] = Field(alias="normalClips")
     shorts: list[ResultExportItem]
+
+
+class StorageStatusResponse(BaseModel):
+    storage_bytes: int = Field(alias="storageBytes")
+    storage_limit_bytes: int = Field(alias="storageLimitBytes")
+    disk_free_bytes: int = Field(alias="diskFreeBytes")
+    disk_total_bytes: int = Field(alias="diskTotalBytes")
+    disk_free_percent: float = Field(alias="diskFreePercent")
+    warning: bool
+    reasons: list[str]
+    cleanup_eligible_jobs: int = Field(alias="cleanupEligibleJobs")
+    cleanup_eligible_videos: int = Field(alias="cleanupEligibleVideos")
+
+
+class StorageCleanupResponse(BaseModel):
+    removed_jobs: int = Field(alias="removedJobs")
+    removed_videos: int = Field(alias="removedVideos")
+    removed_files: int = Field(alias="removedFiles")
+    reclaimed_bytes: int = Field(alias="reclaimedBytes")
+    errors: list[str]

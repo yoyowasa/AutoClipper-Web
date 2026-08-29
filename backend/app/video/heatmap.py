@@ -283,8 +283,9 @@ def load_heatmap_for_video(
     original_filename: str,
     actual_duration: float,
     max_sidecar_size_bytes: int,
+    sidecar_path: Path | None = None,
 ) -> HeatmapLoadResult:
-    sidecar_path = heatmap_sidecar_path(media_path)
+    sidecar_path = sidecar_path or heatmap_sidecar_path(media_path)
     if not sidecar_path.is_file():
         return HeatmapLoadResult(
             segments=[],

@@ -26,12 +26,15 @@ from app.jobs.queue import (
     get_enqueue_subtitle_review_preview,
 )
 from app.candidates.merge_boundaries import Candidate
+from app.candidates.codex_initial_selection import CodexInitialSelectionResult
 from app.candidates.select_candidates import CandidateSelection, select_candidates
 from app.jobs.runner import (
     AutoClipperPipelineDependencies,
     PipelineExpectedError,
     _build_openai_scoring_pool,
+    _codex_selection_with_diverse_refined_shorts,
     _ensure_selected_candidates_openai_scored,
+    _require_all_requested_heatmap_candidate_types,
     _score_candidate_list,
     _transcript_quality_diagnostics,
     _transcription_language_setting,
@@ -49,7 +52,6 @@ from app.models import Job
 from app.scoring.openai_score import OpenAICandidateScorer
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.black_screen import BlackScreenSegment, VisualQuality
-from app.video.heatmap import heatmap_sidecar_path
 from app.video.probe import VideoMetadata
 from app.video.scene_detect import SceneSegment
 
@@ -89,9 +91,20 @@ def test_clip_plan_selection_empty_uses_dedicated_failure_code(tmp_path: Path) -
         )
 
     assert exc_info.value.code == "no_usable_selection"
-    assert exc_info.value.message == (
-        "Pipeline completed analysis but selection produced no usable clips."
+    assert exc_info.value.message == ("Pipeline completed analysis but selection produced no usable clips.")
+
+
+def test_heatmap_type_presence_is_relaxed_only_for_codex_strict_quality() -> None:
+    strict_codex_selection = CandidateSelection(
+        selectionPolicy="strict_quality",
+        requestedNormalCount=1,
+        requestedShortCount=1,
     )
+    fill_codex_selection = strict_codex_selection.model_copy(update={"selection_policy": "fill_requested"})
+
+    assert not _require_all_requested_heatmap_candidate_types(strict_codex_selection)
+    assert _require_all_requested_heatmap_candidate_types(fill_codex_selection)
+    assert _require_all_requested_heatmap_candidate_types(None)
 
 
 def test_long_form_quality_detects_clustered_japanese_repetition_and_sparse_coverage() -> None:
@@ -246,9 +259,7 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_storage_paths] = override_get_storage_paths
     app.dependency_overrides[get_enqueue_job] = override_get_enqueue_job
-    app.dependency_overrides[get_enqueue_subtitle_review_preview] = (
-        lambda: lambda job_id, clip_id, spec_hash: None
-    )
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: lambda job_id, clip_id, spec_hash: None
 
     try:
         yield TestClient(app)
@@ -498,8 +509,8 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
                 "useOpenAIScoring": False,
-                    "subtitleCorrectionMode": "openai",
-                    "subtitleCorrectionScope": "suspicious",
+                "subtitleCorrectionMode": "openai",
+                "subtitleCorrectionScope": "suspicious",
                 "subtitleCorrectionBatchSize": 2,
                 "burnSubtitles": True,
                 "normalizeAudio": True,
@@ -564,6 +575,9 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert status_response.json()["details"]["heatmapStatus"] == "applied"
     assert status_response.json()["details"]["heatmapApplied"] is True
     assert status_response.json()["details"]["heatmapSegmentCount"] == 1
+    assert status_response.json()["details"]["automationManifestAvailable"] is True
+    assert status_response.json()["details"]["automationMode"] == "manual"
+    assert status_response.json()["details"]["automationEffectiveMode"] == "manual"
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200
@@ -580,6 +594,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
 
     job_dir = storage.outputs / created["jobId"]
     for name in [
+        "automation_manifest.json",
         "video_metadata.json",
         "heatmap_validation_summary.json",
         "raw_transcript_segments.json",
@@ -587,10 +602,10 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         "transcript_segments.json",
         "transcript_correction_summary.json",
         "transcript_correction_diff.md",
-            "subtitle_correction_progress.json",
-            "transcript_suspicion_segments.json",
-            "transcript_suspicion_summary.json",
-            "subtitle_correction_targets.json",
+        "subtitle_correction_progress.json",
+        "transcript_suspicion_segments.json",
+        "transcript_suspicion_summary.json",
+        "subtitle_correction_targets.json",
         "scene_segments.json",
         "silence_segments.json",
         "audio_features.json",
@@ -604,6 +619,13 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         assert (job_dir / name).is_file()
 
     selected_payload = json.loads((job_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    automation_manifest = json.loads(
+        (job_dir / "automation_manifest.json").read_text(encoding="utf-8")
+    )
+    assert automation_manifest["requestedMode"] == "manual"
+    assert automation_manifest["effectiveMode"] == "manual"
+    assert automation_manifest["roles"]["initialSelection"] == "legacy"
+    assert len(automation_manifest["decisionInputHash"]) == 64
     assert len(selected_payload["normalClips"]) == 1
     assert len(selected_payload["shorts"]) == 1
     selected_normal = selected_payload["normalClips"][0]
@@ -644,9 +666,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert correction_summary["scope"] == "suspicious"
     assert correction_summary["target_segment_count"] == 4
     assert correction_summary["api_call_count"] == 2
-    correction_progress = json.loads(
-        (job_dir / "subtitle_correction_progress.json").read_text(encoding="utf-8")
-    )
+    correction_progress = json.loads((job_dir / "subtitle_correction_progress.json").read_text(encoding="utf-8"))
     assert correction_progress == {
         "stage": "correcting_subtitles",
         "stageProgress": 100,
@@ -662,9 +682,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     status_details = status_response.json()["details"]
     assert status_details["stageProgress"] == 100
     assert status_details["correctionBatchesCompleted"] == 2
-    transcript_postprocess_summary = json.loads(
-        (job_dir / "transcript_postprocess_summary.json").read_text(encoding="utf-8")
-    )
+    transcript_postprocess_summary = json.loads((job_dir / "transcript_postprocess_summary.json").read_text(encoding="utf-8"))
     assert transcript_postprocess_summary["enabled"] is True
     assert transcript_postprocess_summary["segment_count"] == 4
     assert transcript_postprocess_summary["changed_segment_count"] == 1
@@ -734,6 +752,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "metadata/normal/normal_01.json" in names
     assert "metadata/shorts/short_01.json" in names
     assert "metadata/selected_clips.json" in names
+    assert "metadata/automation_manifest.json" in names
     assert "metadata/raw_transcript_segments.json" in names
     assert "metadata/deterministic_transcript_segments.json" in names
     assert "metadata/transcript_correction_summary.json" in names
@@ -856,14 +875,10 @@ def test_pipeline_uses_heatmap_intervals_as_candidate_source_when_mode_is_on(
     assert all(clip["heatmap_seed_value"] == 1.0 for clip in clips)
     assert all(clip["heatmap_direct_score"] > 0 for clip in clips)
 
-    generation_summary = json.loads(
-        (job_dir / "candidate_generation_summary.json").read_text(encoding="utf-8")
-    )
+    generation_summary = json.loads((job_dir / "candidate_generation_summary.json").read_text(encoding="utf-8"))
     assert generation_summary["by_type"]["normal"]["strategy"] == "heatmap_intervals"
     assert generation_summary["by_type"]["short"]["strategy"] == "heatmap_intervals"
-    heatmap_summary = json.loads(
-        (job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8")
-    )
+    heatmap_summary = json.loads((job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8"))
     assert heatmap_summary["interval_mode_requested"] is True
     assert heatmap_summary["interval_mode_applied"] is True
     assert heatmap_summary["selection_behavior"] == "heatmap_intervals"
@@ -1005,30 +1020,19 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
     )
 
     job_dir = storage.job_outputs(created["jobId"])
-    initial_candidates = json.loads(
-        (job_dir / "candidates.json").read_text(encoding="utf-8")
-    )
+    initial_candidates = json.loads((job_dir / "candidates.json").read_text(encoding="utf-8"))
     assert initial_candidates
-    assert all(
-        candidate["generation_source"] == "heatmap_interval"
-        for candidate in initial_candidates
-    )
+    assert all(candidate["generation_source"] == "heatmap_interval" for candidate in initial_candidates)
     initial_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
     initial_clip_ids = {clip["id"] for clip in initial_plan["clips"]}
-    initial_preview_payloads = {
-        clip["previewVideoUrl"]: client.get(clip["previewVideoUrl"]).content
-        for clip in initial_plan["clips"]
-    }
+    initial_preview_payloads = {clip["previewVideoUrl"]: client.get(clip["previewVideoUrl"]).content for clip in initial_plan["clips"]}
     rollback_names = [
         "normal_candidates.json",
         "short_candidates.json",
         "candidates.json",
         "candidate_generation_summary.json",
     ]
-    initial_artifacts = {
-        name: (job_dir / name).read_bytes()
-        for name in rollback_names
-    }
+    initial_artifacts = {name: (job_dir / name).read_bytes() for name in rollback_names}
 
     with next(app.dependency_overrides[get_db]()) as db:
         stored_job = db.get(Job, created["jobId"])
@@ -1041,9 +1045,7 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
         db.commit()
 
     queued_reselections: list[str] = []
-    app.dependency_overrides[get_enqueue_clip_plan_reselection] = (
-        lambda: queued_reselections.append
-    )
+    app.dependency_overrides[get_enqueue_clip_plan_reselection] = lambda: queued_reselections.append
 
     def reselection_payload(mode: bool | str) -> dict[str, Any]:
         return {
@@ -1106,9 +1108,7 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
 
     for name, initial_payload in initial_artifacts.items():
         assert (job_dir / name).read_bytes() == initial_payload
-    rolled_back_plan = client.get(
-        f"/api/jobs/{created['jobId']}/clip-plan"
-    ).json()
+    rolled_back_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
     assert rolled_back_plan["settings"]["heatmapIntervalMode"] is True
     assert {clip["id"] for clip in rolled_back_plan["clips"]} == initial_clip_ids
     assert initial_clip_ids - attempted_clip_ids
@@ -1134,22 +1134,13 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
     )
     assert statuses[-1] == "awaiting_clip_review"
 
-    legacy_candidates = json.loads(
-        (job_dir / "candidates.json").read_text(encoding="utf-8")
-    )
+    legacy_candidates = json.loads((job_dir / "candidates.json").read_text(encoding="utf-8"))
     assert legacy_candidates
-    assert all(
-        candidate.get("generation_source") != "heatmap_interval"
-        for candidate in legacy_candidates
-    )
-    generation_summary = json.loads(
-        (job_dir / "candidate_generation_summary.json").read_text(encoding="utf-8")
-    )
+    assert all(candidate.get("generation_source") != "heatmap_interval" for candidate in legacy_candidates)
+    generation_summary = json.loads((job_dir / "candidate_generation_summary.json").read_text(encoding="utf-8"))
     assert generation_summary["by_type"]["normal"].get("strategy") != "heatmap_intervals"
     assert generation_summary["by_type"]["short"].get("strategy") != "heatmap_intervals"
-    heatmap_summary = json.loads(
-        (job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8")
-    )
+    heatmap_summary = json.loads((job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8"))
     assert heatmap_summary["interval_mode_requested"] is False
     assert heatmap_summary["interval_mode_applied"] is False
     assert heatmap_summary["selection_behavior"] == "supporting_score"
@@ -1204,8 +1195,8 @@ def test_pipeline_fails_instead_of_falling_back_when_interval_sidecar_is_tampere
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, created["jobId"])
         assert job is not None
-        video_path = storage.resolve_stored_file(job.video.stored_path)
-    heatmap_sidecar_path(video_path).write_text("{}", encoding="utf-8")
+        sidecar_path = storage.resolve_video_heatmap(job.video.id, job.video.stored_path)
+    sidecar_path.write_text("{}", encoding="utf-8")
 
     run_autoclipper_job(
         created["jobId"],
@@ -1225,11 +1216,7 @@ def test_pipeline_fails_instead_of_falling_back_when_interval_sidecar_is_tampere
     status = client.get(f"/api/jobs/{created['jobId']}").json()
     assert status["status"] == "failed"
     assert status["error"]["code"] == "heatmap_interval_mode_unavailable"
-    summary = json.loads(
-        (storage.job_outputs(created["jobId"]) / "heatmap_validation_summary.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    summary = json.loads((storage.job_outputs(created["jobId"]) / "heatmap_validation_summary.json").read_text(encoding="utf-8"))
     assert summary["status"] == "invalid_fallback"
     assert summary["interval_mode_requested"] is True
     assert summary["interval_mode_applied"] is False
@@ -1361,30 +1348,16 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         dependencies=dependencies,
     )
 
-    selected = json.loads(
-        (storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert [
-        (clip["start"], clip["end"], clip["selection_reason"])
-        for clip in selected["normalClips"]
-    ] == [(5.0, 55.0, "manual_time_range")]
-    assert [
-        (clip["start"], clip["end"], clip["selection_reason"])
-        for clip in selected["shorts"]
-    ] == [
+    selected = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
+    assert [(clip["start"], clip["end"], clip["selection_reason"]) for clip in selected["normalClips"]] == [
+        (5.0, 55.0, "manual_time_range")
+    ]
+    assert [(clip["start"], clip["end"], clip["selection_reason"]) for clip in selected["shorts"]] == [
         (60.0, 75.0, "manual_time_range"),
         (150.0, 180.0, "manual_time_range"),
     ]
-    assert all(
-        clip["boundary_refinement_reason"] == "manual_time_range_locked"
-        for clip in [*selected["normalClips"], *selected["shorts"]]
-    )
-    assert all(
-        clip["heatmap_value"] == 0.6
-        for clip in [*selected["normalClips"], *selected["shorts"]]
-    )
+    assert all(clip["boundary_refinement_reason"] == "manual_time_range_locked" for clip in [*selected["normalClips"], *selected["shorts"]])
+    assert all(clip["heatmap_value"] == 0.6 for clip in [*selected["normalClips"], *selected["shorts"]])
     assert not (storage.job_outputs(created["jobId"]) / "openai_scoring_summary.json").exists()
     assert visited_statuses[-1] == "awaiting_clip_review"
     output_dir = storage.job_outputs(created["jobId"])
@@ -1406,17 +1379,11 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     assert client.get(plan["clips"][0]["previewVideoUrl"]).content == b"preview"
     assert len(preview_render_calls) == 3
     transcript_preview = client.get(
-        (
-            f"/api/jobs/{created['jobId']}/clip-plan/clips/"
-            f"{plan['clips'][0]['id']}/transcript-segments"
-        ),
+        (f"/api/jobs/{created['jobId']}/clip-plan/clips/{plan['clips'][0]['id']}/transcript-segments"),
         params={"start": 2, "end": 58},
     )
     assert transcript_preview.status_code == 200
-    assert [
-        (segment["start"], segment["end"], segment["text"])
-        for segment in transcript_preview.json()
-    ] == [
+    assert [(segment["start"], segment["end"], segment["text"]) for segment in transcript_preview.json()] == [
         (0.0, 30.0, "why automation mistakes matter before launch"),
         (
             35.0,
@@ -1425,10 +1392,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         ),
     ]
     invalid_transcript_preview = client.get(
-        (
-            f"/api/jobs/{created['jobId']}/clip-plan/clips/"
-            f"{plan['clips'][0]['id']}/transcript-segments"
-        ),
+        (f"/api/jobs/{created['jobId']}/clip-plan/clips/{plan['clips'][0]['id']}/transcript-segments"),
         params={"start": 58, "end": 2},
     )
     assert invalid_transcript_preview.status_code == 422
@@ -1441,9 +1405,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     def fail_reselection_enqueue(_job_id: str) -> None:
         raise RuntimeError("queue unavailable")
 
-    app.dependency_overrides[get_enqueue_clip_plan_reselection] = (
-        lambda: fail_reselection_enqueue
-    )
+    app.dependency_overrides[get_enqueue_clip_plan_reselection] = lambda: fail_reselection_enqueue
     failed_reselect_response = client.post(
         f"/api/jobs/{created['jobId']}/clip-plan/reselect",
         json={
@@ -1462,14 +1424,10 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         stored_job = db.get(Job, created["jobId"])
         assert stored_job is not None
         assert stored_job.settings_json == settings_before_queue_failure
-    assert client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()[
-        "state"
-    ] == "awaiting_review"
+    assert client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()["state"] == "awaiting_review"
 
     queued_reselections: list[str] = []
-    app.dependency_overrides[get_enqueue_clip_plan_reselection] = (
-        lambda: queued_reselections.append
-    )
+    app.dependency_overrides[get_enqueue_clip_plan_reselection] = lambda: queued_reselections.append
     reselect_response = client.post(
         f"/api/jobs/{created['jobId']}/clip-plan/reselect",
         json={
@@ -1499,22 +1457,12 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     assert revised_plan["revision"] == 2
     assert revised_plan["settings"]["normalClipGuidance"] == "結論を優先"
     assert revised_plan["settings"]["heatmapIntervalMode"] is True
-    reselected = json.loads(
-        (output_dir / "selected_clips.json").read_text(encoding="utf-8")
-    )
-    assert all(
-        clip["heatmap_value"] == 0.6
-        for clip in [*reselected["normalClips"], *reselected["shorts"]]
-    )
-    assert client.get(f"/api/jobs/{created['jobId']}").json()["details"][
-        "clipPlanRevision"
-    ] == 2
+    reselected = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    assert all(clip["heatmap_value"] == 0.6 for clip in [*reselected["normalClips"], *reselected["shorts"]])
+    assert client.get(f"/api/jobs/{created['jobId']}").json()["details"]["clipPlanRevision"] == 2
 
     invalid_boundary = client.patch(
-        (
-            f"/api/jobs/{created['jobId']}/clip-plan/clips/"
-            f"{revised_plan['clips'][0]['id']}/boundary"
-        ),
+        (f"/api/jobs/{created['jobId']}/clip-plan/clips/{revised_plan['clips'][0]['id']}/boundary"),
         json={"start": 2, "end": 241},
     )
     assert invalid_boundary.status_code == 422
@@ -1527,29 +1475,18 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     ) -> None:
         raise RuntimeError("queue unavailable")
 
-    app.dependency_overrides[get_enqueue_clip_plan_boundary_update] = (
-        lambda: fail_boundary_enqueue
-    )
+    app.dependency_overrides[get_enqueue_clip_plan_boundary_update] = lambda: fail_boundary_enqueue
     failed_boundary_response = client.patch(
-        (
-            f"/api/jobs/{created['jobId']}/clip-plan/clips/"
-            f"{revised_plan['clips'][0]['id']}/boundary"
-        ),
+        (f"/api/jobs/{created['jobId']}/clip-plan/clips/{revised_plan['clips'][0]['id']}/boundary"),
         json={"start": 2, "end": 58},
     )
     assert failed_boundary_response.status_code == 503
-    assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == (
-        "awaiting_clip_review"
-    )
-    assert client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()[
-        "state"
-    ] == "awaiting_review"
+    assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == ("awaiting_clip_review")
+    assert client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()["state"] == "awaiting_review"
 
     queued_boundary_updates: list[tuple[str, str, float, float]] = []
-    app.dependency_overrides[get_enqueue_clip_plan_boundary_update] = (
-        lambda: lambda job_id, clip_id, start, end: queued_boundary_updates.append(
-            (job_id, clip_id, start, end)
-        )
+    app.dependency_overrides[get_enqueue_clip_plan_boundary_update] = lambda: (
+        lambda job_id, clip_id, start, end: queued_boundary_updates.append((job_id, clip_id, start, end))
     )
     adjusted_clip_id = revised_plan["clips"][0]["id"]
     boundary_response = client.patch(
@@ -1558,9 +1495,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     )
     assert boundary_response.status_code == 202
     assert boundary_response.json()["status"] == "preparing_clip_review"
-    assert queued_boundary_updates == [
-        (created["jobId"], adjusted_clip_id, 2.0, 58.0)
-    ]
+    assert queued_boundary_updates == [(created["jobId"], adjusted_clip_id, 2.0, 58.0)]
 
     boundary_statuses = run_clip_plan_boundary_update(
         created["jobId"],
@@ -1576,49 +1511,32 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         "awaiting_clip_review",
     ]
     adjusted_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
-    adjusted_item = next(
-        clip for clip in adjusted_plan["clips"] if clip["id"] == adjusted_clip_id
-    )
+    adjusted_item = next(clip for clip in adjusted_plan["clips"] if clip["id"] == adjusted_clip_id)
     assert (adjusted_item["start"], adjusted_item["end"]) == (2.0, 58.0)
     assert adjusted_item["duration"] == 56.0
     assert adjusted_item["recommendedStart"] == 5.0
     assert adjusted_item["recommendedEnd"] == 55.0
     assert adjusted_item["manuallyAdjusted"] is True
-    selected_after_boundary = json.loads(
-        (output_dir / "selected_clips.json").read_text(encoding="utf-8")
-    )
+    selected_after_boundary = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
     assert (
         selected_after_boundary["normalClips"][0]["start"],
         selected_after_boundary["normalClips"][0]["end"],
     ) == (2.0, 58.0)
-    assert selected_after_boundary["normalClips"][0][
-        "clip_plan_boundary_adjusted"
-    ] is True
+    assert selected_after_boundary["normalClips"][0]["clip_plan_boundary_adjusted"] is True
     assert len(preview_render_calls) == 4
     assert preview_render_calls[-1][1:] == (2.0, 56.0)
 
-    short_clip = next(
-        clip for clip in adjusted_plan["clips"] if clip["type"] == "short"
-    )
-    queued_hook_updates: list[
-        tuple[str, str, float | None, float | None]
-    ] = []
-    app.dependency_overrides[get_enqueue_clip_plan_hook_scene_update] = (
-        lambda: lambda job_id, clip_id, start, end: queued_hook_updates.append(
-            (job_id, clip_id, start, end)
-        )
+    short_clip = next(clip for clip in adjusted_plan["clips"] if clip["type"] == "short")
+    queued_hook_updates: list[tuple[str, str, float | None, float | None]] = []
+    app.dependency_overrides[get_enqueue_clip_plan_hook_scene_update] = lambda: (
+        lambda job_id, clip_id, start, end: queued_hook_updates.append((job_id, clip_id, start, end))
     )
     hook_response = client.patch(
-        (
-            f"/api/jobs/{created['jobId']}/clip-plan/clips/"
-            f"{short_clip['id']}/hook-scene"
-        ),
+        (f"/api/jobs/{created['jobId']}/clip-plan/clips/{short_clip['id']}/hook-scene"),
         json={"start": 68, "end": 70},
     )
     assert hook_response.status_code == 202
-    assert queued_hook_updates == [
-        (created["jobId"], short_clip["id"], 68.0, 70.0)
-    ]
+    assert queued_hook_updates == [(created["jobId"], short_clip["id"], 68.0, 70.0)]
 
     hook_statuses = run_clip_plan_hook_scene_update(
         created["jobId"],
@@ -1634,18 +1552,14 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         "awaiting_clip_review",
     ]
     hook_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
-    hook_item = next(
-        clip for clip in hook_plan["clips"] if clip["id"] == short_clip["id"]
-    )
+    hook_item = next(clip for clip in hook_plan["clips"] if clip["id"] == short_clip["id"])
     assert (hook_item["hookSceneStart"], hook_item["hookSceneEnd"]) == (
         68.0,
         70.0,
     )
     assert preview_render_details[-1]["hook_start"] == 68.0
     assert preview_render_details[-1]["hook_duration"] == 2.0
-    selected_after_hook = json.loads(
-        (output_dir / "selected_clips.json").read_text(encoding="utf-8")
-    )
+    selected_after_hook = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
     assert selected_after_hook["shorts"][0]["hook_scene_start"] == 68.0
     assert selected_after_hook["shorts"][0]["hook_scene_end"] == 70.0
 
@@ -1659,26 +1573,14 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
             settings["shortOverlayTitleMode"] = stored_overlay_mode
         job.settings_json = settings
         db.commit()
-    approve_response = client.post(
-        f"/api/jobs/{created['jobId']}/clip-plan/approve"
-    )
+    approve_response = client.post(f"/api/jobs/{created['jobId']}/clip-plan/approve")
     assert approve_response.status_code == 200
     assert approve_response.json()["status"] == "awaiting_subtitle_review"
-    stored_review = json.loads(
-        (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
-    )
+    stored_review = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
     assert stored_review["shortOverlayTitleMode"] == expected_overlay_mode
+    assert all(clip["overlayTitleExpected"] is True for clip in stored_review["clips"] if clip["type"] == "normal")
     assert all(
-        clip["overlayTitleExpected"] is True
-        for clip in stored_review["clips"]
-        if clip["type"] == "normal"
-    )
-    assert all(
-        clip["overlayTitleExpected"]
-        is (
-            stored_review["shortTopBannerEnabled"]
-            or expected_overlay_mode != "never"
-        )
+        clip["overlayTitleExpected"] is (stored_review["shortTopBannerEnabled"] or expected_overlay_mode != "never")
         for clip in stored_review["clips"]
         if clip["type"] == "short"
     )
@@ -1688,9 +1590,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         (60.0, 75.0),
         (150.0, 180.0),
     ]
-    reviewed_short = next(
-        clip for clip in review["clips"] if clip["id"] == short_clip["id"]
-    )
+    reviewed_short = next(clip for clip in review["clips"] if clip["id"] == short_clip["id"])
     assert (reviewed_short["hookSceneStart"], reviewed_short["hookSceneEnd"]) == (
         68.0,
         70.0,
@@ -1794,11 +1694,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     )
 
     def render_queued_previews(review_payload: dict[str, Any]) -> dict[str, Any]:
-        queued_clips = [
-            clip
-            for clip in review_payload["clips"]
-            if clip["previewState"] != "ready"
-        ]
+        queued_clips = [clip for clip in review_payload["clips"] if clip["previewState"] != "ready"]
         for clip in queued_clips:
             assert run_subtitle_review_preview(
                 created["jobId"],
@@ -1808,14 +1704,9 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
                 paths=storage,
                 dependencies=dependencies,
             ) == ["ready"]
-        refreshed = client.get(
-            f"/api/jobs/{created['jobId']}/subtitle-review"
-        )
+        refreshed = client.get(f"/api/jobs/{created['jobId']}/subtitle-review")
         assert refreshed.status_code == 200
-        assert all(
-            clip["previewState"] == "ready"
-            for clip in refreshed.json()["clips"]
-        )
+        assert all(clip["previewState"] == "ready" for clip in refreshed.json()["clips"])
         return refreshed.json()
 
     visited_statuses = run_autoclipper_job(
@@ -1833,23 +1724,11 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert client.get(f"/api/jobs/{created['jobId']}/results").json()["normalClips"] == []
     assert client.get(f"/api/jobs/{created['jobId']}/source-video").content == b"fake video bytes"
 
-    stored_review = json.loads(
-        (
-            storage.job_outputs(created["jobId"]) / "subtitle_review.json"
-        ).read_text(encoding="utf-8")
-    )
+    stored_review = json.loads((storage.job_outputs(created["jobId"]) / "subtitle_review.json").read_text(encoding="utf-8"))
     assert stored_review["shortOverlayTitleMode"] == expected_overlay_mode
+    assert all(clip["overlayTitleExpected"] is True for clip in stored_review["clips"] if clip["type"] == "normal")
     assert all(
-        clip["overlayTitleExpected"] is True
-        for clip in stored_review["clips"]
-        if clip["type"] == "normal"
-    )
-    assert all(
-        clip["overlayTitleExpected"]
-        is (
-            stored_review["shortTopBannerEnabled"]
-            or expected_overlay_mode != "never"
-        )
+        clip["overlayTitleExpected"] is (stored_review["shortTopBannerEnabled"] or expected_overlay_mode != "never")
         for clip in stored_review["clips"]
         if clip["type"] == "short"
     )
@@ -1872,9 +1751,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert preview_response.status_code == 200
     assert preview_response.headers["content-type"].startswith("video/mp4")
     assert preview_response.content.startswith(b"rendered")
-    live_preview_response = client.get(
-        review["clips"][0]["livePreviewVideoUrl"]
-    )
+    live_preview_response = client.get(review["clips"][0]["livePreviewVideoUrl"])
     assert live_preview_response.status_code == 200
     assert live_preview_response.headers["content-type"].startswith("video/mp4")
     assert live_preview_response.content.startswith(b"rendered")
@@ -1888,9 +1765,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         },
     )
     assert content_updated.status_code == 200
-    updated_short = next(
-        clip for clip in content_updated.json()["clips"] if clip["id"] == short_clip["id"]
-    )
+    updated_short = next(clip for clip in content_updated.json()["clips"] if clip["id"] == short_clip["id"])
     assert updated_short["titleEdited"] is True
     assert updated_short["hookText"] == "魚の耳には、本当に「石」が入ってるらしい"
     edited_segment = next(
@@ -1908,24 +1783,13 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert blocked.status_code == 409
 
     review = updated.json()
-    queued_clip = next(
-        clip for clip in review["clips"] if clip["previewState"] != "ready"
-    )
-    preview_blocked = client.post(
-        (
-            f"/api/jobs/{created['jobId']}/subtitle-review/clips/"
-            f"{queued_clip['id']}/confirm"
-        )
-    )
+    queued_clip = next(clip for clip in review["clips"] if clip["previewState"] != "ready")
+    preview_blocked = client.post((f"/api/jobs/{created['jobId']}/subtitle-review/clips/{queued_clip['id']}/confirm"))
     assert preview_blocked.status_code == 409
-    assert preview_blocked.json()["detail"]["code"] == (
-        "subtitle_review_preview_not_ready"
-    )
+    assert preview_blocked.json()["detail"]["code"] == ("subtitle_review_preview_not_ready")
     review = render_queued_previews(review)
     for clip in review["clips"]:
-        response = client.post(
-            f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm"
-        )
+        response = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm")
         assert response.status_code == 200
         review = response.json()
     assert review["confirmedClipCount"] == review["totalClipCount"] == 2
@@ -1959,22 +1823,13 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert completed_review["state"] == "completed"
     assert completed_review["editedSegmentCount"] == 1
     reviewed_transcript = json.loads(
-        (storage.job_outputs(created["jobId"]) / "reviewed_transcript_segments.json").read_text(
-            encoding="utf-8"
-        )
+        (storage.job_outputs(created["jobId"]) / "reviewed_transcript_segments.json").read_text(encoding="utf-8")
     )
     assert reviewed_transcript[edited_segment["index"]]["text"] == "ManualEdit"
-    ass_text = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in (storage.job_outputs(created["jobId"]) / "subtitles").rglob("*.ass")
-    )
+    ass_text = "\n".join(path.read_text(encoding="utf-8") for path in (storage.job_outputs(created["jobId"]) / "subtitles").rglob("*.ass"))
     assert "ManualEdit" in ass_text
     assert "魚の耳には、本当に「石」が入ってるらしい" in ass_text
-    selected_clips = json.loads(
-        (storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    selected_clips = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
     rendered_short = selected_clips["shorts"][0]
     assert rendered_short["title"] == "魚は「耳石」で音を聞く？"
     assert rendered_short["title_source"] == "manual_review"
@@ -1986,27 +1841,18 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert len(first_results["normalClips"]) == 1
     assert len(first_results["shorts"]) == 1
 
-    reopened = client.post(
-        f"/api/jobs/{created['jobId']}/subtitle-review/reopen"
-    )
+    reopened = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/reopen")
     assert reopened.status_code == 200
     reopened_review = reopened.json()
     assert reopened_review["state"] == "awaiting_review"
     assert reopened_review["renderRevision"] == 2
     assert reopened_review["confirmedClipCount"] == 0
     assert all(not clip["confirmed"] for clip in reopened_review["clips"])
-    assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == (
-        "awaiting_subtitle_review"
-    )
+    assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == ("awaiting_subtitle_review")
 
-    reopened_short = next(
-        clip for clip in reopened_review["clips"] if clip["type"] == "short"
-    )
+    reopened_short = next(clip for clip in reopened_review["clips"] if clip["type"] == "short")
     retitled = client.patch(
-        (
-            f"/api/jobs/{created['jobId']}/subtitle-review/clips/"
-            f"{reopened_short['id']}/content"
-        ),
+        (f"/api/jobs/{created['jobId']}/subtitle-review/clips/{reopened_short['id']}/content"),
         json={
             "title": "完成後に変更したタイトル",
             "hookText": "完成後に変更したフック",
@@ -2018,25 +1864,16 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
 
     hook_start = reopened_short["start"] + 1.0
     hook_end = hook_start + 2.0
-    queued_hook_updates: list[
-        tuple[str, str, float | None, float | None]
-    ] = []
-    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = (
-        lambda: lambda job_id, clip_id, start, end: queued_hook_updates.append(
-            (job_id, clip_id, start, end)
-        )
+    queued_hook_updates: list[tuple[str, str, float | None, float | None]] = []
+    app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = lambda: (
+        lambda job_id, clip_id, start, end: queued_hook_updates.append((job_id, clip_id, start, end))
     )
     hook_update = client.patch(
-        (
-            f"/api/jobs/{created['jobId']}/subtitle-review/clips/"
-            f"{reopened_short['id']}/hook-scene"
-        ),
+        (f"/api/jobs/{created['jobId']}/subtitle-review/clips/{reopened_short['id']}/hook-scene"),
         json={"start": hook_start, "end": hook_end},
     )
     assert hook_update.status_code == 202
-    assert queued_hook_updates == [
-        (created["jobId"], reopened_short["id"], hook_start, hook_end)
-    ]
+    assert queued_hook_updates == [(created["jobId"], reopened_short["id"], hook_start, hook_end)]
 
     hook_statuses = run_subtitle_review_hook_scene_update(
         created["jobId"],
@@ -2051,14 +1888,8 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         "preparing_subtitle_review",
         "awaiting_subtitle_review",
     ]
-    reopened_review = client.get(
-        f"/api/jobs/{created['jobId']}/subtitle-review"
-    ).json()
-    updated_short = next(
-        clip
-        for clip in reopened_review["clips"]
-        if clip["id"] == reopened_short["id"]
-    )
+    reopened_review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
+    updated_short = next(clip for clip in reopened_review["clips"] if clip["id"] == reopened_short["id"])
     assert updated_short["title"] == "完成後に変更したタイトル"
     assert (updated_short["hookSceneStart"], updated_short["hookSceneEnd"]) == (
         hook_start,
@@ -2068,16 +1899,12 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert updated_short["previewState"] == "ready"
 
     for clip in reopened_review["clips"]:
-        response = client.post(
-            f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm"
-        )
+        response = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm")
         assert response.status_code == 200
         reopened_review = response.json()
 
     queued_jobs.clear()
-    rerender_queued = client.post(
-        f"/api/jobs/{created['jobId']}/subtitle-review/finalize"
-    )
+    rerender_queued = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/finalize")
     assert rerender_queued.status_code == 202
     assert queued_jobs == [created["jobId"]]
     rerender_statuses = run_subtitle_review_render(
@@ -2088,36 +1915,22 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     )
     assert rerender_statuses[-1] == "completed"
 
-    rerendered_results = client.get(
-        f"/api/jobs/{created['jobId']}/results"
-    ).json()
+    rerendered_results = client.get(f"/api/jobs/{created['jobId']}/results").json()
     assert rerendered_results["canReopenForEditing"] is True
     assert len(rerendered_results["normalClips"]) == 1
     assert len(rerendered_results["shorts"]) == 1
     assert rerendered_results["shorts"][0]["title"] == "完成後に変更したタイトル"
-    rerendered_selection = json.loads(
-        (
-            storage.job_outputs(created["jobId"]) / "selected_clips.json"
-        ).read_text(encoding="utf-8")
-    )
+    rerendered_selection = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
     assert (
         rerendered_selection["shorts"][0]["hook_scene_start"],
         rerendered_selection["shorts"][0]["hook_scene_end"],
     ) == (hook_start, hook_end)
-    assert not (
-        storage.temp
-        / "rr"
-        / f"{created['jobId'][-12:]}_r2"
-    ).exists()
+    assert not (storage.temp / "rr" / f"{created['jobId'][-12:]}_r2").exists()
 
-    reopened_again = client.post(
-        f"/api/jobs/{created['jobId']}/subtitle-review/reopen"
-    ).json()
+    reopened_again = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/reopen").json()
     reopened_again = render_queued_previews(reopened_again)
     for clip in reopened_again["clips"]:
-        client.post(
-            f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm"
-        )
+        client.post(f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm")
     client.post(f"/api/jobs/{created['jobId']}/subtitle-review/finalize")
 
     def failing_render(
@@ -2306,13 +2119,9 @@ def test_real_pipeline_openai_failure_falls_back_to_rule_scoring(client: TestCli
 
     status_response = client.get(f"/api/jobs/{created['jobId']}")
     assert status_response.json()["status"] == "completed"
-    scored_payload = json.loads(
-        (storage.outputs / created["jobId"] / "scored_candidates.json").read_text(encoding="utf-8")
-    )
+    scored_payload = json.loads((storage.outputs / created["jobId"] / "scored_candidates.json").read_text(encoding="utf-8"))
     assert any("openai_fallback_rule_score" in item["risk_flags"] for item in scored_payload)
-    openai_summary = json.loads(
-        (storage.outputs / created["jobId"] / "openai_scoring_summary.json").read_text(encoding="utf-8")
-    )
+    openai_summary = json.loads((storage.outputs / created["jobId"] / "openai_scoring_summary.json").read_text(encoding="utf-8"))
     assert openai_summary["candidates_sent_to_openai"] > 0
     assert openai_summary["fallback_scores"] > 0
     assert openai_summary["candidates_eligible_for_openai_scoring"] > 0
@@ -2470,13 +2279,9 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
     assert len(results["shorts"]) == 1
     assert client.get(results["shorts"][0]["downloadUrl"]).content.startswith(b"rendered short_")
 
-    transcript_payload = json.loads(
-        (storage.outputs / created["jobId"] / "transcript_segments.json").read_text(encoding="utf-8")
-    )
+    transcript_payload = json.loads((storage.outputs / created["jobId"] / "transcript_segments.json").read_text(encoding="utf-8"))
     assert transcript_payload[0]["text"].startswith("Why automation mistakes matter before launch.")
-    transcript_summary = json.loads(
-        (storage.outputs / created["jobId"] / "transcript_summary.json").read_text(encoding="utf-8")
-    )
+    transcript_summary = json.loads((storage.outputs / created["jobId"] / "transcript_summary.json").read_text(encoding="utf-8"))
     assert transcript_summary["transcription_engine"] == "e2e_fixture"
     assert transcript_summary["transcription_model"] == "fixture"
     assert transcript_summary["transcription_language"] == "fixture"
@@ -2802,6 +2607,284 @@ def test_real_pipeline_fails_silent_audio_before_transcription_and_candidates(cl
     assert not (storage.temp / created["jobId"]).exists()
 
 
+def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("codex-source.mp4", b"fake media", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "initialSelectionProvider": "codex",
+                "normalClipCount": 1,
+                "shortCount": 1,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 180,
+                "shortMinDuration": 20,
+                "shortMaxDuration": 75,
+                "enableBoundaryRefinement": False,
+                "burnSubtitles": False,
+            },
+        },
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    selector_calls: list[dict[str, Any]] = []
+
+    normal = Candidate(
+        id="codex-normal",
+        type="normal",
+        start=0.0,
+        end=100.0,
+        duration=100.0,
+        transcript_text="why automation mistakes matter before launch",
+        rule_score=95.0,
+        ai_score=95.0,
+        final_score=95.0,
+        should_use=True,
+        reason="Codex selected a complete topic.",
+        selection_reason="codex_direct",
+        used_ai_score=True,
+    )
+    short = Candidate(
+        id="codex-short",
+        type="short",
+        start=145.0,
+        end=175.0,
+        duration=30.0,
+        transcript_text="another complete section for a normal clip selection",
+        rule_score=92.0,
+        ai_score=92.0,
+        final_score=92.0,
+        should_use=True,
+        reason="Codex selected a concise section.",
+        selection_reason="codex_direct",
+        used_ai_score=True,
+    )
+
+    def fake_codex_selector(**kwargs: Any) -> CodexInitialSelectionResult:
+        selector_calls.append(kwargs)
+        selection = CandidateSelection(
+            normalClips=[normal],
+            shorts=[short],
+            selectionPolicy="strict_quality",
+            requestedNormalCount=1,
+            requestedShortCount=1,
+        )
+        return CodexInitialSelectionResult(
+            selection=selection,
+            candidates=[normal, short],
+            summary={
+                "provider": "codex",
+                "status": "completed",
+                "fallbackUsed": False,
+                "error": None,
+                "requestedNormalCount": 1,
+                "requestedShortCount": 1,
+                "selectedNormalCount": 1,
+                "selectedShortCount": 1,
+                "threadId": "019fc2f6-d3cc-72b1-a68e-cd810a2e1fa6",
+            },
+        )
+
+    def forbidden(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("legacy selection path must not run")
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"rendered")
+        return Path(output_path)
+
+    monkeypatch.setattr(runner_module, "generate_normal_candidates_with_summary", forbidden)
+    monkeypatch.setattr(runner_module, "generate_short_candidates_with_summary", forbidden)
+    monkeypatch.setattr(runner_module, "_score_candidate_list", forbidden)
+
+    visited = run_autoclipper_job(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=AutoClipperPipelineDependencies(
+            probe_metadata=lambda _path: VideoMetadata(
+                duration=240.0,
+                width=1920,
+                height=1080,
+                fps=30.0,
+                has_audio=True,
+            ),
+            extract_audio=fake_extract,
+            transcribe_audio=lambda _path: fake_transcript(),
+            detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
+            detect_silence=lambda _path, _duration: [],
+            compute_audio_features=lambda _path, duration, segments: build_audio_features(
+                duration=duration,
+                silence_segments=segments,
+                volume_peak=0.5,
+            ),
+            detect_black_screen=lambda _path: [],
+            normal_renderer=fake_render,
+            short_renderer=fake_render,
+            codex_initial_selector=fake_codex_selector,
+        ),
+    )
+
+    assert len(selector_calls) == 1
+    assert selector_calls[0]["job_id"] == created["jobId"]
+    assert "scoring_candidates" not in visited
+    selected = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
+    assert selected["normalClips"][0]["start"] == 0.0
+    assert selected["shorts"][0]["start"] == 145.0
+    summary = json.loads((storage.job_outputs(created["jobId"]) / "codex_initial_selection_summary.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "completed"
+    status = client.get(f"/api/jobs/{created['jobId']}").json()
+    assert status["details"]["codexInitialSelectionSelectedNormalCount"] == 1
+    assert status["details"]["codexInitialSelectionSelectedShortCount"] == 1
+
+
+def test_codex_short_pool_rejects_duplicate_and_backfills_after_refinement() -> None:
+    first = Candidate(
+        id="short-first",
+        type="short",
+        start=0,
+        end=20,
+        duration=20,
+        transcript_text="最初の独立した見せ場",
+        final_score=95,
+        moment_key="first",
+        parent_start=0,
+        parent_end=40,
+        evidence_segment_ids=["seg_1"],
+    )
+    duplicate = Candidate(
+        id="short-shifted",
+        type="short",
+        start=18.5,
+        end=38.5,
+        duration=20,
+        transcript_text="同じ場面を少しずらした候補",
+        final_score=94,
+        moment_key="first-shifted",
+        parent_start=0,
+        parent_end=45,
+        evidence_segment_ids=["seg_1"],
+    )
+    replacement = Candidate(
+        id="short-replacement",
+        type="short",
+        start=60,
+        end=80,
+        duration=20,
+        transcript_text="別の独立した見せ場",
+        final_score=90,
+        moment_key="replacement",
+        parent_start=50,
+        parent_end=90,
+        evidence_segment_ids=["seg_2"],
+    )
+    result = CodexInitialSelectionResult(
+        selection=CandidateSelection(
+            shorts=[first, replacement],
+            selectionPolicy="strict_quality",
+            requestedShortCount=2,
+        ),
+        candidates=[first, duplicate, replacement],
+        summary={},
+    )
+
+    selection, scored, diversity = _codex_selection_with_diverse_refined_shorts(
+        result,
+        transcript_segments=[],
+        silence_segments=[],
+        scene_segments=[],
+        settings={
+            "enableBoundaryRefinement": False,
+            "normalClipCount": 0,
+            "shortCount": 2,
+            "selectionPolicy": "strict_quality",
+        },
+        timeline_duration=100,
+    )
+
+    assert [candidate.id for candidate in selection.shorts] == [
+        "short-first",
+        "short-replacement",
+    ]
+    assert {candidate.id for candidate in scored} == {
+        "short-first",
+        "short-shifted",
+        "short-replacement",
+    }
+    assert diversity.unfilled_count == 0
+    assert selection.unfilled_requested_counts["short"] == 0
+    assert any(rejection.candidate_id == "short-shifted" for rejection in selection.rejected_candidates)
+
+
+def test_codex_short_pool_does_not_pad_when_distinct_moments_are_insufficient() -> None:
+    first = Candidate(
+        id="short-first",
+        type="short",
+        start=0,
+        end=20,
+        duration=20,
+        transcript_text="同じ見せ場",
+        final_score=95,
+        moment_key="same-moment",
+        parent_start=0,
+        parent_end=40,
+    )
+    duplicate = first.model_copy(
+        update={
+            "id": "short-duplicate",
+            "start": 40,
+            "end": 60,
+            "refined_start": None,
+            "refined_end": None,
+            "parent_start": 30,
+            "parent_end": 70,
+            "final_score": 90,
+        }
+    )
+    result = CodexInitialSelectionResult(
+        selection=CandidateSelection(
+            shorts=[first],
+            selectionPolicy="fill_requested",
+            requestedShortCount=2,
+        ),
+        candidates=[first, duplicate],
+        summary={},
+    )
+
+    selection, _, diversity = _codex_selection_with_diverse_refined_shorts(
+        result,
+        transcript_segments=[],
+        silence_segments=[],
+        scene_segments=[],
+        settings={
+            "enableBoundaryRefinement": False,
+            "normalClipCount": 0,
+            "shortCount": 2,
+            "selectionPolicy": "fill_requested",
+        },
+        timeline_duration=80,
+    )
+
+    assert [candidate.id for candidate in selection.shorts] == ["short-first"]
+    assert diversity.unfilled_count == 1
+    assert selection.unfilled_requested_counts["short"] == 1
+    assert selection.unfilled_reason_counts["short"]["insufficient_distinct_moments"] == 1
+
+
 def test_real_pipeline_fails_unusable_transcript_before_candidates(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",
@@ -2928,9 +3011,7 @@ def test_real_pipeline_retries_repeated_turbo_transcript_with_small_on_cuda(
                 "gpu_memory_total_mb": 16384,
                 "model_load_seconds": 1.0,
                 "transcription_seconds": 2.0,
-                "peak_vram_mb": (
-                    4800 if self.options["model_size"] == "turbo" else 6100
-                ),
+                "peak_vram_mb": (4800 if self.options["model_size"] == "turbo" else 6100),
                 "fallback_used": False,
                 "fallback_reason": None,
             }
@@ -2997,18 +3078,10 @@ def test_real_pipeline_retries_repeated_turbo_transcript_with_small_on_cuda(
     assert visited_statuses == SUCCESS_STATUSES[1:]
     assert [call["model_size"] for call in engine_calls] == ["turbo", "small"]
     job_dir = storage.outputs / created["jobId"]
-    primary = json.loads(
-        (job_dir / "primary_raw_transcript_segments.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    primary = json.loads((job_dir / "primary_raw_transcript_segments.json").read_text(encoding="utf-8"))
     assert len(primary) == 6
-    assert {segment["text"] for segment in primary} == {
-        "ご視聴ありがとうございました"
-    }
-    transcript_summary = json.loads(
-        (job_dir / "transcript_summary.json").read_text(encoding="utf-8")
-    )
+    assert {segment["text"] for segment in primary} == {"ご視聴ありがとうございました"}
+    transcript_summary = json.loads((job_dir / "transcript_summary.json").read_text(encoding="utf-8"))
     assert transcript_summary["transcription_model"] == "small"
     runtime = transcript_summary["transcription_runtime"]
     assert runtime["requested_model"] == "turbo"
@@ -3017,9 +3090,7 @@ def test_real_pipeline_retries_repeated_turbo_transcript_with_small_on_cuda(
     assert runtime["fallback_reason"] is None
     assert runtime["quality_fallback_used"] is True
     assert runtime["quality_fallback_reason"] == "primary_transcript_unusable"
-    assert runtime["primary_transcript_quality"]["reasons"] == [
-        "repeated_segment_text"
-    ]
+    assert runtime["primary_transcript_quality"]["reasons"] == ["repeated_segment_text"]
     assert runtime["fallback_transcript_quality"]["reasons"] == []
     assert runtime["transcription_seconds"] == 4.0
     assert runtime["peak_vram_mb"] == 6100
@@ -3127,11 +3198,7 @@ def test_real_pipeline_recovers_long_form_transcript_without_user_action(
                 progress_callback(2, 2)
             if self.options["model_size"] == "small" and small_fallback_fails:
                 raise RuntimeError("small chunk transcription failed")
-            return (
-                broken_segments
-                if self.options["model_size"] == "turbo"
-                else recovered_segments
-            )
+            return broken_segments if self.options["model_size"] == "turbo" else recovered_segments
 
     def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
         Path(output_path).write_bytes(b"fake wav")
@@ -3182,9 +3249,7 @@ def test_real_pipeline_recovers_long_form_transcript_without_user_action(
     job_dir = storage.outputs / created["jobId"]
     assert (job_dir / "primary_raw_transcript_segments.json").is_file()
     assert (job_dir / "chunked_raw_transcript_segments.json").is_file()
-    recovery_summary = json.loads(
-        (job_dir / "transcription_recovery_summary.json").read_text(encoding="utf-8")
-    )
+    recovery_summary = json.loads((job_dir / "transcription_recovery_summary.json").read_text(encoding="utf-8"))
     if small_fallback_fails:
         payload = client.get(f"/api/jobs/{created['jobId']}").json()
         assert payload["status"] == "failed"
@@ -3209,9 +3274,7 @@ def test_real_pipeline_recovers_long_form_transcript_without_user_action(
     assert visited_statuses == SUCCESS_STATUSES[1:]
     assert recovery_summary["runtime"]["selected_attempt"] == "small_ja_chunked"
     assert recovery_summary["selected_quality"]["reasons"] == []
-    transcript_summary = json.loads(
-        (job_dir / "transcript_summary.json").read_text(encoding="utf-8")
-    )
+    transcript_summary = json.loads((job_dir / "transcript_summary.json").read_text(encoding="utf-8"))
     runtime = transcript_summary["transcription_runtime"]
     assert transcript_summary["transcription_model"] == "small"
     assert runtime["requested_model"] == "turbo"
@@ -3287,11 +3350,7 @@ def test_real_pipeline_rejects_repeated_japanese_transcript_without_cuda_fallbac
     assert "repeated_segment_text" in payload["error"]["message"]
     assert '"dominant_segment_count": 6' in payload["error"]["message"]
     assert '"dominant_segment_ratio": 1.0' in payload["error"]["message"]
-    assert not (
-        storage.outputs
-        / created["jobId"]
-        / "primary_raw_transcript_segments.json"
-    ).exists()
+    assert not (storage.outputs / created["jobId"] / "primary_raw_transcript_segments.json").exists()
 
 
 def test_real_pipeline_marks_failed_when_no_candidates_found(client: TestClient) -> None:

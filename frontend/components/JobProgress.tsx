@@ -8,6 +8,8 @@ const errorLabels: Record<string, string> = {
   transcription_quality_fallback_failed: "文字起こしの再試行に失敗しました",
   heatmap_interval_mode_unavailable: "JSON区間モードを適用できません",
   heatmap_interval_mode_no_candidates: "JSON区間から候補を作成できません",
+  codex_initial_selection_failed: "Codex初期選定に失敗しました",
+  codex_initial_selection_unavailable: "Codex初期選定を開始できません",
   no_usable_selection: "選定基準を満たす候補がありません",
   no_usable_selection_retry_exhausted: "再処理は終了しています",
   no_usable_output: "切り抜き動画を生成できませんでした",
@@ -58,6 +60,53 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
     heatmapLabel = "人気区間JSON不一致（従来評価）";
   } else if (heatmapStatus === "not_provided") {
     heatmapLabel = "人気区間JSONなし（従来評価）";
+  }
+  const initialSelectionProvider =
+    job.details.initialSelectionProvider === "codex" ? "codex" : "legacy";
+  const codexSelectionStatus =
+    typeof job.details.codexInitialSelectionStatus === "string"
+      ? job.details.codexInitialSelectionStatus
+      : null;
+  const codexFallbackUsed = job.details.codexInitialSelectionFallbackUsed === true;
+  const codexSelectionError =
+    typeof job.details.codexInitialSelectionError === "string"
+      ? job.details.codexInitialSelectionError
+      : null;
+  const codexRequestedNormal = detailNumber("codexInitialSelectionRequestedNormalCount");
+  const codexRequestedShort = detailNumber("codexInitialSelectionRequestedShortCount");
+  const codexSelectedNormal = detailNumber("codexInitialSelectionSelectedNormalCount");
+  const codexSelectedShort = detailNumber("codexInitialSelectionSelectedShortCount");
+  const codexSelectionFinished =
+    codexSelectionStatus === "ready" ||
+    codexSelectionStatus === "completed" ||
+    codexSelectionStatus === "success";
+  let codexSelectionLabel: string | null = null;
+  let codexSelectionTone = "text-sky-700";
+  if (initialSelectionProvider === "codex") {
+    if (codexFallbackUsed) {
+      codexSelectionLabel = "Codex初期選定を使えず、従来選定に切り替えました";
+      codexSelectionTone = "text-amber-700";
+    } else if (codexSelectionError || codexSelectionStatus === "failed") {
+      codexSelectionLabel = `Codex初期選定に失敗${
+        codexSelectionError ? `: ${codexSelectionError}` : ""
+      }`;
+      codexSelectionTone = "text-red-700";
+    } else if (
+      codexSelectionStatus === "queued" ||
+      codexSelectionStatus === "running" ||
+      codexSelectionStatus === "selecting"
+    ) {
+      codexSelectionLabel = "Codexで初期選定中";
+    } else if (codexSelectionFinished) {
+      codexSelectionLabel = `Codex初期選定: 通常 ${codexSelectedNormal ?? 0}/${
+        codexRequestedNormal ?? "-"
+      }・ショート ${codexSelectedShort ?? 0}/${codexRequestedShort ?? "-"}`;
+      codexSelectionTone = "text-emerald-700";
+    } else if (job.status === "selecting_clips") {
+      codexSelectionLabel = "Codexで初期選定中";
+    } else {
+      codexSelectionLabel = "Codexで初期選定（文字起こし完了後に実行）";
+    }
   }
   const showCorrectionProgress =
     job.status === "correcting_subtitles" &&
@@ -118,6 +167,15 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
             data-testid="heatmap-status"
           >
             {heatmapLabel}
+          </p>
+        ) : null}
+
+        {codexSelectionLabel ? (
+          <p
+            className={`text-xs ${codexSelectionTone}`}
+            data-testid="codex-initial-selection-status"
+          >
+            {codexSelectionLabel}
           </p>
         ) : null}
 

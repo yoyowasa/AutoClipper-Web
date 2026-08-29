@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, Suspense, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import {
@@ -9,12 +9,37 @@ import {
 } from "../../components/SettingsPanel";
 import { UploadDropzone } from "../../components/UploadDropzone";
 import { UploadActionBar } from "../../components/UploadActionBar";
-import { createJob, reopenCompletedVideo, uploadVideo } from "../../lib/api";
+import {
+  cleanupExpiredStorage,
+  createJob,
+  getStorageStatus,
+  reopenCompletedVideo,
+  uploadVideo
+} from "../../lib/api";
 import { manualRangeValidationError } from "../../lib/manualClipRanges";
-import type { ClipSettings } from "../../lib/types";
+import type { ClipSettings, StorageStatusResponse } from "../../lib/types";
 
 type UploadMode = "new" | "manual" | "reedit";
 type SubmissionStage = "idle" | "uploading" | "creating_job" | "opening_reedit";
+
+function formatStorageBytes(bytes: number): string {
+  const gibibyte = 1024 ** 3;
+  const mebibyte = 1024 ** 2;
+  if (bytes >= gibibyte) {
+    return `${(bytes / gibibyte).toFixed(1)}GB`;
+  }
+  return `${(bytes / mebibyte).toFixed(0)}MB`;
+}
+
+function readableStorageReason(reason: string): string {
+  if (reason === "storage_limit_exceeded") {
+    return "作業データが容量の警告基準を超えています";
+  }
+  if (reason === "disk_free_below_threshold") {
+    return "Cドライブの空きが20%未満です";
+  }
+  return reason;
+}
 
 function actionLabelForStage(
   stage: SubmissionStage,
@@ -62,6 +87,70 @@ function UploadForm() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [manualRangeRevealKey, setManualRangeRevealKey] = useState(0);
+  const [storageStatus, setStorageStatus] = useState<StorageStatusResponse | null>(null);
+  const [storageStatusError, setStorageStatusError] = useState<string | null>(null);
+  const [isCleaningStorage, setIsCleaningStorage] = useState(false);
+  const [storageCleanupMessage, setStorageCleanupMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void getStorageStatus()
+      .then((status) => {
+        if (!active) {
+          return;
+        }
+        setStorageStatus(status);
+        setStorageStatusError(null);
+      })
+      .catch(() => {
+        if (active) {
+          setStorageStatusError("容量情報を取得できません。アップロードは続行できます。");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function handleStorageCleanup() {
+    if (
+      !storageStatus ||
+      storageStatus.cleanupEligibleJobs + storageStatus.cleanupEligibleVideos <= 0 ||
+      isCleaningStorage
+    ) {
+      return;
+    }
+    if (
+      !window.confirm(
+        `期限切れJob ${storageStatus.cleanupEligibleJobs}件と、参照されなくなる古い元動画 ${storageStatus.cleanupEligibleVideos}件を整理します。よろしいですか？`
+      )
+    ) {
+      return;
+    }
+
+    setIsCleaningStorage(true);
+    setStorageCleanupMessage(null);
+    try {
+      const result = await cleanupExpiredStorage();
+      const summary = `整理完了: Job ${result.removedJobs}件、動画 ${result.removedVideos}件、ファイル ${result.removedFiles}件、${formatStorageBytes(result.reclaimedBytes)}削減`;
+      setStorageCleanupMessage(
+        result.errors.length > 0 ? `${summary}（エラー ${result.errors.length}件）` : summary
+      );
+      try {
+        const refreshed = await getStorageStatus();
+        setStorageStatus(refreshed);
+        setStorageStatusError(null);
+      } catch {
+        setStorageStatusError("整理後の容量情報を取得できません。アップロードは続行できます。");
+      }
+    } catch (caught) {
+      setStorageCleanupMessage(
+        caught instanceof Error ? `整理に失敗しました: ${caught.message}` : "整理に失敗しました"
+      );
+    } finally {
+      setIsCleaningStorage(false);
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -116,11 +205,13 @@ function UploadForm() {
           ? {
               ...settings,
               workflowMode: "manual",
+              automationMode: "manual",
               normalClipCount: 0,
               shortCount: 0,
               normalClipTimeRanges: [],
               shortClipTimeRanges: [],
               heatmapIntervalMode: false,
+              initialSelectionProvider: "legacy",
               useOpenAIScoring: false,
               enableBoundaryRefinement: false,
               requireClipPlanReview: true,
@@ -155,6 +246,7 @@ function UploadForm() {
     setSettings((current) => ({
       ...current,
       workflowMode: nextMode === "manual" ? "manual" : "automatic",
+      automationMode: nextMode === "manual" ? "manual" : current.automationMode,
       heatmapIntervalMode: false
     }));
     setSubmissionStage("idle");
@@ -171,7 +263,13 @@ function UploadForm() {
   const submitDisabled =
     !file ||
     isSubmitting ||
+    isCleaningStorage ||
     (uploadMode === "new" && settings.heatmapIntervalMode && !heatmapFile);
+  const storageReasons = storageStatus?.warning
+    ? storageStatus.reasons.length > 0
+      ? storageStatus.reasons.map(readableStorageReason)
+      : ["容量が警告基準に達しています"]
+    : [];
 
   return (
     <main className="top-workspace min-h-screen bg-[#f1f1ef] text-[#1d1d1b] sm:p-3 xl:p-4">
@@ -214,6 +312,59 @@ function UploadForm() {
             </button>
           </div>
         </header>
+
+        {storageStatus ? (
+          <div
+            className={`border-y px-4 py-2 text-xs ${
+              storageStatus.warning
+                ? "border-amber-300 bg-amber-50 text-amber-950"
+                : "border-emerald-200 bg-emerald-50 text-emerald-950"
+            }`}
+            role={storageStatus.warning ? "alert" : "status"}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-semibold">
+                <span>
+                  AutoClipper保存 {formatStorageBytes(storageStatus.storageBytes)} / 警告基準 {formatStorageBytes(storageStatus.storageLimitBytes)}
+                </span>
+                <span>
+                  SSD空き {formatStorageBytes(storageStatus.diskFreeBytes)}（{storageStatus.diskFreePercent.toFixed(1)}%）
+                </span>
+                <span>
+                  整理対象 Job {storageStatus.cleanupEligibleJobs}件 / 元動画 {storageStatus.cleanupEligibleVideos}件
+                </span>
+              </div>
+              <button
+                className="min-h-9 border border-current bg-white px-3 font-bold hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={
+                  isCleaningStorage ||
+                  isSubmitting ||
+                  storageStatus.cleanupEligibleJobs + storageStatus.cleanupEligibleVideos <= 0
+                }
+                onClick={() => void handleStorageCleanup()}
+                type="button"
+              >
+                {isCleaningStorage ? "整理中..." : "期限切れを整理"}
+              </button>
+            </div>
+            {storageReasons.length > 0 ? (
+              <p className="mt-1 font-bold">{storageReasons.join(" / ")}</p>
+            ) : null}
+            {storageCleanupMessage ? (
+              <p className="mt-1" aria-live="polite">
+                {storageCleanupMessage}
+              </p>
+            ) : null}
+            {storageStatusError ? <p className="mt-1">{storageStatusError}</p> : null}
+          </div>
+        ) : storageStatusError ? (
+          <div
+            className="border-y border-amber-200 bg-amber-50 px-4 py-2 text-xs font-semibold text-amber-900"
+            role="status"
+          >
+            {storageStatusError}
+          </div>
+        ) : null}
 
         {error ? (
           <div
@@ -464,13 +615,22 @@ function UploadForm() {
                       : "完成MP4から元jobを照合して編集画面を開きます"}
                 </p>
               </div>
-              <span className="text-[10px] font-semibold text-sky-700">
-                {uploadMode === "new"
-                  ? "必要な項目だけ調整"
-                  : uploadMode === "manual"
-                    ? "自動選定なし"
-                    : "元データを変更せず復元"}
-              </span>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {uploadMode === "new" ? (
+                  <span className="border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-800">
+                    初期選定: {settings.initialSelectionProvider === "codex"
+                      ? "Codex（文字起こし後）"
+                      : "従来方式"}
+                  </span>
+                ) : null}
+                <span className="text-[10px] font-semibold text-sky-700">
+                  {uploadMode === "new"
+                    ? "必要な項目だけ調整"
+                    : uploadMode === "manual"
+                      ? "自動選定なし"
+                      : "元データを変更せず復元"}
+                </span>
+              </div>
             </div>
 
             <div className="min-h-0 flex-1 xl:overflow-y-auto">

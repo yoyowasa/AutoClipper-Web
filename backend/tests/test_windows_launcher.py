@@ -160,6 +160,8 @@ def make_controller(
     docker_desktop: Path | None = Path(r"C:\Program Files\Docker\Docker\Docker Desktop.exe"),
     desktop_starter: Callable[[Path], None] | None = None,
     monotonic_clock: Callable[[], float] | None = None,
+    background_process_starter: Callable[[list[str], Path], None] | None = None,
+    process_checker: Callable[[int], bool] | None = None,
 ) -> LauncherController:
     values = iter(url_values or [])
 
@@ -179,6 +181,9 @@ def make_controller(
         gpu_checker=lambda: gpu or HostGpu(),
         sleeper=lambda _seconds: None,
         monotonic_clock=monotonic_clock or (lambda: 0.0),
+        background_process_starter=background_process_starter
+        or (lambda _command, _cwd: None),
+        process_checker=process_checker or (lambda _pid: False),
         browser_opener=lambda _url: True,
     )
 
@@ -820,6 +825,173 @@ def test_stop_preserves_volumes_and_data(tmp_path: Path) -> None:
     assert stop_call[-2:] == ["compose", "stop"]
     assert "down" not in stop_call
     assert "-v" not in stop_call
+
+
+def test_launcher_starts_codex_bridge_with_host_python(tmp_path: Path) -> None:
+    root = make_project(tmp_path)
+    module = root / "launcher" / "codex_bridge.py"
+    module.parent.mkdir()
+    module.write_text("# bridge fixture\n", encoding="utf-8")
+    observed: list[tuple[list[str], Path]] = []
+    live_pids: set[int] = {321}
+
+    def start_bridge(command: list[str], cwd: Path) -> None:
+        observed.append((list(command), cwd))
+        status = root / "storage" / "codex_bridge" / "status.json"
+        status.parent.mkdir(parents=True, exist_ok=True)
+        status.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
+                    "state": "ready",
+                    "pid": 321,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    controller = make_controller(
+        root,
+        FakeRunner(),
+        background_process_starter=start_bridge,
+        process_checker=lambda pid: pid in live_pids,
+    )
+
+    started = controller.ensure_codex_bridge_running(timeout=1, poll_interval=0.1)
+
+    assert started is True
+    assert observed == [
+        (
+            [
+                sys.executable,
+                str(module.resolve()),
+                "serve",
+                "--project-root",
+                str(root.resolve()),
+            ],
+            root.resolve(),
+        )
+    ]
+
+
+def test_launcher_start_continues_when_codex_bridge_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    root = make_project(tmp_path)
+    module = root / "launcher" / "codex_bridge.py"
+    module.parent.mkdir()
+    module.write_text("# bridge fixture\n", encoding="utf-8")
+
+    def start_bridge(_command: list[str], _cwd: Path) -> None:
+        status = root / "storage" / "codex_bridge" / "status.json"
+        status.parent.mkdir(parents=True, exist_ok=True)
+        status.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
+                    "state": "error",
+                    "pid": 0,
+                    "errorCode": "codex_login_missing",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    controller = make_controller(
+        root,
+        FakeRunner(),
+        ready=True,
+        background_process_starter=start_bridge,
+        process_checker=lambda _pid: False,
+    )
+
+    result = controller.start(timeout=1, open_browser=False)
+
+    assert result.status.ready is True
+    assert controller.codex_bridge_error is not None
+    assert controller.codex_bridge_error.code == "codex_login_missing"
+
+
+def test_bridge_start_does_not_delete_existing_status_during_race(
+    tmp_path: Path,
+) -> None:
+    root = make_project(tmp_path)
+    module = root / "launcher" / "codex_bridge.py"
+    module.parent.mkdir()
+    module.write_text("# bridge fixture\n", encoding="utf-8")
+    status = root / "storage" / "codex_bridge" / "status.json"
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(
+        json.dumps(
+            {
+                "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
+                "state": "ready",
+                "pid": 111,
+            }
+        ),
+        encoding="utf-8",
+    )
+    existing_status_seen: list[bool] = []
+
+    def start_bridge(_command: list[str], _cwd: Path) -> None:
+        existing_status_seen.append(status.is_file())
+        status.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
+                    "state": "ready",
+                    "pid": 222,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    controller = make_controller(
+        root,
+        FakeRunner(),
+        background_process_starter=start_bridge,
+        process_checker=lambda pid: pid == 222,
+    )
+
+    assert controller.ensure_codex_bridge_running(timeout=1) is True
+    assert existing_status_seen == [True]
+
+
+def test_launcher_stop_signals_live_codex_bridge(tmp_path: Path) -> None:
+    root = make_project(tmp_path)
+    module = root / "launcher" / "codex_bridge.py"
+    module.parent.mkdir()
+    module.write_text("# bridge fixture\n", encoding="utf-8")
+    status = root / "storage" / "codex_bridge" / "status.json"
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(
+        json.dumps(
+            {
+                "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
+                "state": "ready",
+                "pid": 654,
+            }
+        ),
+        encoding="utf-8",
+    )
+    checks = iter([True, False])
+    runner = FakeRunner()
+    controller = make_controller(
+        root,
+        runner,
+        process_checker=lambda _pid: next(checks),
+    )
+
+    result = controller.stop()
+
+    assert result.returncode == 0
+    assert runner.calls[-1][0][-2:] == ["compose", "stop"]
+    stop_payload = json.loads(
+        (root / "storage" / "codex_bridge" / "stop.request").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert isinstance(stop_payload["requestedAt"], float)
 
 
 def test_windows_entrypoint_quotes_project_path_and_does_not_reset_data() -> None:
