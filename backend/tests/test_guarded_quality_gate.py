@@ -18,7 +18,7 @@ from app.jobs.quality_gate import (
     unknown_quality_gate_decision,
     write_quality_gate_decision,
 )
-from app.jobs.subtitle_review import build_subtitle_review
+from app.jobs.subtitle_review import SubtitleReviewDocument, build_subtitle_review
 from app.render.render_normal import NormalRenderFailure
 
 
@@ -83,7 +83,17 @@ def _selection_settings(*, normal_count: int, short_count: int) -> dict[str, obj
     }
 
 
-def _ready_content_document() -> object:
+def _mark_previews_ready(document: SubtitleReviewDocument) -> SubtitleReviewDocument:
+    for index, clip in enumerate(document.clips, start=1):
+        clip.preview_state = "ready"
+        clip.preview_spec_hash = f"{index:064x}"
+        clip.preview_video_url = f"/exact-preview-{clip.id}.mp4"
+        clip.live_preview_spec_hash = f"{index + 100:064x}"
+        clip.live_preview_video_url = f"/live-preview-{clip.id}.mp4"
+    return document
+
+
+def _ready_content_document() -> SubtitleReviewDocument:
     short = _candidate(
         "short_1",
         clip_type="short",
@@ -98,13 +108,7 @@ def _ready_content_document() -> object:
         source_width=1920,
         source_height=1080,
     )
-    clip = document.clips[0]
-    clip.preview_state = "ready"
-    clip.preview_spec_hash = "a" * 64
-    clip.preview_video_url = "/exact-preview.mp4"
-    clip.live_preview_spec_hash = "b" * 64
-    clip.live_preview_video_url = "/live-preview.mp4"
-    return document
+    return _mark_previews_ready(document)
 
 
 def _check(decision: QualityGateDecision, code: str):
@@ -256,7 +260,7 @@ def test_selection_gate_rejects_requested_shortfall_and_duplicate_shorts() -> No
     assert _check(decision, "selection.short_diversity").outcome == "fail"
 
 
-def test_content_gate_keeps_unconnected_semantic_checks_unknown() -> None:
+def test_content_gate_keeps_unconfirmed_semantic_checks_unknown() -> None:
     document = _ready_content_document()
     decision = evaluate_content_quality_gate(
         job_id="job_1",
@@ -271,6 +275,97 @@ def test_content_gate_keeps_unconnected_semantic_checks_unknown() -> None:
     assert _check(decision, "content.title_hook_semantics").outcome == "unknown"
     assert _check(decision, "content.subtitle_accuracy").outcome == "unknown"
     assert _check(decision, "content.actual_framing").outcome == "unknown"
+    assert (
+        _check(decision, "content.title_hook_semantics").evidence["provider"]
+        == "human_review_confirmation"
+    )
+    assert _check(decision, "content.title_hook_semantics").evidence[
+        "incompleteClipIds"
+    ] == ["short_1"]
+
+
+def test_content_gate_passes_after_confirmation_and_current_preview_are_ready() -> None:
+    document = _ready_content_document()
+    document.clips[0].confirmed = True
+    document.confirmed_clip_count = 1
+
+    decision = evaluate_content_quality_gate(
+        job_id="job_1",
+        document=document,
+        settings={"burnSubtitles": True},
+    )
+
+    assert decision.outcome == "pass"
+    assert decision.route == "continue"
+    assert all(check.outcome == "pass" for check in decision.checks)
+    for code in (
+        "content.title_hook_semantics",
+        "content.subtitle_accuracy",
+        "content.actual_framing",
+    ):
+        evidence = _check(decision, code).evidence
+        assert evidence["provider"] == "human_review_confirmation"
+        assert evidence["acceptedReadyClipIds"] == ["short_1"]
+        assert evidence["previewSpecHashes"] == {"short_1": f"{1:064x}"}
+
+
+def test_content_gate_short_framing_uses_only_confirmed_ready_shorts() -> None:
+    normal = _candidate("normal_1")
+    short = _candidate(
+        "short_1",
+        clip_type="short",
+        start=12.0,
+        end=22.0,
+    )
+    document = build_subtitle_review(
+        "job_1",
+        _selection(normal=[normal], shorts=[short]),
+        _transcript_for(normal, short),
+        short_max_duration=30.0,
+        source_width=1920,
+        source_height=1080,
+    )
+    _mark_previews_ready(document)
+    next(clip for clip in document.clips if clip.id == "short_1").confirmed = True
+    document.confirmed_clip_count = 1
+
+    decision = evaluate_content_quality_gate(
+        job_id="job_1",
+        document=document,
+        settings={},
+    )
+
+    assert decision.outcome == "unknown"
+    assert _check(decision, "content.title_hook_semantics").outcome == "unknown"
+    framing = _check(decision, "content.actual_framing")
+    assert framing.outcome == "pass"
+    assert framing.evidence["scope"] == "short_clips"
+    assert framing.evidence["acceptedReadyClipIds"] == ["short_1"]
+
+
+def test_content_gate_normal_only_framing_is_non_applicable_pass() -> None:
+    normal = _candidate("normal_1")
+    document = build_subtitle_review(
+        "job_1",
+        _selection(normal=[normal]),
+        _transcript_for(normal),
+        short_max_duration=30.0,
+        source_width=1920,
+        source_height=1080,
+    )
+    _mark_previews_ready(document)
+
+    decision = evaluate_content_quality_gate(
+        job_id="job_1",
+        document=document,
+        settings={},
+    )
+
+    framing = _check(decision, "content.actual_framing")
+    assert framing.outcome == "pass"
+    assert framing.reason_code is None
+    assert framing.evidence["applicable"] is False
+    assert framing.evidence["clipCount"] == 0
 
 
 def test_content_gate_structure_failure_wins_over_unknown() -> None:
@@ -290,12 +385,17 @@ def test_content_gate_structure_failure_wins_over_unknown() -> None:
 def test_content_gate_treats_unready_preview_as_unknown_and_failed_preview_as_fail() -> None:
     queued_document = _ready_content_document()
     queued_document.clips[0].preview_state = "queued"
+    queued_document.clips[0].confirmed = True
+    queued_document.confirmed_clip_count = 1
     queued = evaluate_content_quality_gate(
         job_id="job_1",
         document=queued_document,
         settings={},
     )
     assert _check(queued, "content.preview_ready").outcome == "unknown"
+    assert _check(queued, "content.title_hook_semantics").outcome == "unknown"
+    assert _check(queued, "content.subtitle_accuracy").outcome == "unknown"
+    assert _check(queued, "content.actual_framing").outcome == "unknown"
 
     failed_document = _ready_content_document()
     failed_document.clips[0].preview_state = "failed"

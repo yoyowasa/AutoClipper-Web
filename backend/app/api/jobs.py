@@ -3997,7 +3997,7 @@ def finalize_subtitle_review(
             },
         )
     try:
-        enqueue_render(job.id)
+        enqueue_render(job.id, document.render_revision)
     except Exception as exc:
         with subtitle_review_document_lock(output_dir):
             latest = _get_subtitle_review_or_404(job_id, paths)

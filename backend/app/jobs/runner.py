@@ -132,6 +132,7 @@ from app.jobs.publication_state import (
     clear_rerender_publication_unresolved,
     mark_rerender_publication_unresolved,
     rerender_publication_is_unresolved,
+    try_acquire_rerender_publication_lease,
 )
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.jobs.manual_workflow import (
@@ -157,6 +158,7 @@ from app.jobs.subtitle_review import (
     load_subtitle_review,
     mark_review_completed,
     mark_review_rendering,
+    queue_review_render,
     reviewed_transcript_output_path,
     restore_review_after_render_failure,
     subtitle_review_output_path,
@@ -2530,8 +2532,10 @@ def _prepare_subtitle_rerender_staging(
     storage_paths: StoragePaths,
     job_id: str,
     render_revision: int,
+    *,
+    attempt_id: str | None = None,
 ) -> StoragePaths:
-    attempt_suffix = make_id("attempt")[-8:]
+    attempt_suffix = (attempt_id or make_id("attempt"))[-8:]
     staging_root = (
         storage_paths.temp
         / "rr"
@@ -5285,6 +5289,8 @@ def run_clip_plan_reselection(
 
 def run_subtitle_review_render(
     job_id: str,
+    *,
+    render_revision: int,
     session_factory: SessionFactory = SessionLocal,
     paths: StoragePaths | None = None,
     dependencies: AutoClipperPipelineDependencies | None = None,
@@ -5313,48 +5319,61 @@ def run_subtitle_review_render(
         is_rerender = False
         pending_rerender_zip: Path | None = None
         rerender_publication_was_unresolved = False
+        rerender_publication_lease: Any | None = None
+        rerender_attempt_id: str | None = None
+        rerender_publication_marker_created = False
 
         try:
             review_document = load_subtitle_review(review_path)
+            if review_document.render_revision != render_revision:
+                return visited_statuses
             is_rerender = review_document.render_revision > 1
+            if not is_rerender:
+                if review_document.state == "completed":
+                    return visited_statuses
+                if review_document.state not in {"render_queued", "rendering"}:
+                    raise PipelineExpectedError(
+                        "subtitle_review_not_ready",
+                        "Subtitle review has not been finalized.",
+                    )
             if is_rerender:
+                if review_document.state not in {
+                    "render_queued",
+                    "rendering",
+                    "completed",
+                }:
+                    return visited_statuses
+                rerender_publication_lease = try_acquire_rerender_publication_lease(
+                    job_dir,
+                    job_id=job.id,
+                    render_revision=review_document.render_revision,
+                )
+                if rerender_publication_lease is None:
+                    return visited_statuses
+                rerender_attempt_id = rerender_publication_lease.attempt_id
                 rerender_publication_was_unresolved = (
                     rerender_publication_is_unresolved(job_dir)
                 )
+                if review_document.state == "completed":
+                    if not rerender_publication_was_unresolved:
+                        return visited_statuses
+                    review_document = queue_review_render(
+                        restore_review_after_render_failure(review_document)
+                    )
+                    write_subtitle_review(review_document, review_path)
+                    write_subtitle_review_summary(
+                        review_document,
+                        subtitle_review_summary_path(job_dir),
+                    )
                 if not rerender_publication_was_unresolved:
                     mark_rerender_publication_unresolved(
                         job_dir,
                         job_id=job.id,
                         render_revision=review_document.render_revision,
+                        attempt_id=rerender_attempt_id,
                     )
-            if review_document.state not in {"render_queued", "rendering"}:
-                raise PipelineExpectedError(
-                    "subtitle_review_not_ready",
-                    "Subtitle review has not been finalized.",
-                )
+                    rerender_publication_marker_created = True
 
-            review_document = mark_review_rendering(review_document)
-            write_subtitle_review(review_document, review_path)
-            write_subtitle_review_summary(
-                review_document,
-                subtitle_review_summary_path(job_dir),
-            )
-
-            transcript_segments = _read_transcript_segments(transcript_output_path(job_dir))
-            transcript_segments = apply_reviewed_text(transcript_segments, review_document)
-            write_transcript_segments(
-                transcript_segments,
-                reviewed_transcript_output_path(job_dir),
-            )
-            write_transcript_segments(
-                transcript_segments,
-                transcript_output_path(job_dir),
-            )
-
-            selection_payload = _read_json_file(job_dir / "selected_clips.json")
-            selection = CandidateSelection.model_validate(selection_payload)
-            selection = apply_reviewed_clip_content(selection, review_document)
-            write_selected_clips(selection, job_dir / "selected_clips.json")
             invalidate_quality_gate_decisions(
                 job_dir,
                 ("selection", "content", "post_render"),
@@ -5383,14 +5402,68 @@ def run_subtitle_review_render(
                     content_gate,
                     quality_gate_decision_path(job_dir, "content"),
                 )
-                if (
-                    content_gate_path is None
-                    and effective_automation_mode == "guarded"
-                ):
-                    raise PipelineExpectedError(
-                        "quality_gate_record_failed",
-                        "Guarded content quality decision could not be recorded.",
+                guarded_content_blocked = (
+                    effective_automation_mode == "guarded"
+                    and (
+                        content_gate_path is None
+                        or content_gate.route != "continue"
                     )
+                )
+                if guarded_content_blocked:
+                    if (
+                        is_rerender
+                        and rerender_publication_marker_created
+                        and rerender_attempt_id is not None
+                    ):
+                        clear_rerender_publication_unresolved(
+                            job_dir,
+                            expected_attempt_id=rerender_attempt_id,
+                        )
+                    _restore_subtitle_rerender_for_retry(
+                        db=db,
+                        job=job,
+                        review_document=review_document,
+                        review_path=review_path,
+                        code=(
+                            "quality_gate_record_failed"
+                            if content_gate_path is None
+                            else "quality_gate_content_review_required"
+                        ),
+                        message=(
+                            "Guarded content quality decision could not be recorded."
+                            if content_gate_path is None
+                            else "Guarded content quality checks require subtitle review."
+                        ),
+                    )
+                    visited_statuses.append("awaiting_subtitle_review")
+                    return visited_statuses
+
+            review_document = mark_review_rendering(review_document)
+            write_subtitle_review(review_document, review_path)
+            write_subtitle_review_summary(
+                review_document,
+                subtitle_review_summary_path(job_dir),
+            )
+
+            transcript_segments = _read_transcript_segments(transcript_output_path(job_dir))
+            transcript_segments = apply_reviewed_text(transcript_segments, review_document)
+            write_transcript_segments(
+                transcript_segments,
+                reviewed_transcript_output_path(job_dir),
+            )
+            write_transcript_segments(
+                transcript_segments,
+                transcript_output_path(job_dir),
+            )
+
+            selection_payload = _read_json_file(job_dir / "selected_clips.json")
+            selection = CandidateSelection.model_validate(selection_payload)
+            selection = apply_reviewed_clip_content(selection, review_document)
+            write_selected_clips(selection, job_dir / "selected_clips.json")
+            invalidate_quality_gate_decisions(
+                job_dir,
+                ("selection", "post_render"),
+            )
             previous_exports = list(db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all())
             previous_export_ids = {export.id for export in previous_exports}
             render_paths = storage_paths
@@ -5399,6 +5472,7 @@ def run_subtitle_review_render(
                     storage_paths,
                     job.id,
                     review_document.render_revision,
+                    attempt_id=rerender_attempt_id,
                 )
                 render_paths = rerender_staging_paths
             normal_result, short_result, exports, _render_failures_path = _render_selected_outputs(
@@ -5548,7 +5622,13 @@ def run_subtitle_review_render(
                 db.commit()
                 rerender_publication_committed = True
                 rerender_promotion.finalize()
-                clear_rerender_publication_unresolved(job_dir)
+                if rerender_publication_was_unresolved:
+                    clear_rerender_publication_unresolved(job_dir)
+                else:
+                    clear_rerender_publication_unresolved(
+                        job_dir,
+                        expected_attempt_id=rerender_attempt_id,
+                    )
             else:
                 _create_zip(
                     zip_path,
@@ -5577,8 +5657,15 @@ def run_subtitle_review_render(
                         staging_paths=rerender_staging_paths,
                         remove_files=rollback_succeeded,
                     )
-                if rollback_succeeded and not rerender_publication_was_unresolved:
-                    clear_rerender_publication_unresolved(job_dir)
+                if (
+                    rollback_succeeded
+                    and rerender_publication_marker_created
+                    and rerender_attempt_id is not None
+                ):
+                    clear_rerender_publication_unresolved(
+                        job_dir,
+                        expected_attempt_id=rerender_attempt_id,
+                    )
                 invalidate_quality_gate_decisions(job_dir, ("post_render",))
                 _restore_subtitle_rerender_for_retry(
                     db=db,
@@ -5617,8 +5704,15 @@ def run_subtitle_review_render(
                         staging_paths=rerender_staging_paths,
                         remove_files=rollback_succeeded,
                     )
-                if rollback_succeeded and not rerender_publication_was_unresolved:
-                    clear_rerender_publication_unresolved(job_dir)
+                if (
+                    rollback_succeeded
+                    and rerender_publication_marker_created
+                    and rerender_attempt_id is not None
+                ):
+                    clear_rerender_publication_unresolved(
+                        job_dir,
+                        expected_attempt_id=rerender_attempt_id,
+                    )
                 invalidate_quality_gate_decisions(job_dir, ("post_render",))
                 _restore_subtitle_rerender_for_retry(
                     db=db,
@@ -5639,5 +5733,8 @@ def run_subtitle_review_render(
             else:
                 _fail_job(db, job_id, "subtitle_review_render_failed", str(exc))
             raise
+        finally:
+            if rerender_publication_lease is not None:
+                rerender_publication_lease.release()
 
     return visited_statuses

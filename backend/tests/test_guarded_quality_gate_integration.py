@@ -29,7 +29,18 @@ from app.jobs.quality_gate import (
     write_quality_gate_decision,
 )
 from app.jobs.queue import get_enqueue_job
-from app.jobs.runner import AutoClipperPipelineDependencies, run_autoclipper_job
+from app.jobs.runner import (
+    AutoClipperPipelineDependencies,
+    run_autoclipper_job,
+    run_subtitle_review_render,
+)
+from app.jobs.subtitle_review import (
+    confirm_review_clip,
+    load_subtitle_review,
+    queue_review_render,
+    subtitle_review_output_path,
+    write_subtitle_review,
+)
 from app.main import app
 from app.models import ExportItem, Job, Video
 from app.storage.paths import StoragePaths, get_storage_paths
@@ -207,6 +218,26 @@ def _dependencies(tmp_path: Path) -> AutoClipperPipelineDependencies:
         short_renderer=fake_render,
         subtitle_review_preview_renderer=fake_render,
     )
+
+
+def _queue_guarded_subtitle_render(
+    job_id: str,
+    *,
+    storage: StoragePaths,
+    session_factory: sessionmaker[Session],
+) -> int:
+    review_path = subtitle_review_output_path(storage.job_outputs(job_id))
+    review = load_subtitle_review(review_path)
+    for clip in review.clips:
+        review = confirm_review_clip(review, clip.id)
+    review = queue_review_render(review)
+    write_subtitle_review(review, review_path)
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.status = "rendering_normal_clips"
+        db.commit()
+    return review.render_revision
 
 
 def test_guarded_selection_pass_skips_clip_review_and_stops_at_content_unknown(
@@ -453,6 +484,184 @@ def test_guarded_content_pass_can_continue_to_completed(
     ).outcome == "pass"
     review_payload = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
     assert review_payload["state"] == "completed"
+
+
+@pytest.mark.parametrize("outcome", ["fail", "unknown"])
+def test_guarded_review_render_content_non_pass_returns_before_render(
+    guarded_client: tuple[TestClient, StoragePaths, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    outcome: str,
+) -> None:
+    client, storage, session_factory = guarded_client
+    job_id = _create_review_job(client)
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_selection_quality_gate",
+        lambda **kwargs: _decision(
+            str(kwargs["job_id"]),
+            stage="selection",
+            outcome="pass",
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_content_quality_gate",
+        lambda **kwargs: _decision(
+            str(kwargs["job_id"]),
+            stage="content",
+            outcome="unknown",
+        ),
+    )
+    initial_statuses = run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+    assert initial_statuses[-1] == "awaiting_subtitle_review"
+    render_revision = _queue_guarded_subtitle_render(
+        job_id,
+        storage=storage,
+        session_factory=session_factory,
+    )
+
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_content_quality_gate",
+        lambda **kwargs: _decision(
+            str(kwargs["job_id"]),
+            stage="content",
+            outcome=outcome,
+        ),
+    )
+    render_calls: list[str] = []
+
+    def must_not_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        render_calls.append(str(output_path))
+        raise AssertionError("guarded content non-pass must stop before rendering")
+
+    statuses = run_subtitle_review_render(
+        job_id,
+        render_revision=render_revision,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=AutoClipperPipelineDependencies(
+            normal_renderer=must_not_render,
+            short_renderer=must_not_render,
+        ),
+    )
+
+    output_dir = storage.job_outputs(job_id)
+    assert statuses[-1] == "awaiting_subtitle_review"
+    assert render_calls == []
+    assert load_subtitle_review(
+        subtitle_review_output_path(output_dir)
+    ).state == "awaiting_review"
+    decision = load_quality_gate_decision(
+        quality_gate_decision_path(output_dir, "content")
+    )
+    assert decision.outcome == outcome
+    assert decision.route == "subtitle_review"
+    assert not quality_gate_decision_path(output_dir, "post_render").exists()
+    assert not (output_dir / "normal" / "normal_01.mp4").exists()
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.status == "awaiting_subtitle_review"
+        assert list(
+            db.scalars(select(ExportItem).where(ExportItem.job_id == job_id)).all()
+        ) == []
+
+
+def test_guarded_review_render_content_pass_continues_to_renderer(
+    guarded_client: tuple[TestClient, StoragePaths, sessionmaker[Session]],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client, storage, session_factory = guarded_client
+    job_id = _create_review_job(client)
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_selection_quality_gate",
+        lambda **kwargs: _decision(
+            str(kwargs["job_id"]),
+            stage="selection",
+            outcome="pass",
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_content_quality_gate",
+        lambda **kwargs: _decision(
+            str(kwargs["job_id"]),
+            stage="content",
+            outcome="unknown",
+        ),
+    )
+    initial_statuses = run_autoclipper_job(
+        job_id,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=_dependencies(tmp_path),
+    )
+    assert initial_statuses[-1] == "awaiting_subtitle_review"
+    render_revision = _queue_guarded_subtitle_render(
+        job_id,
+        storage=storage,
+        session_factory=session_factory,
+    )
+
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_content_quality_gate",
+        lambda **kwargs: _decision(
+            str(kwargs["job_id"]),
+            stage="content",
+            outcome="pass",
+        ),
+    )
+    render_calls: list[Path] = []
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"rendered")
+        render_calls.append(path)
+        return path
+
+    statuses = run_subtitle_review_render(
+        job_id,
+        render_revision=render_revision,
+        session_factory=session_factory,
+        paths=storage,
+        dependencies=AutoClipperPipelineDependencies(
+            normal_renderer=fake_render,
+            short_renderer=fake_render,
+        ),
+    )
+
+    assert statuses[-1] == "completed"
+    assert [path.name for path in render_calls] == ["normal_01.mp4"]
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.status == "completed"
+        assert len(
+            list(
+                db.scalars(
+                    select(ExportItem).where(ExportItem.job_id == job_id)
+                ).all()
+            )
+        ) == 1
 
 
 @pytest.mark.parametrize(

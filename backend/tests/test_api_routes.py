@@ -1772,6 +1772,7 @@ def test_converted_child_render_failure_returns_to_subtitle_review_without_expor
 
     statuses = run_subtitle_review_render(
         child_job_id,
+        render_revision=2,
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
         dependencies=AutoClipperPipelineDependencies(
@@ -3802,6 +3803,7 @@ def test_rollback_failed_publication_stays_blocked_during_hook_updates(
         output_dir,
         job_id=job_id,
         render_revision=2,
+        attempt_id="test_unresolved_publication",
     )
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, job_id)

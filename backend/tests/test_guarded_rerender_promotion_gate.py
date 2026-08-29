@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Generator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session, sessionmaker
 
 import app.jobs.runner as runner_module
 from app.candidates.merge_boundaries import Candidate
@@ -19,12 +20,14 @@ from app.jobs.quality_gate import (
     QualityGateDecision,
     load_quality_gate_decision,
     quality_gate_decision_path,
+    unknown_quality_gate_decision,
     write_quality_gate_decision,
 )
 from app.jobs.publication_state import (
     mark_rerender_publication_unresolved,
     rerender_publication_is_unresolved,
     rerender_publication_marker_path,
+    try_acquire_rerender_publication_lease,
 )
 from app.jobs.runner import run_subtitle_review_render
 from app.models import ExportItem, Job, Video
@@ -55,6 +58,309 @@ def _passing_post_render_decision(
         ],
         createdAt=datetime.now(UTC),
     )
+
+
+def _passing_content_decision(job_id: str) -> QualityGateDecision:
+    return QualityGateDecision(
+        jobId=job_id,
+        mode="guarded",
+        enforced=True,
+        stage="content",
+        inputHash=hashlib.sha256(f"{job_id}:content:pass".encode()).hexdigest(),
+        outcome="pass",
+        route="continue",
+        checks=[
+            QualityGateCheck(
+                code="content.integration",
+                outcome="pass",
+                evidence={"source": "integration_test"},
+            )
+        ],
+        createdAt=datetime.now(UTC),
+    )
+
+
+@pytest.fixture()
+def rerender_noop_runtime(
+    tmp_path: Path,
+) -> Generator[tuple[sessionmaker[Session], StoragePaths, str], None, None]:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'noop.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    session_factory = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+    storage = StoragePaths(tmp_path / "noop-storage")
+    storage.ensure()
+    input_path = storage.uploads / "source.mp4"
+    input_path.write_bytes(b"source")
+    job_id = "job_guarded_rerender_noop"
+    with session_factory() as db:
+        video = Video(
+            id="video_guarded_rerender_noop",
+            original_filename="source.mp4",
+            stored_path=str(input_path),
+            duration=60,
+            width=1920,
+            height=1080,
+            fps=30,
+            has_audio=True,
+        )
+        db.add(video)
+        db.add(
+            Job(
+                id=job_id,
+                video_id=video.id,
+                status="rendering_normal_clips",
+                settings_json={
+                    "automationMode": "guarded",
+                    "burnSubtitles": True,
+                    "requireClipPlanReview": True,
+                    "requireSubtitleReview": True,
+                },
+            )
+        )
+        db.commit()
+    try:
+        yield session_factory, storage, job_id
+    finally:
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("queued_revision", "review_revision", "review_state"),
+    [
+        (1, 2, "render_queued"),
+        (1, 1, "completed"),
+    ],
+)
+def test_stale_or_initial_completed_delivery_is_noop_before_lease(
+    rerender_noop_runtime: tuple[sessionmaker[Session], StoragePaths, str],
+    monkeypatch: pytest.MonkeyPatch,
+    queued_revision: int,
+    review_revision: int,
+    review_state: str,
+) -> None:
+    session_factory, storage, job_id = rerender_noop_runtime
+    monkeypatch.setattr(
+        runner_module,
+        "load_subtitle_review",
+        lambda _path: SimpleNamespace(
+            render_revision=review_revision,
+            state=review_state,
+        ),
+    )
+    touched: list[str] = []
+
+    def must_not_touch(*_args: object, **_kwargs: object) -> object:
+        touched.append("called")
+        raise AssertionError("stale or completed delivery must be a no-op")
+
+    monkeypatch.setattr(
+        runner_module,
+        "try_acquire_rerender_publication_lease",
+        must_not_touch,
+    )
+    monkeypatch.setattr(runner_module, "mark_review_rendering", must_not_touch)
+    monkeypatch.setattr(runner_module, "_render_selected_outputs", must_not_touch)
+
+    statuses = run_subtitle_review_render(
+        job_id,
+        render_revision=queued_revision,
+        session_factory=session_factory,
+        paths=storage,
+    )
+
+    assert statuses == []
+    assert touched == []
+    assert not rerender_publication_marker_path(
+        storage.job_outputs(job_id)
+    ).exists()
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.status == "rendering_normal_clips"
+        assert list(
+            db.scalars(select(ExportItem).where(ExportItem.job_id == job_id)).all()
+        ) == []
+
+
+def test_rerender_completed_with_unresolved_marker_recovers_under_lease(
+    rerender_noop_runtime: tuple[sessionmaker[Session], StoragePaths, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, storage, job_id = rerender_noop_runtime
+    job_dir = storage.job_outputs(job_id)
+    marker = mark_rerender_publication_unresolved(
+        job_dir,
+        job_id=job_id,
+        render_revision=2,
+        attempt_id="interrupted_attempt",
+    )
+    original_marker = marker.read_bytes()
+    review = SimpleNamespace(
+        render_revision=2,
+        state="completed",
+        confirmed_clip_count=1,
+        total_clip_count=1,
+    )
+    restored_states: list[str] = []
+    monkeypatch.setattr(runner_module, "load_subtitle_review", lambda _path: review)
+    monkeypatch.setattr(
+        runner_module,
+        "restore_review_after_render_failure",
+        lambda document: setattr(document, "state", "awaiting_review") or document,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "queue_review_render",
+        lambda document: setattr(document, "state", "render_queued") or document,
+    )
+    monkeypatch.setattr(runner_module, "write_subtitle_review", lambda *_args: None)
+    monkeypatch.setattr(runner_module, "write_subtitle_review_summary", lambda *_args: None)
+    monkeypatch.setattr(runner_module, "_active_quality_gate_mode", lambda *_args: "guarded")
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_content_quality_gate",
+        lambda **_kwargs: unknown_quality_gate_decision(
+            job_id=job_id,
+            stage="content",
+            reason_code="content_review_required",
+            mode="guarded",
+        ),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_try_write_quality_gate_decision",
+        lambda _decision, output_path: output_path,
+    )
+
+    def record_restore(**kwargs: Any) -> None:
+        restored_states.append(kwargs["review_document"].state)
+
+    monkeypatch.setattr(
+        runner_module,
+        "_restore_subtitle_rerender_for_retry",
+        record_restore,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_render_selected_outputs",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("content-blocked recovery must not render")
+        ),
+    )
+
+    statuses = run_subtitle_review_render(
+        job_id,
+        render_revision=2,
+        session_factory=session_factory,
+        paths=storage,
+    )
+
+    assert statuses == ["awaiting_subtitle_review"]
+    assert restored_states == ["render_queued"]
+    assert marker.read_bytes() == original_marker
+    reacquired = try_acquire_rerender_publication_lease(
+        job_dir,
+        job_id=job_id,
+        render_revision=2,
+    )
+    assert reacquired is not None
+    reacquired.release()
+
+
+def test_lease_acquisition_error_preserves_preexisting_marker(
+    rerender_noop_runtime: tuple[sessionmaker[Session], StoragePaths, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, storage, job_id = rerender_noop_runtime
+    job_dir = storage.job_outputs(job_id)
+    marker = mark_rerender_publication_unresolved(
+        job_dir,
+        job_id=job_id,
+        render_revision=2,
+        attempt_id="existing_attempt",
+    )
+    original_marker = marker.read_bytes()
+    monkeypatch.setattr(
+        runner_module,
+        "load_subtitle_review",
+        lambda _path: SimpleNamespace(render_revision=2, state="render_queued"),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "try_acquire_rerender_publication_lease",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("lease unavailable")),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_rollback_subtitle_rerender_publication",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_restore_subtitle_rerender_for_retry",
+        lambda **_kwargs: None,
+    )
+
+    with pytest.raises(OSError, match="lease unavailable"):
+        run_subtitle_review_render(
+            job_id,
+            render_revision=2,
+            session_factory=session_factory,
+            paths=storage,
+        )
+
+    assert marker.read_bytes() == original_marker
+
+
+def test_rerender_lease_busy_is_noop_before_marker_or_render(
+    rerender_noop_runtime: tuple[sessionmaker[Session], StoragePaths, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory, storage, job_id = rerender_noop_runtime
+    review = SimpleNamespace(render_revision=2, state="render_queued")
+    monkeypatch.setattr(runner_module, "load_subtitle_review", lambda _path: review)
+    lease_calls: list[tuple[str, int]] = []
+
+    def lease_busy(
+        _job_dir: Path,
+        *,
+        job_id: str,
+        render_revision: int,
+    ) -> None:
+        lease_calls.append((job_id, render_revision))
+        return None
+
+    def must_not_touch(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("lease-busy rerender must be a no-op")
+
+    monkeypatch.setattr(
+        runner_module,
+        "try_acquire_rerender_publication_lease",
+        lease_busy,
+    )
+    monkeypatch.setattr(runner_module, "mark_review_rendering", must_not_touch)
+    monkeypatch.setattr(runner_module, "_render_selected_outputs", must_not_touch)
+
+    statuses = run_subtitle_review_render(
+        job_id,
+        render_revision=review.render_revision,
+        session_factory=session_factory,
+        paths=storage,
+    )
+
+    assert statuses == []
+    assert lease_calls == [(job_id, review.render_revision)]
+    assert not rerender_publication_marker_path(
+        storage.job_outputs(job_id)
+    ).exists()
+    with session_factory() as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        assert job.status == "rendering_normal_clips"
 
 
 @pytest.mark.parametrize(
@@ -132,6 +438,7 @@ def test_guarded_rerender_failure_leaves_post_render_gate_missing(
             job_dir,
             job_id=job_id,
             render_revision=1,
+            attempt_id="preexisting_attempt",
         )
         preexisting_marker = marker_path.read_bytes()
     write_selected_clips(selection, job_dir / "selected_clips.json")
@@ -155,6 +462,11 @@ def test_guarded_rerender_failure_leaves_post_render_gate_missing(
     monkeypatch.setattr(runner_module, "write_transcript_segments", lambda *_args: None)
     monkeypatch.setattr(runner_module, "apply_reviewed_clip_content", lambda current, _review: current)
     monkeypatch.setattr(runner_module, "_active_quality_gate_mode", lambda *_args: "guarded")
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_content_quality_gate",
+        lambda **_kwargs: _passing_content_decision(job_id),
+    )
     monkeypatch.setattr(
         runner_module,
         "evaluate_post_render_quality_gate",
@@ -233,6 +545,7 @@ def test_guarded_rerender_failure_leaves_post_render_gate_missing(
         )
         run_subtitle_review_render(
             job_id,
+            render_revision=review.render_revision,
             session_factory=session_factory,
             paths=storage,
         )
@@ -246,6 +559,7 @@ def test_guarded_rerender_failure_leaves_post_render_gate_missing(
         with pytest.raises(RuntimeError, match=expected_message):
             run_subtitle_review_render(
                 job_id,
+                render_revision=review.render_revision,
                 session_factory=session_factory,
                 paths=storage,
             )
@@ -347,6 +661,11 @@ def test_guarded_rerender_hashes_projected_canonical_exports_before_promotion(
     monkeypatch.setattr(runner_module, "write_transcript_segments", lambda *_args: None)
     monkeypatch.setattr(runner_module, "apply_reviewed_clip_content", lambda current, _review: current)
     monkeypatch.setattr(runner_module, "_active_quality_gate_mode", lambda *_args: "guarded")
+    monkeypatch.setattr(
+        runner_module,
+        "evaluate_content_quality_gate",
+        lambda **_kwargs: _passing_content_decision(job_id),
+    )
 
     def fake_render_selected_outputs(**kwargs: Any) -> tuple[Any, Any, list[object], Path]:
         staging_dir = kwargs["storage_paths"].job_outputs(job_id)
@@ -411,6 +730,7 @@ def test_guarded_rerender_hashes_projected_canonical_exports_before_promotion(
     ):
         run_subtitle_review_render(
             job_id,
+            render_revision=review.render_revision,
             session_factory=session_factory,
             paths=storage,
         )

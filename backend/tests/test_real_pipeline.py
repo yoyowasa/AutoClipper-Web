@@ -1794,16 +1794,21 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         review = response.json()
     assert review["confirmedClipCount"] == review["totalClipCount"] == 2
 
-    queued_jobs: list[str] = []
-    app.dependency_overrides[get_enqueue_render_job] = lambda: queued_jobs.append
+    queued_jobs: list[tuple[str, int]] = []
+    app.dependency_overrides[get_enqueue_render_job] = lambda: (
+        lambda queued_job_id, render_revision: queued_jobs.append(
+            (queued_job_id, render_revision)
+        )
+    )
     finalized = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/finalize")
     assert finalized.status_code == 202
     assert finalized.json()["status"] == "rendering_normal_clips"
-    assert queued_jobs == [created["jobId"]]
+    assert queued_jobs == [(created["jobId"], 1)]
 
     preview_short_render_count = len(short_render_kwargs)
     resume_statuses = run_subtitle_review_render(
         created["jobId"],
+        render_revision=1,
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
         dependencies=dependencies,
@@ -1906,9 +1911,10 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     queued_jobs.clear()
     rerender_queued = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/finalize")
     assert rerender_queued.status_code == 202
-    assert queued_jobs == [created["jobId"]]
+    assert queued_jobs == [(created["jobId"], 2)]
     rerender_statuses = run_subtitle_review_render(
         created["jobId"],
+        render_revision=2,
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
         dependencies=dependencies,
@@ -1948,6 +1954,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
 
     failed_statuses = run_subtitle_review_render(
         created["jobId"],
+        render_revision=3,
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
         dependencies=AutoClipperPipelineDependencies(

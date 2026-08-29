@@ -594,6 +594,48 @@ def _preview_check(document: SubtitleReviewDocument) -> QualityGateCheck:
     )
 
 
+def _human_review_confirmation(
+    clips: Sequence[Any],
+    *,
+    scope: str,
+    applicable: bool = True,
+) -> tuple[bool, dict[str, Any]]:
+    scoped_clips = list(clips)
+    current_preview_ready_clip_ids = [
+        clip.id
+        for clip in scoped_clips
+        if clip.preview_state == "ready"
+        and clip.preview_spec_hash
+        and clip.preview_video_url
+    ]
+    confirmed_clip_ids = [clip.id for clip in scoped_clips if clip.confirmed]
+    accepted_ready_clip_ids = [
+        clip.id
+        for clip in scoped_clips
+        if clip.confirmed
+        and clip.preview_state == "ready"
+        and clip.preview_spec_hash
+        and clip.preview_video_url
+    ]
+    accepted = bool(scoped_clips) and len(accepted_ready_clip_ids) == len(scoped_clips)
+    evidence = {
+        "provider": "human_review_confirmation",
+        "scope": scope,
+        "applicable": applicable,
+        "clipCount": len(scoped_clips),
+        "currentPreviewReadyClipIds": current_preview_ready_clip_ids,
+        "confirmedClipIds": confirmed_clip_ids,
+        "acceptedReadyClipIds": accepted_ready_clip_ids,
+        "previewSpecHashes": {
+            clip.id: clip.preview_spec_hash for clip in scoped_clips
+        },
+        "incompleteClipIds": [
+            clip.id for clip in scoped_clips if clip.id not in accepted_ready_clip_ids
+        ],
+    }
+    return accepted, evidence
+
+
 def evaluate_content_quality_gate(
     *,
     job_id: str,
@@ -601,33 +643,51 @@ def evaluate_content_quality_gate(
     settings: Mapping[str, Any],
     mode: QualityGateMode = "guarded",
 ) -> QualityGateDecision:
+    all_clips_accepted, all_clips_evidence = _human_review_confirmation(
+        document.clips,
+        scope="all_clips",
+    )
+    short_clips = [clip for clip in document.clips if clip.type == "short"]
+    all_shorts_accepted, short_evidence = _human_review_confirmation(
+        short_clips,
+        scope="short_clips",
+        applicable=bool(short_clips),
+    )
+    framing_outcome: QualityGateOutcome = (
+        "pass" if not short_clips or all_shorts_accepted else "unknown"
+    )
     checks = [
         _content_structure_check(document),
         _preview_check(document),
         _check(
             "content.title_hook_semantics",
-            "unknown",
-            reason_code="title_hook_semantic_quality_not_connected",
-            evidence={"provider": "not_connected"},
+            "pass" if all_clips_accepted else "unknown",
+            reason_code=(
+                None
+                if all_clips_accepted
+                else "human_review_or_current_preview_incomplete"
+            ),
+            evidence=all_clips_evidence,
         ),
         _check(
             "content.subtitle_accuracy",
-            "unknown",
-            reason_code="subtitle_accuracy_check_not_connected",
-            evidence={"provider": "not_connected"},
+            "pass" if all_clips_accepted else "unknown",
+            reason_code=(
+                None
+                if all_clips_accepted
+                else "human_review_or_current_preview_incomplete"
+            ),
+            evidence=all_clips_evidence,
         ),
         _check(
             "content.actual_framing",
-            "unknown" if any(clip.type == "short" for clip in document.clips) else "pass",
+            framing_outcome,
             reason_code=(
-                "actual_framing_check_not_connected"
-                if any(clip.type == "short" for clip in document.clips)
+                "human_review_or_current_preview_incomplete"
+                if framing_outcome == "unknown"
                 else None
             ),
-            evidence={
-                "provider": "not_connected",
-                "applicable": any(clip.type == "short" for clip in document.clips),
-            },
+            evidence=short_evidence,
         ),
     ]
     return _decision(

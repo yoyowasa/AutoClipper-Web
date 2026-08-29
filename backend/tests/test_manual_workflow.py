@@ -549,6 +549,7 @@ def test_manual_subtitle_modes_skip_audio_and_prepare_review(
 
         resume_visited = run_subtitle_review_render(
             "job_manual",
+            render_revision=1,
             session_factory=session_factory,
             paths=storage,
             dependencies=AutoClipperPipelineDependencies(

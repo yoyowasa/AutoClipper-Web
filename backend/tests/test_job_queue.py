@@ -108,6 +108,116 @@ def test_retry_enqueue_does_not_replace_terminal_job_when_db_disallows_it(
     assert queue.calls == []
 
 
+def test_subtitle_render_enqueue_uses_revision_scoped_unique_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    queue_module.enqueue_subtitle_review_render("job_render", 3)
+
+    assert len(queue.calls) == 1
+    function, args, kwargs = queue.calls[0]
+    assert function is queue_module.run_subtitle_review_render
+    assert args == ("job_render",)
+    assert kwargs["render_revision"] == 3
+    assert kwargs["job_id"] == "subtitle_review_render-job_render-r3"
+    assert kwargs["retry"].max == 2
+    assert kwargs["retry"].intervals == [0]
+    assert re.fullmatch(r"[A-Za-z0-9_-]+", kwargs["job_id"])
+    assert kwargs["unique"] is True
+    assert kwargs["job_timeout"] == 3600
+
+
+def test_subtitle_render_enqueue_keeps_active_same_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    rq_job_id = queue_module.subtitle_review_render_rq_job_id("job_render", 2)
+    queue.jobs[rq_job_id] = FakeJob(JobStatus.STARTED)
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    queue_module.enqueue_subtitle_review_render("job_render", 2)
+
+    assert queue.calls == []
+
+
+def test_subtitle_render_enqueue_allows_next_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    previous_rq_job_id = queue_module.subtitle_review_render_rq_job_id(
+        "job_render",
+        2,
+    )
+    queue.jobs[previous_rq_job_id] = FakeJob(JobStatus.STARTED)
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    queue_module.enqueue_subtitle_review_render("job_render", 3)
+
+    assert len(queue.calls) == 1
+    assert queue.calls[0][2]["job_id"] == "subtitle_review_render-job_render-r3"
+
+
+def test_subtitle_render_enqueue_uses_next_id_after_terminal_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    rq_job_id = queue_module.subtitle_review_render_rq_job_id("job_render", 2)
+    old_job = FakeJob(JobStatus.FAILED)
+    queue.jobs[rq_job_id] = old_job
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    queue_module.enqueue_subtitle_review_render("job_render", 2)
+
+    assert old_job.deleted is False
+    assert len(queue.calls) == 1
+    assert queue.calls[0][2]["job_id"] == f"{rq_job_id}-a1"
+
+
+def test_subtitle_render_enqueue_skips_terminal_attempt_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    base_id = queue_module.subtitle_review_render_rq_job_id("job_render", 4)
+    queue.jobs[base_id] = FakeJob(JobStatus.FAILED)
+    queue.jobs[f"{base_id}-a1"] = FakeJob(JobStatus.FINISHED)
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    queue_module.enqueue_subtitle_review_render("job_render", 4)
+
+    assert len(queue.calls) == 1
+    assert queue.calls[0][2]["job_id"] == f"{base_id}-a2"
+
+
+def test_subtitle_render_enqueue_dedupes_active_retry_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    base_id = queue_module.subtitle_review_render_rq_job_id("job_render", 4)
+    queue.jobs[base_id] = FakeJob(JobStatus.FAILED)
+    queue.jobs[f"{base_id}-a1"] = FakeJob(JobStatus.STARTED)
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    queue_module.enqueue_subtitle_review_render("job_render", 4)
+
+    assert queue.calls == []
+
+
+def test_subtitle_render_enqueue_resolves_concurrent_duplicate_as_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    queue.duplicate_on_next_enqueue = True
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    queue_module.enqueue_subtitle_review_render("job_render", 2)
+
+    assert len(queue.calls) == 1
+    rq_job_id = queue_module.subtitle_review_render_rq_job_id("job_render", 2)
+    assert queue.fetch_job(rq_job_id) is not None
+
+
 def test_subtitle_preview_enqueue_uses_content_addressed_unique_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

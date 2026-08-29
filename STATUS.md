@@ -8242,3 +8242,38 @@ pip check: pass
 - 内容正確性、タイトル／フック、字幕、最終画角の自動判定は未接続。このため現行`guarded`は字幕確認を自動通過しない。
 - 同一jobの再レンダーworkerが二重実行された場合のattempt所有leaseは未実装。通常の単一RQ workerでは低頻度だが、Phase 3でjob単位leaseまたはattempt ID付きmarkerへ更新する。
 - 実際の1時間動画を使ったGPU jobのPhase 2受入確認は未実施。
+
+## 2026-08-29 内容確認証拠と再レンダー排他（Phase 3）
+
+### 目的
+
+- 人のOK操作と現行preview artifactを追跡可能な品質証拠として扱い、内容ゲートの判定抜けと同一revisionの二重再レンダーを防ぐ。
+
+### 現在状態・変更
+
+- 全clipが人のOK済みで、現在のexact／live preview artifactも生成済みの場合、タイトル／フック、字幕、ショート画角を`human_review_confirmation`として`pass`にする。未確認・preview未完成は`unknown`のままにし、preview spec hashを判断証拠へ残す。人がexact previewを再生した証拠とは扱わない。
+- `guarded`の内容判定をレンダー前へ移動した。decision保存失敗またはrouteが`continue`以外なら、字幕・selected clips・MP4・ExportItemへ触れず`awaiting_subtitle_review`へ戻す。
+- 字幕レンダーRQ job IDを`jobId + renderRevision + attempt`で一意化した。同じrevisionのactive jobは追加せず、terminal attemptは削除せず次attempt IDを使う。worker異常終了時はRQが同revisionを最大2回自動再投入する。古いrevisionと初回完了済みreviewの遅延配送は無変更で終了する。
+- render workerの`renderRevision`を必須化した。更新前にqueue済みのrevisionなしpayloadは処理開始前に拒否し、revision照合の迂回を防ぐ。
+- 再レンダー開始時にjob単位の非blocking OS advisory leaseを取得する。Windowsは`msvcrt.locking`、POSIXは`fcntl.flock`を使い、process終了時にOSが解放する。lock前にlease fileへ書き込まず、競合中のpayload破損を防ぐ。
+- publication markerをattempt ID付きversion 2にし、現在の所有attemptだけが解除できる。既存version 1 markerは失敗時に保持し、完全成功時だけlease保持中に解除する。
+- reviewを`completed`へ保存した直後にworkerが停止しても、markerが残る同revisionの再配送はlease取得後に`render_queued`へ戻して再開する。lease取得自体の例外では既存owner markerを保持する。
+- `auto`は引き続き無効。人の確認を音声照合や自動意味判定として扱わない。
+
+### 変更ファイル
+
+- backend: `app/jobs/quality_gate.py`、`app/jobs/publication_state.py`、`app/jobs/queue.py`、`app/jobs/runner.py`、`app/api/jobs.py`
+- test: `tests/test_api_routes.py`、`tests/test_guarded_quality_gate.py`、`tests/test_guarded_quality_gate_integration.py`、`tests/test_guarded_rerender_promotion_gate.py`、`tests/test_job_queue.py`、`tests/test_manual_workflow.py`、`tests/test_real_pipeline.py`、`tests/test_rerender_publication_lease.py`
+
+### 最小検証
+
+- backend全test: `822 passed / 1 skipped`。既定SQLite親directory不在を避けるため、repo内一時SQLiteを明示して全件実行しpass。一時DBは削除済み。
+- Phase 3対象test: `213 passed`。内容gate、render前停止、post-render、RQ重複／terminal retry、stale revision、lease busy、marker所有権、completed+marker回復、process終了後lease再取得、rerender rollbackを確認した。
+- backend Ruff、frontend typecheck／lint／build、`docker compose config --quiet`、`git diff --check`: pass。
+- backend／GPU workerを再構築し、backend healthy、workerはCUDA `float16`で起動。`/health=200`、`/upload=200`。Linux worker内でも`fcntl.flock`の競合拒否と解放後再取得を確認した。
+
+### 未解決事項
+
+- 音声との再照合による字幕正確性、タイトル／フックの意味品質、人物見切れの自動判定は未接続。現状の`pass`は人のOKと現在のpreview artifact生成済みを組み合わせた証拠に限定する。
+- Windowsではprocess終了後のlease解放、Linux workerでは`fcntl.flock`の競合拒否と解放後再取得を確認済み。Linux workerの異常終了後再取得は未確認。
+- 実際の1時間動画を使ったGPU jobのPhase 3受入確認は未実施。

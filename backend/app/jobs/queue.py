@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 from redis import Redis
-from rq import Queue
+from rq import Queue, Retry
 from rq.exceptions import DuplicateJobError
 from rq.job import JobStatus
 
@@ -32,7 +32,7 @@ SubtitleReviewHookSceneUpdateEnqueue = Callable[
 ]
 SubtitleReviewPreviewEnqueue = Callable[[str, str, str], None]
 TitleHookSuggestionsEnqueue = Callable[[str, str, str], None]
-RenderEnqueue = Callable[[str], None]
+RenderEnqueue = Callable[[str, int], None]
 ACTIVE_RETRY_RQ_STATUSES = {
     JobStatus.CREATED,
     JobStatus.QUEUED,
@@ -93,9 +93,46 @@ def enqueue_autoclipper_retry_job(
     raise RuntimeError("retry RQ attempt limit exceeded")
 
 
-def enqueue_subtitle_review_render(job_id: str) -> None:
+def subtitle_review_render_rq_job_id(
+    job_id: str,
+    render_revision: int,
+    attempt: int = 0,
+) -> str:
+    base_rq_job_id = f"subtitle_review_render-{job_id}-r{render_revision}"
+    return base_rq_job_id if attempt == 0 else f"{base_rq_job_id}-a{attempt}"
+
+
+def enqueue_subtitle_review_render(job_id: str, render_revision: int) -> None:
     queue = get_queue()
-    queue.enqueue(run_subtitle_review_render, job_id, job_timeout=3600)
+    for attempt in range(MAX_RETRY_RQ_ATTEMPTS):
+        rq_job_id = subtitle_review_render_rq_job_id(
+            job_id,
+            render_revision,
+            attempt,
+        )
+        existing = queue.fetch_job(rq_job_id)
+        if existing is not None:
+            if existing.get_status(refresh=True) in ACTIVE_RETRY_RQ_STATUSES:
+                return
+            continue
+        try:
+            queue.enqueue(
+                run_subtitle_review_render,
+                job_id,
+                render_revision=render_revision,
+                job_timeout=3600,
+                job_id=rq_job_id,
+                retry=Retry(max=2),
+                unique=True,
+            )
+            return
+        except DuplicateJobError:
+            concurrent = queue.fetch_job(rq_job_id)
+            if concurrent is None:
+                raise
+            if concurrent.get_status(refresh=True) in ACTIVE_RETRY_RQ_STATUSES:
+                return
+    raise RuntimeError("subtitle render RQ attempt limit exceeded")
 
 
 def subtitle_review_preview_rq_job_id(
