@@ -2533,6 +2533,32 @@ def test_subtitle_style_presets_reject_invalid_slot_payload(client: TestClient) 
     assert invalid_color.status_code == 422
 
 
+def test_youtube_posting_profile_is_persisted_in_database(client: TestClient) -> None:
+    initial_response = client.get("/api/preferences/youtube-posting-profile")
+
+    assert initial_response.status_code == 200
+    assert initial_response.json()["profile"]["performerName"] == ""
+    payload = {
+        "version": 1,
+        "profile": {
+            "performerName": "儒烏風亭らでん",
+            "affiliation": "hololive DEV_IS / ReGLOSS",
+            "baseHashtags": ["#儒烏風亭らでん", "#ReGLOSS"],
+            "shortHashtags": ["#shortsfunny"],
+            "baseTags": ["儒烏風亭らでん", "ReGLOSS"],
+        },
+    }
+
+    saved = client.put("/api/preferences/youtube-posting-profile", json=payload)
+
+    assert saved.status_code == 200
+    assert client.get("/api/preferences/youtube-posting-profile").json() == payload
+    with next(app.dependency_overrides[get_db]()) as db:
+        preference = db.get(AppPreference, "youtube_posting_profile")
+        assert preference is not None
+        assert preference.value_json["profile"]["performerName"] == "儒烏風亭らでん"
+
+
 def test_create_job_and_fetch_status(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",

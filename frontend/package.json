@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings=0",
     "test:overlay-fit": "tsx tests/overlayTextFit.golden.ts",
-    "test:automation-ui": "tsx tests/automationQuality.test.ts"
+    "test:automation-ui": "tsx tests/automationQuality.test.ts",
+    "test:youtube-posting": "tsx tests/youtubePosting.test.ts"
   },
   "dependencies": {
     "next": "^16.3.3",

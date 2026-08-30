@@ -9,15 +9,19 @@ import {
 } from "../../components/SettingsPanel";
 import { UploadDropzone } from "../../components/UploadDropzone";
 import { UploadActionBar } from "../../components/UploadActionBar";
+import { YouTubePostingSettingsPanel } from "../../components/YouTubePostingSettingsPanel";
 import {
   cleanupExpiredStorage,
   createJob,
   getStorageStatus,
+  getYouTubePostingProfile,
   reopenCompletedVideo,
+  saveYouTubePostingProfile,
   uploadVideo
 } from "../../lib/api";
 import { manualRangeValidationError } from "../../lib/manualClipRanges";
 import type { ClipSettings, StorageStatusResponse } from "../../lib/types";
+import { parseYouTubeSourceFromFilename } from "../../lib/youtubePosting";
 
 type UploadMode = "new" | "manual" | "reedit";
 type SubmissionStage = "idle" | "uploading" | "creating_job" | "opening_reedit";
@@ -112,6 +116,25 @@ function UploadForm() {
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    void getYouTubePostingProfile()
+      .then((document) => {
+        if (active) {
+          setSettings((current) => ({
+            ...current,
+            youtubePostingProfile: document.profile
+          }));
+        }
+      })
+      .catch(() => {
+        // 投稿プリセットが未保存でも動画作成は続行できる。
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   async function handleStorageCleanup() {
     if (
       !storageStatus ||
@@ -194,6 +217,11 @@ function UploadForm() {
         router.push(`/jobs/${reopened.jobId}/subtitles?${query.toString()}`);
         return;
       }
+      try {
+        await saveYouTubePostingProfile(settings.youtubePostingProfile);
+      } catch {
+        // プリセット保存失敗だけでは動画処理を止めない。
+      }
       const uploaded = await uploadVideo(
         file,
         setUploadProgress,
@@ -247,7 +275,9 @@ function UploadForm() {
       ...current,
       workflowMode: nextMode === "manual" ? "manual" : "automatic",
       automationMode: nextMode === "manual" ? "manual" : current.automationMode,
-      heatmapIntervalMode: false
+      heatmapIntervalMode: false,
+      youtubeSourceTitle: "",
+      youtubeSourceUrl: ""
     }));
     setSubmissionStage("idle");
     setUploadProgress(0);
@@ -453,6 +483,20 @@ function UploadForm() {
                 }
                 onFileChange={(nextFile) => {
                   setFile(nextFile);
+                  if (nextFile && uploadMode !== "reedit") {
+                    const detected = parseYouTubeSourceFromFilename(nextFile.name);
+                    setSettings((current) => ({
+                      ...current,
+                      youtubeSourceTitle: detected?.title ?? "",
+                      youtubeSourceUrl: detected?.url ?? ""
+                    }));
+                  } else if (!nextFile) {
+                    setSettings((current) => ({
+                      ...current,
+                      youtubeSourceTitle: "",
+                      youtubeSourceUrl: ""
+                    }));
+                  }
                   const keepHeatmap = Boolean(
                     heatmapFile &&
                       nextFile &&
@@ -465,6 +509,14 @@ function UploadForm() {
                 }}
               />
             </div>
+
+            {uploadMode !== "reedit" ? (
+              <YouTubePostingSettingsPanel
+                disabled={isSubmitting}
+                settings={settings}
+                onChange={setSettings}
+              />
+            ) : null}
 
             {uploadMode === "new" ? (
               <section className="border-t border-[#d5d5d2] bg-white p-3">

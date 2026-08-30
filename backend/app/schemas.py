@@ -1,10 +1,15 @@
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.candidates.merge_boundaries import ClipTextStyle
-from app.posting_metadata import PostMetadataSource, YouTubeTitleCandidate
+from app.posting_metadata import (
+    PostMetadataSource,
+    YouTubePostingProfile,
+    YouTubeTitleCandidate,
+)
 
 
 JobStatus = Literal[
@@ -246,6 +251,13 @@ class SubtitleStylePresetDocument(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
+class YouTubePostingProfileDocument(BaseModel):
+    version: Literal[1] = 1
+    profile: YouTubePostingProfile = Field(default_factory=YouTubePostingProfile)
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
 class JobSettings(BaseModel):
     workflow_mode: WorkflowMode = Field(default="automatic", alias="workflowMode")
     automation_mode: AutomationMode = Field(default="manual", alias="automationMode")
@@ -447,6 +459,20 @@ class JobSettings(BaseModel):
         alias="allowBoundaryExpansionBeyondMaxDuration",
     )
     e2e_fixture_transcript: bool = Field(default=False, alias="e2eFixtureTranscript")
+    youtube_source_title: str = Field(
+        default="",
+        max_length=300,
+        alias="youtubeSourceTitle",
+    )
+    youtube_source_url: str = Field(
+        default="",
+        max_length=500,
+        alias="youtubeSourceUrl",
+    )
+    youtube_posting_profile: YouTubePostingProfile = Field(
+        default_factory=YouTubePostingProfile,
+        alias="youtubePostingProfile",
+    )
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
@@ -455,6 +481,21 @@ class JobSettings(BaseModel):
     def normalize_legacy_transcription_language(cls, value: Any) -> Any:
         if isinstance(value, str) and value.strip().lower() in {"auto", "ja"}:
             return "ja"
+        return value
+
+    @field_validator("youtube_source_title", "youtube_source_url", mode="before")
+    @classmethod
+    def normalize_youtube_source_text(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("youtube_source_url")
+    @classmethod
+    def validate_youtube_source_url(cls, value: str) -> str:
+        if not value:
+            return value
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("youtubeSourceUrl must be an absolute HTTP(S) URL")
         return value
 
     @model_validator(mode="after")
@@ -593,6 +634,7 @@ class SubtitleReviewClipApplyRequest(SubtitleReviewClipContentUpdateRequest):
     selected_title_id: str | None = Field(default=None, alias="selectedTitleId")
     youtube_description: str = Field(default="", max_length=2000, alias="youtubeDescription")
     youtube_hashtags: list[str] = Field(default_factory=list, max_length=12, alias="youtubeHashtags")
+    youtube_tags: list[str] = Field(default_factory=list, max_length=40, alias="youtubeTags")
     description_evidence_segment_ids: list[str] = Field(
         default_factory=list,
         max_length=64,
@@ -626,6 +668,10 @@ class SubtitleReviewClipApplyRequest(SubtitleReviewClipContentUpdateRequest):
             raise ValueError("duplicate YouTube hashtag")
         if any(not hashtag.startswith("#") for hashtag in self.youtube_hashtags):
             raise ValueError("YouTube hashtags must start with #")
+        if len(self.youtube_tags) != len({tag.casefold() for tag in self.youtube_tags}):
+            raise ValueError("duplicate YouTube tag")
+        if len(",".join(self.youtube_tags)) > 500:
+            raise ValueError("YouTube tags must be 500 characters or fewer")
         if len(self.description_evidence_segment_ids) != len(
             set(self.description_evidence_segment_ids)
         ):
@@ -833,6 +879,7 @@ class ResultExportItem(BaseModel):
     selected_title_id: str | None = Field(default=None, alias="selectedTitleId")
     youtube_description: str = Field(default="", alias="youtubeDescription")
     youtube_hashtags: list[str] = Field(default_factory=list, alias="youtubeHashtags")
+    youtube_tags: list[str] = Field(default_factory=list, alias="youtubeTags")
     description_evidence_segment_ids: list[str] = Field(
         default_factory=list,
         alias="descriptionEvidenceSegmentIds",

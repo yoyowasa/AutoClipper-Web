@@ -5,6 +5,7 @@ import { useState } from "react";
 import { formatDuration, formatScore } from "../lib/format";
 import { toApiUrl } from "../lib/api";
 import type { PostTitleIntent, ResultExportItem } from "../lib/types";
+import { descriptionWithHashtags, youtubeTagsText } from "../lib/youtubePosting";
 
 const INTENT_LABELS: Record<PostTitleIntent, string> = {
   factual: "事実重視",
@@ -22,8 +23,10 @@ function normalizedHashtags(values: string[]): string[] {
 function postCopyText(item: ResultExportItem): string {
   return [
     item.title.trim(),
-    (item.youtubeDescription ?? "").trim(),
-    normalizedHashtags(item.youtubeHashtags ?? []).join(" ")
+    descriptionWithHashtags(
+      item.youtubeDescription ?? "",
+      normalizedHashtags(item.youtubeHashtags ?? [])
+    )
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -76,8 +79,12 @@ export function ResultVideoCard({
   const titleCandidates = item.titleCandidates ?? [];
   const youtubeDescription = item.youtubeDescription ?? "";
   const youtubeHashtags = normalizedHashtags(item.youtubeHashtags ?? []);
+  const youtubeTags = item.youtubeTags ?? [];
   const hasPostMetadata = Boolean(
-    titleCandidates.length > 0 || youtubeDescription || youtubeHashtags.length > 0
+    titleCandidates.length > 0 ||
+      youtubeDescription ||
+      youtubeHashtags.length > 0 ||
+      youtubeTags.length > 0
   );
   const scoreSource = scoreSourceLabel(item);
   const showOverlayStatus =
@@ -230,7 +237,12 @@ export function ResultVideoCard({
                 {youtubeHashtags.join(" ")}
               </p>
             ) : null}
-            <div className="mt-3 grid grid-cols-3 gap-1">
+            {youtubeTags.length > 0 ? (
+              <p className="mt-2 break-words text-neutral-600">
+                タグ: {youtubeTagsText(youtubeTags)}
+              </p>
+            ) : null}
+            <div className="mt-3 grid grid-cols-2 gap-1 sm:grid-cols-4">
               <button
                 className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold"
                 type="button"
@@ -240,11 +252,24 @@ export function ResultVideoCard({
               </button>
               <button
                 className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
-                disabled={!youtubeDescription.trim()}
+                disabled={!youtubeDescription.trim() && youtubeHashtags.length === 0}
                 type="button"
-                onClick={() => void copyField("description", youtubeDescription)}
+                onClick={() =>
+                  void copyField(
+                    "description",
+                    descriptionWithHashtags(youtubeDescription, youtubeHashtags)
+                  )
+                }
               >
                 {copyStatus === "description" ? "コピー済み" : "説明欄"}
+              </button>
+              <button
+                className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
+                disabled={youtubeTags.length === 0}
+                type="button"
+                onClick={() => void copyField("tags", youtubeTagsText(youtubeTags))}
+              >
+                {copyStatus === "tags" ? "コピー済み" : "タグ"}
               </button>
               <button
                 className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold"

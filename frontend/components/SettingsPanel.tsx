@@ -82,7 +82,16 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   shortLayout: "auto",
   shortOverlayTitleMode: "auto",
   shortTopBannerEnabled: true,
-  shortBottomBannerEnabled: true
+  shortBottomBannerEnabled: true,
+  youtubeSourceTitle: "",
+  youtubeSourceUrl: "",
+  youtubePostingProfile: {
+    performerName: "",
+    affiliation: "",
+    baseHashtags: [],
+    shortHashtags: ["#shortsfunny"],
+    baseTags: []
+  }
 };
 
 export function settingsForRuntimeProfile(profile: string | null): ClipSettings {

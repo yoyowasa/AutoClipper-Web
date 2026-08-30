@@ -19,7 +19,12 @@ from app.jobs.subtitle_review import (
 )
 from app.jobs.subtitle_review_preview import subtitle_review_document_lock
 from app.models import Job, Video
-from app.posting_metadata import YouTubeTitleCandidate, build_post_metadata_revision_hash
+from app.posting_metadata import (
+    YouTubePostingProfile,
+    YouTubeTitleCandidate,
+    build_post_metadata_revision_hash,
+    build_youtube_posting_copy,
+)
 from app.scoring.codex_title_hook_suggestions import (
     CodexTitleHookSuggestionError,
     CodexTitleHookSuggestionGenerator,
@@ -525,6 +530,10 @@ def generate_title_hook_suggestions_for_auto(
 def apply_recommended_title_hook_suggestions(
     document: SubtitleReviewDocument,
     artifact: TitleHookSuggestionsDocument,
+    *,
+    youtube_source_title: str = "",
+    youtube_source_url: str = "",
+    youtube_posting_profile: YouTubePostingProfile | dict[str, Any] | None = None,
 ) -> SubtitleReviewDocument:
     """Apply the generated recommendation while preserving its evidence contract."""
 
@@ -574,8 +583,17 @@ def apply_recommended_title_hook_suggestions(
     ]
     clip.recommended_title_id = recommended.id
     clip.selected_title_id = recommended.id
-    clip.youtube_description = artifact.youtube_description
-    clip.youtube_hashtags = list(artifact.hashtags)
+    posting_copy = build_youtube_posting_copy(
+        clip_type=clip.type,
+        source_title=youtube_source_title,
+        source_url=youtube_source_url,
+        profile=youtube_posting_profile,
+        fallback_description=artifact.youtube_description,
+        topic_hashtags=artifact.hashtags,
+    )
+    clip.youtube_description = posting_copy.description
+    clip.youtube_hashtags = posting_copy.hashtags
+    clip.youtube_tags = posting_copy.tags
     clip.description_evidence_segment_ids = list(
         artifact.description_evidence_segment_ids
     )

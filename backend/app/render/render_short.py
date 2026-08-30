@@ -1076,6 +1076,7 @@ def _write_export_metadata(
                 "selected_title_id": candidate.selected_title_id,
                 "youtube_description": candidate.youtube_description,
                 "youtube_hashtags": candidate.youtube_hashtags,
+                "youtube_tags": candidate.youtube_tags,
                 "description_evidence_segment_ids": candidate.description_evidence_segment_ids,
                 "post_metadata_source": candidate.post_metadata_source,
                 "post_metadata_revision_hash": candidate.post_metadata_revision_hash,

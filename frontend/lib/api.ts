@@ -21,7 +21,9 @@ import type {
   SubtitleReviewFinalizeResponse,
   SubtitleReviewShortBannerSettings,
   TitleHookSuggestionResponse,
-  VideoUploadResponse
+  VideoUploadResponse,
+  YouTubePostingProfile,
+  YouTubePostingProfileDocument
 } from "./types";
 import type {
   SubtitleStylePresetDocument,
@@ -375,6 +377,28 @@ export async function updateSubtitleReviewClipContent(
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
+export async function getYouTubePostingProfile(): Promise<YouTubePostingProfileDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/preferences/youtube-posting-profile`,
+    { cache: "no-store" }
+  );
+  return parseJsonResponse<YouTubePostingProfileDocument>(response);
+}
+
+export async function saveYouTubePostingProfile(
+  profile: YouTubePostingProfile
+): Promise<YouTubePostingProfileDocument> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/preferences/youtube-posting-profile`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version: 1, profile })
+    }
+  );
+  return parseJsonResponse<YouTubePostingProfileDocument>(response);
+}
+
 export async function updateSubtitleReviewClipFraming(
   jobId: string,
   clipId: string,
@@ -550,6 +574,7 @@ export async function applySubtitleReviewClip(
     selectedTitleId: string | null;
     youtubeDescription: string;
     youtubeHashtags: string[];
+    youtubeTags: string[];
     descriptionEvidenceSegmentIds: string[];
     postMetadataSource: string | null;
     postMetadataRevisionHash: string | null;

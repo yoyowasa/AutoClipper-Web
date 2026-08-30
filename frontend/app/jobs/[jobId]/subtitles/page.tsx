@@ -39,6 +39,11 @@ import type {
   TitleHookSuggestion,
   TitleHookSuggestionResponse
 } from "../../../../lib/types";
+import {
+  descriptionWithHashtags,
+  tagsFromText,
+  youtubeTagsText
+} from "../../../../lib/youtubePosting";
 
 function readJobId(param: string | string[] | undefined): string {
   if (Array.isArray(param)) {
@@ -189,6 +194,7 @@ type ClipContentDraft = {
   selectedTitleId: string | null;
   youtubeDescription: string;
   youtubeHashtagsText: string;
+  youtubeTagsText: string;
   descriptionEvidenceSegmentIds: string[];
   postMetadataSource: string | null;
   postMetadataRevisionHash: string | null;
@@ -208,6 +214,7 @@ type PostMetadataApplyPayload = {
   selectedTitleId: string | null;
   youtubeDescription: string;
   youtubeHashtags: string[];
+  youtubeTags: string[];
   descriptionEvidenceSegmentIds: string[];
   postMetadataSource: string | null;
   postMetadataRevisionHash: string | null;
@@ -219,6 +226,7 @@ function postMetadataApplyPayload(
 ): PostMetadataApplyPayload {
   const youtubeDescription = draft.youtubeDescription.trim();
   const youtubeHashtags = hashtagsFromText(draft.youtubeHashtagsText);
+  const youtubeTags = tagsFromText(draft.youtubeTagsText);
   if (invalidateAiEvidence) {
     return {
       titleCandidates: [],
@@ -226,6 +234,7 @@ function postMetadataApplyPayload(
       selectedTitleId: null,
       youtubeDescription,
       youtubeHashtags,
+      youtubeTags,
       descriptionEvidenceSegmentIds: [],
       postMetadataSource: "manual",
       postMetadataRevisionHash: null
@@ -237,6 +246,7 @@ function postMetadataApplyPayload(
     selectedTitleId: draft.selectedTitleId,
     youtubeDescription,
     youtubeHashtags,
+    youtubeTags,
     descriptionEvidenceSegmentIds: draft.descriptionEvidenceSegmentIds,
     postMetadataSource: draft.postMetadataSource,
     postMetadataRevisionHash: draft.postMetadataRevisionHash
@@ -327,6 +337,7 @@ function contentDraftForClip(clip: SubtitleReviewClip): ClipContentDraft {
     selectedTitleId: clip.selectedTitleId ?? null,
     youtubeDescription: clip.youtubeDescription ?? "",
     youtubeHashtagsText: (clip.youtubeHashtags ?? []).join(" "),
+    youtubeTagsText: youtubeTagsText(clip.youtubeTags ?? []),
     descriptionEvidenceSegmentIds: clip.descriptionEvidenceSegmentIds ?? [],
     postMetadataSource: clip.postMetadataSource ?? null,
     postMetadataRevisionHash: clip.postMetadataRevisionHash ?? null,
@@ -1862,6 +1873,7 @@ export default function SubtitleReviewPage() {
       selectedTitleId: suggestion.id,
       youtubeDescription: suggestionResponse?.youtubeDescription ?? "",
       youtubeHashtagsText: (suggestionResponse?.hashtags ?? []).join(" "),
+      youtubeTagsText: selectedClipContentDraft?.youtubeTagsText ?? "",
       descriptionEvidenceSegmentIds:
         suggestionResponse?.descriptionEvidenceSegmentIds ?? [],
       postMetadataSource: postMetadataSourceForProvider(suggestionResponse?.provider),
@@ -3222,7 +3234,27 @@ export default function SubtitleReviewPage() {
                       <p className="mt-1 text-[10px] text-neutral-500">
                         空白またはカンマ区切り・最大12個
                       </p>
-                      <div className="mt-2 grid grid-cols-3 gap-1">
+                      <label className="mt-2 block text-xs font-semibold text-neutral-700">
+                        タグ
+                        <textarea
+                          className="mt-1 min-h-20 w-full resize-y border border-neutral-300 bg-white px-2 py-2 text-sm leading-5 outline-none focus:border-sky-600"
+                          disabled={!isEditable}
+                          maxLength={500}
+                          placeholder="儒烏風亭らでん,ReGLOSS,ホロライブ切り抜き"
+                          value={selectedClipContentDraft?.youtubeTagsText ?? ""}
+                          onChange={(event) =>
+                            updateClipContentDraft(selectedClip.id, {
+                              youtubeTagsText: event.target.value,
+                              postMetadataSource: "manual",
+                              postMetadataRevisionHash: null
+                            })
+                          }
+                        />
+                      </label>
+                      <p className="mt-1 text-[10px] text-neutral-500">
+                        カンマ区切り・最大500文字
+                      </p>
+                      <div className="mt-2 grid grid-cols-2 gap-1 sm:grid-cols-4">
                         <button
                           className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
                           disabled={!selectedClipContentDraft?.publicationTitle.trim()}
@@ -3243,13 +3275,33 @@ export default function SubtitleReviewPage() {
                           onClick={() =>
                             void copyPostField(
                               "description",
-                              selectedClipContentDraft?.youtubeDescription ?? ""
+                              descriptionWithHashtags(
+                                selectedClipContentDraft?.youtubeDescription ?? "",
+                                hashtagsFromText(
+                                  selectedClipContentDraft?.youtubeHashtagsText ?? ""
+                                )
+                              )
                             )
                           }
                         >
                           {copiedPostField === "description"
                             ? "コピー済み"
                             : "説明欄をコピー"}
+                        </button>
+                        <button
+                          className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
+                          disabled={!selectedClipContentDraft?.youtubeTagsText.trim()}
+                          type="button"
+                          onClick={() =>
+                            void copyPostField(
+                              "tags",
+                              youtubeTagsText(
+                                tagsFromText(selectedClipContentDraft?.youtubeTagsText ?? "")
+                              )
+                            )
+                          }
+                        >
+                          {copiedPostField === "tags" ? "コピー済み" : "タグをコピー"}
                         </button>
                         <button
                           className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"

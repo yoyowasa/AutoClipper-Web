@@ -3091,9 +3091,11 @@ def _generate_auto_title_hook_evidence(
     input_path: Path,
     paths: StoragePaths,
     model: str,
+    settings: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, TitleHookSuggestionsDocument], dict[str, str]]:
     artifacts: dict[str, TitleHookSuggestionsDocument] = {}
     failures: dict[str, str] = {}
+    posting_settings = settings or {}
     for clip in document.clips:
         try:
             artifact = dependencies.auto_title_hook_generator(
@@ -3103,7 +3105,17 @@ def _generate_auto_title_hook_evidence(
                 paths=paths,
                 model=model,
             )
-            apply_recommended_title_hook_suggestions(document, artifact)
+            apply_recommended_title_hook_suggestions(
+                document,
+                artifact,
+                youtube_source_title=str(
+                    posting_settings.get("youtubeSourceTitle") or ""
+                ),
+                youtube_source_url=str(
+                    posting_settings.get("youtubeSourceUrl") or ""
+                ),
+                youtube_posting_profile=posting_settings.get("youtubePostingProfile"),
+            )
             artifacts[clip.id] = artifact
         except Exception as exc:
             failures[clip.id] = exc.__class__.__name__
@@ -3283,6 +3295,7 @@ def _resume_auto_after_clip_review(
         input_path=input_path,
         paths=storage_paths,
         model=str(settings.get("titleHookModel") or "codex-default"),
+        settings=settings,
     )
     preview_total = len(review_document.clips)
     _set_subtitle_review_preview_progress(
@@ -4557,6 +4570,7 @@ def run_autoclipper_job(
                             model=str(
                                 settings.get("titleHookModel") or "codex-default"
                             ),
+                            settings=settings,
                         )
                     )
                 preview_total = len(review_document.clips)

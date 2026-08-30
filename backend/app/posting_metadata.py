@@ -14,6 +14,145 @@ YOUTUBE_POSTING_PACKAGES_FILENAME = "youtube_posting_packages.json"
 YOUTUBE_POSTS_FILENAME = "youtube_posts.md"
 
 
+class YouTubePostingProfile(BaseModel):
+    performer_name: str = Field(default="", max_length=120, alias="performerName")
+    affiliation: str = Field(default="", max_length=160)
+    base_hashtags: list[str] = Field(
+        default_factory=list,
+        max_length=12,
+        alias="baseHashtags",
+    )
+    short_hashtags: list[str] = Field(
+        default_factory=lambda: ["#shortsfunny"],
+        max_length=5,
+        alias="shortHashtags",
+    )
+    base_tags: list[str] = Field(
+        default_factory=list,
+        max_length=40,
+        alias="baseTags",
+    )
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        extra="forbid",
+        str_strip_whitespace=True,
+    )
+
+    @field_validator("base_hashtags", "short_hashtags")
+    @classmethod
+    def validate_hashtags(cls, value: list[str]) -> list[str]:
+        normalized = _unique_strings(
+            item if item.strip().startswith("#") else f"#{item.strip()}"
+            for item in value
+            if item.strip()
+        )
+        if any(any(char.isspace() for char in item) for item in normalized):
+            raise ValueError("YouTube hashtags must not contain whitespace")
+        return normalized
+
+    @field_validator("base_tags")
+    @classmethod
+    def validate_tags(cls, value: list[str]) -> list[str]:
+        return _limit_youtube_tags(_unique_strings(value))
+
+
+class YouTubePostingCopy(BaseModel):
+    description: str = Field(default="", max_length=2000)
+    hashtags: list[str] = Field(default_factory=list, max_length=12)
+    tags: list[str] = Field(default_factory=list, max_length=40)
+
+    model_config = ConfigDict(extra="forbid")
+
+
+def _unique_strings(values: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw_value in values:
+        value = str(raw_value).strip()
+        key = value.casefold()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        result.append(value)
+    return result
+
+
+def _limit_youtube_tags(values: Sequence[str]) -> list[str]:
+    result: list[str] = []
+    total_length = 0
+    for value in values:
+        normalized = value.strip().strip(",")
+        if not normalized:
+            continue
+        next_length = len(normalized) + (1 if result else 0)
+        if total_length + next_length > 500:
+            break
+        result.append(normalized)
+        total_length += next_length
+        if len(result) >= 40:
+            break
+    return result
+
+
+def build_youtube_posting_copy(
+    *,
+    clip_type: str,
+    source_title: str = "",
+    source_url: str = "",
+    profile: YouTubePostingProfile | Mapping[str, Any] | None = None,
+    fallback_description: str = "",
+    topic_hashtags: Sequence[str] = (),
+) -> YouTubePostingCopy:
+    resolved_profile = (
+        profile
+        if isinstance(profile, YouTubePostingProfile)
+        else YouTubePostingProfile.model_validate(profile or {})
+    )
+    source_title = source_title.strip()
+    source_url = source_url.strip()
+    description_sections: list[str] = []
+    if source_title or source_url:
+        source_lines = ["元配信："]
+        if source_title:
+            source_lines.append(source_title)
+        if source_url:
+            source_lines.append(source_url)
+        description_sections.append("\n".join(source_lines))
+    if resolved_profile.performer_name or resolved_profile.affiliation:
+        performer = resolved_profile.performer_name
+        if resolved_profile.affiliation:
+            performer = (
+                f"{performer}（{resolved_profile.affiliation}）"
+                if performer
+                else resolved_profile.affiliation
+            )
+        description_sections.append(f"出演：\n{performer}")
+
+    hashtags = list(resolved_profile.base_hashtags)
+    if clip_type == "short":
+        hashtags.extend(resolved_profile.short_hashtags)
+    hashtags = _unique_strings(hashtags)
+    normalized_topics = _unique_strings(
+        item[1:] if item.startswith("#") else item for item in topic_hashtags
+    )
+    tags = _limit_youtube_tags(
+        _unique_strings([*resolved_profile.base_tags, *normalized_topics])
+    )
+    if not hashtags:
+        hashtags = _unique_strings(
+            item if item.startswith("#") else f"#{item}" for item in topic_hashtags
+        )[:12]
+    description = "\n\n".join(description_sections).strip()
+    if not description:
+        description = fallback_description.strip()
+    return YouTubePostingCopy(
+        description=description,
+        hashtags=hashtags,
+        tags=tags,
+    )
+
+
 class YouTubeTitleCandidate(BaseModel):
     id: str = Field(min_length=1, max_length=80)
     title: str = Field(min_length=1, max_length=100)
@@ -109,6 +248,7 @@ def write_youtube_posting_artifacts(clips: Sequence[Any], output_dir: str | Path
         publication_title = str(getattr(clip, "publication_title", "") or "").strip()
         youtube_description = str(getattr(clip, "youtube_description", "") or "").strip()
         hashtags = list(getattr(clip, "youtube_hashtags", []) or [])
+        tags = list(getattr(clip, "youtube_tags", []) or [])
         description_evidence_segment_ids = list(
             getattr(clip, "description_evidence_segment_ids", []) or []
         )
@@ -117,6 +257,7 @@ def write_youtube_posting_artifacts(clips: Sequence[Any], output_dir: str | Path
             and not publication_title
             and not youtube_description
             and not hashtags
+            and not tags
         ):
             continue
 
@@ -150,11 +291,17 @@ def write_youtube_posting_artifacts(clips: Sequence[Any], output_dir: str | Path
             ],
             "youtubeDescription": youtube_description,
             "youtubeHashtags": hashtags,
+            "youtubeTags": tags,
             "descriptionEvidenceSegmentIds": description_evidence_segment_ids,
             "postMetadataSource": getattr(clip, "post_metadata_source", None),
             "postMetadataRevisionHash": getattr(clip, "post_metadata_revision_hash", None),
         }
         packages.append(package)
+        copy_ready_description = "\n\n".join(
+            item
+            for item in [youtube_description, " ".join(hashtags)]
+            if item.strip()
+        )
         markdown_sections.append(
             "\n".join(
                 [
@@ -170,10 +317,10 @@ def write_youtube_posting_artifacts(clips: Sequence[Any], output_dir: str | Path
                     ],
                     "",
                     "### 説明欄",
-                    youtube_description,
+                    copy_ready_description,
                     "",
-                    "### ハッシュタグ",
-                    " ".join(hashtags),
+                    "### タグ",
+                    ",".join(tags),
                 ]
             ).rstrip()
         )
@@ -182,7 +329,7 @@ def write_youtube_posting_artifacts(clips: Sequence[Any], output_dir: str | Path
     markdown_path = youtube_posts_path(output_dir)
     _write_text_atomic(
         json_path,
-        json.dumps({"version": 1, "clips": packages}, ensure_ascii=False, indent=2) + "\n",
+        json.dumps({"version": 2, "clips": packages}, ensure_ascii=False, indent=2) + "\n",
     )
     _write_text_atomic(
         markdown_path,

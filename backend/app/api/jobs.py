@@ -127,7 +127,10 @@ from app.jobs.title_hook_suggestions import (
     write_title_hook_suggestion_input,
     write_title_hook_suggestions,
 )
-from app.posting_metadata import build_post_metadata_revision_hash
+from app.posting_metadata import (
+    build_post_metadata_revision_hash,
+    build_youtube_posting_copy,
+)
 from app.models import ExportItem, Job, Video
 from app.models import utc_now
 from app.render.render_exact_review_preview import (
@@ -701,6 +704,11 @@ def _result_item(
             selected.get("youtube_hashtags"),
             [],
         ),
+        youtubeTags=_first_value(
+            metadata.get("youtube_tags"),
+            selected.get("youtube_tags"),
+            [],
+        ),
         descriptionEvidenceSegmentIds=_first_value(
             metadata.get("description_evidence_segment_ids"),
             selected.get("description_evidence_segment_ids"),
@@ -881,6 +889,7 @@ def _reedit_candidate(
         selected_title_id=review_clip.selected_title_id,
         youtube_description=review_clip.youtube_description or None,
         youtube_hashtags=review_clip.youtube_hashtags,
+        youtube_tags=review_clip.youtube_tags,
         description_evidence_segment_ids=review_clip.description_evidence_segment_ids,
         post_metadata_source=review_clip.post_metadata_source,
         post_metadata_revision_hash=review_clip.post_metadata_revision_hash,
@@ -3743,6 +3752,18 @@ def convert_subtitle_review_clip_to_short(
         )
         duration = short_end - short_start
         converted_clip = document.clips[0]
+        settings = dict(job.settings_json or {})
+        posting_copy = build_youtube_posting_copy(
+            clip_type="short",
+            source_title=str(settings.get("youtubeSourceTitle") or ""),
+            source_url=str(settings.get("youtubeSourceUrl") or ""),
+            profile=settings.get("youtubePostingProfile"),
+            fallback_description=candidate.youtube_description or "",
+            topic_hashtags=candidate.youtube_tags,
+        )
+        converted_clip.youtube_description = posting_copy.description
+        converted_clip.youtube_hashtags = posting_copy.hashtags
+        converted_clip.youtube_tags = posting_copy.tags
         candidate_payload = candidate.model_dump(mode="python")
         candidate_payload.update(
             {
@@ -3769,6 +3790,9 @@ def convert_subtitle_review_clip_to_short(
                 "clip_plan_recommended_end": short_end,
                 "clip_plan_boundary_adjusted": False,
                 "selection_reason": "completed_normal_to_short",
+                "youtube_description": posting_copy.description,
+                "youtube_hashtags": posting_copy.hashtags,
+                "youtube_tags": posting_copy.tags,
             }
         )
         short_candidate = Candidate.model_validate(candidate_payload)
@@ -3783,7 +3807,6 @@ def convert_subtitle_review_clip_to_short(
             }
         )
 
-        settings = dict(job.settings_json or {})
         settings.update(
             {
                 "normalClipCount": 0,
@@ -3972,6 +3995,7 @@ def apply_subtitle_review_clip(
             "selected_title_id",
             "youtube_description",
             "youtube_hashtags",
+            "youtube_tags",
             "description_evidence_segment_ids",
             "post_metadata_source",
             "post_metadata_revision_hash",
@@ -4023,6 +4047,7 @@ def apply_subtitle_review_clip(
             resolved_description_evidence_ids = list(
                 request.description_evidence_segment_ids
             )
+            resolved_artifact: TitleHookSuggestionsDocument | None = None
             if (
                 not manualize_stale_payload
                 and request.post_metadata_source == "codex"
@@ -4039,6 +4064,7 @@ def apply_subtitle_review_clip(
                     and artifact.state == "ready"
                     and artifact.revision_hash == prospective_revision_hash
                 ):
+                    resolved_artifact = artifact
                     evidence_by_id = {
                         suggestion.id: suggestion.evidence_segment_ids
                         for suggestion in artifact.suggestions
@@ -4068,6 +4094,26 @@ def apply_subtitle_review_clip(
             for field_name in posting_fields:
                 if field_name in supplied_posting_fields:
                     style_updates[field_name] = getattr(request, field_name)
+            if resolved_artifact is not None:
+                posting_copy = build_youtube_posting_copy(
+                    clip_type=clip.type,
+                    source_title=str(
+                        (job.settings_json or {}).get("youtubeSourceTitle") or ""
+                    ),
+                    source_url=str(
+                        (job.settings_json or {}).get("youtubeSourceUrl") or ""
+                    ),
+                    profile=(job.settings_json or {}).get("youtubePostingProfile"),
+                    fallback_description=resolved_artifact.youtube_description,
+                    topic_hashtags=resolved_artifact.hashtags,
+                )
+                style_updates.update(
+                    {
+                        "youtube_description": posting_copy.description,
+                        "youtube_hashtags": posting_copy.hashtags,
+                        "youtube_tags": posting_copy.tags,
+                    }
+                )
             if "title_candidates" in supplied_posting_fields:
                 style_updates["title_candidates"] = resolved_title_candidates
             if "description_evidence_segment_ids" in supplied_posting_fields or (
@@ -4087,6 +4133,7 @@ def apply_subtitle_review_clip(
                     {
                         "youtube_description": "",
                         "youtube_hashtags": [],
+                        "youtube_tags": [],
                     }
                 )
             if manualize_stale_payload or stored_metadata_became_stale:

@@ -111,6 +111,7 @@ class Candidate(BaseModel):
     selected_title_id: str | None = None
     youtube_description: str | None = Field(default=None, max_length=2000)
     youtube_hashtags: list[str] = Field(default_factory=list, max_length=12)
+    youtube_tags: list[str] = Field(default_factory=list, max_length=40)
     description_evidence_segment_ids: list[str] = Field(default_factory=list, max_length=64)
     post_metadata_source: PostMetadataSource | None = None
     post_metadata_revision_hash: str | None = Field(default=None, min_length=64, max_length=64)
@@ -168,6 +169,10 @@ class Candidate(BaseModel):
             raise ValueError("duplicate YouTube hashtag")
         if any(not hashtag.startswith("#") for hashtag in self.youtube_hashtags):
             raise ValueError("YouTube hashtags must start with #")
+        if len(self.youtube_tags) != len({tag.casefold() for tag in self.youtube_tags}):
+            raise ValueError("duplicate YouTube tag")
+        if len(",".join(self.youtube_tags)) > 500:
+            raise ValueError("YouTube tags must be 500 characters or fewer")
         hook_start = self.hook_scene_start
         hook_end = self.hook_scene_end
         if (hook_start is None) != (hook_end is None):

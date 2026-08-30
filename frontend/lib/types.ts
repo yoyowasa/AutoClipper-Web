@@ -40,6 +40,19 @@ export type PostTitleCandidate = {
   reason: string;
   evidenceSegmentIds: string[];
 };
+
+export type YouTubePostingProfile = {
+  performerName: string;
+  affiliation: string;
+  baseHashtags: string[];
+  shortHashtags: string[];
+  baseTags: string[];
+};
+
+export type YouTubePostingProfileDocument = {
+  version: 1;
+  profile: YouTubePostingProfile;
+};
 export type ManualSubtitleMode = "auto" | "none" | "manual";
 
 export type ClipSelectionPreset =
@@ -156,6 +169,9 @@ export type ClipSettings = {
   subtitleCorrectionBatchSize: number;
   subtitleCorrectionContextSegments: number;
   subtitleCorrectionFallbackEnabled: boolean;
+  youtubeSourceTitle: string;
+  youtubeSourceUrl: string;
+  youtubePostingProfile: YouTubePostingProfile;
 };
 
 export type VideoUploadResponse = {
@@ -234,6 +250,7 @@ export type ResultExportItem = {
   selectedTitleId: string | null;
   youtubeDescription: string;
   youtubeHashtags: string[];
+  youtubeTags: string[];
   descriptionEvidenceSegmentIds: string[];
   postMetadataSource: string | null;
   duration: number;
@@ -352,6 +369,7 @@ export type SubtitleReviewClip = {
   selectedTitleId: string | null;
   youtubeDescription: string;
   youtubeHashtags: string[];
+  youtubeTags: string[];
   descriptionEvidenceSegmentIds: string[];
   postMetadataSource: string | null;
   postMetadataRevisionHash: string | null;

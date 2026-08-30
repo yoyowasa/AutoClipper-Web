@@ -8397,3 +8397,40 @@ pip check: pass
 
 - selection自動判定はこの実jobで証拠不足となり、人がclip planを承認した。承認後の最終ZIPは`clip_plan.json`を選定証跡とし、初回の`selection.json`は保持しない現行仕様。
 - タイトル／フック意味品質はCodexの字幕segment provenance、字幕正確性はASR confidence、人物追従はrenderer geometryによる間接証拠。完成pixelからの独立再検出は未接続。
+
+## 2026-08-30 YouTube説明欄テンプレートと投稿タグ
+
+### 目的
+
+- AIの自由文だけでなく、元配信・出演者・固定ハッシュタグ・検索タグを含む定型のYouTube説明欄をclipごとに生成する。
+- タイトル、説明欄、ハッシュタグ、YouTubeタグを字幕確認、完成画面、ZIPへ同じ内容で引き継ぐ。
+
+### 現在状態・変更
+
+- upload画面へ`YouTube投稿情報`を追加した。元配信タイトル／URLはjobごと、出演者／所属／固定ハッシュタグ／ショート用ハッシュタグ／固定タグは次回も再利用する。
+- Downloader形式の動画ファイル名にYouTube動画IDがある場合、元配信タイトルとURLを自動入力する。検出できない場合は手入力できる。
+- 説明欄を`元配信`、配信タイトル、URL、`出演`、出演者／所属の順で生成する。通常／ショートで共通ハッシュタグを使い、ショートだけ`#shortsfunny`等のショート用ハッシュタグを追加する。
+- Codexが抽出した話題語はYouTubeタグへ再利用する。タグは重複除去し、YouTube上限500文字以内へ制限する。
+- 字幕確認画面で説明欄／ハッシュタグ／タグを編集・コピーできる。完成画面はタイトル、説明欄、タグ、全部のコピーを分離した。
+- 通常clipからショートへ変換した場合、説明欄とタグをショート条件で再生成する。
+- ZIP投稿artifactをversion 2へ更新し、`youtubeTags`をJSON／Markdownへ追加した。
+- 投稿profile APIを追加し、旧job／旧artifactは投稿profileやタグがなくても従来表示できる後方互換を維持した。
+
+### 変更ファイル
+
+- backend: `app/posting_metadata.py`、`app/schemas.py`、`app/api/preferences.py`、`app/api/jobs.py`、候補／subtitle review／title hook／runner／render関連module
+- frontend: `app/upload/page.tsx`、`app/jobs/[jobId]/subtitles/page.tsx`、`components/YouTubePostingSettingsPanel.tsx`、`components/ResultVideoCard.tsx`、`components/SettingsPanel.tsx`、`lib/youtubePosting.ts`、`lib/api.ts`、`lib/types.ts`
+- test: `backend/tests/test_posting_metadata.py`、`backend/tests/test_api_routes.py`、`frontend/tests/youtubePosting.test.ts`
+
+### 最小検証
+
+- backend全test: `915 passed / 1 skipped / 0 failed`。backend Ruff: pass。
+- frontend: YouTube投稿helper test、automation UI test、overlay fit test、typecheck、lint、Next.js `16.3.3` build: pass。
+- `npm audit`: `found 0 vulnerabilities`。`git diff --check`、GPU compose config: pass。
+- backend／frontend／GPU workerを再構築し、backend healthy、frontend／Redis／GPU worker稼働を確認した。
+- in-app browserでupload投稿設定の表示と入力、完成画面のタイトル／説明欄／タグ／全部コピー導線、画面崩れなし、console error／warning=`0`を確認した。
+
+### 未解決事項
+
+- 既存jobには新しい投稿profileとYouTubeタグがないため、完成画面のタグコピーは無効。新規job、または新設定で再編集したclipから有効になる。
+- ファイル名から元配信タイトル／URLを特定できない動画はupload画面で手入力が必要。

@@ -101,6 +101,7 @@ class SubtitleReviewClip(BaseModel):
     selected_title_id: str | None = Field(default=None, alias="selectedTitleId")
     youtube_description: str = Field(default="", max_length=2000, alias="youtubeDescription")
     youtube_hashtags: list[str] = Field(default_factory=list, max_length=12, alias="youtubeHashtags")
+    youtube_tags: list[str] = Field(default_factory=list, max_length=40, alias="youtubeTags")
     description_evidence_segment_ids: list[str] = Field(
         default_factory=list,
         max_length=64,
@@ -205,6 +206,10 @@ class SubtitleReviewClip(BaseModel):
             raise ValueError("duplicate YouTube hashtag")
         if any(not hashtag.startswith("#") for hashtag in self.youtube_hashtags):
             raise ValueError("YouTube hashtags must start with #")
+        if len(self.youtube_tags) != len({tag.casefold() for tag in self.youtube_tags}):
+            raise ValueError("duplicate YouTube tag")
+        if len(",".join(self.youtube_tags)) > 500:
+            raise ValueError("YouTube tags must be 500 characters or fewer")
         hook_start = self.hook_scene_start
         hook_end = self.hook_scene_end
         if (hook_start is None) != (hook_end is None):
@@ -493,6 +498,7 @@ def build_subtitle_review(
                 selectedTitleId=candidate.selected_title_id,
                 youtubeDescription=candidate.youtube_description or "",
                 youtubeHashtags=candidate.youtube_hashtags,
+                youtubeTags=candidate.youtube_tags,
                 descriptionEvidenceSegmentIds=candidate.description_evidence_segment_ids,
                 postMetadataSource=candidate.post_metadata_source,
                 postMetadataRevisionHash=candidate.post_metadata_revision_hash,
@@ -631,6 +637,7 @@ def update_review_clip_content(
     selected_title_id: str | None | object = _STYLE_UNSET,
     youtube_description: str | object = _STYLE_UNSET,
     youtube_hashtags: Sequence[str] | object = _STYLE_UNSET,
+    youtube_tags: Sequence[str] | object = _STYLE_UNSET,
     description_evidence_segment_ids: Sequence[str] | object = _STYLE_UNSET,
     post_metadata_source: PostMetadataSource | None | object = _STYLE_UNSET,
     post_metadata_revision_hash: str | None | object = _STYLE_UNSET,
@@ -689,6 +696,11 @@ def update_review_clip_content(
         if youtube_hashtags is _STYLE_UNSET
         else [str(hashtag).strip() for hashtag in youtube_hashtags if str(hashtag).strip()]
     )
+    next_youtube_tags = (
+        clip.youtube_tags
+        if youtube_tags is _STYLE_UNSET
+        else [str(tag).strip() for tag in youtube_tags if str(tag).strip()]
+    )
     next_description_evidence_segment_ids = (
         clip.description_evidence_segment_ids
         if description_evidence_segment_ids is _STYLE_UNSET
@@ -723,6 +735,12 @@ def update_review_clip_content(
         raise ValueError("duplicate YouTube hashtag")
     if any(not hashtag.startswith("#") for hashtag in next_youtube_hashtags):
         raise ValueError("YouTube hashtags must start with #")
+    if len(next_youtube_tags) > 40:
+        raise ValueError("YouTube tags must contain 40 items or fewer")
+    if len(next_youtube_tags) != len({tag.casefold() for tag in next_youtube_tags}):
+        raise ValueError("duplicate YouTube tag")
+    if len(",".join(next_youtube_tags)) > 500:
+        raise ValueError("YouTube tags must be 500 characters or fewer")
     if len(next_description_evidence_segment_ids) != len(
         set(next_description_evidence_segment_ids)
     ):
@@ -741,6 +759,7 @@ def update_review_clip_content(
         or clip.selected_title_id != next_selected_title_id
         or clip.youtube_description != next_youtube_description
         or clip.youtube_hashtags != next_youtube_hashtags
+        or clip.youtube_tags != next_youtube_tags
         or clip.description_evidence_segment_ids != next_description_evidence_segment_ids
         or clip.post_metadata_source != next_post_metadata_source
         or clip.post_metadata_revision_hash != next_post_metadata_revision_hash
@@ -765,6 +784,7 @@ def update_review_clip_content(
     clip.selected_title_id = next_selected_title_id
     clip.youtube_description = next_youtube_description
     clip.youtube_hashtags = next_youtube_hashtags
+    clip.youtube_tags = next_youtube_tags
     clip.description_evidence_segment_ids = next_description_evidence_segment_ids
     clip.post_metadata_source = next_post_metadata_source
     clip.post_metadata_revision_hash = next_post_metadata_revision_hash
@@ -956,6 +976,7 @@ def convert_review_clip_to_short(
     clip.selected_title_id = None
     clip.youtube_description = ""
     clip.youtube_hashtags = []
+    clip.youtube_tags = []
     clip.description_evidence_segment_ids = []
     clip.post_metadata_revision_hash = None
     if had_post_metadata:
@@ -1038,6 +1059,7 @@ def apply_reviewed_clip_content(
         updates["selected_title_id"] = clip.selected_title_id
         updates["youtube_description"] = clip.youtube_description or None
         updates["youtube_hashtags"] = clip.youtube_hashtags
+        updates["youtube_tags"] = clip.youtube_tags
         updates["description_evidence_segment_ids"] = clip.description_evidence_segment_ids
         updates["post_metadata_source"] = clip.post_metadata_source
         updates["post_metadata_revision_hash"] = clip.post_metadata_revision_hash
