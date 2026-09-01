@@ -8434,3 +8434,43 @@ pip check: pass
 
 - 既存jobには新しい投稿profileとYouTubeタグがないため、完成画面のタグコピーは無効。新規job、または新設定で再編集したclipから有効になる。
 - ファイル名から元配信タイトル／URLを特定できない動画はupload画面で手入力が必要。
+
+## 2026-09-01 切り抜き境界の時分秒入力と双方向調整
+
+### 目的
+
+- 1時間超の元動画でも、文字起こし時刻と同じ基準で切り抜き開始・終了を調整できるようにする。
+- 開始を後ろ、終了を前へもワンクリックで動かせるようにする。
+
+### 現在状態・変更
+
+- 開始・終了入力を`時・分・秒`へ統一した。
+- 開始・終了の両方へ`1秒 / 5秒 / 15秒 / 30秒`の前後移動ボタンを追加した。
+- 入力値の分・秒を`0〜59`へ制限し、開始は終了の1秒前まで、終了は開始の1秒後から元動画尺までに制限した。
+- 有効表示幅`1900px`未満では境界編集が動画下へ移動していたため、横並び条件を`1800px`へ変更し、アプリ内ブラウザの`1861px`幅でも動画右側へ配置した。
+- 左のclip一覧を`280px`から`240px`へ縮小し、境界編集を`480px`から`520px`へ拡張した。動画幅を維持したまま時・分・秒入力の見切れを解消した。
+
+### 変更ファイル
+
+- `frontend/components/ClipBoundaryEditor.tsx`
+- `frontend/app/jobs/[jobId]/clips/page.tsx`
+- `frontend/lib/clipBoundaryTime.ts`
+- `frontend/tests/clipBoundaryTime.test.ts`
+- `STATUS.md`
+
+### 最小検証
+
+- `npm exec --workspace frontend -- tsx tests/clipBoundaryTime.test.ts`: 成功。
+- `npm run typecheck --workspace frontend`: 成功。
+- `npm run lint --workspace frontend`: 成功。
+- `npm run build --workspace frontend`: 成功。
+- `npm audit --workspace frontend --audit-level=high`: `found 0 vulnerabilities`。
+- 実ブラウザで`1:25:26.0`が`1時25分26秒`、`1:27:08.58`が`1時27分8.58秒`として表示されることを確認した。
+- 実ブラウザで開始`+5秒`と終了`-5秒`が反映されることを確認し、保存せず元の値へ戻した。
+- 実ブラウザで`1分`ボタンがなく、開始`+1秒`と終了`-1秒`が反映されることを確認し、保存せず元の値へ戻した。
+- アプリ内ブラウザの`innerWidth=1861px`で境界編集が動画右側へ配置されることを目視確認した。
+- 分入力の実幅を`clientWidth=43px / scrollWidth=47px`から`49px / 49px`へ改善し、数値が見切れないことを実ブラウザで確認した。
+
+### 未解決事項
+
+- なし。

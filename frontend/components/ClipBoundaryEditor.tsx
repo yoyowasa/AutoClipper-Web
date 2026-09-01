@@ -2,6 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import {
+  clampEndBoundary,
+  clampStartBoundary,
+  combineBoundaryTime,
+  splitBoundaryTime,
+  type BoundaryTimeParts
+} from "../lib/clipBoundaryTime";
 import type { ClipPlanClip } from "../lib/types";
 
 type ClipBoundaryEditorProps = {
@@ -19,40 +26,7 @@ export type ClipBoundaryDraft = {
   end: number;
 };
 
-type TimeParts = {
-  minutes: string;
-  seconds: string;
-};
-
-const QUICK_ADJUSTMENTS = [5, 15, 30, 60] as const;
-
-function splitTime(value: number): TimeParts {
-  const safe = Math.max(0, value);
-  const minutes = Math.floor(safe / 60);
-  const seconds = Math.round((safe - minutes * 60) * 1000) / 1000;
-  return {
-    minutes: String(minutes),
-    seconds: String(seconds)
-  };
-}
-
-function combineTime(parts: TimeParts): number | null {
-  if (parts.minutes.trim() === "" || parts.seconds.trim() === "") {
-    return null;
-  }
-  const minutes = Number(parts.minutes);
-  const seconds = Number(parts.seconds);
-  if (
-    !Number.isFinite(minutes) ||
-    !Number.isFinite(seconds) ||
-    minutes < 0 ||
-    seconds < 0 ||
-    seconds >= 60
-  ) {
-    return null;
-  }
-  return Math.round((minutes * 60 + seconds) * 1000) / 1000;
-}
+const QUICK_ADJUSTMENTS = [1, 5, 15, 30] as const;
 
 function formatTime(value: number): string {
   const safe = Math.max(0, value);
@@ -73,13 +47,26 @@ function BoundaryTimeInput({
 }: {
   disabled: boolean;
   label: string;
-  parts: TimeParts;
-  onChange: (parts: TimeParts) => void;
+  parts: BoundaryTimeParts;
+  onChange: (parts: BoundaryTimeParts) => void;
 }) {
   return (
     <div>
       <p className="text-xs font-semibold text-neutral-700">{label}</p>
-      <div className="mt-1 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto] items-center gap-1.5">
+      <div className="mt-1 grid grid-cols-[minmax(0,0.75fr)_auto_minmax(0,0.75fr)_auto_minmax(0,1fr)_auto] items-center gap-1.5">
+        <input
+          aria-label={`${label} 時`}
+          className="min-h-9 min-w-0 border border-neutral-300 px-2 text-sm tabular-nums"
+          disabled={disabled}
+          min={0}
+          step={1}
+          type="number"
+          value={parts.hours}
+          onChange={(event) =>
+            onChange({ ...parts, hours: event.target.value })
+          }
+        />
+        <span className="text-xs text-neutral-500">時</span>
         <input
           aria-label={`${label} 分`}
           className="min-h-9 min-w-0 border border-neutral-300 px-2 text-sm tabular-nums"
@@ -122,14 +109,14 @@ export function ClipBoundaryEditor({
 }: ClipBoundaryEditorProps) {
   const recommendedStart = clip.recommendedStart ?? clip.start;
   const recommendedEnd = clip.recommendedEnd ?? clip.end;
-  const [startParts, setStartParts] = useState(() => splitTime(clip.start));
-  const [endParts, setEndParts] = useState(() => splitTime(clip.end));
-  const start = combineTime(startParts);
-  const end = combineTime(endParts);
+  const [startParts, setStartParts] = useState(() => splitBoundaryTime(clip.start));
+  const [endParts, setEndParts] = useState(() => splitBoundaryTime(clip.end));
+  const start = combineBoundaryTime(startParts);
+  const end = combineBoundaryTime(endParts);
 
   const validation = useMemo(() => {
     if (start === null || end === null) {
-      return "分と秒を正しく入力してください";
+      return "時・分・秒を正しく入力してください";
     }
     if (end <= start) {
       return "終了は開始より後にしてください";
@@ -166,13 +153,13 @@ export function ClipBoundaryEditor({
   }, [clip.id, end, onDraftChange, start, validation]);
 
   function replaceStart(value: number) {
-    setStartParts(splitTime(Math.max(0, value)));
+    setStartParts(splitBoundaryTime(clampStartBoundary(value, end)));
   }
 
   function replaceEnd(value: number) {
-    const bounded =
-      sourceDuration === null ? value : Math.min(value, sourceDuration);
-    setEndParts(splitTime(Math.max(0, bounded)));
+    setEndParts(
+      splitBoundaryTime(clampEndBoundary(value, start, sourceDuration))
+    );
   }
 
   function resetRecommended() {
@@ -188,7 +175,7 @@ export function ClipBoundaryEditor({
             このclipの開始・終了を調整
           </h3>
           <p className="min-w-[260px] flex-1 text-xs leading-4 text-neutral-600">
-            分・秒を直接変更するか、前後の追加ボタンを使います。選ばれた場面は維持され、字幕生成も行いません。
+            時・分・秒を直接変更するか、開始・終了を前後へ動かします。選ばれた場面は維持され、字幕生成も行いません。
           </p>
         </div>
         {clip.manuallyAdjusted ? (
@@ -208,15 +195,31 @@ export function ClipBoundaryEditor({
           />
           <div className="mt-1 flex flex-wrap gap-1">
             {QUICK_ADJUSTMENTS.map((seconds) => (
-              <button
-                className="min-h-8 border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
-                disabled={disabled || start === null || start <= 0}
-                key={`before-${seconds}`}
-                type="button"
-                onClick={() => replaceStart((start ?? clip.start) - seconds)}
-              >
-                前に+{seconds === 60 ? "1分" : `${seconds}秒`}
-              </button>
+              <div className="flex" key={`start-${seconds}`}>
+                <button
+                  aria-label={`開始を${seconds}秒前へ`}
+                  className="min-h-8 border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
+                  disabled={disabled || start === null || start <= 0}
+                  type="button"
+                  onClick={() => replaceStart((start ?? clip.start) - seconds)}
+                >
+                  ←{seconds}秒
+                </button>
+                <button
+                  aria-label={`開始を${seconds}秒後ろへ`}
+                  className="min-h-8 border-y border-r border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
+                  disabled={
+                    disabled ||
+                    start === null ||
+                    end === null ||
+                    start >= end - 1
+                  }
+                  type="button"
+                  onClick={() => replaceStart((start ?? clip.start) + seconds)}
+                >
+                  {seconds}秒→
+                </button>
+              </div>
             ))}
           </div>
         </div>
@@ -230,19 +233,35 @@ export function ClipBoundaryEditor({
           />
           <div className="mt-1 flex flex-wrap gap-1">
             {QUICK_ADJUSTMENTS.map((seconds) => (
-              <button
-                className="min-h-8 border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
-                disabled={
-                  disabled ||
-                  end === null ||
-                  (sourceDuration !== null && end >= sourceDuration)
-                }
-                key={`after-${seconds}`}
-                type="button"
-                onClick={() => replaceEnd((end ?? clip.end) + seconds)}
-              >
-                後に+{seconds === 60 ? "1分" : `${seconds}秒`}
-              </button>
+              <div className="flex" key={`end-${seconds}`}>
+                <button
+                  aria-label={`終了を${seconds}秒前へ`}
+                  className="min-h-8 border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
+                  disabled={
+                    disabled ||
+                    end === null ||
+                    start === null ||
+                    end <= start + 1
+                  }
+                  type="button"
+                  onClick={() => replaceEnd((end ?? clip.end) - seconds)}
+                >
+                  ←{seconds}秒
+                </button>
+                <button
+                  aria-label={`終了を${seconds}秒後ろへ`}
+                  className="min-h-8 border-y border-r border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
+                  disabled={
+                    disabled ||
+                    end === null ||
+                    (sourceDuration !== null && end >= sourceDuration)
+                  }
+                  type="button"
+                  onClick={() => replaceEnd((end ?? clip.end) + seconds)}
+                >
+                  {seconds}秒→
+                </button>
+              </div>
             ))}
           </div>
         </div>

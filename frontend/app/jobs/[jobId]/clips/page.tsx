@@ -677,7 +677,7 @@ export default function ClipPlanReviewPage() {
         />
       ) : (
 
-      <div className="grid w-full lg:grid-cols-[280px_minmax(0,1fr)_390px]">
+      <div className="grid w-full lg:grid-cols-[240px_minmax(0,1fr)_390px]">
         <aside className="border-r border-neutral-300 bg-white lg:row-span-2 lg:min-h-[calc(100vh-145px)]">
           <div className="border-b border-neutral-300 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
@@ -733,7 +733,7 @@ export default function ClipPlanReviewPage() {
         <section className="min-w-0 border-b border-neutral-300 bg-white lg:col-start-2 lg:row-start-1 lg:border-r">
           {selectedClip ? (
             <>
-              <div className="min-[1900px]:grid min-[1900px]:grid-cols-[minmax(0,1fr)_480px] min-[1900px]:items-start">
+              <div className="min-[1800px]:grid min-[1800px]:grid-cols-[minmax(0,1fr)_520px] min-[1800px]:items-start">
                 <div className="aspect-video w-full bg-black">
                   {selectedClip.previewVideoUrl ? (
                     <video
@@ -752,7 +752,7 @@ export default function ClipPlanReviewPage() {
                   )}
                 </div>
 
-                <div className="min-w-0 min-[1900px]:border-l min-[1900px]:border-neutral-300">
+                <div className="min-w-0 min-[1800px]:border-l min-[1800px]:border-neutral-300">
                   <ClipBoundaryEditor
                     clip={selectedClip}
                     disabled={controlsDisabled}
