@@ -2028,8 +2028,9 @@ export default function SubtitleReviewPage() {
       return;
     }
     const title = selectedClipContentDraft.title.trim();
-    if (!title) {
-      setError("タイトルを入力してください。");
+    const publicationTitle = selectedClipContentDraft.publicationTitle.trim();
+    if (!publicationTitle) {
+      setError("公開用タイトルを入力してください。");
       return;
     }
     if (!selectedHookDurationIsValid) {
@@ -2053,7 +2054,7 @@ export default function SubtitleReviewPage() {
     try {
       const updated = await applySubtitleReviewClip(jobId, selectedClip.id, {
         title,
-        publicationTitle: selectedClipContentDraft.publicationTitle.trim() || title,
+        publicationTitle,
         ...postMetadata,
         hookText: selectedClipContentDraft.hookText.trim(),
         hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
@@ -2120,8 +2121,9 @@ export default function SubtitleReviewPage() {
       return;
     }
     const title = selectedClipContentDraft.title.trim();
-    if (!title) {
-      setError("タイトルを入力してください。");
+    const publicationTitle = selectedClipContentDraft.publicationTitle.trim();
+    if (!publicationTitle) {
+      setError("公開用タイトルを入力してください。");
       return;
     }
     if (!selectedHookDurationIsValid) {
@@ -2148,8 +2150,7 @@ export default function SubtitleReviewPage() {
       if (selectedClipHasDirtySegments || selectedClipHasDirtyContent) {
           const saved = await applySubtitleReviewClip(jobId, selectedClip.id, {
             title,
-            publicationTitle:
-              selectedClipContentDraft.publicationTitle.trim() || title,
+            publicationTitle,
             ...postMetadata,
             hookText: selectedClipContentDraft.hookText.trim(),
           hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
@@ -3063,7 +3064,7 @@ export default function SubtitleReviewPage() {
                         className="mt-1 min-h-14 w-full resize-y border border-neutral-300 bg-white px-2 py-2 text-sm leading-5 outline-none focus:border-sky-600"
                         disabled={!isEditable}
                         maxLength={80}
-                        placeholder="2行にする位置でEnter"
+                        placeholder="空欄なら非表示。2行にする位置でEnter"
                         rows={2}
                         value={selectedClipContentDraft?.title ?? ""}
                         onChange={(event) =>
@@ -3074,7 +3075,7 @@ export default function SubtitleReviewPage() {
                       />
                     </label>
                     <div className="mt-1 flex items-center justify-between gap-3 text-[10px] text-neutral-500">
-                      <span>Enterを入れた位置で2行表示します（最大2行）</span>
+                      <span>空欄なら非表示。Enterを入れた位置で2行表示します（最大2行）</span>
                       <span>{selectedClipContentDraft?.title.length ?? 0} / 80</span>
                     </div>
                     {selectedClip.type === "short" ? (
@@ -3553,7 +3554,7 @@ export default function SubtitleReviewPage() {
                       (selectedClip.confirmed &&
                         !selectedClipHasDirtySegments &&
                         !selectedClipHasDirtyContent) ||
-                      !selectedClipContentDraft?.title.trim() ||
+                      !selectedClipContentDraft?.publicationTitle.trim() ||
                       !selectedHookDurationIsValid ||
                       isSavingShortBannerSettings ||
                       confirmingClipId === selectedClip.id

@@ -12,6 +12,7 @@ from app.jobs.subtitle_review import (
     confirm_review_clip,
     load_subtitle_review,
     queue_review_render,
+    refresh_review_overlay_title_expectations,
     refresh_review_render_contract,
     reopen_completed_review,
     subtitle_review_preview_path,
@@ -22,7 +23,10 @@ from app.jobs.subtitle_review import (
     update_review_segment,
     write_subtitle_review,
 )
-from app.posting_metadata import YouTubeTitleCandidate
+from app.posting_metadata import (
+    NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX,
+    YouTubeTitleCandidate,
+)
 
 
 def _candidate(candidate_id: str, candidate_type: str, start: float, end: float) -> Candidate:
@@ -99,7 +103,13 @@ def test_posting_metadata_round_trips_from_review_to_selected_candidate(tmp_path
     restored = load_subtitle_review(output_path)
     applied = apply_reviewed_clip_content(selection, restored).normal_clips[0]
 
-    assert restored.clips[0].title_candidates == candidates
+    assert [candidate.id for candidate in restored.clips[0].title_candidates] == [
+        candidate.id for candidate in candidates
+    ]
+    assert all(
+        candidate.title.endswith(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)
+        for candidate in restored.clips[0].title_candidates
+    )
     assert restored.clips[0].description_evidence_segment_ids == ["seg_0001"]
     assert applied.recommended_title_id == "factual"
     assert applied.selected_title_id == "factual"
@@ -608,7 +618,42 @@ def test_normal_clip_accepts_title_hook_and_subtitle_styles() -> None:
     assert review.clips[0].title_style == title_style
     assert review.clips[0].hook_style == hook_style
     assert review.clips[0].subtitle_style == subtitle_style
+    assert review.clips[0].title == "通常タイトル"
+    assert review.clips[0].publication_title == (
+        f"通常タイトル{NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX}"
+    )
     assert updated.normal_clips[0].title_style == title_style
+    assert updated.normal_clips[0].title == (
+        f"通常タイトル{NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX}"
+    )
+
+
+def test_normal_clip_allows_empty_overlay_title_and_keeps_publication_title() -> None:
+    _transcript, review = _review_fixture()
+    selection = CandidateSelection(
+        normalClips=[_candidate("normal_1", "normal", 0.0, 20.0)],
+    )
+
+    review = update_review_clip_content(
+        review,
+        "normal_1",
+        title="",
+        publication_title="公開用タイトル",
+    )
+    review = refresh_review_overlay_title_expectations(
+        review,
+        render_mode="high_quality",
+    )
+    updated = apply_reviewed_clip_content(selection, review).normal_clips[0]
+
+    assert review.clips[0].title == ""
+    assert review.clips[0].publication_title == (
+        f"公開用タイトル{NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX}"
+    )
+    assert review.clips[0].overlay_title_expected is False
+    assert updated.title == f"公開用タイトル{NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX}"
+    assert updated.overlay_title == ""
+    assert updated.title_source == "manual_review"
 
 
 def test_review_preserves_manual_title_and_hook_line_breaks() -> None:

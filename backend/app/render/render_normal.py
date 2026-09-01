@@ -266,8 +266,8 @@ def _write_export_metadata(
                 "post_metadata_source": candidate.post_metadata_source,
                 "post_metadata_revision_hash": candidate.post_metadata_revision_hash,
                 "title_rendered": True,
-                "overlay_title_expected": True,
-                "overlay_title_rendered": True,
+                "overlay_title_expected": bool(overlay_title),
+                "overlay_title_rendered": bool(overlay_title),
                 "title_style": (
                     candidate.title_style.model_dump(by_alias=True)
                     if candidate.title_style
@@ -359,7 +359,11 @@ def render_selected_normal_candidates(
 
         try:
             title = _candidate_title(candidate, index)
-            overlay_title = (candidate.overlay_title or title).strip()
+            overlay_title = (
+                candidate.overlay_title
+                if candidate.overlay_title is not None
+                else title
+            ).strip()
             use_ass = burn_subtitles or bool(overlay_title)
             if use_ass:
                 subtitle_path = subtitle_dir / f"normal_{index:02d}.ass"

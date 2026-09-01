@@ -25,7 +25,10 @@ from app.candidates.short_diversity import (
 from app.jobs.subtitle_review import SubtitleReviewDocument
 from app.jobs.title_hook_suggestions import TitleHookSuggestionsDocument
 from app.overlay_text import fit_overlay_text
-from app.posting_metadata import build_post_metadata_revision_hash
+from app.posting_metadata import (
+    build_post_metadata_revision_hash,
+    ensure_publication_title_suffix,
+)
 from app.render.render_short import SHORT_BANNER_HEIGHT
 from app.render.subtitles_ass import (
     SubtitleEvent,
@@ -758,7 +761,11 @@ def _automated_title_hook_check(
             or clip.recommended_title_id != recommended.id
             or clip.selected_title_id != recommended.id
             or clip.title != recommended.overlay_title
-            or clip.publication_title != recommended.publication_title
+            or clip.publication_title
+            != ensure_publication_title_suffix(
+                recommended.publication_title,
+                clip_type=clip.type,
+            )
             or clip.hook_text != recommended.hook_text
             or clip.hook_scene_start != expected_scene_start
             or clip.hook_scene_end != expected_scene_end

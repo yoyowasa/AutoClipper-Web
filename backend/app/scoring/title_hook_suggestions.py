@@ -9,10 +9,10 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.posting_metadata import PostTitleIntent
+from app.posting_metadata import PostTitleIntent, ensure_publication_title_suffix
 
 
-TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v2"
+TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v5"
 REPRESENTATIVE_FRAME_RATIOS = (0.12, 0.38, 0.62, 0.88)
 TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
 TRANSIENT_ERROR_NAMES = {
@@ -27,12 +27,22 @@ SYSTEM_PROMPT = """あなたは日本語動画の編集者です。
 与えられた選定済みclipの修正字幕と代表フレームだけを根拠に、投稿用セットを作成してください。
 - suggestionsは3案固定。intentをfactual、engagement、conciseで1案ずつ作成する。
 - publicationTitle: YouTube公開用。字幕から確認できる人物・状況・出来事だけを書く。
+- clipTypeがnormalならpublicationTitle末尾を「儒烏風亭らでん【ReGLOSS切り抜き】」に固定する。overlayTitleには付けない。
 - overlayTitle: 動画内表示用。最大2行を想定し、短く読みやすくする。
 - hookText: 冒頭から興味を引く短い文。publicationTitleの丸写しにしない。
 - hookSceneStart / hookSceneEnd: clip先頭を0秒とする相対秒。1.5〜3.0秒でclip内に収める。
+- clipTypeがnormalならthumbnailKicker、thumbnailLine1、thumbnailLine2に通常サムネ用の短い文言を書く。
+  thumbnailKickerは小見出し、thumbnailLine1とthumbnailLine2は内容が伝わる主見出し2行にする。
+- clipTypeがnormalならthumbnailFrameSecondsに、人物の表情と内容が最も伝わる場面をclip先頭からの相対秒で指定する。
+- clipTypeがshortならthumbnailKicker、thumbnailLine1、thumbnailLine2は空文字、thumbnailFrameSecondsはnullにする。
+  ショートは完成動画のフック場面を別処理で切り出す。
 - evidenceSegmentIds: その案を直接裏付ける入力字幕のsegmentIdだけを返す。
 - recommendedSuggestionId: 3案で最も事実性と訴求力の均衡が良い案のid。
-- youtubeDescription: clip内容の短い要約。未提供の元動画URL、人物名、数値、固有名詞を創作しない。
+- youtubeDescription: clip内容の説明本文だけを書く。未提供の元動画URL、人物名、数値、固有名詞を創作しない。
+- clipTypeがnormalなら、冒頭に内容を具体的にまとめた2〜4文を書く。
+- normalの要約後は空行を入れ、clip相対時刻による4〜8件のチャプターを「00:00 見どころ」の形式で付ける。最初は必ず00:00にする。
+- clipTypeがshortなら、結末まで分かる具体的な1〜2文だけを書き、チャプターは付けない。
+- 元配信、出演、ハッシュタグ、タグは別処理で追加するためyoutubeDescriptionへ書かない。
 - hashtags: 字幕から根拠を持てる3〜5個。#から始め、空白を含めない。
 - descriptionEvidenceSegmentIds: 説明欄を直接裏付けるsegmentId。
 根拠のあるフックを作れない案はhookTextを空文字、hookSceneStartとhookSceneEndをnullにしてください。
@@ -47,6 +57,14 @@ class TitleHookSuggestion(BaseModel):
     hook_duration_seconds: float = Field(ge=1.5, le=3.0, alias="hookDurationSeconds")
     hook_scene_start: float | None = Field(ge=0, alias="hookSceneStart")
     hook_scene_end: float | None = Field(gt=0, alias="hookSceneEnd")
+    thumbnail_kicker: str = Field(default="", max_length=40, alias="thumbnailKicker")
+    thumbnail_line1: str = Field(default="", max_length=60, alias="thumbnailLine1")
+    thumbnail_line2: str = Field(default="", max_length=60, alias="thumbnailLine2")
+    thumbnail_frame_seconds: float | None = Field(
+        default=None,
+        ge=0,
+        alias="thumbnailFrameSeconds",
+    )
     reason: str = Field(min_length=1, max_length=300)
     intent: PostTitleIntent | None = None
     evidence_segment_ids: list[str] = Field(
@@ -222,6 +240,15 @@ TITLE_HOOK_GENERATION_SCHEMA: dict[str, Any] = {
                             {"type": "null"},
                         ]
                     },
+                    "thumbnailKicker": {"type": "string", "maxLength": 40},
+                    "thumbnailLine1": {"type": "string", "maxLength": 60},
+                    "thumbnailLine2": {"type": "string", "maxLength": 60},
+                    "thumbnailFrameSeconds": {
+                        "anyOf": [
+                            {"type": "number", "minimum": 0},
+                            {"type": "null"},
+                        ]
+                    },
                     "reason": {
                         "type": "string",
                         "minLength": 1,
@@ -243,6 +270,10 @@ TITLE_HOOK_GENERATION_SCHEMA: dict[str, Any] = {
                     "hookDurationSeconds",
                     "hookSceneStart",
                     "hookSceneEnd",
+                    "thumbnailKicker",
+                    "thumbnailLine1",
+                    "thumbnailLine2",
+                    "thumbnailFrameSeconds",
                     "reason",
                     "evidenceSegmentIds",
                 ],
@@ -495,18 +526,29 @@ def normalize_title_hook_suggestions(
     result: TitleHookSuggestionResult,
     *,
     clip_duration: float,
+    clip_type: str = "short",
 ) -> list[TitleHookSuggestion]:
     normalized: list[TitleHookSuggestion] = []
     for index, suggestion in enumerate(result.suggestions, start=1):
+        thumbnail_update = _normalized_thumbnail_fields(
+            suggestion,
+            clip_duration=clip_duration,
+            clip_type=clip_type,
+        )
         if suggestion.hook_scene_start is None or suggestion.hook_scene_end is None:
             normalized.append(
                 suggestion.model_copy(
                     update={
                         "id": f"suggestion_{index}",
+                        "publication_title": ensure_publication_title_suffix(
+                            suggestion.publication_title,
+                            clip_type=clip_type,
+                        ),
                         "hook_duration_seconds": round(
                             min(3.0, max(1.5, suggestion.hook_duration_seconds)),
                             3,
                         ),
+                        **thumbnail_update,
                     }
                 )
             )
@@ -524,10 +566,56 @@ def normalize_title_hook_suggestions(
             suggestion.model_copy(
                 update={
                     "id": f"suggestion_{index}",
+                    "publication_title": ensure_publication_title_suffix(
+                        suggestion.publication_title,
+                        clip_type=clip_type,
+                    ),
                     "hook_duration_seconds": round(duration, 3),
                     "hook_scene_start": round(start, 3),
                     "hook_scene_end": round(end, 3),
+                    **thumbnail_update,
                 }
             )
         )
     return normalized
+
+
+def _normalized_thumbnail_fields(
+    suggestion: TitleHookSuggestion,
+    *,
+    clip_duration: float,
+    clip_type: str,
+) -> dict[str, str | float | None]:
+    if clip_type != "normal":
+        return {
+            "thumbnail_kicker": "",
+            "thumbnail_line1": "",
+            "thumbnail_line2": "",
+            "thumbnail_frame_seconds": None,
+        }
+
+    fallback_line1, fallback_line2 = _fallback_thumbnail_lines(suggestion.overlay_title)
+    frame_seconds = suggestion.thumbnail_frame_seconds
+    if frame_seconds is None:
+        if suggestion.hook_scene_start is not None and suggestion.hook_scene_end is not None:
+            frame_seconds = (suggestion.hook_scene_start + suggestion.hook_scene_end) / 2
+        else:
+            frame_seconds = clip_duration * 0.38
+    frame_seconds = min(max(0.0, frame_seconds), clip_duration)
+    return {
+        "thumbnail_kicker": suggestion.thumbnail_kicker or "今回の見どころ",
+        "thumbnail_line1": suggestion.thumbnail_line1 or fallback_line1,
+        "thumbnail_line2": suggestion.thumbnail_line2 or fallback_line2,
+        "thumbnail_frame_seconds": round(frame_seconds, 3),
+    }
+
+
+def _fallback_thumbnail_lines(title: str) -> tuple[str, str]:
+    explicit_lines = [line.strip() for line in title.splitlines() if line.strip()]
+    if len(explicit_lines) >= 2:
+        return explicit_lines[0][:60], " ".join(explicit_lines[1:])[:60]
+    normalized = " ".join(title.split()).strip()
+    if len(normalized) <= 18:
+        return normalized[:60], ""
+    midpoint = len(normalized) // 2
+    return normalized[:midpoint].rstrip()[:60], normalized[midpoint:].lstrip()[:60]

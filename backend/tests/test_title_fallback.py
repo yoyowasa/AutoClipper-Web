@@ -148,6 +148,21 @@ def test_manual_short_overlay_title_keeps_two_line_break() -> None:
     assert titled.title_source == "manual_review"
 
 
+def test_manual_short_empty_overlay_title_stays_empty() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="fallback text",
+        title="公開用タイトル",
+        overlay_title="",
+    ).model_copy(update={"title_source": "manual_review"})
+
+    titled = candidate_with_title(candidate, index=1)
+
+    assert titled.title == "公開用タイトル"
+    assert titled.overlay_title == ""
+    assert titled.title_source == "manual_review"
+
+
 def test_curated_title_keeps_trailing_prolonged_sound_mark() -> None:
     candidate = make_candidate(
         candidate_type="short",

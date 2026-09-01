@@ -586,7 +586,7 @@ class SubtitleReviewSegmentUpdateRequest(BaseModel):
 
 
 class SubtitleReviewClipContentUpdateRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=80)
+    title: str = Field(max_length=80)
     hook_text: str = Field(default="", max_length=120, alias="hookText")
     hook_duration_seconds: float = Field(
         default=3.0,

@@ -11,7 +11,11 @@ from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPr
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.overlay_text import normalize_overlay_text
-from app.posting_metadata import PostMetadataSource, YouTubeTitleCandidate
+from app.posting_metadata import (
+    PostMetadataSource,
+    YouTubeTitleCandidate,
+    ensure_publication_title_suffix,
+)
 from app.render.subtitles_ass import (
     DEFAULT_NORMAL_HEIGHT,
     DEFAULT_NORMAL_WIDTH,
@@ -195,6 +199,22 @@ class SubtitleReviewClip(BaseModel):
 
     @model_validator(mode="after")
     def validate_hook_scene(self) -> "SubtitleReviewClip":
+        if self.type == "normal":
+            self.publication_title = ensure_publication_title_suffix(
+                self.publication_title or self.title,
+                clip_type=self.type,
+            )
+            self.title_candidates = [
+                candidate.model_copy(
+                    update={
+                        "title": ensure_publication_title_suffix(
+                            candidate.title,
+                            clip_type=self.type,
+                        )
+                    }
+                )
+                for candidate in self.title_candidates
+            ]
         title_candidate_ids = [candidate.id for candidate in self.title_candidates]
         if len(title_candidate_ids) != len(set(title_candidate_ids)):
             raise ValueError("duplicate YouTube title candidate id")
@@ -280,7 +300,9 @@ def _candidate_title(candidate: Candidate, index: int) -> str:
 
 def _candidate_publication_title(candidate: Candidate) -> str | None:
     title = (candidate.title or "").strip()
-    return title or None
+    if not title:
+        return None
+    return ensure_publication_title_suffix(title, clip_type=candidate.type)
 
 
 def _segment_id(index: int) -> str:
@@ -327,14 +349,17 @@ def refresh_review_overlay_title_expectations(
 ) -> SubtitleReviewDocument:
     for clip in document.clips:
         clip.overlay_title_expected = bool(
-            clip.type == "normal"
-            or (
-                clip.type == "short"
-                and short_overlay_title_expected(
-                    render_mode=render_mode,
-                    stored_mode=document.short_overlay_title_mode,
-                    top_banner_enabled=document.short_top_banner_enabled,
-                    title_manually_reviewed=clip.title_edited,
+            clip.title
+            and (
+                clip.type == "normal"
+                or (
+                    clip.type == "short"
+                    and short_overlay_title_expected(
+                        render_mode=render_mode,
+                        stored_mode=document.short_overlay_title_mode,
+                        top_banner_enabled=document.short_top_banner_enabled,
+                        title_manually_reviewed=clip.title_edited,
+                    )
                 )
             )
         )
@@ -648,14 +673,24 @@ def update_review_clip_content(
 
     normalized_title = normalize_overlay_text(title)
     normalized_hook = normalize_overlay_text(hook_text)
-    if not normalized_title:
-        raise ValueError("title must not be empty")
     if len(normalized_title) > 80:
         raise ValueError("title must be 80 characters or fewer")
     next_publication_title = clip.publication_title
     if publication_title is _STYLE_UNSET:
-        if clip.publication_title is None or clip.publication_title == clip.title:
-            next_publication_title = " ".join(normalized_title.split())
+        current_derived_title = ensure_publication_title_suffix(
+            clip.title,
+            clip_type=clip.type,
+        )
+        if (
+            clip.publication_title is None
+            or clip.publication_title == clip.title
+            or clip.publication_title == current_derived_title
+        ):
+            next_publication_title = (
+                " ".join(normalized_title.split())
+                if normalized_title
+                else clip.publication_title
+            )
     else:
         next_publication_title = (
             " ".join(publication_title.split()).strip()
@@ -664,6 +699,20 @@ def update_review_clip_content(
         )
         if next_publication_title and len(next_publication_title) > 100:
             raise ValueError("publication title must be 100 characters or fewer")
+    if not next_publication_title:
+        next_publication_title = " ".join(normalized_title.split()) or None
+    if not next_publication_title:
+        raise ValueError("publication title must not be empty")
+    if clip.type == "normal":
+        next_publication_title = ensure_publication_title_suffix(
+            next_publication_title,
+            clip_type=clip.type,
+        )
+    elif next_publication_title:
+        next_publication_title = ensure_publication_title_suffix(
+            next_publication_title,
+            clip_type=clip.type,
+        )
     if len(normalized_hook) > 120:
         raise ValueError("hook text must be 120 characters or fewer")
     if not 1 <= hook_duration_seconds <= 8:
@@ -678,6 +727,17 @@ def update_review_clip_content(
         if title_candidates is _STYLE_UNSET
         else [YouTubeTitleCandidate.model_validate(item) for item in title_candidates]
     )
+    next_title_candidates = [
+        candidate.model_copy(
+            update={
+                "title": ensure_publication_title_suffix(
+                    candidate.title,
+                    clip_type=clip.type,
+                )
+            }
+        )
+        for candidate in next_title_candidates
+    ]
     next_recommended_title_id = (
         clip.recommended_title_id
         if recommended_title_id is _STYLE_UNSET
@@ -1027,7 +1087,10 @@ def apply_reviewed_clip_content(
         clip = reviewed_by_id.get(candidate.id)
         if clip is None:
             return candidate
-        publication_title = clip.publication_title or clip.title
+        publication_title = ensure_publication_title_suffix(
+            clip.publication_title or clip.title,
+            clip_type=clip.type,
+        )
         overlay_title = (
             clip.title
             if (

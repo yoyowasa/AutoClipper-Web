@@ -847,6 +847,33 @@ def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
     assert persisted["segments"][0]["text"] == "OKでまとめて保存した字幕"
 
 
+def test_apply_subtitle_review_clip_accepts_empty_overlay_title(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+
+    applied = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
+        json={
+            "title": "",
+            "publicationTitle": "公開用タイトル",
+            "hookText": "",
+            "hookDurationSeconds": 3,
+            "segments": [],
+        },
+    )
+
+    assert applied.status_code == 200
+    clip = applied.json()["clips"][0]
+    assert clip["title"] == ""
+    assert clip["publicationTitle"].startswith("公開用タイトル")
+    assert clip["overlayTitleExpected"] is False
+    assert clip["confirmed"] is True
+
+
 @pytest.mark.parametrize("action", ["apply", "confirm"])
 def test_auto_clip_acceptance_queues_render_without_confirming_auto_passed_sibling(
     client: TestClient,

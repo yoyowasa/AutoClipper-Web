@@ -265,7 +265,11 @@ def build_subtitle_review_preview_spec(
     ).title
     top_title = ""
     if title_expected:
-        top_title = (resolved_candidate.overlay_title or resolved_title).strip()
+        top_title = (
+            resolved_candidate.overlay_title
+            if resolved_candidate.overlay_title is not None
+            else resolved_title
+        ).strip()
     return _normalize_for_spec(
         {
             "rendererVersion": renderer_version.strip(),

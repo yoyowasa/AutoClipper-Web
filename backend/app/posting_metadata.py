@@ -12,6 +12,29 @@ PostTitleIntent = Literal["factual", "engagement", "concise"]
 PostMetadataSource = Literal["codex", "manual", "existing"]
 YOUTUBE_POSTING_PACKAGES_FILENAME = "youtube_posting_packages.json"
 YOUTUBE_POSTS_FILENAME = "youtube_posts.md"
+YOUTUBE_TITLE_MAX_LENGTH = 100
+NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX = "儒烏風亭らでん【ReGLOSS切り抜き】"
+
+
+def ensure_publication_title_suffix(title: str, *, clip_type: str) -> str:
+    """Keep the fixed normal-clip suffix exactly once within YouTube's title limit."""
+
+    normalized = " ".join(str(title).split()).strip()
+    if clip_type != "normal":
+        return normalized
+
+    while normalized.endswith(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX):
+        normalized = normalized[: -len(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)].rstrip()
+    available_length = YOUTUBE_TITLE_MAX_LENGTH - len(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)
+    base_title = normalized[:available_length].rstrip()
+    return f"{base_title}{NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX}"
+
+
+def strip_normal_publication_title_suffix(title: str) -> str:
+    normalized = " ".join(str(title).split()).strip()
+    while normalized.endswith(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX):
+        normalized = normalized[: -len(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)].rstrip()
+    return normalized
 
 
 class YouTubePostingProfile(BaseModel):
@@ -111,14 +134,14 @@ def build_youtube_posting_copy(
     )
     source_title = source_title.strip()
     source_url = source_url.strip()
-    description_sections: list[str] = []
+    fixed_description_sections: list[str] = []
     if source_title or source_url:
         source_lines = ["元配信："]
         if source_title:
             source_lines.append(source_title)
         if source_url:
             source_lines.append(source_url)
-        description_sections.append("\n".join(source_lines))
+        fixed_description_sections.append("\n".join(source_lines))
     if resolved_profile.performer_name or resolved_profile.affiliation:
         performer = resolved_profile.performer_name
         if resolved_profile.affiliation:
@@ -127,7 +150,7 @@ def build_youtube_posting_copy(
                 if performer
                 else resolved_profile.affiliation
             )
-        description_sections.append(f"出演：\n{performer}")
+        fixed_description_sections.append(f"出演：\n{performer}")
 
     hashtags = list(resolved_profile.base_hashtags)
     if clip_type == "short":
@@ -143,9 +166,16 @@ def build_youtube_posting_copy(
         hashtags = _unique_strings(
             item if item.startswith("#") else f"#{item}" for item in topic_hashtags
         )[:12]
-    description = "\n\n".join(description_sections).strip()
-    if not description:
-        description = fallback_description.strip()
+    fixed_description = "\n\n".join(fixed_description_sections).strip()
+    content_description = fallback_description.strip()
+    if content_description and fixed_description:
+        available_length = max(0, 2000 - len(fixed_description) - 2)
+        content_description = content_description[:available_length].rstrip()
+    description = "\n\n".join(
+        section
+        for section in (content_description, fixed_description)
+        if section
+    )[:2000].rstrip()
     return YouTubePostingCopy(
         description=description,
         hashtags=hashtags,
@@ -240,12 +270,95 @@ def _write_text_atomic(path: Path, text: str) -> Path:
     return path
 
 
-def write_youtube_posting_artifacts(clips: Sequence[Any], output_dir: str | Path) -> list[Path]:
+def _thumbnail_posting_fields(
+    *,
+    clip_id: str,
+    clip_type: str,
+    type_index: int,
+    thumbnail_root: Path,
+    thumbnail_metadata_by_clip_id: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, str, str | None]:
+    fallback_filename = f"{clip_type}_{type_index:02d}.jpg"
+    metadata = thumbnail_metadata_by_clip_id.get(clip_id, {})
+    filename_value = metadata.get("thumbnail_filename")
+    filename = (
+        filename_value
+        if isinstance(filename_value, str)
+        and filename_value
+        and Path(filename_value).name == filename_value
+        else fallback_filename
+    )
+    status_value = metadata.get("thumbnail_status")
+    status = (
+        status_value
+        if status_value in {"not_generated", "ready", "failed"}
+        else "not_generated"
+    )
+    if status != "ready":
+        return status, filename, None
+
+    path_value = metadata.get("thumbnail_path")
+    if not isinstance(path_value, str) or not path_value.strip():
+        return "failed", filename, None
+    thumbnail_path = Path(path_value)
+    if not thumbnail_path.is_absolute():
+        thumbnail_path = thumbnail_root / thumbnail_path
+    try:
+        relative_path = thumbnail_path.resolve(strict=False).relative_to(
+            thumbnail_root.resolve(strict=False)
+        )
+    except (OSError, ValueError):
+        return "failed", filename, None
+    if not thumbnail_path.is_file():
+        return "failed", filename, None
+    return "ready", filename, relative_path.as_posix()
+
+
+def write_youtube_posting_artifacts(
+    clips: Sequence[Any],
+    output_dir: str | Path,
+    *,
+    thumbnail_metadata_by_clip_id: Mapping[str, Mapping[str, Any]] | None = None,
+    thumbnail_root: str | Path | None = None,
+) -> list[Path]:
     packages: list[dict[str, Any]] = []
     markdown_sections: list[str] = []
+    output_root = Path(output_dir)
+    thumbnail_output_root = Path(thumbnail_root) if thumbnail_root is not None else output_root
+    thumbnail_metadata = thumbnail_metadata_by_clip_id or {}
+    type_indices: dict[str, int] = {"normal": 0, "short": 0}
     for clip in clips:
-        title_candidates = list(getattr(clip, "title_candidates", []) or [])
-        publication_title = str(getattr(clip, "publication_title", "") or "").strip()
+        clip_id = str(getattr(clip, "id"))
+        clip_type = str(getattr(clip, "type"))
+        type_indices[clip_type] = type_indices.get(clip_type, 0) + 1
+        thumbnail_status, thumbnail_filename, thumbnail_relative_path = (
+            _thumbnail_posting_fields(
+                clip_id=clip_id,
+                clip_type=clip_type,
+                type_index=type_indices[clip_type],
+                thumbnail_root=thumbnail_output_root,
+                thumbnail_metadata_by_clip_id=thumbnail_metadata,
+            )
+        )
+        title_candidates = [
+            candidate.model_copy(
+                update={
+                    "title": ensure_publication_title_suffix(
+                        candidate.title,
+                        clip_type=clip_type,
+                    )
+                }
+            )
+            for candidate in list(getattr(clip, "title_candidates", []) or [])
+        ]
+        publication_title = ensure_publication_title_suffix(
+            str(
+                getattr(clip, "publication_title", "")
+                or getattr(clip, "title", "")
+                or ""
+            ),
+            clip_type=clip_type,
+        )
         youtube_description = str(getattr(clip, "youtube_description", "") or "").strip()
         hashtags = list(getattr(clip, "youtube_hashtags", []) or [])
         tags = list(getattr(clip, "youtube_tags", []) or [])
@@ -281,9 +394,12 @@ def write_youtube_posting_artifacts(clips: Sequence[Any], output_dir: str | Path
             )
         )
         package = {
-            "clipId": str(getattr(clip, "id")),
-            "clipType": str(getattr(clip, "type")),
-            "selectedTitle": selected_title,
+            "clipId": clip_id,
+            "clipType": clip_type,
+            "selectedTitle": ensure_publication_title_suffix(
+                selected_title,
+                clip_type=clip_type,
+            ),
             "selectedTitleId": selected_title_id,
             "recommendedTitleId": recommended_title_id,
             "titleCandidates": [
@@ -295,6 +411,13 @@ def write_youtube_posting_artifacts(clips: Sequence[Any], output_dir: str | Path
             "descriptionEvidenceSegmentIds": description_evidence_segment_ids,
             "postMetadataSource": getattr(clip, "post_metadata_source", None),
             "postMetadataRevisionHash": getattr(clip, "post_metadata_revision_hash", None),
+            "thumbnailKicker": str(getattr(clip, "thumbnail_kicker", "") or ""),
+            "thumbnailLine1": str(getattr(clip, "thumbnail_line1", "") or ""),
+            "thumbnailLine2": str(getattr(clip, "thumbnail_line2", "") or ""),
+            "thumbnailFrameSeconds": getattr(clip, "thumbnail_frame_seconds", None),
+            "thumbnailStatus": thumbnail_status,
+            "thumbnailFilename": thumbnail_filename,
+            "thumbnailPath": thumbnail_relative_path,
         }
         packages.append(package)
         copy_ready_description = "\n\n".join(
@@ -308,7 +431,7 @@ def write_youtube_posting_artifacts(clips: Sequence[Any], output_dir: str | Path
                     f"## {package['clipType']} / {package['clipId']}",
                     "",
                     "### 選択タイトル",
-                    selected_title,
+                    package["selectedTitle"],
                     "",
                     "### タイトル候補",
                     *[

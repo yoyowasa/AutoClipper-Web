@@ -1008,7 +1008,11 @@ def _render_mode(settings: SubtitleRenderSettings | dict[str, Any] | None, expli
 def _overlay_title_for_burn(candidate: Candidate, *, expected: bool, fallback_title: str) -> str:
     if not expected:
         return ""
-    return (candidate.overlay_title or fallback_title).strip()
+    return (
+        candidate.overlay_title
+        if candidate.overlay_title is not None
+        else fallback_title
+    ).strip()
 
 
 def _candidate_hook_scene_duration(candidate: Candidate) -> float:
@@ -1215,7 +1219,11 @@ def render_selected_short_candidates(
         hook_scene_duration = _candidate_hook_scene_duration(candidate)
         output_duration = candidate.duration + hook_scene_duration
         hook_scene_rendered = hook_scene_duration > 0
-        overlay_expected = short_overlay_title_expected(
+        overlay_expected = bool(
+            candidate.overlay_title
+            if candidate.overlay_title is not None
+            else candidate.title
+        ) and short_overlay_title_expected(
             render_mode=resolved_mode,
             stored_mode=stored_overlay_title_mode,
             top_banner_enabled=short_top_banner_enabled,

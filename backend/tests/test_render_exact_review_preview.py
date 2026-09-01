@@ -178,6 +178,28 @@ def test_manual_overlay_break_changes_exact_hash_but_not_text_free_live_video_ha
     )
 
 
+def test_exact_preview_preserves_explicit_empty_overlay_title() -> None:
+    candidate = make_candidate("short_1", "short").model_copy(
+        update={
+            "title": "公開用タイトル",
+            "overlay_title": "",
+            "title_source": "manual_review",
+        }
+    )
+
+    spec = build_subtitle_review_preview_spec(
+        candidate=candidate,
+        transcript_segments=[],
+        settings={"shortLayout": "center_crop"},
+        source_fingerprint="source-sha256",
+        source_width=1920,
+        source_height=1080,
+        overlay_title_expected=True,
+    )
+
+    assert spec["topTitle"] == ""
+
+
 def test_preview_specs_and_hashes_track_short_framing() -> None:
     candidate = make_candidate("short_1", "short")
     adjusted = candidate.model_copy(

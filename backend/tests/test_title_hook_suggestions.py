@@ -42,9 +42,13 @@ from app.jobs.title_hook_suggestions import (
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.main import app
 from app.models import Job, Video
-from app.posting_metadata import write_youtube_posting_artifacts
+from app.posting_metadata import (
+    NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX,
+    write_youtube_posting_artifacts,
+)
 from app.scoring.title_hook_suggestions import (
     OPENAI_REQUEST_TIMEOUT_SECONDS,
+    TITLE_HOOK_GENERATION_SCHEMA,
     OpenAITitleHookSuggestionGenerator,
     TitleHookSuggestionResult,
     extract_representative_frames,
@@ -87,6 +91,10 @@ def _suggestion_result() -> TitleHookSuggestionResult:
                     "hookDurationSeconds": 2.0,
                     "hookSceneStart": 0.2,
                     "hookSceneEnd": 2.2,
+                    "thumbnailKicker": "美学を考える",
+                    "thumbnailLine1": "美しいものって",
+                    "thumbnailLine2": "なんだろう？",
+                    "thumbnailFrameSeconds": 8.5,
                     "reason": "発言直後の反応が伝わる",
                     "evidenceSegmentIds": [],
                 },
@@ -841,7 +849,11 @@ def test_legacy_review_without_publication_title_falls_back_to_display_title(
 
     applied = apply_reviewed_clip_content(title_hook_api["selection"], legacy)
 
-    assert all(clip.publication_title is None for clip in legacy.clips)
+    legacy_normal = next(clip for clip in legacy.clips if clip.type == "normal")
+    legacy_short_clip = next(clip for clip in legacy.clips if clip.type == "short")
+    assert legacy_normal.publication_title is not None
+    assert legacy_normal.publication_title.endswith(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)
+    assert legacy_short_clip.publication_title is None
     assert applied.shorts[0].title == "ショート公開タイトル"
     assert applied.shorts[0].overlay_title == "ショート表示タイトル"
     assert applied.shorts[0].title_source == title_hook_api["selection"].shorts[0].title_source
@@ -888,7 +900,9 @@ def test_legacy_normal_uses_review_title_even_when_candidate_overlay_differs(
 
     applied = apply_reviewed_clip_content(selection, legacy)
 
-    assert applied.normal_clips[0].title == "旧通常reviewタイトル"
+    assert applied.normal_clips[0].title == (
+        f"旧通常reviewタイトル{NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX}"
+    )
     assert applied.normal_clips[0].overlay_title == "旧通常reviewタイトル"
     assert applied.normal_clips[0].title_source == "manual_review"
 
@@ -1385,6 +1399,51 @@ def test_normalization_clamps_scenes_to_clip_range() -> None:
     assert all(1.5 <= item.hook_scene_end - item.hook_scene_start <= 3 for item in suggestions)
 
 
+def test_normalization_suffixes_only_normal_publication_titles() -> None:
+    normal = normalize_title_hook_suggestions(
+        _suggestion_result(),
+        clip_duration=20,
+        clip_type="normal",
+    )
+    short = normalize_title_hook_suggestions(
+        _suggestion_result(),
+        clip_duration=20,
+        clip_type="short",
+    )
+
+    assert all(
+        item.publication_title.endswith(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)
+        for item in normal
+    )
+    assert all(
+        not item.publication_title.endswith(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)
+        for item in short
+    )
+    assert normal[0].overlay_title == short[0].overlay_title
+    assert normal[0].thumbnail_kicker == "美学を考える"
+    assert normal[0].thumbnail_line1 == "美しいものって"
+    assert normal[0].thumbnail_line2 == "なんだろう？"
+    assert normal[0].thumbnail_frame_seconds == 8.5
+    assert normal[1].thumbnail_kicker
+    assert normal[1].thumbnail_line1
+    assert normal[1].thumbnail_frame_seconds == 20
+    assert all(item.thumbnail_kicker == "" for item in short)
+    assert all(item.thumbnail_line1 == "" for item in short)
+    assert all(item.thumbnail_line2 == "" for item in short)
+    assert all(item.thumbnail_frame_seconds is None for item in short)
+
+
+def test_generation_schema_requires_thumbnail_contract_in_same_suggestion() -> None:
+    suggestion_schema = TITLE_HOOK_GENERATION_SCHEMA["properties"]["suggestions"]["items"]
+
+    assert {
+        "thumbnailKicker",
+        "thumbnailLine1",
+        "thumbnailLine2",
+        "thumbnailFrameSeconds",
+    }.issubset(set(suggestion_schema["required"]))
+
+
 def test_auto_generation_maps_recommended_source_id_to_normalized_id(
     tmp_path: Path,
 ) -> None:
@@ -1499,6 +1558,10 @@ def test_legacy_suggestion_result_fills_intents_and_recommendation() -> None:
     for suggestion in payload["suggestions"]:
         suggestion.pop("intent")
         suggestion.pop("evidenceSegmentIds")
+        suggestion.pop("thumbnailKicker")
+        suggestion.pop("thumbnailLine1")
+        suggestion.pop("thumbnailLine2")
+        suggestion.pop("thumbnailFrameSeconds")
     for key in (
         "recommendedSuggestionId",
         "youtubeDescription",
@@ -1515,3 +1578,5 @@ def test_legacy_suggestion_result_fills_intents_and_recommendation() -> None:
         "concise",
     ]
     assert restored.recommended_suggestion_id == "model-a"
+    assert restored.suggestions[0].thumbnail_kicker == ""
+    assert restored.suggestions[0].thumbnail_frame_seconds is None

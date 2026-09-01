@@ -24,6 +24,7 @@ from app.posting_metadata import (
     YouTubeTitleCandidate,
     build_post_metadata_revision_hash,
     build_youtube_posting_copy,
+    ensure_publication_title_suffix,
 )
 from app.scoring.codex_title_hook_suggestions import (
     CodexTitleHookSuggestionError,
@@ -496,6 +497,7 @@ def generate_title_hook_suggestions_for_auto(
     suggestions = normalize_title_hook_suggestions(
         result,
         clip_duration=request.clip_duration,
+        clip_type=request.clip_type,
     )
     recommended_index = next(
         (
@@ -556,7 +558,10 @@ def apply_recommended_title_hook_suggestions(
     if clip.original_title is None:
         clip.original_title = clip.title
     clip.title = recommended.overlay_title
-    clip.publication_title = recommended.publication_title
+    clip.publication_title = ensure_publication_title_suffix(
+        recommended.publication_title,
+        clip_type=clip.type,
+    )
     clip.title_edited = True
     clip.hook_text = recommended.hook_text
     clip.hook_duration_seconds = recommended.hook_duration_seconds
@@ -573,7 +578,10 @@ def apply_recommended_title_hook_suggestions(
     clip.title_candidates = [
         YouTubeTitleCandidate(
             id=item.id,
-            title=item.publication_title,
+            title=ensure_publication_title_suffix(
+                item.publication_title,
+                clip_type=clip.type,
+            ),
             intent=item.intent,
             reason=item.reason,
             evidenceSegmentIds=item.evidence_segment_ids,
@@ -723,6 +731,7 @@ def run_title_hook_suggestion_generation(
         suggestions = normalize_title_hook_suggestions(
             result,
             clip_duration=request.clip_duration,
+            clip_type=request.clip_type,
         )
         recommended_index = next(
             (

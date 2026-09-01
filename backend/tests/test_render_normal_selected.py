@@ -114,7 +114,9 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
             }
         ),
         make_candidate("cand_normal_fail", 130.0, 250.0, "Broken normal", 90.0),
-        make_candidate("cand_normal_2", 260.0, 380.0, "Second normal", 82.0),
+        make_candidate("cand_normal_2", 260.0, 380.0, "Second normal", 82.0).model_copy(
+            update={"overlay_title": "", "title_source": "manual_review"}
+        ),
         Candidate(
             id="cand_short_ignored",
             type="short",
@@ -188,6 +190,16 @@ def test_render_selected_normal_candidates_creates_exports_visible_in_results(cl
     assert "Video\\Noverlay" in normal_ass
     assert "通常切り抜きの\\Nフック" in normal_ass
     assert "First normal" not in normal_ass
+    hidden_title_metadata = json.loads(
+        (normal_dir / "normal_03.json").read_text(encoding="utf-8")
+    )
+    assert hidden_title_metadata["title"] == "Second normal"
+    assert hidden_title_metadata["overlay_title"] == ""
+    assert hidden_title_metadata["overlay_title_expected"] is False
+    assert hidden_title_metadata["overlay_title_rendered"] is False
+    hidden_title_ass = (subtitle_dir / "normal_03.ass").read_text(encoding="utf-8-sig")
+    assert ",Title,,0,0,0,," not in hidden_title_ass
+    assert "Second normal" not in hidden_title_ass
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200

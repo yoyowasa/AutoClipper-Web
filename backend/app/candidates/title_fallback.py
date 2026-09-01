@@ -169,13 +169,13 @@ def resolve_candidate_title(
         source = candidate.title_source
         if source is None:
             source = "openai" if candidate.openai_scored is True or candidate.used_ai_score is True else "existing"
-        overlay_title = (
-            normalize_overlay_text(candidate.overlay_title or "")
-            if title_is_already_resolved
-            else _postprocessed_overlay_text(candidate.overlay_title)
-        ) or (
-            existing_title if candidate.type == "short" else None
-        )
+        if title_is_already_resolved and candidate.overlay_title is not None:
+            overlay_title = normalize_overlay_text(candidate.overlay_title)
+        else:
+            overlay_title = (
+                _postprocessed_overlay_text(candidate.overlay_title)
+                or (existing_title if candidate.type == "short" else None)
+            )
         return TitleResolution(title=existing_title, overlay_title=overlay_title, title_source=source)
 
     transcript_title = _meaningful_segment_title(candidate, transcript_segments)
