@@ -298,6 +298,7 @@ export type JobResultsResponse = {
   jobId: string;
   zipDownloadUrl: string;
   canReopenForEditing: boolean;
+  reeditSourceJobId: string | null;
   auditSummary: JobAuditSummary | null;
   normalClips: ResultExportItem[];
   shorts: ResultExportItem[];

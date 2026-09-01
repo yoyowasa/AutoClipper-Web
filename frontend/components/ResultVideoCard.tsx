@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 
+import { SaveFileButton } from "./SaveFileButton";
 import { formatDuration, formatScore } from "../lib/format";
-import { toApiUrl } from "../lib/api";
+import { toBrowserApiUrl } from "../lib/api";
 import type { PostTitleIntent, ResultExportItem } from "../lib/types";
 import { descriptionWithHashtags, youtubeTagsText } from "../lib/youtubePosting";
 
@@ -67,12 +68,14 @@ export function ResultVideoCard({
   item,
   auditAvailable = false,
   onReedit,
-  isReediting = false
+  isReediting = false,
+  suggestedFilename
 }: {
   item: ResultExportItem;
   auditAvailable?: boolean;
   onReedit?: (item: ResultExportItem) => void;
   isReediting?: boolean;
+  suggestedFilename: string;
 }) {
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const warnings = item.auditWarnings ?? [];
@@ -298,15 +301,18 @@ export function ResultVideoCard({
               {isReediting ? "再編集画面を準備中" : "この動画だけ再編集"}
             </button>
           ) : null}
-          <a
+          <SaveFileButton
             className="inline-flex min-h-10 items-center rounded-md bg-neutral-950 px-4 text-sm font-medium text-white"
-            href={toApiUrl(item.downloadUrl)}
-          >
-            Download MP4
-          </a>
+            url={toBrowserApiUrl(item.downloadUrl)}
+            suggestedName={suggestedFilename}
+            mimeType="video/mp4"
+            extension=".mp4"
+            description="MP4 video"
+            label="MP4を保存"
+          />
           <a
             className="inline-flex min-h-10 items-center rounded-md border border-neutral-300 px-4 text-sm font-medium text-neutral-800"
-            href={toApiUrl(item.videoUrl)}
+            href={toBrowserApiUrl(item.videoUrl)}
             target="_blank"
           >
             Open
@@ -314,7 +320,7 @@ export function ResultVideoCard({
           {item.metadataUrl ? (
             <a
               className="inline-flex min-h-10 items-center rounded-md border border-neutral-300 px-4 text-sm font-medium text-neutral-800"
-              href={toApiUrl(item.metadataUrl)}
+              href={toBrowserApiUrl(item.metadataUrl)}
               target="_blank"
             >
               Metadata
@@ -323,7 +329,7 @@ export function ResultVideoCard({
           {item.subtitleUrl ? (
             <a
               className="inline-flex min-h-10 items-center rounded-md border border-neutral-300 px-4 text-sm font-medium text-neutral-800"
-              href={toApiUrl(item.subtitleUrl)}
+              href={toBrowserApiUrl(item.subtitleUrl)}
               target="_blank"
             >
               Subtitle

@@ -1710,6 +1710,9 @@ def test_clip_reedit_creates_one_clip_child_and_keeps_source_job_completed(
     assert client.get(f"/api/jobs/{child_review['jobId']}").json()["status"] == (
         "awaiting_subtitle_review"
     )
+    child_results = client.get(f"/api/jobs/{child_review['jobId']}/results")
+    assert child_results.status_code == 200
+    assert child_results.json()["reeditSourceJobId"] == source_job_id
 
 
 def test_isolated_normal_reedit_can_convert_to_one_short(

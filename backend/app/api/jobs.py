@@ -4639,11 +4639,21 @@ def get_job_results(
     ]
     normal_clips = [item for item in items if item.type == "normal"]
     shorts = [item for item in items if item.type == "short"]
+    reedit_source_job_id: str | None = None
+    review_path = subtitle_review_output_path(output_dir)
+    if review_path.is_file():
+        try:
+            source_job_id = load_subtitle_review(review_path).reedit_source_job_id
+        except (OSError, ValueError):
+            source_job_id = None
+        if source_job_id and db.get(Job, source_job_id) is not None:
+            reedit_source_job_id = source_job_id
 
     return JobResultsResponse(
         jobId=job.id,
         zipDownloadUrl=f"/api/jobs/{job.id}/download.zip",
         canReopenForEditing=_can_reopen_subtitle_review(job, video, paths),
+        reeditSourceJobId=reedit_source_job_id,
         auditSummary=_audit_summary(audit),
         normalClips=normal_clips,
         shorts=shorts,

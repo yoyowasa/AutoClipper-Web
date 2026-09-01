@@ -5,7 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { ResultVideoCard } from "../../../components/ResultVideoCard";
-import { createClipReedit, getJobResults, toApiUrl } from "../../../lib/api";
+import { SaveFileButton } from "../../../components/SaveFileButton";
+import { createClipReedit, getJobResults, toBrowserApiUrl } from "../../../lib/api";
 import type { JobAuditSummary, JobResultsResponse, ResultExportItem } from "../../../lib/types";
 
 const IMPORTANT_AUDIT_WARNINGS = [
@@ -131,13 +132,24 @@ export default function ResultsPage() {
             <h1 className="mt-2 break-all text-3xl font-semibold">Results</h1>
           </div>
           <div className="flex flex-wrap gap-2">
-            {results ? (
-              <a
-                className="inline-flex min-h-11 items-center rounded-md bg-neutral-950 px-5 text-sm font-medium text-white"
-                href={toApiUrl(results.zipDownloadUrl)}
+            {results?.reeditSourceJobId ? (
+              <Link
+                className="inline-flex min-h-11 items-center rounded-md border border-sky-700 bg-white px-5 text-sm font-medium text-sky-800"
+                href={`/results/${results.reeditSourceJobId}`}
               >
-                Download ZIP
-              </a>
+                元の完成動画一覧へ戻る
+              </Link>
+            ) : null}
+            {results ? (
+              <SaveFileButton
+                className="inline-flex min-h-11 items-center rounded-md bg-neutral-950 px-5 text-sm font-medium text-white"
+                url={toBrowserApiUrl(results.zipDownloadUrl)}
+                suggestedName={`${jobId}.zip`}
+                mimeType="application/zip"
+                extension=".zip"
+                description="ZIP archive"
+                label="ZIPを保存"
+              />
             ) : null}
             <Link
               className="inline-flex min-h-11 items-center rounded-md border border-neutral-300 px-5 text-sm font-medium text-neutral-800"
@@ -170,13 +182,14 @@ export default function ResultsPage() {
                 <span className="text-sm text-neutral-500">{results.normalClips.length}</span>
               </div>
               <div className="grid gap-4 md:grid-cols-2">
-                {results.normalClips.map((item) => (
+                {results.normalClips.map((item, index) => (
                   <ResultVideoCard
                     key={item.id}
                     item={item}
                     auditAvailable={Boolean(results.auditSummary)}
                     isReediting={reopeningClipId === item.candidateId}
                     onReedit={results.canReopenForEditing ? reopenForEditing : undefined}
+                    suggestedFilename={`normal_${String(index + 1).padStart(2, "0")}.mp4`}
                   />
                 ))}
               </div>
@@ -188,13 +201,14 @@ export default function ResultsPage() {
                 <span className="text-sm text-neutral-500">{results.shorts.length}</span>
               </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {results.shorts.map((item) => (
+                {results.shorts.map((item, index) => (
                   <ResultVideoCard
                     key={item.id}
                     item={item}
                     auditAvailable={Boolean(results.auditSummary)}
                     isReediting={reopeningClipId === item.candidateId}
                     onReedit={results.canReopenForEditing ? reopenForEditing : undefined}
+                    suggestedFilename={`short_${String(index + 1).padStart(2, "0")}.mp4`}
                   />
                 ))}
               </div>

@@ -72,6 +72,30 @@ export function toApiUrl(pathOrUrl: string): string {
   return `${API_BASE_URL}${pathOrUrl}`;
 }
 
+export function toBrowserApiUrl(pathOrUrl: string): string {
+  let apiPath = pathOrUrl;
+  if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
+    const url = new URL(pathOrUrl);
+    apiPath = `${url.pathname}${url.search}`;
+  }
+  if (!apiPath.startsWith("/api/")) {
+    return toApiUrl(pathOrUrl);
+  }
+
+  const queryIndex = apiPath.indexOf("?");
+  const pathname = queryIndex >= 0 ? apiPath.slice(0, queryIndex) : apiPath;
+  const search = queryIndex >= 0 ? apiPath.slice(queryIndex) : "";
+  const exportDownload = pathname.match(/^\/api\/exports\/([^/]+)\/download$/);
+  if (exportDownload) {
+    return `/backend-api/exports/${exportDownload[1]}/video.mp4${search}`;
+  }
+  const zipDownload = pathname.match(/^\/api\/jobs\/([^/]+)\/download\.zip$/);
+  if (zipDownload) {
+    return `/backend-api/jobs/${zipDownload[1]}/archive.zip${search}`;
+  }
+  return `/backend-api/${apiPath.slice("/api/".length)}`;
+}
+
 export async function getStorageStatus(): Promise<StorageStatusResponse> {
   const response = await fetch(`${API_BASE_URL}/api/storage/status`, {
     cache: "no-store"
