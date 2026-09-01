@@ -182,6 +182,11 @@ from app.jobs.subtitle_review_preview import (
     subtitle_review_preview_url as exact_subtitle_review_preview_url,
     write_subtitle_review_preview_error,
 )
+from app.jobs.thumbnails import (
+    generate_export_thumbnails,
+    read_export_metadata,
+    thumbnail_path_from_export,
+)
 from app.jobs.title_hook_suggestions import (
     TitleHookSuggestionsDocument,
     apply_recommended_title_hook_suggestions,
@@ -207,6 +212,11 @@ from app.render.render_manual_source_proxy import (
 )
 from app.render.render_review_preview import render_review_preview
 from app.render.render_short import ShortRenderBatchResult, render_selected_short_candidates, render_short_clip
+from app.render.render_thumbnail import (
+    ThumbnailRenderResult,
+    render_normal_thumbnail,
+    render_short_thumbnail,
+)
 from app.scoring.openai_score import OpenAICandidateScorer, score_candidate_batch
 from app.scoring.clip_preferences import build_clip_selection_preferences
 from app.scoring.heatmap import annotate_candidates_with_heatmap
@@ -292,6 +302,8 @@ class AutoClipperPipelineDependencies:
     detect_black_screen: DetectBlackScreen = detect_black_screen
     normal_renderer: Callable[..., Path] = render_normal_clip
     short_renderer: Callable[..., Any] = render_short_clip
+    normal_thumbnail_renderer: Callable[..., ThumbnailRenderResult] = render_normal_thumbnail
+    short_thumbnail_renderer: Callable[..., ThumbnailRenderResult] = render_short_thumbnail
     manual_source_proxy_renderer: Callable[..., Path] = render_manual_source_proxy
     subtitle_review_preview_renderer: Callable[..., Path] = render_review_preview
     subtitle_review_exact_preview_renderer: Callable[..., ExactPreviewResult] = render_exact_subtitle_review_preview
@@ -2324,6 +2336,7 @@ def _zip_export_arcname(export: ExportItem, path: Path, source_value: str) -> st
 
 def _create_zip(zip_path: Path, exports: Sequence[ExportItem], metadata_files: Sequence[Path] | None = None) -> None:
     zip_path.parent.mkdir(parents=True, exist_ok=True)
+    resolved_job_dir = zip_path.parent.resolve(strict=False)
     with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as archive:
         for export in exports:
             for value in (export.video_path, export.subtitle_path, export.metadata_path):
@@ -2332,6 +2345,19 @@ def _create_zip(zip_path: Path, exports: Sequence[ExportItem], metadata_files: S
                 path = Path(value)
                 if path.is_file():
                     archive.write(path, arcname=_zip_export_arcname(export, path, value))
+            thumbnail_path = thumbnail_path_from_export(export)
+            if thumbnail_path is not None:
+                try:
+                    thumbnail_path.resolve(strict=False).relative_to(resolved_job_dir)
+                except (OSError, ValueError):
+                    thumbnail_path = None
+            if thumbnail_path is not None and thumbnail_path.is_file():
+                archive.write(
+                    thumbnail_path,
+                    arcname=(
+                        f"thumbnails/{_zip_type_dir(export.type)}/{thumbnail_path.name}"
+                    ),
+                )
         for metadata_file in metadata_files or []:
             if metadata_file.is_file():
                 archive.write(metadata_file, arcname=f"metadata/{metadata_file.name}")
@@ -2510,7 +2536,12 @@ def _discard_unpublished_exports(
 ) -> None:
     resolved_job_dir = job_dir.resolve()
     for export in exports:
-        for value in (export.video_path, export.subtitle_path, export.metadata_path):
+        thumbnail_path = thumbnail_path_from_export(export)
+        values = [export.video_path, export.subtitle_path]
+        if thumbnail_path is not None:
+            values.append(str(thumbnail_path))
+        values.append(export.metadata_path)
+        for value in values:
             if not value:
                 continue
             candidate_path = Path(value)
@@ -2619,6 +2650,25 @@ class _SubtitleRerenderPromotion:
         source.replace(resolved_destination)
         change.new_published = True
 
+    def remove(self, destination: Path) -> None:
+        resolved_destination = destination.resolve(strict=False)
+        resolved_destination.relative_to(self.canonical_job_dir.resolve(strict=False))
+        if any(change.destination == resolved_destination for change in self.changes):
+            raise ValueError(f"duplicate rerender promotion destination: {resolved_destination}")
+
+        backup = self.backup_root / f"{len(self.changes):04d}" / destination.name
+        change = _RerenderFileChange(
+            destination=resolved_destination,
+            backup=backup,
+        )
+        self.changes.append(change)
+        if resolved_destination.exists():
+            if not resolved_destination.is_file():
+                raise ValueError(f"rerender promotion destination is not a file: {resolved_destination}")
+            backup.parent.mkdir(parents=True, exist_ok=True)
+            resolved_destination.replace(backup)
+            change.original_backed_up = True
+
     def rollback(self) -> None:
         failures: list[str] = []
         for change in reversed(self.changes):
@@ -2642,6 +2692,44 @@ class _SubtitleRerenderPromotion:
 
 class _SubtitleRerenderRollbackError(RuntimeError):
     pass
+
+
+def _thumbnail_metadata_by_candidate_id(
+    exports: Sequence[ExportItem],
+) -> dict[str, Mapping[str, Any]]:
+    return {
+        str(export.candidate_id): read_export_metadata(export)
+        for export in exports
+        if export.candidate_id is not None
+    }
+
+
+def _write_youtube_posting_artifacts_for_publication(
+    clips: Sequence[Any],
+    exports: Sequence[ExportItem],
+    *,
+    job_dir: Path,
+    staging_job_dir: Path | None = None,
+    promotion: _SubtitleRerenderPromotion | None = None,
+) -> list[Path]:
+    if (staging_job_dir is None) != (promotion is None):
+        raise ValueError("posting artifact staging and promotion must be supplied together")
+    output_dir = staging_job_dir or job_dir
+    written_paths = write_youtube_posting_artifacts(
+        clips,
+        output_dir,
+        thumbnail_metadata_by_clip_id=_thumbnail_metadata_by_candidate_id(exports),
+        thumbnail_root=job_dir,
+    )
+    if promotion is None:
+        return written_paths
+
+    published_paths: list[Path] = []
+    for written_path in written_paths:
+        destination = job_dir / written_path.name
+        promotion.publish(written_path, destination)
+        published_paths.append(destination)
+    return published_paths
 
 
 def _project_staged_exports_for_quality_gate(
@@ -2683,7 +2771,11 @@ def _project_staged_exports_for_quality_gate(
     return projected
 
 
-def _rewrite_export_metadata_paths(export: ExportItem) -> None:
+def _rewrite_export_metadata_paths(
+    export: ExportItem,
+    *,
+    thumbnail_path: str | None = None,
+) -> None:
     if not export.metadata_path:
         return
     metadata_path = Path(export.metadata_path)
@@ -2694,6 +2786,8 @@ def _rewrite_export_metadata_paths(export: ExportItem) -> None:
         return
     payload["video_path"] = export.video_path
     payload["subtitle_path"] = export.subtitle_path
+    if "thumbnail_path" in payload:
+        payload["thumbnail_path"] = thumbnail_path
     _write_json(metadata_path, payload)
 
 
@@ -2714,9 +2808,21 @@ def _promote_subtitle_rerender(
         canonical_job_dir=canonical_job_dir,
         changes=[],
     )
+    previous_thumbnails = {
+        previous.candidate_id: thumbnail_path_from_export(previous)
+        for previous in previous_exports
+        if previous.candidate_id is not None
+    }
 
     try:
         for export in staged_exports:
+            staged_thumbnail_path = thumbnail_path_from_export(export)
+            expected_thumbnail_path = (
+                canonical_job_dir
+                / "thumbnails"
+                / _zip_type_dir(export.type)
+                / f"{Path(export.video_path).stem}.jpg"
+            )
             export.video_path = (
                 _promote_staged_export_file(
                     export.video_path,
@@ -2732,13 +2838,34 @@ def _promote_subtitle_rerender(
                 canonical_job_dir=canonical_job_dir,
                 promotion=promotion,
             )
+            if staged_thumbnail_path is not None:
+                promoted_thumbnail_path = _promote_staged_export_file(
+                    str(staged_thumbnail_path),
+                    staging_job_dir=staging_job_dir,
+                    canonical_job_dir=canonical_job_dir,
+                    promotion=promotion,
+                )
+            else:
+                previous_thumbnail_path = previous_thumbnails.get(export.candidate_id)
+                if previous_thumbnail_path is not None:
+                    try:
+                        previous_thumbnail_path.resolve(strict=False).relative_to(
+                            canonical_job_dir.resolve(strict=False)
+                        )
+                    except (OSError, ValueError):
+                        previous_thumbnail_path = None
+                promotion.remove(previous_thumbnail_path or expected_thumbnail_path)
+                promoted_thumbnail_path = None
             export.metadata_path = _promote_staged_export_file(
                 export.metadata_path,
                 staging_job_dir=staging_job_dir,
                 canonical_job_dir=canonical_job_dir,
                 promotion=promotion,
             )
-            _rewrite_export_metadata_paths(export)
+            _rewrite_export_metadata_paths(
+                export,
+                thumbnail_path=promoted_thumbnail_path,
+            )
 
         successful_candidate_ids = {
             export.candidate_id
@@ -4764,6 +4891,14 @@ def run_autoclipper_job(
                             "qualityGateInputHash": post_render_gate.input_hash,
                         },
                     )
+            generate_export_thumbnails(
+                exports=exports,
+                selection=selection,
+                input_path=input_path,
+                job_output_dir=storage_paths.job_outputs(job.id),
+                normal_renderer=deps.normal_thumbnail_renderer,
+                short_renderer=deps.short_thumbnail_renderer,
+            )
             if guarded_content_auto_passed:
                 review_document = mark_review_completed(review_document)
                 write_subtitle_review(
@@ -4774,9 +4909,10 @@ def run_autoclipper_job(
                     review_document,
                     subtitle_review_summary_path(job_dir),
                 )
-                posting_files = write_youtube_posting_artifacts(
+                posting_files = _write_youtube_posting_artifacts_for_publication(
                     review_document.clips,
-                    job_dir,
+                    exports,
+                    job_dir=job_dir,
                 )
                 metadata_files.extend(
                     path for path in posting_files if path not in metadata_files
@@ -6058,6 +6194,14 @@ def run_subtitle_review_render(
                     "subtitle_rerender_incomplete",
                     "Re-render did not complete for every existing clip. Previous outputs were kept.",
                 )
+            generate_export_thumbnails(
+                exports=exports,
+                selection=selection,
+                input_path=input_path,
+                job_output_dir=render_paths.job_outputs(job.id),
+                normal_renderer=deps.normal_thumbnail_renderer,
+                short_renderer=deps.short_thumbnail_renderer,
+            )
             if rerender_staging_paths is not None:
                 exports, _render_failures_path, rerender_promotion = _promote_subtitle_rerender(
                     db=db,
@@ -6111,7 +6255,22 @@ def run_subtitle_review_render(
                 review_document,
                 subtitle_review_summary_path(job_dir),
             )
-            write_youtube_posting_artifacts(review_document.clips, job_dir)
+            if rerender_staging_paths is not None:
+                if rerender_promotion is None:
+                    raise RuntimeError("subtitle rerender promotion is unavailable")
+                _write_youtube_posting_artifacts_for_publication(
+                    review_document.clips,
+                    exports,
+                    job_dir=job_dir,
+                    staging_job_dir=rerender_staging_paths.job_outputs(job.id),
+                    promotion=rerender_promotion,
+                )
+            else:
+                _write_youtube_posting_artifacts_for_publication(
+                    review_document.clips,
+                    exports,
+                    job_dir=job_dir,
+                )
             zip_path = storage_paths.zip_path(job.id)
             if is_rerender:
                 if rerender_promotion is None:

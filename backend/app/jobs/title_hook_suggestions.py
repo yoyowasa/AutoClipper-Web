@@ -575,6 +575,10 @@ def apply_recommended_title_hook_suggestions(
         if recommended.hook_scene_end is None
         else round(clip.start + recommended.hook_scene_end, 3)
     )
+    clip.thumbnail_kicker = recommended.thumbnail_kicker
+    clip.thumbnail_line1 = recommended.thumbnail_line1
+    clip.thumbnail_line2 = recommended.thumbnail_line2
+    clip.thumbnail_frame_seconds = recommended.thumbnail_frame_seconds
     clip.title_candidates = [
         YouTubeTitleCandidate(
             id=item.id,

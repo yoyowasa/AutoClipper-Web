@@ -203,6 +203,10 @@ type ClipContentDraft = {
   hookDurationSeconds: number;
   hookSceneStart: number | null;
   hookSceneEnd: number | null;
+  thumbnailKicker: string;
+  thumbnailLine1: string;
+  thumbnailLine2: string;
+  thumbnailFrameSeconds: number | null;
   titleStyle: ClipTextStyle | null;
   hookStyle: ClipTextStyle | null;
   subtitleStyle: ClipTextStyle | null;
@@ -329,6 +333,152 @@ function ShortFramingRange({
   );
 }
 
+function NormalThumbnailDraftPreview({
+  clipId,
+  frameSeconds,
+  kicker,
+  line1,
+  line2,
+  maxFrameSeconds,
+  sourceStartSeconds,
+  videoSrc,
+  videoVersion
+}: {
+  clipId: string;
+  frameSeconds: number | null;
+  kicker: string;
+  line1: string;
+  line2: string;
+  maxFrameSeconds: number;
+  sourceStartSeconds: number;
+  videoSrc: string | null;
+  videoVersion: string;
+}) {
+  const thumbnailVideoRef = useRef<HTMLVideoElement>(null);
+  const selectedFrameSeconds = clamp(
+    frameSeconds ?? maxFrameSeconds * 0.38,
+    0,
+    maxFrameSeconds
+  );
+  const previewSource = videoSrc ? previewVideoSrc(videoSrc, videoVersion) : null;
+  const previewTextStyle = (text: string, maximumSizeCqw: number, minimumSizeCqw: number) => {
+    const characterCount = Math.max(1, Array.from(text.trim()).length);
+    const availableWidthCqw = 42;
+    const fontSizeCqw = Math.max(
+      minimumSizeCqw,
+      Math.min(maximumSizeCqw, availableWidthCqw / characterCount)
+    );
+    return {
+      fontSize: `${fontSizeCqw}cqw`,
+      fontFamily: '"Noto Sans JP", "Noto Sans CJK JP", sans-serif',
+      transform: `scaleX(${Math.min(
+        1,
+        availableWidthCqw / (fontSizeCqw * characterCount)
+      )})`,
+      transformOrigin: "left center",
+      whiteSpace: "nowrap" as const
+    };
+  };
+
+  useEffect(() => {
+    const video = thumbnailVideoRef.current;
+    if (!video || !previewSource) {
+      return;
+    }
+    const seekToFrame = () => {
+      const target = Math.min(
+        Math.max(0, sourceStartSeconds + selectedFrameSeconds),
+        Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.05) : 0
+      );
+      video.pause();
+      video.currentTime = target;
+    };
+    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+      seekToFrame();
+      return;
+    }
+    video.addEventListener("loadedmetadata", seekToFrame, { once: true });
+    return () => video.removeEventListener("loadedmetadata", seekToFrame);
+  }, [previewSource, selectedFrameSeconds, sourceStartSeconds]);
+
+  return (
+    <div
+      aria-label="通常サムネ即時プレビュー"
+      className="relative mt-3 aspect-video w-full overflow-hidden border border-[#9a7737] bg-[#071b18]"
+      style={{ containerType: "inline-size" }}
+    >
+      {previewSource ? (
+        <video
+          className="absolute left-[50.8%] top-[4.4%] h-[91.2%] w-[46.7%] object-cover object-[64%_50%]"
+          key={`${clipId}:${previewSource}`}
+          muted
+          playsInline
+          preload="auto"
+          ref={thumbnailVideoRef}
+          src={previewSource}
+          onLoadedMetadata={(event) => {
+            event.currentTarget.currentTime = Math.min(
+              sourceStartSeconds + selectedFrameSeconds,
+              Math.max(0, event.currentTarget.duration - 0.05)
+            );
+          }}
+        />
+      ) : null}
+      <div className="absolute inset-0 bg-gradient-to-r from-[#061b18] via-[#061b18dd] to-transparent" />
+      <div
+        className="absolute inset-0 opacity-35"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle at 12px 12px, rgba(184,147,67,.55) 0 1px, transparent 1.5px), repeating-linear-gradient(45deg, transparent 0 14px, rgba(23,71,63,.55) 14px 15px)"
+        }}
+      />
+      <div className="absolute inset-[2.5%] border border-[#b89343]/90" />
+      <div className="absolute -left-[7%] top-[18%] h-[13%] w-[61%] -rotate-6 bg-[#d24a27]/75" />
+      <div className="absolute left-[4.4%] top-[20.2%] w-[44.8%] -rotate-3">
+        {kicker.trim() ? (
+          <p
+            className="inline-block border-l-4 border-[#d24a27] bg-black/70 px-[3%] py-[1%] font-black tracking-[0.08em] text-[#f2e5bd]"
+            style={previewTextStyle(kicker, 2.3, 1.4)}
+          >
+            {kicker.trim()}
+          </p>
+        ) : null}
+      </div>
+      <div className="absolute left-[3.4%] top-[34.2%] w-[44.8%] -rotate-3">
+        {line1.trim() ? (
+          <p
+            className="font-black leading-[1.02] text-white"
+            style={{
+              ...previewTextStyle(line1, 6.4, 1.875),
+              textShadow:
+                "-2px -2px 0 #03110e, 2px -2px 0 #03110e, -2px 2px 0 #03110e, 2px 2px 0 #03110e, 4px 4px 0 #176b5b"
+            }}
+          >
+            {line1.trim()}
+          </p>
+        ) : null}
+        {line2.trim() ? (
+          <p
+            className={`${line1.trim() ? "mt-[2%]" : ""} font-black leading-[1.02] text-[#f4d84b]`}
+            style={{
+              ...previewTextStyle(line2, 6.8, 1.875),
+              textShadow:
+                "-2px -2px 0 #03110e, 2px -2px 0 #03110e, -2px 2px 0 #03110e, 2px 2px 0 #03110e, 4px 4px 0 #176b5b"
+            }}
+          >
+            {line2.trim()}
+          </p>
+        ) : null}
+      </div>
+      {!kicker.trim() && !line1.trim() && !line2.trim() ? (
+        <p className="absolute bottom-[5%] left-[5%] bg-black/70 px-2 py-1 text-[10px] font-semibold text-white">
+          文字なし
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function contentDraftForClip(clip: SubtitleReviewClip): ClipContentDraft {
   return {
     publicationTitle: clip.publicationTitle ?? clip.title,
@@ -346,6 +496,10 @@ function contentDraftForClip(clip: SubtitleReviewClip): ClipContentDraft {
     hookDurationSeconds: clip.hookDurationSeconds,
     hookSceneStart: clip.hookSceneStart,
     hookSceneEnd: clip.hookSceneEnd,
+    thumbnailKicker: clip.thumbnailKicker ?? "",
+    thumbnailLine1: clip.thumbnailLine1 ?? "",
+    thumbnailLine2: clip.thumbnailLine2 ?? "",
+    thumbnailFrameSeconds: clip.thumbnailFrameSeconds ?? null,
     titleStyle: clip.titleStyle,
     hookStyle: clip.hookStyle,
     subtitleStyle: clip.subtitleStyle
@@ -399,6 +553,10 @@ function isClipContentDirty(
         draft.hookDurationSeconds !== clip.hookDurationSeconds ||
         draft.hookSceneStart !== clip.hookSceneStart ||
         draft.hookSceneEnd !== clip.hookSceneEnd ||
+        draft.thumbnailKicker !== (clip.thumbnailKicker ?? "") ||
+        draft.thumbnailLine1 !== (clip.thumbnailLine1 ?? "") ||
+        draft.thumbnailLine2 !== (clip.thumbnailLine2 ?? "") ||
+        draft.thumbnailFrameSeconds !== (clip.thumbnailFrameSeconds ?? null) ||
         !stylesEqual(draft.titleStyle, clip.titleStyle) ||
         !stylesEqual(draft.hookStyle, clip.hookStyle) ||
         !stylesEqual(draft.subtitleStyle, clip.subtitleStyle))
@@ -1886,7 +2044,24 @@ export default function SubtitleReviewPage() {
         : null,
       hookSceneEnd: hasValidHookScene
         ? selectedClip.start + suggestedHookEnd
-        : null
+        : null,
+      thumbnailKicker:
+        selectedClip.type === "normal"
+          ? (suggestion.thumbnailKicker ?? "").trim().slice(0, 40)
+          : "",
+      thumbnailLine1:
+        selectedClip.type === "normal"
+          ? (suggestion.thumbnailLine1 ?? "").trim().slice(0, 60)
+          : "",
+      thumbnailLine2:
+        selectedClip.type === "normal"
+          ? (suggestion.thumbnailLine2 ?? "").trim().slice(0, 60)
+          : "",
+      thumbnailFrameSeconds:
+        selectedClip.type === "normal" &&
+        suggestion.thumbnailFrameSeconds !== null
+          ? clamp(suggestion.thumbnailFrameSeconds, 0, bodyDuration)
+          : null
     });
     setSelectedTextStyleTarget("title");
   }
@@ -2060,6 +2235,10 @@ export default function SubtitleReviewPage() {
         hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
         hookSceneStart: selectedClipContentDraft.hookSceneStart,
         hookSceneEnd: selectedClipContentDraft.hookSceneEnd,
+        thumbnailKicker: selectedClipContentDraft.thumbnailKicker.trim(),
+        thumbnailLine1: selectedClipContentDraft.thumbnailLine1.trim(),
+        thumbnailLine2: selectedClipContentDraft.thumbnailLine2.trim(),
+        thumbnailFrameSeconds: selectedClipContentDraft.thumbnailFrameSeconds,
         titleStyle: selectedClipContentDraft.titleStyle,
         hookStyle: selectedClipContentDraft.hookStyle,
         subtitleStyle: selectedClipContentDraft.subtitleStyle,
@@ -2156,6 +2335,10 @@ export default function SubtitleReviewPage() {
           hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
           hookSceneStart: selectedClipContentDraft.hookSceneStart,
           hookSceneEnd: selectedClipContentDraft.hookSceneEnd,
+          thumbnailKicker: selectedClipContentDraft.thumbnailKicker.trim(),
+          thumbnailLine1: selectedClipContentDraft.thumbnailLine1.trim(),
+          thumbnailLine2: selectedClipContentDraft.thumbnailLine2.trim(),
+          thumbnailFrameSeconds: selectedClipContentDraft.thumbnailFrameSeconds,
           titleStyle: selectedClipContentDraft.titleStyle,
           hookStyle: selectedClipContentDraft.hookStyle,
           subtitleStyle: selectedClipContentDraft.subtitleStyle,
@@ -3180,6 +3363,111 @@ export default function SubtitleReviewPage() {
                       <p className="mt-1 text-xs font-semibold text-red-700">
                         1〜8秒で入力してください。
                       </p>
+                    ) : null}
+
+                    {selectedClip.type === "normal" ? (
+                      <section className="mt-3 border-t border-[#b89343] pt-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className="text-xs font-semibold text-neutral-800">
+                            通常サムネ
+                          </h4>
+                          <span className="text-[10px] text-neutral-500">
+                            完成時に1280×720で生成
+                          </span>
+                        </div>
+                        <label className="mt-2 block text-xs font-semibold text-neutral-700">
+                          小見出し
+                          <input
+                            className="mt-1 min-h-9 w-full border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-sky-600"
+                            disabled={!isEditable}
+                            maxLength={40}
+                            placeholder="空欄なら表示しません"
+                            type="text"
+                            value={selectedClipContentDraft?.thumbnailKicker ?? ""}
+                            onChange={(event) =>
+                              updateClipContentDraft(selectedClip.id, {
+                                thumbnailKicker: event.target.value
+                              })
+                            }
+                          />
+                        </label>
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          <label className="block text-xs font-semibold text-neutral-700">
+                            主見出し 1
+                            <input
+                              className="mt-1 min-h-9 w-full border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-sky-600"
+                              disabled={!isEditable}
+                              maxLength={60}
+                              placeholder="白文字"
+                              type="text"
+                              value={selectedClipContentDraft?.thumbnailLine1 ?? ""}
+                              onChange={(event) =>
+                                updateClipContentDraft(selectedClip.id, {
+                                  thumbnailLine1: event.target.value
+                                })
+                              }
+                            />
+                          </label>
+                          <label className="block text-xs font-semibold text-neutral-700">
+                            主見出し 2
+                            <input
+                              className="mt-1 min-h-9 w-full border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-sky-600"
+                              disabled={!isEditable}
+                              maxLength={60}
+                              placeholder="黄文字"
+                              type="text"
+                              value={selectedClipContentDraft?.thumbnailLine2 ?? ""}
+                              onChange={(event) =>
+                                updateClipContentDraft(selectedClip.id, {
+                                  thumbnailLine2: event.target.value
+                                })
+                              }
+                            />
+                          </label>
+                        </div>
+                        <label className="mt-2 block text-xs font-semibold text-neutral-700">
+                          場面（clip先頭からの秒数）
+                          <input
+                            className="mt-1 h-9 w-28 border border-neutral-300 bg-white px-2 text-sm tabular-nums outline-none focus:border-sky-600"
+                            disabled={!isEditable}
+                            max={bodyDuration}
+                            min={0}
+                            placeholder="自動"
+                            step={0.1}
+                            type="number"
+                            value={selectedClipContentDraft?.thumbnailFrameSeconds ?? ""}
+                            onChange={(event) => {
+                              const rawValue = event.target.value;
+                              updateClipContentDraft(selectedClip.id, {
+                                thumbnailFrameSeconds:
+                                  rawValue === ""
+                                    ? null
+                                    : clamp(Number(rawValue), 0, bodyDuration)
+                              });
+                            }}
+                          />
+                        </label>
+                        <p className="mt-1 text-[10px] leading-4 text-neutral-500">
+                          文字欄は空欄なら非表示。場面秒は空欄ならclip長の38%（
+                          {(bodyDuration * 0.38).toFixed(1)}秒）を使います。
+                        </p>
+                        <NormalThumbnailDraftPreview
+                          clipId={selectedClip.id}
+                          frameSeconds={
+                            selectedClipContentDraft?.thumbnailFrameSeconds ?? null
+                          }
+                          kicker={selectedClipContentDraft?.thumbnailKicker ?? ""}
+                          line1={selectedClipContentDraft?.thumbnailLine1 ?? ""}
+                          line2={selectedClipContentDraft?.thumbnailLine2 ?? ""}
+                          maxFrameSeconds={bodyDuration}
+                          sourceStartSeconds={selectedClip.start}
+                          videoSrc={review.sourceVideoUrl}
+                          videoVersion={review.updatedAt}
+                        />
+                        <p className="mt-1 text-[10px] leading-4 text-neutral-500">
+                          即時プレビューは配置確認用です。保存後の書き出しでは字幕焼込み前の元動画フレームを使います。
+                        </p>
+                      </section>
                     ) : null}
 
                     <section className="mt-3 border-t border-neutral-300 pt-3">

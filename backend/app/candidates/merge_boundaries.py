@@ -106,6 +106,10 @@ class Candidate(BaseModel):
     hook_duration_seconds: float | None = Field(default=None, ge=1, le=8)
     hook_scene_start: float | None = Field(default=None, ge=0)
     hook_scene_end: float | None = Field(default=None, ge=0)
+    thumbnail_kicker: str = Field(default="", max_length=40)
+    thumbnail_line1: str = Field(default="", max_length=60)
+    thumbnail_line2: str = Field(default="", max_length=60)
+    thumbnail_frame_seconds: float | None = Field(default=None, ge=0)
     title_candidates: list[YouTubeTitleCandidate] = Field(default_factory=list)
     recommended_title_id: str | None = None
     selected_title_id: str | None = None

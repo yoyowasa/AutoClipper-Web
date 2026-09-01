@@ -37,6 +37,7 @@ JobStatus = Literal[
 ]
 
 ExportType = Literal["normal", "short"]
+ThumbnailStatus = Literal["not_generated", "ready", "failed"]
 ClipMode = Literal["low_cost", "fast", "high_quality"]
 ClipProfile = Literal["auto", "talk", "gameplay", "lecture"]
 WorkflowMode = Literal["automatic", "manual"]
@@ -594,6 +595,14 @@ class SubtitleReviewClipContentUpdateRequest(BaseModel):
         le=8,
         alias="hookDurationSeconds",
     )
+    thumbnail_kicker: str = Field(default="", max_length=40, alias="thumbnailKicker")
+    thumbnail_line1: str = Field(default="", max_length=60, alias="thumbnailLine1")
+    thumbnail_line2: str = Field(default="", max_length=60, alias="thumbnailLine2")
+    thumbnail_frame_seconds: float | None = Field(
+        default=None,
+        ge=0,
+        alias="thumbnailFrameSeconds",
+    )
     title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
@@ -915,6 +924,10 @@ class ResultExportItem(BaseModel):
     subtitle_url: str | None = Field(default=None, alias="subtitleUrl")
     metadata_path: str | None = Field(default=None, alias="metadataPath")
     metadata_url: str | None = Field(default=None, alias="metadataUrl")
+    thumbnail_url: str | None = Field(default=None, alias="thumbnailUrl")
+    thumbnail_download_url: str | None = Field(default=None, alias="thumbnailDownloadUrl")
+    thumbnail_status: ThumbnailStatus | None = Field(default=None, alias="thumbnailStatus")
+    thumbnail_filename: str | None = Field(default=None, alias="thumbnailFilename")
     video_url: str = Field(alias="videoUrl")
     download_url: str = Field(alias="downloadUrl")
 

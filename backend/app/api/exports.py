@@ -1,9 +1,12 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.jobs.publication_state import rerender_publication_is_unresolved
+from app.jobs.thumbnails import read_export_metadata
 from app.models import ExportItem, Job
 from app.storage.paths import StoragePaths, get_storage_paths
 
@@ -62,6 +65,32 @@ def _stored_file_or_404(paths: StoragePaths, value: str | None, *, detail: str, 
     return FileResponse(path, media_type=media_type, filename=path.name)
 
 
+def _thumbnail_file_or_404(export: ExportItem, paths: StoragePaths) -> Path:
+    metadata = read_export_metadata(export)
+    value = metadata.get("thumbnail_path")
+    if metadata.get("thumbnail_status") != "ready" or not isinstance(value, str):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="thumbnail file not found",
+        )
+    thumbnail_path = paths.resolve_stored_file(value)
+    try:
+        thumbnail_path.resolve(strict=False).relative_to(
+            paths.job_outputs(export.job_id).resolve(strict=False)
+        )
+    except (OSError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="thumbnail is not published",
+        ) from None
+    if not thumbnail_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="thumbnail file not found",
+        )
+    return thumbnail_path
+
+
 @router.get("/{export_id}/download")
 def download_export(
     export_id: str,
@@ -103,4 +132,30 @@ def download_export_subtitle(
         export.subtitle_path,
         detail="subtitle file not found",
         media_type="text/plain",
+    )
+
+
+@router.get("/{export_id}/thumbnail")
+def view_export_thumbnail(
+    export_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> FileResponse:
+    export = _get_export_or_404(db, export_id, paths)
+    thumbnail_path = _thumbnail_file_or_404(export, paths)
+    return FileResponse(thumbnail_path, media_type="image/jpeg")
+
+
+@router.get("/{export_id}/thumbnail/download")
+def download_export_thumbnail(
+    export_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> FileResponse:
+    export = _get_export_or_404(db, export_id, paths)
+    thumbnail_path = _thumbnail_file_or_404(export, paths)
+    return FileResponse(
+        thumbnail_path,
+        media_type="image/jpeg",
+        filename=thumbnail_path.name,
     )

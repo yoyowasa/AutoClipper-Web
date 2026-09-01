@@ -141,6 +141,15 @@ TITLE_HOOK_OUTPUT_SCHEMA: dict[str, Any] = {
                             {"type": "null"},
                         ]
                     },
+                    "thumbnailKicker": {"type": "string", "maxLength": 40},
+                    "thumbnailLine1": {"type": "string", "maxLength": 60},
+                    "thumbnailLine2": {"type": "string", "maxLength": 60},
+                    "thumbnailFrameSeconds": {
+                        "anyOf": [
+                            {"type": "number", "minimum": 0},
+                            {"type": "null"},
+                        ]
+                    },
                     "reason": {
                         "type": "string",
                         "minLength": 1,
@@ -166,6 +175,10 @@ TITLE_HOOK_OUTPUT_SCHEMA: dict[str, Any] = {
                     "hookDurationSeconds",
                     "hookSceneStart",
                     "hookSceneEnd",
+                    "thumbnailKicker",
+                    "thumbnailLine1",
+                    "thumbnailLine2",
+                    "thumbnailFrameSeconds",
                     "reason",
                     "evidenceSegmentIds",
                 ],
@@ -214,7 +227,7 @@ TITLE_HOOK_OUTPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 EXPECTED_RESPONSE_SCHEMA_SHA256 = {
-    REQUEST_TASK: "7eeb4af17402f17cf3f01e075d0cc74d1d2720c2bbee3b621d4230f9e7f920a1",
+    REQUEST_TASK: "1132f309829659084401c1de4b53bb4b5b3f2fd7ef7e5977e8951089c47950bb",
     INITIAL_CLIP_SELECTION_TASK: (
         "a419f3346e5a666d393a6c22a55ee980a1db1f48646b3c545c596b34962165e3"
     ),

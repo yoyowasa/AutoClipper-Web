@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "canvas": {
+    "width": 1280,
+    "height": 720
+  },
+  "frame": {
+    "x": 650,
+    "y": 32,
+    "width": 598,
+    "height": 656,
+    "anchor_x": 0.64
+  },
+  "text": {
+    "eyebrow_x": 56,
+    "eyebrow_y": 146,
+    "eyebrow_max_width": 530,
+    "eyebrow_max_size": 38,
+    "title_x": 44,
+    "title_y": 246,
+    "title_max_width": 574,
+    "title_max_size": 86,
+    "title_min_size": 24,
+    "line_gap": 18,
+    "rotation_degrees": 3.0
+  },
+  "colors": {
+    "background": "#061b18",
+    "pattern": "#17473f",
+    "gold": "#b89343",
+    "gold_light": "#e0c57b",
+    "accent": "#d24a27",
+    "eyebrow": "#e0c57b",
+    "title_first": "#ffffff",
+    "title_second": "#ffd84a",
+    "title_inner_stroke": "#07110f",
+    "title_outer_stroke": "#0a665d"
+  },
+  "font": "NotoSansJP-Black.ttf"
+}

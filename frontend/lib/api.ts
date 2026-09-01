@@ -625,6 +625,10 @@ export async function applySubtitleReviewClip(
     hookDurationSeconds: number;
     hookSceneStart: number | null;
     hookSceneEnd: number | null;
+    thumbnailKicker: string;
+    thumbnailLine1: string;
+    thumbnailLine2: string;
+    thumbnailFrameSeconds: number | null;
     titleStyle: ClipTextStyle | null;
     hookStyle: ClipTextStyle | null;
     subtitleStyle: ClipTextStyle | null;

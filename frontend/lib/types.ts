@@ -283,6 +283,10 @@ export type ResultExportItem = {
   metadataUrl: string | null;
   videoUrl: string;
   downloadUrl: string;
+  thumbnailUrl: string | null;
+  thumbnailDownloadUrl: string | null;
+  thumbnailStatus: "not_generated" | "ready" | "failed" | null;
+  thumbnailFilename: string | null;
 };
 
 export type JobAuditSummary = {
@@ -381,6 +385,10 @@ export type SubtitleReviewClip = {
   hookDurationSeconds: number;
   hookSceneStart: number | null;
   hookSceneEnd: number | null;
+  thumbnailKicker: string;
+  thumbnailLine1: string;
+  thumbnailLine2: string;
+  thumbnailFrameSeconds: number | null;
   titleStyle: ClipTextStyle | null;
   hookStyle: ClipTextStyle | null;
   subtitleStyle: ClipTextStyle | null;
@@ -467,6 +475,10 @@ export type TitleHookSuggestion = {
   hookDurationSeconds: number;
   hookSceneStart: number | null;
   hookSceneEnd: number | null;
+  thumbnailKicker: string;
+  thumbnailLine1: string;
+  thumbnailLine2: string;
+  thumbnailFrameSeconds: number | null;
   reason: string;
   evidenceSegmentIds: string[];
 };

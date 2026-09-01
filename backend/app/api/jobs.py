@@ -670,6 +670,33 @@ def _result_item(
     url = f"/api/exports/{export.id}/download"
     metadata_url = f"/api/exports/{export.id}/metadata" if export.metadata_path else None
     subtitle_url = f"/api/exports/{export.id}/subtitle" if export.subtitle_path else None
+    thumbnail_status_value = metadata.get("thumbnail_status")
+    thumbnail_status = (
+        thumbnail_status_value
+        if thumbnail_status_value in {"not_generated", "ready", "failed"}
+        else "not_generated"
+    )
+    thumbnail_path_value = metadata.get("thumbnail_path")
+    thumbnail_ready = thumbnail_status == "ready" and isinstance(
+        thumbnail_path_value,
+        str,
+    )
+    thumbnail_url = (
+        f"/api/exports/{export.id}/thumbnail" if thumbnail_ready else None
+    )
+    thumbnail_download_url = (
+        f"/api/exports/{export.id}/thumbnail/download" if thumbnail_ready else None
+    )
+    thumbnail_filename_value = metadata.get("thumbnail_filename")
+    thumbnail_filename = (
+        thumbnail_filename_value
+        if isinstance(thumbnail_filename_value, str) and thumbnail_filename_value
+        else (
+            Path(thumbnail_path_value).name
+            if isinstance(thumbnail_path_value, str) and thumbnail_path_value
+            else None
+        )
+    )
     score = _number_or_none(_first_value(selected.get("score"), selected.get("final_score"), metadata.get("score"), export.score))
     final_score = _number_or_none(_first_value(selected.get("final_score"), selected.get("score"), audit_clip.get("final_score"), score))
     resolution = audit_clip.get("resolution") if isinstance(audit_clip.get("resolution"), dict) else None
@@ -768,6 +795,10 @@ def _result_item(
         metadataUrl=metadata_url,
         videoUrl=url,
         downloadUrl=url,
+        thumbnailUrl=thumbnail_url,
+        thumbnailDownloadUrl=thumbnail_download_url,
+        thumbnailStatus=thumbnail_status,
+        thumbnailFilename=thumbnail_filename,
     )
 
 
@@ -3627,6 +3658,10 @@ def update_subtitle_review_clip_content(
                 title=request.title,
                 hook_text=request.hook_text,
                 hook_duration_seconds=request.hook_duration_seconds,
+                thumbnail_kicker=request.thumbnail_kicker,
+                thumbnail_line1=request.thumbnail_line1,
+                thumbnail_line2=request.thumbnail_line2,
+                thumbnail_frame_seconds=request.thumbnail_frame_seconds,
                 **style_updates,
             )
             document, _contract_changed = refresh_review_render_contract(
@@ -4269,6 +4304,10 @@ def apply_subtitle_review_clip(
                 title=request.title,
                 hook_text=request.hook_text,
                 hook_duration_seconds=request.hook_duration_seconds,
+                thumbnail_kicker=request.thumbnail_kicker,
+                thumbnail_line1=request.thumbnail_line1,
+                thumbnail_line2=request.thumbnail_line2,
+                thumbnail_frame_seconds=request.thumbnail_frame_seconds,
                 **style_updates,
             )
             if {

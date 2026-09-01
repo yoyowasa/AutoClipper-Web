@@ -97,6 +97,10 @@ def test_posting_metadata_round_trips_from_review_to_selected_candidate(tmp_path
         description_evidence_segment_ids=["seg_0001"],
         post_metadata_source="codex",
         post_metadata_revision_hash="a" * 64,
+        thumbnail_kicker="今回の美学",
+        thumbnail_line1="美しいものって",
+        thumbnail_line2="なんだろう？",
+        thumbnail_frame_seconds=8.5,
     )
     output_path = tmp_path / "subtitle_review.json"
     write_subtitle_review(review, output_path)
@@ -118,6 +122,12 @@ def test_posting_metadata_round_trips_from_review_to_selected_candidate(tmp_path
     assert applied.description_evidence_segment_ids == ["seg_0001"]
     assert applied.post_metadata_source == "codex"
     assert applied.post_metadata_revision_hash == "a" * 64
+    assert restored.clips[0].thumbnail_kicker == "今回の美学"
+    assert restored.clips[0].thumbnail_line1 == "美しいものって"
+    assert restored.clips[0].thumbnail_line2 == "なんだろう？"
+    assert restored.clips[0].thumbnail_frame_seconds == 8.5
+    assert applied.thumbnail_kicker == "今回の美学"
+    assert applied.thumbnail_frame_seconds == 8.5
 
 
 def test_review_build_defaults_to_auto_and_exposes_title_expectation_alias() -> None:

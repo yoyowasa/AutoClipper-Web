@@ -15,6 +15,7 @@ from app.posting_metadata import (
     PostMetadataSource,
     YouTubeTitleCandidate,
     ensure_publication_title_suffix,
+    strip_normal_publication_title_suffix,
 )
 from app.render.subtitles_ass import (
     DEFAULT_NORMAL_HEIGHT,
@@ -97,6 +98,14 @@ class SubtitleReviewClip(BaseModel):
     hook_duration_seconds: float = Field(default=3.0, ge=1, le=8, alias="hookDurationSeconds")
     hook_scene_start: float | None = Field(default=None, ge=0, alias="hookSceneStart")
     hook_scene_end: float | None = Field(default=None, ge=0, alias="hookSceneEnd")
+    thumbnail_kicker: str = Field(default="", max_length=40, alias="thumbnailKicker")
+    thumbnail_line1: str = Field(default="", max_length=60, alias="thumbnailLine1")
+    thumbnail_line2: str = Field(default="", max_length=60, alias="thumbnailLine2")
+    thumbnail_frame_seconds: float | None = Field(
+        default=None,
+        ge=0,
+        alias="thumbnailFrameSeconds",
+    )
     title_candidates: list[YouTubeTitleCandidate] = Field(
         default_factory=list,
         alias="titleCandidates",
@@ -230,6 +239,11 @@ class SubtitleReviewClip(BaseModel):
             raise ValueError("duplicate YouTube tag")
         if len(",".join(self.youtube_tags)) > 500:
             raise ValueError("YouTube tags must be 500 characters or fewer")
+        if (
+            self.thumbnail_frame_seconds is not None
+            and self.thumbnail_frame_seconds > self.duration + 0.001
+        ):
+            raise ValueError("thumbnail frame must stay within the selected clip")
         hook_start = self.hook_scene_start
         hook_end = self.hook_scene_end
         if (hook_start is None) != (hook_end is None):
@@ -518,6 +532,10 @@ def build_subtitle_review(
                 hookDurationSeconds=candidate.hook_duration_seconds or 3.0,
                 hookSceneStart=candidate.hook_scene_start,
                 hookSceneEnd=candidate.hook_scene_end,
+                thumbnailKicker=getattr(candidate, "thumbnail_kicker", ""),
+                thumbnailLine1=getattr(candidate, "thumbnail_line1", ""),
+                thumbnailLine2=getattr(candidate, "thumbnail_line2", ""),
+                thumbnailFrameSeconds=getattr(candidate, "thumbnail_frame_seconds", None),
                 titleCandidates=candidate.title_candidates,
                 recommendedTitleId=candidate.recommended_title_id,
                 selectedTitleId=candidate.selected_title_id,
@@ -666,6 +684,10 @@ def update_review_clip_content(
     description_evidence_segment_ids: Sequence[str] | object = _STYLE_UNSET,
     post_metadata_source: PostMetadataSource | None | object = _STYLE_UNSET,
     post_metadata_revision_hash: str | None | object = _STYLE_UNSET,
+    thumbnail_kicker: str | object = _STYLE_UNSET,
+    thumbnail_line1: str | object = _STYLE_UNSET,
+    thumbnail_line2: str | object = _STYLE_UNSET,
+    thumbnail_frame_seconds: float | None | object = _STYLE_UNSET,
 ) -> SubtitleReviewDocument:
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
@@ -780,6 +802,30 @@ def update_review_clip_content(
         if post_metadata_revision_hash is _STYLE_UNSET
         else post_metadata_revision_hash
     )
+    next_thumbnail_kicker = (
+        clip.thumbnail_kicker
+        if thumbnail_kicker is _STYLE_UNSET
+        else " ".join(str(thumbnail_kicker).split()).strip()
+    )
+    next_thumbnail_line1 = (
+        clip.thumbnail_line1
+        if thumbnail_line1 is _STYLE_UNSET
+        else " ".join(str(thumbnail_line1).split()).strip()
+    )
+    next_thumbnail_line2 = (
+        clip.thumbnail_line2
+        if thumbnail_line2 is _STYLE_UNSET
+        else " ".join(str(thumbnail_line2).split()).strip()
+    )
+    next_thumbnail_frame_seconds = (
+        clip.thumbnail_frame_seconds
+        if thumbnail_frame_seconds is _STYLE_UNSET
+        else (
+            None
+            if thumbnail_frame_seconds is None
+            else round(float(thumbnail_frame_seconds), 3)
+        )
+    )
     title_candidate_ids = [candidate.id for candidate in next_title_candidates]
     if len(title_candidate_ids) != len(set(title_candidate_ids)):
         raise ValueError("duplicate YouTube title candidate id")
@@ -805,6 +851,15 @@ def update_review_clip_content(
         set(next_description_evidence_segment_ids)
     ):
         raise ValueError("duplicate description evidence segment id")
+    if len(next_thumbnail_kicker) > 40:
+        raise ValueError("thumbnail kicker must be 40 characters or fewer")
+    if len(next_thumbnail_line1) > 60 or len(next_thumbnail_line2) > 60:
+        raise ValueError("thumbnail title line must be 60 characters or fewer")
+    if (
+        next_thumbnail_frame_seconds is not None
+        and not 0 <= next_thumbnail_frame_seconds <= clip.duration
+    ):
+        raise ValueError("thumbnail frame must stay within the selected clip")
 
     changed = (
         clip.title != normalized_title
@@ -823,6 +878,10 @@ def update_review_clip_content(
         or clip.description_evidence_segment_ids != next_description_evidence_segment_ids
         or clip.post_metadata_source != next_post_metadata_source
         or clip.post_metadata_revision_hash != next_post_metadata_revision_hash
+        or clip.thumbnail_kicker != next_thumbnail_kicker
+        or clip.thumbnail_line1 != next_thumbnail_line1
+        or clip.thumbnail_line2 != next_thumbnail_line2
+        or clip.thumbnail_frame_seconds != next_thumbnail_frame_seconds
     )
     if not changed:
         return _refresh_counts(document)
@@ -848,6 +907,10 @@ def update_review_clip_content(
     clip.description_evidence_segment_ids = next_description_evidence_segment_ids
     clip.post_metadata_source = next_post_metadata_source
     clip.post_metadata_revision_hash = next_post_metadata_revision_hash
+    clip.thumbnail_kicker = next_thumbnail_kicker
+    clip.thumbnail_line1 = next_thumbnail_line1
+    clip.thumbnail_line2 = next_thumbnail_line2
+    clip.thumbnail_frame_seconds = next_thumbnail_frame_seconds
     clip.confirmed = False
     return _refresh_counts(document)
 
@@ -1001,6 +1064,14 @@ def convert_review_clip_to_short(
         )
 
     clip.type = "short"
+    clip.thumbnail_kicker = ""
+    clip.thumbnail_line1 = ""
+    clip.thumbnail_line2 = ""
+    clip.thumbnail_frame_seconds = None
+    if clip.publication_title:
+        clip.publication_title = strip_normal_publication_title_suffix(
+            clip.publication_title
+        )
     clip.start = start
     clip.end = end
     clip.duration = end - start
@@ -1117,6 +1188,10 @@ def apply_reviewed_clip_content(
         updates["hook_duration_seconds"] = clip.hook_duration_seconds
         updates["hook_scene_start"] = clip.hook_scene_start
         updates["hook_scene_end"] = clip.hook_scene_end
+        updates["thumbnail_kicker"] = clip.thumbnail_kicker
+        updates["thumbnail_line1"] = clip.thumbnail_line1
+        updates["thumbnail_line2"] = clip.thumbnail_line2
+        updates["thumbnail_frame_seconds"] = clip.thumbnail_frame_seconds
         updates["title_candidates"] = clip.title_candidates
         updates["recommended_title_id"] = clip.recommended_title_id
         updates["selected_title_id"] = clip.selected_title_id

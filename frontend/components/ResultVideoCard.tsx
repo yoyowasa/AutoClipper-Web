@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useState } from "react";
 
 import { SaveFileButton } from "./SaveFileButton";
@@ -64,6 +65,22 @@ function scoreSourceLabel(item: ResultExportItem): string {
   return "rule";
 }
 
+function thumbnailStatusLabel(
+  status: ResultExportItem["thumbnailStatus"],
+  hasPublishedUrl: boolean
+): string {
+  if (status === "failed") {
+    return "サムネ生成失敗";
+  }
+  if (status === "ready") {
+    return hasPublishedUrl ? "サムネ完成" : "サムネ情報不整合";
+  }
+  if (status === "not_generated" || status === null) {
+    return "サムネ未生成";
+  }
+  return "サムネ状態不明";
+}
+
 export function ResultVideoCard({
   item,
   auditAvailable = false,
@@ -78,6 +95,7 @@ export function ResultVideoCard({
   suggestedFilename: string;
 }) {
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [failedThumbnailUrl, setFailedThumbnailUrl] = useState<string | null>(null);
   const warnings = item.auditWarnings ?? [];
   const titleCandidates = item.titleCandidates ?? [];
   const youtubeDescription = item.youtubeDescription ?? "";
@@ -92,6 +110,22 @@ export function ResultVideoCard({
   const scoreSource = scoreSourceLabel(item);
   const showOverlayStatus =
     item.overlayTitleExpected !== null || item.overlayTitleRendered !== null;
+  const thumbnailUrl = item.thumbnailUrl
+    ? toBrowserApiUrl(item.thumbnailUrl)
+    : null;
+  const thumbnailIsDisplayable = Boolean(
+    thumbnailUrl && failedThumbnailUrl !== thumbnailUrl
+  );
+  const thumbnailFilename =
+    item.thumbnailFilename ?? suggestedFilename.replace(/\.mp4$/iu, ".jpg");
+  const thumbnailIsPng = thumbnailFilename.toLowerCase().endsWith(".png");
+  const thumbnailLabel = thumbnailStatusLabel(
+    item.thumbnailStatus,
+    thumbnailIsDisplayable
+  );
+  const thumbnailHasError =
+    item.thumbnailStatus === "failed" ||
+    (item.thumbnailStatus === "ready" && !thumbnailIsDisplayable);
 
   async function copyField(field: string, value: string) {
     if (!value.trim()) {
@@ -127,6 +161,47 @@ export function ResultVideoCard({
             ) : null}
           </div>
           <h2 className="break-words text-lg font-semibold leading-snug text-neutral-950">{item.title}</h2>
+          {thumbnailIsDisplayable && thumbnailUrl ? (
+            <section className="overflow-hidden rounded-md border border-neutral-200 bg-neutral-50">
+              <Image
+                alt={`${item.title} のサムネイル`}
+                className={`h-auto w-full bg-neutral-950 object-contain ${
+                  item.type === "short" ? "aspect-[9/16] max-h-[34rem]" : "aspect-video"
+                }`}
+                height={item.type === "short" ? 1920 : 720}
+                src={thumbnailUrl}
+                unoptimized
+                width={item.type === "short" ? 1080 : 1280}
+                onError={() => setFailedThumbnailUrl(thumbnailUrl)}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-200 px-3 py-2">
+                <span className="text-xs font-semibold text-neutral-600">
+                  {thumbnailLabel}
+                </span>
+                {item.thumbnailDownloadUrl ? (
+                  <SaveFileButton
+                    className="inline-flex min-h-9 items-center rounded-md border border-neutral-400 bg-white px-3 text-xs font-semibold text-neutral-900"
+                    description="YouTube thumbnail"
+                    extension={thumbnailIsPng ? ".png" : ".jpg"}
+                    label="サムネを保存"
+                    mimeType={thumbnailIsPng ? "image/png" : "image/jpeg"}
+                    suggestedName={thumbnailFilename}
+                    url={toBrowserApiUrl(item.thumbnailDownloadUrl)}
+                  />
+                ) : null}
+              </div>
+            </section>
+          ) : item.thumbnailStatus ? (
+            <div
+              className={`rounded-md border px-3 py-2 text-xs font-semibold ${
+                thumbnailHasError
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-neutral-200 bg-neutral-50 text-neutral-600"
+              }`}
+            >
+              {thumbnailLabel}
+            </div>
+          ) : null}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
             <span>title: {readableToken(item.titleSource)}</span>
             <span>score source: {scoreSource}</span>

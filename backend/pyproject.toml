@@ -8,6 +8,7 @@ dependencies = [
   "faster-whisper>=1.0.0,<2.0.0",
   "fastapi>=0.115.0,<1.0.0",
   "openai>=1.100.0,<2.0.0",
+  "pillow>=10.4.0,<13.0.0",
   "python-multipart>=0.0.20,<1.0.0",
   "redis>=5.0.0,<7.0.0",
   "rq>=2.10.0,<3.0.0",
@@ -38,6 +39,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["assets/thumbnail_templates/raden_normal_v1/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
