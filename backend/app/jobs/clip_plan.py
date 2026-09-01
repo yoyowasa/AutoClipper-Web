@@ -108,6 +108,26 @@ def clip_plan_preview_url(job_id: str, clip_id: str) -> str:
     return f"/api/jobs/{job_id}/clip-plan/clips/{clip_id}/preview-video"
 
 
+def convert_clip_plan_clip_to_normal(
+    document: ClipPlanDocument,
+    clip_id: str,
+) -> ClipPlanClip:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise ValueError("clip plan item not found")
+
+    clip.type = "normal"
+    clip.hook_scene_start = None
+    clip.hook_scene_end = None
+    document.settings = {
+        **document.settings,
+        "normalClipCount": sum(item.type == "normal" for item in document.clips),
+        "shortCount": sum(item.type == "short" for item in document.clips),
+    }
+    document.updated_at = _utc_iso()
+    return clip
+
+
 def _candidate_title(candidate: Candidate, index: int) -> str:
     prefix = "通常切り抜き" if candidate.type == "normal" else "ショート"
     return (candidate.title or candidate.overlay_title or f"{prefix} {index:02d}").strip()

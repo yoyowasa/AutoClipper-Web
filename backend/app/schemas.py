@@ -771,6 +771,12 @@ class ClipPlanBoundaryUpdateRequest(BaseModel):
         return self
 
 
+class ClipPlanTypeUpdateRequest(BaseModel):
+    type: Literal["normal"]
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class ManualClipCreateRequest(BaseModel):
     type: Literal["normal", "short"]
     title: str = Field(default="", max_length=120)

@@ -547,6 +547,10 @@ export type ClipPlanBoundaryUpdateRequest = {
   end: number;
 };
 
+export type ClipPlanTypeUpdateRequest = {
+  type: "normal";
+};
+
 export type ClipPlanClipCreateRequest = ClipPlanBoundaryUpdateRequest & {
   type: ExportType;
 };

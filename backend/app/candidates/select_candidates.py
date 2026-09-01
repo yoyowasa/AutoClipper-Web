@@ -696,6 +696,50 @@ def selected_clips_to_jsonable(selection: CandidateSelection) -> dict[str, Any]:
     return selection.model_dump(by_alias=True, mode="json")
 
 
+def convert_selected_clip_to_normal(
+    selection: CandidateSelection,
+    clip_id: str,
+) -> CandidateSelection:
+    matching_candidates = [
+        candidate
+        for candidate in [*selection.normal_clips, *selection.shorts]
+        if candidate.id == clip_id
+    ]
+    if len(matching_candidates) != 1:
+        raise ValueError("selected clip data must contain exactly one matching candidate")
+
+    source = matching_candidates[0]
+    converted = source.model_copy(
+        update={
+            "type": "normal",
+            "hook_text": None,
+            "hook_duration_seconds": None,
+            "hook_scene_start": None,
+            "hook_scene_end": None,
+        }
+    )
+    if source.type == "normal":
+        normal_clips = [
+            converted if candidate.id == clip_id else candidate
+            for candidate in selection.normal_clips
+        ]
+    else:
+        normal_clips = [*selection.normal_clips, converted]
+    shorts = [candidate for candidate in selection.shorts if candidate.id != clip_id]
+    unfilled_requested_counts = dict(selection.unfilled_requested_counts)
+    unfilled_requested_counts.update({"normal": 0, "short": 0})
+
+    return selection.model_copy(
+        update={
+            "normal_clips": normal_clips,
+            "shorts": shorts,
+            "requested_normal_count": len(normal_clips),
+            "requested_short_count": len(shorts),
+            "unfilled_requested_counts": unfilled_requested_counts,
+        }
+    )
+
+
 def write_selected_clips(selection: CandidateSelection, output_path: str | Path) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)

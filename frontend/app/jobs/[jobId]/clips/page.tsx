@@ -22,6 +22,7 @@ import {
   toApiUrl,
   updateClipPlanBoundary,
   updateClipPlanHookScene,
+  updateClipPlanType,
   updateManualClipPlanClip
 } from "../../../../lib/api";
 import type {
@@ -89,6 +90,7 @@ export default function ClipPlanReviewPage() {
   const [isCreatingManualClip, setIsCreatingManualClip] = useState(false);
   const [isDeletingManualClip, setIsDeletingManualClip] = useState(false);
   const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
+  const [isUpdatingClipType, setIsUpdatingClipType] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [previewPlayheadSourceTime, setPreviewPlayheadSourceTime] = useState(0);
   const [boundaryDraft, setBoundaryDraft] = useState<ClipBoundaryDraft | null>(
@@ -357,6 +359,7 @@ export default function ClipPlanReviewPage() {
     isCreatingManualClip ||
     isDeletingManualClip ||
     isUpdatingHookScene ||
+    isUpdatingClipType ||
     isApproving ||
     !planIsEditable;
 
@@ -515,6 +518,30 @@ export default function ClipPlanReviewPage() {
         caught instanceof Error
           ? caught.message
           : "冒頭フック映像を更新できませんでした"
+      );
+    }
+  }
+
+  async function handleConvertToNormal() {
+    if (!selectedClip || selectedClip.type !== "short") {
+      return;
+    }
+    setError(null);
+    setIsUpdatingClipType(true);
+    try {
+      const document = await updateClipPlanType(jobId, selectedClip.id, {
+        type: "normal"
+      });
+      setPlan(document);
+      setDraftSettings(document.settings);
+      setPreviewPlayheadSourceTime(selectedClip.start);
+      setIsUpdatingClipType(false);
+    } catch (caught) {
+      setIsUpdatingClipType(false);
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "通常切り抜きへ変更できませんでした"
       );
     }
   }
@@ -753,10 +780,32 @@ export default function ClipPlanReviewPage() {
                 </div>
 
                 <div className="min-w-0 min-[1800px]:border-l min-[1800px]:border-neutral-300">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-300 bg-neutral-50 px-5 py-3">
+                    <div>
+                      <p className="text-xs font-semibold text-neutral-900">
+                        clip種別: {selectedClip.type === "short" ? "ショート" : "通常切り抜き"}
+                      </p>
+                      <p className="mt-1 text-xs text-neutral-600">
+                        {selectedClip.type === "short"
+                          ? "範囲とタイトルを維持したまま、通常切り抜きへ変更できます。"
+                          : "通常切り抜きはショート用の複製フックを使用しません。"}
+                      </p>
+                    </div>
+                    {selectedClip.type === "short" && !isManualWorkflow ? (
+                      <button
+                        className="min-h-9 border border-neutral-900 bg-white px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={controlsDisabled}
+                        type="button"
+                        onClick={() => void handleConvertToNormal()}
+                      >
+                        {isUpdatingClipType ? "変更中…" : "通常切り抜きに変更"}
+                      </button>
+                    ) : null}
+                  </div>
                   <ClipBoundaryEditor
                     clip={selectedClip}
                     disabled={controlsDisabled}
-                    key={`${selectedClip.id}-${selectedClip.start}-${selectedClip.end}`}
+                    key={`${selectedClip.id}-${selectedClip.type}-${selectedClip.start}-${selectedClip.end}`}
                     saving={isAdjusting}
                     sourceDuration={plan.sourceDuration}
                     onDraftChange={handleBoundaryDraftChange}
@@ -765,7 +814,8 @@ export default function ClipPlanReviewPage() {
                     }
                   />
 
-                  <>
+                  {selectedClip.type === "short" ? (
+                    <>
                     <ClipHookSceneEditor
                       clip={selectedClip}
                       compact
@@ -787,7 +837,12 @@ export default function ClipPlanReviewPage() {
                     <p className="border-b border-neutral-300 bg-sky-50 px-5 py-2 text-xs font-medium text-sky-900">
                       タイトルと冒頭フック文字は、次の「字幕確認」で編集できます。
                     </p>
-                  </>
+                    </>
+                  ) : (
+                    <p className="border-b border-neutral-300 bg-sky-50 px-5 py-2 text-xs font-medium text-sky-900">
+                      タイトルと通常字幕は、次の「字幕確認」で編集できます。
+                    </p>
+                  )}
                 </div>
               </div>
             </>

@@ -13,6 +13,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.api.jobs as jobs_api
+from app.candidates.merge_boundaries import Candidate
+from app.candidates.select_candidates import CandidateSelection, write_selected_clips
 from app.config import Settings, get_settings
 from app.db import Base, get_db
 from app.jobs.queue import (
@@ -25,6 +27,12 @@ from app.jobs.queue import (
 from app.jobs.publication_state import (
     mark_rerender_publication_unresolved,
     rerender_publication_is_unresolved,
+)
+from app.jobs.clip_plan import (
+    build_clip_plan,
+    clip_plan_output_path,
+    mark_clip_plan_awaiting_review,
+    write_clip_plan,
 )
 from app.jobs.runner import (
     AutoClipperPipelineDependencies,
@@ -157,6 +165,150 @@ def test_upload_video_accepts_and_stores_valid_heatmap_sidecar(client: TestClien
     assert payload["schema_version"] == 1
     assert payload["media"]["filename"] == "sample.mp4"
     assert payload["heatmap"][0]["value"] == 0.8
+
+
+def test_clip_plan_converts_only_selected_short_to_normal(client: TestClient) -> None:
+    job_id = "job_clip_type_update"
+    video_id = "vid_clip_type_update"
+    first_short = Candidate(
+        id="candidate_short_1",
+        type="short",
+        start=10,
+        end=40,
+        duration=30,
+        transcript_text="一つ目のショート",
+        title="一つ目",
+        hook_text="一つ目のフック",
+        hook_duration_seconds=2,
+        hook_scene_start=12,
+        hook_scene_end=14,
+        boundary_refined=False,
+    )
+    converted_short = Candidate(
+        id="candidate_short_2",
+        type="short",
+        start=50,
+        end=80,
+        duration=30,
+        transcript_text="通常へ変更するショート",
+        title="変更対象",
+        hook_text="解除されるフック",
+        hook_duration_seconds=2,
+        hook_scene_start=52,
+        hook_scene_end=54,
+        boundary_refined=False,
+    )
+    selection = CandidateSelection(
+        normalClips=[],
+        shorts=[first_short, converted_short],
+        requestedNormalCount=0,
+        requestedShortCount=2,
+        unfilledRequestedCounts={"normal": 0, "short": 0},
+    )
+    settings = {
+        "normalClipCount": 0,
+        "shortCount": 2,
+        "requireClipPlanReview": True,
+        "requireSubtitleReview": True,
+    }
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    source_path = storage.uploads / f"{video_id}.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"source video")
+    document = mark_clip_plan_awaiting_review(
+        build_clip_plan(
+            job_id,
+            selection,
+            settings,
+            source_duration=120,
+        ),
+        preview_clip_ids=[],
+    )
+    write_clip_plan(document, clip_plan_output_path(output_dir))
+    write_selected_clips(selection, output_dir / "selected_clips.json")
+    (output_dir / "transcript_segments.json").write_text(
+        json.dumps(
+            [
+                {"start": 10, "end": 40, "text": "一つ目のショート", "confidence": 0.9},
+                {"start": 50, "end": 80, "text": "通常へ変更するショート", "confidence": 0.9},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with next(app.dependency_overrides[get_db]()) as db:
+        video = Video(
+            id=video_id,
+            original_filename="source.mp4",
+            stored_path=str(source_path),
+            duration=120,
+            width=1920,
+            height=1080,
+            has_audio=True,
+        )
+        job = Job(
+            id=job_id,
+            video_id=video_id,
+            status="awaiting_clip_review",
+            progress=65,
+            current_step="切り抜き予定を確認してください",
+            settings_json=settings,
+        )
+        db.add_all([video, job])
+        db.commit()
+
+    endpoint = f"/api/jobs/{job_id}/clip-plan/clips/{converted_short.id}/type"
+    response = client.patch(endpoint, json={"type": "normal"})
+    assert response.status_code == 200
+    response_plan = response.json()
+    response_item = next(clip for clip in response_plan["clips"] if clip["id"] == converted_short.id)
+    assert response_item["type"] == "normal"
+    assert (response_item["start"], response_item["end"], response_item["title"]) == (
+        50.0,
+        80.0,
+        "変更対象",
+    )
+    assert response_item["hookSceneStart"] is None
+    assert response_item["hookSceneEnd"] is None
+    assert response_plan["settings"]["normalClipCount"] == 1
+    assert response_plan["settings"]["shortCount"] == 1
+
+    stored_selection = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    assert [clip["id"] for clip in stored_selection["normalClips"]] == [converted_short.id]
+    assert [clip["id"] for clip in stored_selection["shorts"]] == [first_short.id]
+    stored_candidate = stored_selection["normalClips"][0]
+    assert stored_candidate["type"] == "normal"
+    assert stored_candidate["hook_text"] is None
+    assert stored_candidate["hook_duration_seconds"] is None
+    assert stored_candidate["hook_scene_start"] is None
+    assert stored_candidate["hook_scene_end"] is None
+    with next(app.dependency_overrides[get_db]()) as db:
+        stored_job = db.get(Job, job_id)
+        assert stored_job is not None
+        assert stored_job.settings_json["normalClipCount"] == 1
+        assert stored_job.settings_json["shortCount"] == 1
+
+    repeated_response = client.patch(endpoint, json={"type": "normal"})
+    assert repeated_response.status_code == 200
+    repeated_selection = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
+    assert [clip["id"] for clip in repeated_selection["normalClips"]] == [converted_short.id]
+    assert [clip["id"] for clip in repeated_selection["shorts"]] == [first_short.id]
+
+    approve_response = client.post(f"/api/jobs/{job_id}/clip-plan/approve")
+    assert approve_response.status_code == 200
+    review = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
+    review_types = {clip["id"]: clip["type"] for clip in review["clips"]}
+    assert review_types == {
+        converted_short.id: "normal",
+        first_short.id: "short",
+    }
+    converted_review = next(clip for clip in review["clips"] if clip["id"] == converted_short.id)
+    assert converted_review["hookSceneStart"] is None
+    assert converted_review["hookSceneEnd"] is None
+
+    invalid_state_response = client.patch(endpoint, json={"type": "normal"})
+    assert invalid_state_response.status_code == 409
 
 
 def test_upload_video_accepts_unavailable_heatmap_for_existing_fallback(

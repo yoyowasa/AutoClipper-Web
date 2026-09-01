@@ -20,7 +20,11 @@ from app.audio.transcribe_faster_whisper import (
 )
 from app.audio.transcript_postprocess import repair_known_transcript_artifact_segments
 from app.candidates.merge_boundaries import Candidate, write_candidates
-from app.candidates.select_candidates import CandidateSelection, write_selected_clips
+from app.candidates.select_candidates import (
+    CandidateSelection,
+    convert_selected_clip_to_normal,
+    write_selected_clips,
+)
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.ids import make_id
@@ -45,6 +49,7 @@ from app.jobs.clip_plan import (
     ClipPlanClip,
     ClipPlanDocument,
     clip_plan_output_path,
+    convert_clip_plan_clip_to_normal,
     load_clip_plan,
     mark_clip_plan_approved,
     update_clip_plan_boundary,
@@ -147,6 +152,7 @@ from app.schemas import (
     ClipPlanBoundaryUpdateRequest,
     ClipPlanHookSceneUpdateRequest,
     ClipPlanReselectionRequest,
+    ClipPlanTypeUpdateRequest,
     CompletedVideoReeditResponse,
     JobAuditSummary,
     JobCreateRequest,
@@ -2242,6 +2248,116 @@ def get_clip_plan_preview_video(
             detail="clip plan preview not found",
         )
     return FileResponse(preview_path, media_type="video/mp4")
+
+
+@router.patch(
+    "/{job_id}/clip-plan/clips/{clip_id}/type",
+    response_model=ClipPlanDocument,
+)
+def update_clip_plan_clip_type(
+    job_id: str,
+    clip_id: str,
+    request: ClipPlanTypeUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> ClipPlanDocument:
+    job = _get_job_or_404(db, job_id)
+    if job.status != "awaiting_clip_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clip plan is not awaiting type adjustment",
+        )
+    document = _get_clip_plan_or_404(job_id, paths)
+    if document.state != "awaiting_review":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clip plan is not awaiting type adjustment",
+        )
+    planned_clip = next(
+        (clip for clip in document.clips if clip.id == clip_id),
+        None,
+    )
+    if planned_clip is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="clip plan item not found",
+        )
+    if request.type != "normal":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="only conversion to a normal clip is supported",
+        )
+
+    output_dir = paths.job_outputs(job_id)
+    selected_path = output_dir / "selected_clips.json"
+    selected_payload = _read_json_if_exists(selected_path)
+    if not isinstance(selected_payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="selected clip data is unavailable",
+        )
+    try:
+        selection = CandidateSelection.model_validate(selected_payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="selected clip data is invalid",
+        ) from exc
+    if planned_clip.type == "short" and len(selection.normal_clips) >= 12:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="normal clip count cannot exceed 12",
+        )
+    try:
+        converted_selection = convert_selected_clip_to_normal(selection, clip_id)
+        convert_clip_plan_clip_to_normal(document, clip_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    next_settings = {
+        **dict(job.settings_json or {}),
+        "normalClipCount": len(converted_selection.normal_clips),
+        "shortCount": len(converted_selection.shorts),
+    }
+    document.settings = {
+        **document.settings,
+        "normalClipCount": len(converted_selection.normal_clips),
+        "shortCount": len(converted_selection.shorts),
+    }
+    plan_path = clip_plan_output_path(output_dir)
+    artifact_snapshot = {
+        selected_path: selected_path.read_bytes(),
+        plan_path: plan_path.read_bytes(),
+    }
+    previous_settings = dict(job.settings_json or {})
+    try:
+        _write_json_payload(
+            selected_path,
+            converted_selection.model_dump(by_alias=True, mode="json"),
+        )
+        _write_json_payload(
+            plan_path,
+            document.model_dump(by_alias=True, mode="json"),
+        )
+        job.settings_json = next_settings
+        job.updated_at = utc_now()
+        db.commit()
+        db.refresh(job)
+    except Exception as exc:
+        db.rollback()
+        job.settings_json = previous_settings
+        for path, payload in artifact_snapshot.items():
+            temporary_path = path.with_suffix(f"{path.suffix}.rollback")
+            temporary_path.write_bytes(payload)
+            temporary_path.replace(path)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="could not update clip type",
+        ) from exc
+    return document
 
 
 @router.patch(
