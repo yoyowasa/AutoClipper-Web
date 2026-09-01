@@ -8435,6 +8435,222 @@ pip check: pass
 - 既存jobには新しい投稿profileとYouTubeタグがないため、完成画面のタグコピーは無効。新規job、または新設定で再編集したclipから有効になる。
 - ファイル名から元配信タイトル／URLを特定できない動画はupload画面で手入力が必要。
 
+## 2026-08-31 `normal_01` YouTubeサムネイル作成
+
+### 目的
+
+- 現在の`normal_01.mp4`に合わせ、前回の黒・深緑・銅色のサムネイル構成を踏襲した新規画像を作る。
+
+### 現在状態・変更
+
+- 動画内容をフレーム確認し、残ったバジルソースとブロッコリーをリゾットへ展開する切り抜きとして構成した。
+- 人物を右、料理を右下、左に`らでん飯 / 残りソースが / リゾットに変身`を配置した。
+- 旧`normal_01_youtube_thumbnail.jpg`は上書きせず、`normal_01_youtube_thumbnail_v2.jpg`を追加した。
+- 生成背景と決定的テキスト合成の来歴を`normal_01_youtube_thumbnail_v2.manifest.json`へ保存した。
+
+### 変更ファイル
+
+- `youtube/thumbnails/normal_01_youtube_thumbnail_v2.jpg`
+- `youtube/thumbnails/normal_01_youtube_thumbnail_v2.manifest.json`
+- `STATUS.md`
+
+### 最小検証
+
+- `1280x720 / JPEG / yuvj420p / 226305 bytes`を確認した。
+- 目視で文字欠け、人物の顔への文字かぶり、主要要素のフレーム外切れがないことを確認した。
+- 最終SHA256=`11864B72AE8E009F24B27C98C8667DFD6639374AEC1D3A7151DAD687AFEF1B7E`。
+
+### 未解決事項
+
+- YouTubeへの実アップロード後の縮小表示は未確認。
+
+## 2026-08-31 `normal_02` YouTubeサムネイル作成
+
+### 目的
+
+- 現在の`normal_02.mp4`に合わせ、直前に作成した黒・深緑・銅色のサムネイル構成で2本目を作る。
+
+### 現在状態・変更
+
+- 動画内容をフレーム確認し、福岡の警固公園での待ち合わせと「恥ずかしいからやめて」の発言を主題にした。
+- 人物を右、左に`よかれと思ったのに / 恥ずかしいから / やめて`を配置した。
+- 旧`normal_02_youtube_thumbnail.jpg`は上書きせず、`normal_02_youtube_thumbnail_v2.jpg`を追加した。
+- 生成背景と決定的テキスト合成の来歴を`normal_02_youtube_thumbnail_v2.manifest.json`へ保存した。
+
+### 変更ファイル
+
+- `youtube/thumbnails/normal_02_youtube_thumbnail_v2.jpg`
+- `youtube/thumbnails/normal_02_youtube_thumbnail_v2.manifest.json`
+- `STATUS.md`
+
+### 最小検証
+
+- `1280x720 / JPEG / yuvj420p / 200982 bytes`を確認した。
+- 目視で文字欠け、人物の顔への文字かぶり、主要要素のフレーム外切れがないことを確認した。
+- 最終SHA256=`0A6B1151CB94E3FE383A490EA0C0F31C7467C0B5AA15D1D5A0B2E2E7BB65BCB9`。
+
+### 未解決事項
+
+- YouTubeへの実アップロード後の縮小表示は未確認。
+
+## 2026-08-31 `normal_02` サムネイル文字訴求強化
+
+### 目的
+
+- `normal_02_youtube_thumbnail_v2.jpg`の文字占有率と視線誘導を、既存の`痛風`／`まだ本編`サムネイル相当まで強める。
+
+### 現在状態・変更
+
+- 長文`恥ずかしいから`を`恥ずかしい / やめて`へ分け、主見出しを画面左半分へ大きく拡張した。
+- 赤橙の斜めブラシ、白／黄色の文字、黒＋青緑の二重縁取りを使い、旧版よりコントラストを強めた。
+- 人物を右へ寄せ、文字と顔の競合を避けた。
+- `normal_02_youtube_thumbnail_v3.jpg`と生成来歴manifestを追加し、v2は保持した。
+
+### 変更ファイル
+
+- `youtube/thumbnails/normal_02_youtube_thumbnail_v3.jpg`
+- `youtube/thumbnails/normal_02_youtube_thumbnail_v3.manifest.json`
+- `STATUS.md`
+
+### 最小検証
+
+- `1280x720 / JPEG / yuvj420p / 277339 bytes`を確認した。
+- 目視で文字欠け、左端の縁取り切れ、人物の顔への文字かぶりがないことを確認した。
+- 最終SHA256=`EB9F54E62C1598941A8B8401496B56F71C43384E3EC43098DAFBD2A6C20D4D70`。
+
+### 未解決事項
+
+- YouTubeへの実アップロード後の縮小表示は未確認。
+
+## 2026-08-31 `normal_02` サムネイル斜め文字化
+
+### 目的
+
+- `痛風`サムネイルの見せ方を反映し、v3の水平な主見出しを左下から右上へ傾ける。
+
+### 現在状態・変更
+
+- `恥ずかしい`を`-5度`、`やめて`を`-6度`回転し、赤橙ブラシの方向と文字の視線誘導を揃えた。
+- 背景、人物、配色、正確な文言はv3から維持した。
+- 透明文字レイヤーを使い、回転後の黒い矩形が残らないよう合成した。
+- `normal_02_youtube_thumbnail_v4.jpg`と生成来歴manifestを追加し、v3以前は保持した。
+
+### 変更ファイル
+
+- `youtube/thumbnails/normal_02_youtube_thumbnail_v4.jpg`
+- `youtube/thumbnails/normal_02_youtube_thumbnail_v4.manifest.json`
+- `STATUS.md`
+
+### 最小検証
+
+- `1280x720 / JPEG / yuvj420p / 257198 bytes`を確認した。
+- 目視で文字欠け、左端切れ、透明レイヤーの黒矩形、人物の顔への文字かぶりがないことを確認した。
+- 最終SHA256=`B3A1E7827F108876CF9CEA696411F4E9DC82670F600F7DB58DCBF2EBDE1F3CD5`。
+
+### 未解決事項
+
+- YouTubeへの実アップロード後の縮小表示は未確認。
+
+## 2026-08-31 `normal_01` サムネイル斜め文字強化
+
+### 目的
+
+- `normal_01_youtube_thumbnail_v2.jpg`の文字訴求を、既存の`痛風`／`まだ本編`サムネイル相当へ強める。
+
+### 現在状態・変更
+
+- `残りソースが`を小見出しへ移し、主見出しを`リゾットに / 変身`へ短縮した。
+- `リゾットに`を`-5度`、`変身`を`-6度`回転し、赤橙ブラシと同じ方向へ視線を誘導した。
+- 人物とブロッコリー料理を右へまとめ、左側を巨大文字へ割り当てた。
+- `normal_01_youtube_thumbnail_v3.jpg`と生成来歴manifestを追加し、v2以前は保持した。
+
+### 変更ファイル
+
+- `youtube/thumbnails/normal_01_youtube_thumbnail_v3.jpg`
+- `youtube/thumbnails/normal_01_youtube_thumbnail_v3.manifest.json`
+- `STATUS.md`
+
+### 最小検証
+
+- `1280x720 / JPEG / yuvj420p / 275386 bytes`を確認した。
+- 目視で文字欠け、左端・右端・下端切れ、透明レイヤーの黒矩形、人物や料理への文字かぶりがないことを確認した。
+- 最終SHA256=`EB3DBD851FE0DD25E91900FDDCE9CA48D63C5E4C9ECB86AB3CFEE0612EEF1532`。
+
+### 未解決事項
+
+- YouTubeへの実アップロード後の縮小表示は未確認。
+
+## 2026-08-31 通常切り抜き公開タイトルの固定末尾
+
+### 目的
+
+- 通常切り抜きのYouTube公開用タイトル末尾へ`儒烏風亭らでん【ReGLOSS切り抜き】`を常に付ける。
+- 動画内タイトルと字幕フォント設定は変更しない。
+
+### 現在状態・変更
+
+- 通常切り抜きの公開タイトルと3件のタイトル候補へ固定末尾を重複なく付与する共通処理を追加した。
+- 初期生成、手入力保存、AI提案、自動／手動再編集、投稿用JSON／Markdown出力へ共通処理を適用した。
+- 100文字を超える場合はYouTubeタイトル上限内で本文側だけを切り詰め、固定末尾を保持する。
+- 通常切り抜きをショートへ変換した場合は固定末尾を外す。
+- AI生成指示を`title_hook_suggestions_v3`へ更新し、通常切り抜きだけに固定末尾を付ける契約を追加した。
+- 品質ゲートのAI提案一致判定も固定末尾適用後の公開タイトルを基準にした。
+
+### 変更ファイル
+
+- `backend/app/posting_metadata.py`
+- `backend/app/jobs/subtitle_review.py`
+- `backend/app/jobs/title_hook_suggestions.py`
+- `backend/app/jobs/quality_gate.py`
+- `backend/app/scoring/title_hook_suggestions.py`
+- `backend/tests/test_posting_metadata.py`
+- `backend/tests/test_subtitle_review.py`
+- `backend/tests/test_title_hook_suggestions.py`
+- `STATUS.md`
+
+### 最小検証
+
+- `cd backend; python -m ruff check .`: 成功。
+- `cd backend; python -m pytest -q`: `918 passed, 1 skipped`。
+- 通常切り抜きのみ固定末尾、重複防止、100文字上限、動画内タイトル非変更、投稿用出力を自動テストで確認した。
+
+### 未解決事項
+
+- 実ブラウザで既存ジョブを開いた際の表示確認は未実施。
+
+## 2026-08-31 YouTube説明欄の内容要約・チャプター強化
+
+### 目的
+
+- 伸びた通常切り抜きと同程度に、内容が分かる要約とクリップ内チャプターを備えた説明欄を標準生成する。
+
+### 現在状態・変更
+
+- AIが生成した内容要約を、元配信・出演テンプレート適用時にも先頭へ保持するよう修正した。
+- 通常切り抜きは2〜4文の具体的要約と、`00:00`から始まる4〜8件のクリップ相対チャプターを生成する指示へ変更した。
+- ショートは1〜2文の具体的要約のみとし、不要なチャプターを付けない。
+- 元配信、出演、ハッシュタグ、タグは既存の固定処理を維持し、AIに創作させない。
+- AI生成指示を`title_hook_suggestions_v4`へ更新し、旧キャッシュを再利用しないようにした。
+- 2000文字上限を超える場合は固定の元配信・出演情報を残し、内容本文側を上限内へ収める。
+
+### 変更ファイル
+
+- `backend/app/posting_metadata.py`
+- `backend/app/scoring/title_hook_suggestions.py`
+- `backend/tests/test_posting_metadata.py`
+- `STATUS.md`
+
+### 最小検証
+
+- `cd backend; python -m pytest tests/test_posting_metadata.py tests/test_title_hook_suggestions.py -q`: `43 passed`。
+- `cd backend; python -m ruff check .`: 成功。
+- `cd backend; python -m pytest -q`: `918 passed, 1 skipped`。
+- 内容要約・チャプターが元配信・出演より前に保持されることを自動テストで確認した。
+
+### 未解決事項
+
+- 実ブラウザでの表示確認と、今日公開済み2本のYouTube説明欄への反映は未実施。
+
 ## 2026-09-01 切り抜き境界の時分秒入力と双方向調整
 
 ### 目的
@@ -8474,3 +8690,518 @@ pip check: pass
 ### 未解決事項
 
 - なし。
+
+## 2026-09-01 予定確認でショート1本を通常切り抜きへ変更
+
+### 目的
+
+- 切り抜き予定の確認中に、選択したショート1本だけを通常切り抜きへ変更できるようにする。
+
+### 現在状態・変更
+
+- 選択clipへ`通常切り抜きに変更`ボタンを追加した。
+- clipのID・タイトル・開始終了区間は維持し、ショート専用の複製フックだけ解除する。
+- `clip_plan.json`、`selected_clips.json`、job本数設定を同期し、字幕確認後も通常切り抜きとして扱う。
+- 保存失敗時は変更前のartifactへ戻す。
+- 通常切り抜きへ変更後は、予定確認画面の複製フック編集を表示しない。
+- OpenAI API、再文字起こし、確認動画の再生成は実行しない。
+- Dockerのbackend/frontendを再buildし、既存storageを維持したまま反映した。
+
+### 変更ファイル
+
+- `backend/app/api/jobs.py`
+- `backend/app/candidates/select_candidates.py`
+- `backend/app/jobs/clip_plan.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_api_routes.py`
+- `frontend/app/jobs/[jobId]/clips/page.tsx`
+- `frontend/lib/api.ts`
+- `frontend/lib/types.ts`
+- `STATUS.md`
+
+### 最小検証
+
+- `cd backend; python -m pytest tests/test_api_routes.py tests/test_clip_plan.py -q`: `106 passed`。
+- `cd backend; python -m ruff check app/api/jobs.py app/schemas.py app/candidates/select_candidates.py app/jobs/clip_plan.py tests/test_api_routes.py`: 成功。
+- `cd backend; python -m pytest -q`: `919 passed, 1 skipped`。
+- `cd backend; python -m ruff check .`: 成功。
+- `cd frontend; npm run typecheck`: 成功。
+- `cd frontend; npm run lint`: 成功。
+- `cd frontend; npm run build`: 成功。
+- Dockerのbackendは`healthy`、frontendは起動済み。対象jobが`awaiting_clip_review`のまま保持されることを確認した。
+- 実ブラウザで2本目選択時に変更ボタンが表示・有効、見切れなし、console error 0件を確認した。
+- 自動テストで対象1本だけの通常化、フック解除、再実行の冪等性、字幕確認への種別引き継ぎを確認した。
+
+### 未解決事項
+
+- 実ジョブの2本目は未変更。ユーザー操作で変更する。
+- 通常切り抜きからショートへの逆変換は今回の対象外。
+
+## 2026-09-01 動画内タイトルの空欄保存・非表示対応
+
+### 目的
+
+- 字幕確認／再編集画面で動画内タイトルを空欄にし、タイトルなしで保存・プレビュー・書き出しできるようにする。
+- 公開用タイトルは別項目として保持する。
+
+### 現在状態・変更
+
+- フロントの動画内タイトル必須判定を解除し、公開用タイトルだけを保存必須にした。
+- APIとsubtitle review artifactで空の動画内タイトルを受け付けるようにした。
+- 通常／ショート書き出しと完成表示プレビューで、明示した空文字を公開用タイトルへ戻さないようにした。
+- 動画内タイトルが空の場合は`overlayTitleExpected=false`とし、品質ゲートと書き出しmetadataを一致させた。
+- 入力欄へ`空欄なら非表示`の案内を追加した。
+- backend、frontend、GPU workerを再buildし、既存storageを保持したまま反映した。
+
+### 変更ファイル
+
+- `frontend/app/jobs/[jobId]/subtitles/page.tsx`
+- `backend/app/schemas.py`
+- `backend/app/jobs/subtitle_review.py`
+- `backend/app/candidates/title_fallback.py`
+- `backend/app/render/render_normal.py`
+- `backend/app/render/render_short.py`
+- `backend/app/render/render_exact_review_preview.py`
+- `backend/tests/test_api_routes.py`
+- `backend/tests/test_subtitle_review.py`
+- `backend/tests/test_render_normal_selected.py`
+- `backend/tests/test_title_fallback.py`
+- `backend/tests/test_render_exact_review_preview.py`
+- `STATUS.md`
+
+### 最小検証
+
+- 対象backendテスト: `152 passed`。
+- backend全テスト: `923 passed, 1 skipped`。
+- `python -m ruff check .`: 成功。
+- frontend `typecheck`、`lint`、`build`: 成功。
+- Dockerのbackendは`healthy`、frontend／GPU workerは起動済み。
+- 実ブラウザで非表示案内の反映とconsole error 0件を確認した。
+- ユーザーの編集中タイトルは変更していない。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 動画内タイトル空欄時の保存ボタン修正
+
+### 目的
+
+- 動画内タイトルを空欄にした状態で、字幕確認の保存ボタンを有効化する。
+
+### 現在状態・変更
+
+- 保存処理とAPIは空欄対応済みだったが、フロントのボタン無効化条件に動画内タイトル必須判定が残っていた。
+- 無効化条件を公開用タイトル必須へ変更した。
+- frontendを再buildし、既存storageを保持したまま反映した。
+- 対象jobで動画内タイトルを空欄のまま保存し、確認済み状態と完成表示プレビュー更新まで完了した。
+
+### 変更ファイル
+
+- `frontend/app/jobs/[jobId]/subtitles/page.tsx`
+- `STATUS.md`
+
+### 最小検証
+
+- frontend `typecheck`、`lint`、`build`: 成功。
+- 実ブラウザで`動画内タイトル=""`、公開用タイトルあり、保存ボタン有効を確認した。
+- 実保存後に`確認 1 / 1`、`保存済み`、完成表示プレビュー更新完了を確認した。
+- 再読込後も動画内タイトル空欄と保存済み状態が保持された。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 再編集後Resultsから元の完成動画一覧へ戻る導線
+
+### 目的
+
+- 1本だけ再編集した子jobの完成画面から、元jobの完成動画一覧へ直接戻れるようにする。
+
+### 現在状態・変更
+
+- Results APIへ`reeditSourceJobId`を追加した。
+- 子jobのsubtitle review artifactから元job IDを取得し、元jobが存在する場合だけ返す。
+- 子job Resultsのヘッダーへ`元の完成動画一覧へ戻る`リンクを追加した。
+- 通常の完成jobではリンクを表示しない。
+- backend/frontendを再buildし、既存storageを保持したまま反映した。
+
+### 変更ファイル
+
+- `backend/app/api/jobs.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_api_routes.py`
+- `frontend/app/results/[jobId]/page.tsx`
+- `frontend/lib/types.ts`
+- `STATUS.md`
+
+### 最小検証
+
+- backend対象テスト: `1 passed`。
+- backend Results関連テスト: `2 passed`。
+- backend対象ruff: 成功。
+- frontend `typecheck`、`lint`、`build`: 成功。
+- Dockerのbackendは`healthy`、frontendは起動済み。
+- Chromeで子job Resultsにリンクが表示され、元job Resultsへ遷移することを確認した。
+- 遷移後に通常3本・ショート2本・再編集ボタン5件を確認した。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 Chrome ERR_BLOCKED_BY_CLIENTの同一オリジンダウンロード対応
+
+### 目的
+
+- Results画面のMP4／ZIPをChromeでクリックした際、通常ページ遷移や事前HEAD確認によるブロックを回避する。
+
+### 現在状態・変更
+
+- Results画面は`localhost:3000`からbackendの`localhost:8000`へ直接遷移しており、Chrome側で`ERR_BLOCKED_BY_CLIENT`となっていた。
+- frontendへ同一オリジンの`/backend-api/[...path]`プロキシを追加した。
+- MP4、Open、Metadata、Subtitle、ZIPのリンクを`localhost:3000/backend-api/...`経由へ統一した。
+- 同一オリジン化後も本人クリックでは公開URL末尾の`/download`へのページ遷移が`ERR_BLOCKED_BY_CLIENT`になったため、公開URLを`video.mp4`／`archive.zip`へ変更した。backend内部では従来のdownload endpointへ変換する。
+- MP4／ZIPリンクへ`download`属性を追加したが、ユーザー操作ではChrome管理ポリシーの`FILE_BLOCKED`が発生したため、標準ダウンロード経路を廃止した。
+- MP4／ZIP保存を`showSaveFilePicker()`→`fetch()`→`response.body.pipeTo()`へ変更した。Chromeのダウンロード管理を使わず、ファイル全体をメモリへ保持しない。
+- MP4は`normal_XX.mp4`／`short_XX.mp4`、ZIPは`job_ID.zip`を保存候補名にする。
+- backendのdownload endpointがHEAD非対応で`405`だったため、frontend proxyのHEADはupstreamへ`Range: bytes=0-0`を要求し、総サイズを復元して`200`を返すようにした。
+- Range／キャッシュ条件付きリクエストをbackendへ転送し、動画再生・分割取得に必要なレスポンスヘッダーを保持した。
+- Docker内frontendからbackendへ接続する`BACKEND_INTERNAL_URL=http://backend:8000`を追加した。
+
+### 変更ファイル
+
+- `docker-compose.yml`
+- `frontend/app/backend-api/[...path]/route.ts`
+- `frontend/app/results/[jobId]/page.tsx`
+- `frontend/components/ResultVideoCard.tsx`
+- `frontend/components/SaveFileButton.tsx`
+- `frontend/lib/api.ts`
+- `frontend/lib/browserFileSave.ts`
+- `frontend/tests/browserFileSave.test.ts`
+- `frontend/package.json`
+- `STATUS.md`
+
+### 最小検証
+
+- frontend `typecheck`、`lint`、`build`: 成功。
+- `docker compose config --quiet`: 成功。
+- 公開URL変換: exportは`/video.mp4`、job ZIPは`/archive.zip`、metadataは従来経路になることを確認した。
+- MP4のHEAD: `200`、`Content-Length: 54641581`、`Content-Disposition: attachment`。
+- ZIPのHEAD: `200`、`Content-Length: 54798129`。1byteだけ取得するため約`71ms`で完了した。
+- MP4のRange取得: `206`、`Content-Range: bytes 0-0/54641581`。
+- 標準ダウンロードはブラウザ自動操作では保存できたが、ユーザー操作ではChromeの「組織でブロックされました」が発生したため、合格扱いを撤回した。
+- 保存helperテスト: picker→fetch→stream書込順、キャンセル時fetchなし、HTTPエラーを確認した。
+- Chrome実画面でMP4／ZIPの保存API対応が`true`、ボタン有効を確認した。
+- MP4保存ボタンからネイティブ保存先ダイアログが開き、Results画面に留まることを確認した。
+
+### 未解決事項
+
+- ネイティブ保存先ダイアログでユーザーが保存を確定した後の、保存ファイルサイズ／SHA-256確認が未完了。
+
+## 2026-09-01 高校美術・美学切り抜き用YouTubeサムネイル
+
+### 目的
+
+- `高校で美術を学ぶ理由を「美学」から考える儒烏風亭らでん【ReGLOSS切り抜き】.mp4`用の通常動画サムネイルを作成する。
+
+### 現在状態・変更
+
+- 実動画の48.92秒付近から、正面を向いて話す表情を参照フレームとして選定した。
+- 既存サムネイルの黒・深緑・金・青緑・赤橙の斜め構図を参照し、人物を右側、見出しを左側へ配置した。
+- 画像生成では文字なし背景と人物構図だけを作り、日本語コピーは後段で決定論的に合成した。
+- コピーは`高校で学ぶ理由`／`美術って`／`必要なの？`とした。
+- 既存ファイルは上書きしていない。
+
+### 生成ファイル
+
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/highschool_art_aesthetics_youtube_thumbnail_v1.jpg`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/manifest.json`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/generated_base_v1.png`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/frame_06_048.92s.jpg`
+
+### 最小検証
+
+- 完成画像: `1280x720`、JPEG、`377487 bytes`。
+- SHA-256: `f98e94df31936758b814cbd78d4174783b3298dde4a77fbceb4cfff48d05c649`。
+- 文字列、人物の顔、左右の安全余白、コントラストを原寸表示で確認した。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 高校美術サムネイルv2・文字階層と背景修正
+
+### 目的
+
+- 2行の主見出しが同程度の大きさに見える問題を直し、背景を既存の`痛風オールバック`サムネイルへ合わせる。
+
+### 現在状態・変更
+
+- `美術って`を100px、`必要なの？`を154pxとし、2行目を主見出しにした。
+- 背景を濃緑の幾何学柄、金枠・金雲、赤い筆跡、白い斜め速度線へ変更した。
+- 人物の右側配置と日本語コピーは維持した。
+- v1は残し、v2を新規作成した。
+
+### 生成ファイル
+
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/highschool_art_aesthetics_youtube_thumbnail_v2.jpg`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/generated_base_v2.png`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/manifest_v2.json`
+
+### 最小検証
+
+- 完成画像: `1280x720`、JPEG、`373994 bytes`。
+- SHA-256: `56e551babcad94560e520f10ca33432d013993986acd64139b8a17e7a66a0692`。
+- 2行のサイズ差、背景参照、文字列、人物の顔、安全余白を原寸表示で確認した。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 高校美術サムネイルv3・参照画像に合わせた文字バランス修正
+
+### 目的
+
+- `normal_01_youtube_thumbnail.jpg`の見た目バランスへ合わせる。
+
+### 現在状態・変更
+
+- `美術って`を154px、`必要なの？`を148pxとし、短い上段を大きく、長い下段を少し小さくして見た目幅を揃えた。
+- 上部の小見出し枠を拡大し、左側の文字要素を一つの塊として配置した。
+- `痛風オールバック`系の背景と人物の右側配置は維持した。
+- v1・v2は残し、v3を新規作成した。
+
+### 生成ファイル
+
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/highschool_art_aesthetics_youtube_thumbnail_v3.jpg`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/manifest_v3.json`
+
+### 最小検証
+
+- 完成画像: `1280x720`、JPEG、`351084 bytes`。
+- SHA-256: `e9f83c66cdb5b815066492c80a38ca7050a37a48e33fc82a1b79f58b2f3b00fa`。
+- 2行の見た目幅、上部枠、人物の顔、安全余白を原寸表示で確認した。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 高校美術サムネイルv4・行間圧縮と主見出し強調
+
+### 目的
+
+- 主見出し2行の上下間隔を詰め、片方を明確に大きくする。
+
+### 現在状態・変更
+
+- `美術って`を142px、`必要なの？`を168pxとし、下段を主役化した。
+- 2行の開始位置差を130pxに縮め、縁取りが接する密度へ変更した。
+- 背景、人物、上部枠、文言は維持した。
+- v1からv3は残し、v4を新規作成した。
+
+### 生成ファイル
+
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/highschool_art_aesthetics_youtube_thumbnail_v4.jpg`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/manifest_v4.json`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/render_v4.py`
+
+### 最小検証
+
+- 完成画像: `1280x720`、JPEG、`502947 bytes`。
+- SHA-256: `2be9993d406b38ad7033a027b5bb519baf108f321c547be8384d6e4efe32f5a3`。
+- 2行の間隔、下段のサイズ差、文言、人物の顔、安全余白を原寸表示で確認した。
+- manifestのSHA-256一致を確認した。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 高校美術サムネイルv5・文字重なり解消
+
+### 目的
+
+- v4で重なりすぎた主見出し2行を、近接したまま分離する。
+
+### 現在状態・変更
+
+- 上段142px、下段168pxのサイズ差は維持した。
+- 下段の開始位置を326pxから382pxへ下げ、縁取り間に約3pxの空きを確保した。
+- 背景、人物、上部枠、文言は維持した。
+- v4は残し、v5を新規作成した。
+
+### 生成ファイル
+
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/highschool_art_aesthetics_youtube_thumbnail_v5.jpg`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/manifest_v5.json`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/render_v5.py`
+
+### 最小検証
+
+- 完成画像: `1280x720`、JPEG、`499387 bytes`。
+- SHA-256: `9a1e947588a45dc2244c0ff5926dbce6878408addf8a24d9d9c3a019d04d5cd4`。
+- 2行が重ならないこと、下段のサイズ差、文言、人物の顔、安全余白を原寸表示で確認した。
+- manifestのSHA-256一致を確認した。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 高校美術サムネイルv6・主見出し斜め配置
+
+### 目的
+
+- 主見出し2行を少し斜めにし、動きのある配置へ変える。
+
+### 現在状態・変更
+
+- 主見出し2行を一つの文字塊として右上がり3度に回転した。
+- 上段142px、下段168pxのサイズ差と、重ならない近接間隔を維持した。
+- 背景、人物、上部枠、文言は維持した。
+- v5は残し、v6を新規作成した。
+
+### 生成ファイル
+
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/highschool_art_aesthetics_youtube_thumbnail_v6.jpg`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/manifest_v6.json`
+- `youtube/thumbnails/highschool_art_aesthetics_20260901/render_v6.py`
+
+### 最小検証
+
+- 完成画像: `1280x720`、JPEG、`503513 bytes`。
+- SHA-256: `107cc6171c022cff5722fe311315b6a88451e9f3b063346d9f4c93e64341ff91`。
+- 主見出しが右上がり3度であること、2行が重ならないこと、文言、人物の顔、安全余白を原寸表示で確認した。
+- manifestのSHA-256一致を確認した。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 分かりやすく話す2つのこと・YouTubeサムネイル
+
+### 目的
+
+- `分かりやすく話すために意識する2つのこと｜儒烏風亭らでん【ReGLOSS切り抜き】.mp4`用の通常動画サムネイルを作成する。
+
+### 現在状態・変更
+
+- 実動画は140.5秒、1920x1080、60fps。12点を確認し、正面寄りの笑顔がある19.67秒を人物参照に選定した。
+- 既存の黒・深緑・金・赤筆跡の通常切り抜きサムネイル様式を維持し、人物を右、文字を左へ配置した。
+- 文字なし背景と人物を画像生成し、日本語は決定論的に合成した。
+- コピーは`伝わる話し方`／`意識するのは`／`この2つ`とした。
+- 上段122px、下段206pxとし、主見出し全体を右上がり3度にした。
+
+### 生成ファイル
+
+- `youtube/thumbnails/clear_speaking_two_points_20260901/clear_speaking_two_points_youtube_thumbnail_v1.jpg`
+- `youtube/thumbnails/clear_speaking_two_points_20260901/generated_base_v1.png`
+- `youtube/thumbnails/clear_speaking_two_points_20260901/manifest.json`
+- `youtube/thumbnails/clear_speaking_two_points_20260901/render_thumbnail.py`
+- `youtube/thumbnails/clear_speaking_two_points_20260901/source_metadata.json`
+- `youtube/thumbnails/clear_speaking_two_points_20260901/contact_sheet.jpg`
+
+### 最小検証
+
+- 完成画像: `1280x720`、JPEG、`451347 bytes`。
+- SHA-256: `ec98225532984e3c51725380860a14531fc78516199f7306e96b1e92aa500a9a`。
+- 文言、サイズ差、右上がり3度、人物の顔、安全余白を原寸表示で確認した。
+- manifestのSHA-256一致を確認した。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-01 らでんだけ見てて・YouTubeサムネイル
+
+### 目的
+
+- `「らでんだけ見てて」と思う？リスナーへの答えを明かす儒烏風亭らでん【ReGLOSS切り抜き】.mp4`用の通常動画サムネイルを作成する。
+
+### 現在状態・変更
+
+- 実動画は124.0秒、1920x1080、60fps。12点を確認し、正面寄りで表情が強い86.80秒を人物参照に選定した。
+- 他配信者も見てよいという回答につながる内容を確認し、結論を隠す疑問形コピーにした。
+- コピーは`リスナーへの本音`／`らでんだけ`／`見ててほしい？`とした。
+- 上段155px、下段112pxで見た目幅を揃え、主見出し全体を右上がり3度にした。
+- 文字なし背景と人物を画像生成し、日本語は決定論的に合成した。
+
+### 生成ファイル
+
+- `youtube/thumbnails/raden_only_listener_answer_20260901/raden_only_listener_answer_youtube_thumbnail_v1.jpg`
+- `youtube/thumbnails/raden_only_listener_answer_20260901/generated_base_v1.png`
+- `youtube/thumbnails/raden_only_listener_answer_20260901/manifest.json`
+- `youtube/thumbnails/raden_only_listener_answer_20260901/render_thumbnail.py`
+- `youtube/thumbnails/raden_only_listener_answer_20260901/source_metadata.json`
+- `youtube/thumbnails/raden_only_listener_answer_20260901/contact_sheet.jpg`
+
+### 最小検証
+
+- 完成画像: `1280x720`、JPEG、`438041 bytes`。
+- SHA-256: `0853ddcf1bf46126c820f4d45f588eb6625766af24ff6443ab163e9fb1f260e1`。
+- 文言、サイズ差、右上がり3度、人物の顔、安全余白を原寸表示で確認した。
+- manifestのSHA-256一致を確認した。
+
+### 未解決事項
+
+- なし。
+
+## 2026-09-02 完成時サムネイル自動生成
+
+### 目的
+
+- 通常切り抜きとショートの完成時に、投稿用サムネイルを同時生成する。
+
+### 現在状態・変更
+
+- 通常切り抜きは、既存実績の深緑和柄・金枠・赤橙アクセント・人物右／文字左を `raden_normal_v1` テンプレート化した。
+- 通常サムネは `1280x720 JPEG`。字幕焼込み前の元動画フレーム、小見出し、主見出し2行、clip内場面秒を使用する。長文は実幅で縮小する。
+- 小見出し・主見出しは空欄なら非表示。場面秒が空欄ならclip長の38%を使用し、許容上限の長文も縮小して描画を継続する。
+- ショートは画像生成せず、完成MP4の冒頭フック字幕が表示されている区間中央を元解像度のJPEGとして切り出す。
+- 字幕確認画面へ通常サムネ4項目と即時プレビューを追加し、AI提案の採用内容にも接続した。即時プレビューも空欄・38%自動場面・長文縮小を完成描画へ合わせた。
+- 結果画面へサムネ表示、生成状態、単体保存を追加した。旧成果物の未生成表示はコンパクトにし、URL不整合・画像読込失敗も区別する。
+- ZIPとYouTube投稿JSON/Markdownにもサムネ情報を含め、状態源をexport metadataへ統一した。ZIPは同一job配下のサムネだけを収録する。
+- 再編集書き出しでは動画・字幕・メタデータ・サムネ・YouTube投稿JSON/Markdownを同一の原子的昇格対象にした。サムネ失敗時は旧JPEGを残さず、rollback時だけ復元する。
+- サムネ生成だけ失敗した場合は動画完成を失敗にせず、`thumbnail_status=failed` とエラーをメタデータへ残す。
+- サムネ取得APIはjob出力ディレクトリ外のパスを拒否する。
+
+### 変更ファイル
+
+- `backend/app/render/render_thumbnail.py`
+- `backend/app/jobs/thumbnails.py`
+- `backend/app/assets/thumbnail_templates/raden_normal_v1/`
+- `backend/app/jobs/runner.py`
+- `backend/app/api/exports.py`
+- `backend/app/api/jobs.py`
+- `backend/app/posting_metadata.py`
+- `backend/app/schemas.py`
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/scoring/title_hook_suggestions.py`
+- `backend/app/jobs/title_hook_suggestions.py`
+- `backend/app/jobs/subtitle_review.py`
+- `backend/app/render/render_normal.py`
+- `backend/app/render/render_short.py`
+- `frontend/app/jobs/[jobId]/subtitles/page.tsx`
+- `frontend/components/ResultVideoCard.tsx`
+- `frontend/lib/api.ts`
+- `frontend/lib/types.ts`
+- `launcher/codex_bridge.py`
+- `backend/tests/test_thumbnail_rendering.py`
+- `backend/tests/test_thumbnail_integration.py`
+- `backend/tests/test_posting_metadata.py`
+- `backend/tests/test_guarded_rerender_promotion_gate.py`
+
+### 最小検証
+
+- backend全体: `945 passed, 1 skipped`。
+- backend ruff: 成功。
+- サムネ描画再検証: `9 passed`。空欄、許容上限長文、片側1行だけの描画も成功した。
+- サムネ・投稿・再編集の回帰セット: `39 passed`、関連拡張セット: `88 passed`。
+- frontend: `typecheck`、`lint`、`build`、関連テスト成功。
+- Docker: backend/worker/frontend/redisを再build・起動し、backend healthy、health `200`。
+- Docker内FFmpeg実行: 通常 `1280x720`、ショート `960x540` のJPEG生成成功。
+- 実画像を目視し、通常の和柄・金枠・2行文字・人物配置と文字切れなしを確認した。
+- ブラウザ確認: 通常サムネ編集欄、38%自動場面、即時プレビュー、結果画面のコンパクトな旧成果物 `サムネ未生成` 表示を確認。console error/warn 0件。
+- `git diff --check`: 成功。
+
+### 未解決事項
+
+- 既に完成済みの旧成果物は自動遡及生成しない。新規完成または再編集書き出し時に生成する。
