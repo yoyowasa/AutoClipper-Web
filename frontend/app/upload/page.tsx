@@ -183,11 +183,11 @@ function UploadForm() {
     }
     if (uploadMode === "new") {
       if (settings.heatmapIntervalMode && !heatmapFile) {
-        setError("JSON区間モードをONにするには人気区間JSONを選択してください。");
+        setError("人気度JSONを参考にするには、対応するJSONを選択してください。");
         return;
       }
       if (heatmapFile && heatmapFile.name !== `${file.name}.heatmap.json`) {
-        setError(`人気区間JSONは ${file.name}.heatmap.json を選択してください。`);
+        setError(`人気度JSONは ${file.name}.heatmap.json を選択してください。`);
         return;
       }
       const rangeError = manualRangeValidationError(settings);
@@ -523,7 +523,7 @@ function UploadForm() {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-xs font-bold text-[#282825]">人気区間JSON</h3>
+                      <h3 className="text-xs font-bold text-[#282825]">人気度JSON</h3>
                       <span className="bg-[#eef7fa] px-1.5 py-0.5 text-[10px] font-bold text-sky-800">
                         任意
                       </span>
@@ -585,15 +585,15 @@ function UploadForm() {
                 <div className="mt-3 border-t border-[#e1e1de] pt-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-xs font-bold text-[#282825]">JSON区間モード</p>
+                      <p className="text-xs font-bold text-[#282825]">人気度JSONを参考にする</p>
                       <p className="mt-1 text-[11px] leading-4 text-[#73736e]">
                         {settings.heatmapIntervalMode
-                          ? "人気区間を起点に候補を作り、既存の品質条件で絞り込みます。"
-                          : "既存候補を字幕・音声・映像で評価し、JSON値を最大+10点の補助に使います。"}
+                          ? "字幕・会話内容から場面を選び、人気度JSONは優先度の参考にだけ使います。開始・終了はJSON区間へ合わせません。"
+                          : "字幕・会話内容だけで場面と開始・終了を選びます。"}
                       </p>
                     </div>
                     <div
-                      aria-label="JSON区間モード"
+                      aria-label="人気度JSONを参考にする"
                       className="grid shrink-0 grid-cols-2 border border-[#bfc0bd]"
                       role="group"
                     >
@@ -631,14 +631,14 @@ function UploadForm() {
                   </div>
                   {!heatmapFile ? (
                     <p className="mt-2 text-[10px] leading-4 text-[#85857f]">
-                      ONにするには動画に対応する人気区間JSONを選択してください。
+                      参考にするには動画に対応する人気度JSONを選択してください。
                     </p>
                   ) : null}
                   {settings.heatmapIntervalMode &&
                   (settings.normalClipTimeRanges.length > 0 ||
                     settings.shortClipTimeRanges.length > 0) ? (
                     <p className="mt-2 text-[10px] leading-4 text-amber-700">
-                      時間を手動指定した種類は手動区間を優先し、それ以外をJSON区間から作成します。
+                      時間を手動指定した種類は手動区間を優先し、それ以外は字幕・会話内容で境界を決め、人気度JSONを優先度の参考にします。
                     </p>
                   ) : null}
                 </div>
@@ -750,7 +750,7 @@ function UploadForm() {
                       元動画を見ながら範囲を決めます
                     </h3>
                     <p className="mt-2 text-xs leading-6 text-sky-900">
-                      自動候補・人気区間JSON・AI評価は使いません。アップロード後の画面で、
+                      自動候補・人気度JSON・AI評価は使いません。アップロード後の画面で、
                       再生位置を開始・終了に設定して通常切り抜きとショートを追加します。
                     </p>
                   </section>

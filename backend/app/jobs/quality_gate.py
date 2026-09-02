@@ -508,11 +508,7 @@ def evaluate_selection_quality_gate(
     diversity = select_diverse_shorts(
         selection.shorts,
         requested_count=len(selection.shorts),
-        settings=ShortDiversitySettings(
-            enforce_heatmap_segment_uniqueness=bool(
-                settings.get("heatmapIntervalMode", False)
-            )
-        ),
+        settings=ShortDiversitySettings(enforce_heatmap_segment_uniqueness=False),
     )
     duplicate_evidence = [
         {

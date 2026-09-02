@@ -9205,3 +9205,50 @@ pip check: pass
 ### 未解決事項
 
 - 既に完成済みの旧成果物は自動遡及生成しない。新規完成または再編集書き出し時に生成する。
+
+## 2026-09-03 JSONを人気度参考へ限定した内容選定
+
+### 目的
+
+- JSON区間を切り抜き境界や候補元にせず、文字起こしと会話内容を基準に通常切り抜き・ショートを選定する。
+
+### 現在状態・変更
+
+- JSON ONは人気度の参考情報だけをCodexへ渡す。開始・終了、尺、採否は内容基準で決める。
+- JSON OFFは文字起こし・会話内容だけで選定する。
+- JSONが実行中に欠損・破損した場合もjobを失敗させず、内容選定へフォールバックする。
+- 同一JSON区間に含まれる候補を重複として強制排除する判定を廃止した。
+- 再選定は旧候補の並べ替えではなく、文字起こしと任意の人気度参考から候補を再生成する。
+- Codex再選定に失敗した場合は従来の内容評価へフォールバックする。
+- 初期選定と再選定の要約を別ファイルへ保存し、初期選定結果を上書きしない。
+- アップロード、clip再選定、進捗表示の文言を「JSONを参考」「内容のみ」に統一した。
+
+### 変更ファイル
+
+- `backend/app/candidates/codex_initial_selection.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/jobs/quality_gate.py`
+- `backend/app/api/jobs.py`
+- `launcher/codex_bridge.py`
+- `frontend/app/upload/page.tsx`
+- `frontend/app/jobs/[jobId]/clips/page.tsx`
+- `frontend/components/JobProgress.tsx`
+- `backend/tests/test_api_routes.py`
+- `backend/tests/test_codex_initial_selection.py`
+- `backend/tests/test_heatmap_interval_candidates.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_runner_short_diversity.py`
+
+### 最小検証
+
+- backend全体: `942 passed, 1 skipped`。
+- backend/launcher ruff: 成功。
+- frontend: `typecheck`、`lint`、`build` 成功。
+- Docker: backend/worker/frontendを再build・起動し、backend health `200`、frontend `200`。
+- ブラウザ確認: `人気度JSONを参考にする`、OFF時の内容選定説明を確認した。
+- `git diff --check`: 成功。
+
+### 未解決事項
+
+- 既存jobの候補は自動で選び直さない。新規jobまたは再選定の実行時から新方式を使う。
+- 旧JSON候補生成モジュールは互換維持のため残しているが、製品の実行経路からは呼び出さない。

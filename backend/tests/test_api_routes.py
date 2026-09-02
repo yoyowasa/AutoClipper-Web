@@ -373,7 +373,7 @@ def test_create_job_requires_available_heatmap_for_interval_mode(client: TestCli
     assert missing_response.status_code == 422
     assert missing_response.json()["detail"] == {
         "code": "heatmap_interval_mode_requires_data",
-        "message": "JSON区間モードには有効な人気区間JSONが必要です。",
+            "message": "人気度JSONを参考にするには有効なJSONが必要です。",
         "reason": "heatmap_sidecar_not_provided",
     }
     assert unavailable_response.status_code == 422

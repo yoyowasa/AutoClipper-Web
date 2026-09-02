@@ -1868,7 +1868,7 @@ def create_job(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={
                     "code": "heatmap_interval_mode_requires_data",
-                    "message": "JSON区間モードには有効な人気区間JSONが必要です。",
+                    "message": "人気度JSONを参考にするには有効なJSONが必要です。",
                     "reason": unavailable_reason,
                 },
             )
@@ -1939,7 +1939,7 @@ def retry_job(
                 status_code=status.HTTP_409_CONFLICT,
                 detail={
                     "code": "retry_source_unavailable",
-                    "message": "人気区間JSONが残っていないため再処理できません。",
+                    "message": "参考用の人気度JSONが残っていないため再処理できません。",
                 },
             )
 

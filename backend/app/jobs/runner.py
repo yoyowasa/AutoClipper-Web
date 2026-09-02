@@ -67,12 +67,12 @@ from app.candidates.codex_initial_selection import (
     CodexInitialSelectionError,
     CodexInitialSelectionResult,
     codex_initial_selection_summary_output_path,
+    codex_reselection_summary_output_path,
     request_codex_initial_selection,
     write_codex_initial_selection_summary,
 )
 from app.candidates.generate_normal_candidates import generate_normal_candidates_with_summary
 from app.candidates.generate_short_candidates import generate_short_candidates_with_summary
-from app.candidates.generate_heatmap_candidates import generate_heatmap_candidates_with_summary
 from app.candidates.manual_ranges import (
     MANUAL_SELECTION_REASON,
     automatic_selection_settings,
@@ -497,7 +497,11 @@ def _heatmap_summary_for_selection_mode(
     available = usable_positive_segments > 0
     interval_mode_applied = requested and automatic_output and available
     selection_behavior = (
-        "heatmap_intervals" if interval_mode_applied else "manual_ranges" if requested and not automatic_output else "supporting_score"
+        "content_with_heatmap_reference"
+        if interval_mode_applied
+        else "manual_ranges"
+        if requested and not automatic_output
+        else "content_only"
     )
     updated = {
         **summary,
@@ -508,12 +512,12 @@ def _heatmap_summary_for_selection_mode(
         "usable_positive_segment_count": usable_positive_segments,
         "selection_behavior": selection_behavior,
     }
-    should_fail = requested and automatic_output and not available
-    if should_fail:
+    reference_unavailable = requested and automatic_output and not available
+    if reference_unavailable:
         updated["interval_mode_unavailable_reason"] = summary.get("fallback_reason") or (
             "heatmap_has_no_positive_segments_in_video" if positive_segments > 0 else "heatmap_has_no_positive_segments"
         )
-    return updated, should_fail
+    return updated, False
 
 
 def _int_setting(settings: dict[str, Any], key: str, default: int) -> int:
@@ -539,6 +543,7 @@ def _generate_candidates_for_reselection_mode(
     short_manual_ranges = manual_ranges_for_type(settings, "short")
     heatmap_interval_mode = _bool_setting(settings, "heatmapIntervalMode", False)
 
+    reference_segments = heatmap_segments if heatmap_interval_mode else ()
     normal_generation_result = (
         build_manual_candidates(
             "normal",
@@ -546,16 +551,6 @@ def _generate_candidates_for_reselection_mode(
             transcript_segments,
         )
         if normal_manual_ranges
-        else generate_heatmap_candidates_with_summary(
-            "normal",
-            heatmap_segments=heatmap_segments,
-            transcript_segments=transcript_segments,
-            video_duration=video_duration,
-            requested_count=_int_setting(settings, "normalClipCount", 2),
-            settings=settings,
-            heartbeat=heartbeat,
-        )
-        if heatmap_interval_mode
         else generate_normal_candidates_with_summary(
             transcript_segments,
             scene_segments,
@@ -571,16 +566,6 @@ def _generate_candidates_for_reselection_mode(
             transcript_segments,
         )
         if short_manual_ranges
-        else generate_heatmap_candidates_with_summary(
-            "short",
-            heatmap_segments=heatmap_segments,
-            transcript_segments=transcript_segments,
-            video_duration=video_duration,
-            requested_count=_int_setting(settings, "shortCount", 3),
-            settings=settings,
-            heartbeat=heartbeat,
-        )
-        if heatmap_interval_mode
         else generate_short_candidates_with_summary(
             transcript_segments,
             scene_segments,
@@ -591,11 +576,11 @@ def _generate_candidates_for_reselection_mode(
     )
     normal_candidates = annotate_candidates_with_heatmap(
         normal_generation_result.candidates,
-        heatmap_segments,
+        reference_segments,
     )
     short_candidates = annotate_candidates_with_heatmap(
         short_generation_result.candidates,
-        heatmap_segments,
+        reference_segments,
     )
     summary = merge_candidate_generation_summaries(
         [normal_generation_result.summary, short_generation_result.summary],
@@ -603,40 +588,10 @@ def _generate_candidates_for_reselection_mode(
         transcript_segment_count=len(transcript_segments),
     )
 
-    if heatmap_interval_mode:
-        missing_candidate_types = [
-            candidate_type
-            for candidate_type, requested_count, manual_ranges, candidates in (
-                (
-                    "normal",
-                    _int_setting(settings, "normalClipCount", 2),
-                    normal_manual_ranges,
-                    normal_candidates,
-                ),
-                (
-                    "short",
-                    _int_setting(settings, "shortCount", 3),
-                    short_manual_ranges,
-                    short_candidates,
-                ),
-            )
-            if requested_count > 0 and not manual_ranges and not candidates
-        ]
-        if missing_candidate_types:
-            raise PipelineExpectedError(
-                "heatmap_interval_mode_no_candidates",
-                "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。",
-                details={"candidateTypes": missing_candidate_types},
-            )
-
     if not normal_candidates and not short_candidates:
         raise PipelineExpectedError(
-            ("heatmap_interval_mode_no_candidates" if heatmap_interval_mode else "no_candidates_found"),
-            (
-                "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。"
-                if heatmap_interval_mode
-                else "No clip candidates were found for the selected settings."
-            ),
+            "no_candidates_found",
+            "No clip candidates were found for the selected settings.",
         )
     return normal_candidates, short_candidates, summary
 
@@ -660,12 +615,6 @@ def _codex_initial_selection_enabled(
 ) -> bool:
     provider = str(settings.get("initialSelectionProvider") or "legacy").strip().lower()
     return provider == "codex" and not manual_workflow and not has_manual_ranges
-
-
-def _require_all_requested_heatmap_candidate_types(
-    codex_selection: CandidateSelection | None,
-) -> bool:
-    return not (codex_selection is not None and codex_selection.selection_policy == "strict_quality")
 
 
 def _ensure_selected_openai_scored(settings: dict[str, Any]) -> bool:
@@ -2003,13 +1952,7 @@ def _codex_selection_with_diverse_refined_shorts(
     diversity = select_diverse_shorts(
         eligible_shorts,
         requested_count=result.selection.requested_short_count,
-        settings=ShortDiversitySettings(
-            enforce_heatmap_segment_uniqueness=_bool_setting(
-                settings,
-                "heatmapIntervalMode",
-                False,
-            )
-        ),
+        settings=ShortDiversitySettings(enforce_heatmap_segment_uniqueness=False),
     )
     diversity_rejections = [
         CandidateRejection(
@@ -2099,11 +2042,7 @@ def _automatic_selection_with_diverse_refined_shorts(
 
     parsed_settings = parse_selection_settings(settings)
     diversity_settings = ShortDiversitySettings(
-        enforce_heatmap_segment_uniqueness=_bool_setting(
-            settings,
-            "heatmapIntervalMode",
-            False,
-        )
+        enforce_heatmap_segment_uniqueness=False
     )
     excluded_short_ids: set[str] = set()
     diversity_rejections = []
@@ -3751,7 +3690,7 @@ def run_autoclipper_job(
                     ),
                 )
                 heatmap_segments = heatmap_result.segments
-                heatmap_summary, heatmap_mode_unavailable = _heatmap_summary_for_selection_mode(
+                heatmap_summary, _ = _heatmap_summary_for_selection_mode(
                     heatmap_result.summary,
                     heatmap_segments,
                     settings,
@@ -3763,12 +3702,6 @@ def run_autoclipper_job(
                         heatmap_summary,
                     )
                 )
-                if heatmap_mode_unavailable:
-                    raise PipelineExpectedError(
-                        "heatmap_interval_mode_unavailable",
-                        "JSON区間モードには有効な人気区間JSONが必要です。",
-                        details=heatmap_summary,
-                    )
             if not skip_automatic_audio_analysis and not metadata.has_audio:
                 raise PipelineExpectedError(
                     "missing_audio",
@@ -4258,6 +4191,9 @@ def run_autoclipper_job(
                 manual_short=bool(short_manual_ranges),
             )
             heatmap_interval_mode = _bool_setting(settings, "heatmapIntervalMode", False)
+            heatmap_reference_segments = (
+                heatmap_segments if heatmap_interval_mode else ()
+            )
             codex_summary_path = codex_initial_selection_summary_output_path(job_dir)
             codex_requested = _codex_initial_selection_enabled(
                 settings,
@@ -4278,7 +4214,7 @@ def run_autoclipper_job(
                         job_id=job.id,
                         storage_root=storage_paths.root,
                         transcript_segments=transcript_segments,
-                        heatmap_segments=heatmap_segments,
+                        heatmap_segments=heatmap_reference_segments,
                         video_duration=duration,
                         settings=settings,
                         heartbeat=codex_selection_heartbeat,
@@ -4335,7 +4271,7 @@ def run_autoclipper_job(
                         candidates=codex_normal_candidates,
                         summary={
                             "type": "normal",
-                            "strategy": "codex_initial_selection",
+                            "strategy": "codex_content_selection",
                             "raw_candidates_considered": len(codex_normal_candidates),
                             "candidates_kept_by_type": {"normal": len(codex_normal_candidates)},
                         },
@@ -4347,16 +4283,6 @@ def run_autoclipper_job(
                         transcript_segments,
                     )
                     if manual_workflow or normal_manual_ranges
-                    else generate_heatmap_candidates_with_summary(
-                        "normal",
-                        heatmap_segments=heatmap_segments,
-                        transcript_segments=transcript_segments,
-                        video_duration=duration,
-                        requested_count=_int_setting(settings, "normalClipCount", 2),
-                        settings=settings,
-                        heartbeat=candidate_generation_heartbeat,
-                    )
-                    if heatmap_interval_mode
                     else generate_normal_candidates_with_summary(
                         transcript_segments,
                         scene_segments,
@@ -4370,7 +4296,7 @@ def run_autoclipper_job(
                     if manual_workflow
                     else annotate_candidates_with_heatmap(
                         normal_generation_result.candidates,
-                        heatmap_segments,
+                        heatmap_reference_segments,
                     )
                 )
                 short_generation_result = (
@@ -4378,7 +4304,7 @@ def run_autoclipper_job(
                         candidates=codex_short_candidates,
                         summary={
                             "type": "short",
-                            "strategy": "codex_initial_selection",
+                            "strategy": "codex_content_selection",
                             "raw_candidates_considered": len(codex_short_candidates),
                             "candidates_kept_by_type": {"short": len(codex_short_candidates)},
                         },
@@ -4390,16 +4316,6 @@ def run_autoclipper_job(
                         transcript_segments,
                     )
                     if manual_workflow or short_manual_ranges
-                    else generate_heatmap_candidates_with_summary(
-                        "short",
-                        heatmap_segments=heatmap_segments,
-                        transcript_segments=transcript_segments,
-                        video_duration=duration,
-                        requested_count=_int_setting(settings, "shortCount", 3),
-                        settings=settings,
-                        heartbeat=candidate_generation_heartbeat,
-                    )
-                    if heatmap_interval_mode
                     else generate_short_candidates_with_summary(
                         transcript_segments,
                         scene_segments,
@@ -4413,7 +4329,7 @@ def run_autoclipper_job(
                     if manual_workflow
                     else annotate_candidates_with_heatmap(
                         short_generation_result.candidates,
-                        heatmap_segments,
+                        heatmap_reference_segments,
                     )
                 )
                 candidate_generation_summary = merge_candidate_generation_summaries(
@@ -4444,32 +4360,6 @@ def run_autoclipper_job(
                     short_candidates,
                     settings,
                 )
-            codex_selection = codex_initial_selection_result.selection if codex_initial_selection_result is not None else None
-            if heatmap_interval_mode and _require_all_requested_heatmap_candidate_types(codex_selection):
-                missing_candidate_types = [
-                    candidate_type
-                    for candidate_type, requested_count, manual_ranges, candidates in (
-                        (
-                            "normal",
-                            _int_setting(settings, "normalClipCount", 2),
-                            normal_manual_ranges,
-                            normal_candidates,
-                        ),
-                        (
-                            "short",
-                            _int_setting(settings, "shortCount", 3),
-                            short_manual_ranges,
-                            short_candidates,
-                        ),
-                    )
-                    if requested_count > 0 and not manual_ranges and not candidates
-                ]
-                if missing_candidate_types:
-                    raise PipelineExpectedError(
-                        "heatmap_interval_mode_no_candidates",
-                        "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。",
-                        details={"candidateTypes": missing_candidate_types},
-                    )
             all_candidates = [*normal_candidates, *short_candidates]
             metadata_files.extend(
                 [
@@ -4480,12 +4370,8 @@ def run_autoclipper_job(
             )
             if not all_candidates:
                 raise PipelineExpectedError(
-                    ("heatmap_interval_mode_no_candidates" if heatmap_interval_mode else "no_candidates_found"),
-                    (
-                        "人気区間JSONから設定時間と字幕条件を満たす候補を生成できませんでした。"
-                        if heatmap_interval_mode
-                        else "No clip candidates were found for the selected settings."
-                    ),
+                    "no_candidates_found",
+                    "No clip candidates were found for the selected settings.",
                 )
 
             manual_candidates = [
@@ -4513,7 +4399,7 @@ def run_autoclipper_job(
                     scene_segments=scene_segments,
                     settings=settings,
                     timeline_duration=duration,
-                    heatmap_segments=heatmap_segments,
+                    heatmap_segments=heatmap_reference_segments,
                 )
                 final_codex_summary = {
                     **codex_initial_selection_result.summary,
@@ -4568,7 +4454,7 @@ def run_autoclipper_job(
                         settings=automatic_settings,
                         timeline_duration=duration,
                         audio_features=audio_features,
-                        heatmap_segments=heatmap_segments,
+                        heatmap_segments=heatmap_reference_segments,
                     )
                 )
                 scored_candidates = [*automatic_scored, *manual_candidates]
@@ -5608,6 +5494,7 @@ def run_clip_plan_reselection(
             job_dir / "rejection_summary.json",
             job_dir / "selected_clips_summary.json",
             job_dir / "heatmap_validation_summary.json",
+            codex_reselection_summary_output_path(job_dir),
             quality_gate_decision_path(job_dir, "selection"),
             quality_gate_decision_path(job_dir, "content"),
             quality_gate_decision_path(job_dir, "post_render"),
@@ -5632,7 +5519,7 @@ def run_clip_plan_reselection(
                     video.stored_path,
                 ),
             )
-            heatmap_summary, heatmap_mode_unavailable = _heatmap_summary_for_selection_mode(
+            heatmap_summary, _ = _heatmap_summary_for_selection_mode(
                 heatmap_result.summary,
                 heatmap_result.segments,
                 settings,
@@ -5642,12 +5529,6 @@ def run_clip_plan_reselection(
                 job_dir / "heatmap_validation_summary.json",
                 heatmap_summary,
             )
-            if heatmap_mode_unavailable:
-                raise PipelineExpectedError(
-                    "heatmap_interval_mode_unavailable",
-                    "JSON区間モードには有効な人気区間JSONが必要です。",
-                    details=heatmap_summary,
-                )
             normal_manual_ranges = manual_ranges_for_type(settings, "normal")
             short_manual_ranges = manual_ranges_for_type(settings, "short")
             automatic_settings = automatic_selection_settings(
@@ -5655,27 +5536,111 @@ def run_clip_plan_reselection(
                 manual_normal=bool(normal_manual_ranges),
                 manual_short=bool(short_manual_ranges),
             )
-            previous_settings = dict(previous_plan.settings) if previous_plan is not None else {}
-            previous_heatmap_interval_mode = _bool_setting(
-                previous_settings,
-                "heatmapIntervalMode",
-                False,
-            )
             heatmap_interval_mode = _bool_setting(
                 settings,
                 "heatmapIntervalMode",
                 False,
             )
-            heatmap_interval_mode_changed = heatmap_interval_mode != previous_heatmap_interval_mode
+            heatmap_reference_segments = (
+                heatmap_result.segments if heatmap_interval_mode else ()
+            )
+            candidate_generation_summary_path = job_dir / "candidate_generation_summary.json"
+            codex_summary_path = codex_reselection_summary_output_path(job_dir)
+            codex_reselection_result: CodexInitialSelectionResult | None = None
+            codex_requested = _codex_initial_selection_enabled(
+                settings,
+                manual_workflow=is_manual_workflow(settings),
+                has_manual_ranges=bool(normal_manual_ranges or short_manual_ranges),
+            )
 
-            if heatmap_interval_mode_changed:
-                candidate_generation_summary_path = job_dir / "candidate_generation_summary.json"
+            def candidate_generation_heartbeat(summary: dict[str, Any]) -> None:
+                _write_json(candidate_generation_summary_path, summary)
+                _heartbeat_job(db, job)
 
-                def candidate_generation_heartbeat(summary: dict[str, Any]) -> None:
-                    _write_json(candidate_generation_summary_path, summary)
+            if codex_requested:
+                def codex_reselection_heartbeat(summary: dict[str, Any]) -> None:
+                    write_codex_initial_selection_summary(
+                        {**summary, "phase": "reselection"},
+                        codex_summary_path,
+                    )
                     _heartbeat_job(db, job)
 
                 try:
+                    codex_reselection_result = deps.codex_initial_selector(
+                        job_id=job.id,
+                        storage_root=storage_paths.root,
+                        transcript_segments=transcript_segments,
+                        heatmap_segments=heatmap_reference_segments,
+                        video_duration=float(video.duration or visual_quality.duration),
+                        settings=settings,
+                        heartbeat=codex_reselection_heartbeat,
+                    )
+                    write_codex_initial_selection_summary(
+                        {**codex_reselection_result.summary, "phase": "reselection"},
+                        codex_summary_path,
+                    )
+                except CodexInitialSelectionError as exc:
+                    write_codex_initial_selection_summary(
+                        {
+                            **exc.fallback_summary(
+                                requested_normal_count=_int_setting(settings, "normalClipCount", 2),
+                                requested_short_count=_int_setting(settings, "shortCount", 3),
+                            ),
+                            "phase": "reselection",
+                        },
+                        codex_summary_path,
+                    )
+                except Exception:
+                    write_codex_initial_selection_summary(
+                        {
+                            "provider": "codex",
+                            "phase": "reselection",
+                            "status": "fallback",
+                            "fallbackUsed": True,
+                            "error": {
+                                "code": "codex_initial_selection_unexpected_error",
+                                "message": "Codex再選定を完了できなかったため、字幕候補へ切り替えました。",
+                            },
+                            "requestedNormalCount": _int_setting(settings, "normalClipCount", 2),
+                            "requestedShortCount": _int_setting(settings, "shortCount", 3),
+                            "selectedNormalCount": 0,
+                            "selectedShortCount": 0,
+                            "threadId": None,
+                        },
+                        codex_summary_path,
+                    )
+
+            try:
+                if codex_reselection_result is not None:
+                    normal_candidates = [
+                        candidate
+                        for candidate in codex_reselection_result.candidates
+                        if candidate.type == "normal"
+                    ]
+                    short_candidates = [
+                        candidate
+                        for candidate in codex_reselection_result.candidates
+                        if candidate.type == "short"
+                    ]
+                    candidate_generation_summary = merge_candidate_generation_summaries(
+                        [
+                            {
+                                "type": "normal",
+                                "strategy": "codex_content_selection",
+                                "raw_candidates_considered": len(normal_candidates),
+                                "candidates_kept_by_type": {"normal": len(normal_candidates)},
+                            },
+                            {
+                                "type": "short",
+                                "strategy": "codex_content_selection",
+                                "raw_candidates_considered": len(short_candidates),
+                                "candidates_kept_by_type": {"short": len(short_candidates)},
+                            },
+                        ],
+                        video_duration=float(video.duration or visual_quality.duration),
+                        transcript_segment_count=len(transcript_segments),
+                    )
+                else:
                     (
                         normal_candidates,
                         short_candidates,
@@ -5689,73 +5654,31 @@ def run_clip_plan_reselection(
                         video_duration=float(video.duration or visual_quality.duration),
                         heartbeat=candidate_generation_heartbeat,
                     )
-                except CandidateGenerationMemoryLimitError as exc:
-                    _write_json(candidate_generation_summary_path, exc.summary)
-                    raise PipelineExpectedError(
-                        "candidate_generation_memory_limit",
-                        "Candidate generation exceeded the configured memory limit.",
-                        details=exc.summary,
-                    ) from exc
-                except PipelineExpectedError:
-                    raise
-                except Exception as exc:
-                    raise PipelineExpectedError(
-                        "candidate_generation_failed",
-                        f"Could not generate clip candidates: {exc}",
-                    ) from exc
+            except CandidateGenerationMemoryLimitError as exc:
+                _write_json(candidate_generation_summary_path, exc.summary)
+                raise PipelineExpectedError(
+                    "candidate_generation_memory_limit",
+                    "Candidate generation exceeded the configured memory limit.",
+                    details=exc.summary,
+                ) from exc
+            except PipelineExpectedError:
+                raise
+            except Exception as exc:
+                raise PipelineExpectedError(
+                    "candidate_generation_failed",
+                    f"Could not generate clip candidates: {exc}",
+                ) from exc
 
-                write_candidates(
-                    normal_candidates,
-                    job_dir / "normal_candidates.json",
-                )
-                write_candidates(
-                    short_candidates,
-                    job_dir / "short_candidates.json",
-                )
-                write_candidates(
-                    [*normal_candidates, *short_candidates],
-                    job_dir / "candidates.json",
-                )
-                _write_json(
-                    candidate_generation_summary_path,
-                    candidate_generation_summary,
-                )
-            else:
-                base_candidates = _read_model_list(
-                    job_dir / "candidates.json",
-                    Candidate,
-                )
-                if not base_candidates:
-                    raise PipelineExpectedError(
-                        "clip_plan_candidates_missing",
-                        "Saved clip candidates are unavailable for reselection.",
-                    )
-                normal_candidates = (
-                    build_manual_candidates(
-                        "normal",
-                        normal_manual_ranges,
-                        transcript_segments,
-                    ).candidates
-                    if normal_manual_ranges
-                    else [candidate for candidate in base_candidates if candidate.type == "normal"]
-                )
-                short_candidates = (
-                    build_manual_candidates(
-                        "short",
-                        short_manual_ranges,
-                        transcript_segments,
-                    ).candidates
-                    if short_manual_ranges
-                    else [candidate for candidate in base_candidates if candidate.type == "short"]
-                )
-                normal_candidates = annotate_candidates_with_heatmap(
-                    normal_candidates,
-                    heatmap_result.segments,
-                )
-                short_candidates = annotate_candidates_with_heatmap(
-                    short_candidates,
-                    heatmap_result.segments,
-                )
+            write_candidates(normal_candidates, job_dir / "normal_candidates.json")
+            write_candidates(short_candidates, job_dir / "short_candidates.json")
+            write_candidates(
+                [*normal_candidates, *short_candidates],
+                job_dir / "candidates.json",
+            )
+            _write_json(
+                candidate_generation_summary_path,
+                candidate_generation_summary,
+            )
             manual_candidates = [
                 *(normal_candidates if normal_manual_ranges else []),
                 *(short_candidates if short_manual_ranges else []),
@@ -5765,45 +5688,68 @@ def run_clip_plan_reselection(
                 *(short_candidates if not short_manual_ranges else []),
             ]
 
-            scoring_result = (
-                _score_candidate_list(
-                    automatic_candidates,
+            if codex_reselection_result is not None:
+                automatic_selection, automatic_scored, _ = (
+                    _codex_selection_with_diverse_refined_shorts(
+                        codex_reselection_result,
+                        transcript_segments=transcript_segments,
+                        silence_segments=silence_segments,
+                        scene_segments=scene_segments,
+                        settings=settings,
+                        timeline_duration=float(video.duration or visual_quality.duration),
+                        heatmap_segments=heatmap_reference_segments,
+                    )
+                )
+                openai_scoring_summary = None
+                write_codex_initial_selection_summary(
+                    {
+                        **codex_reselection_result.summary,
+                        "phase": "reselection",
+                        "selectedNormalCount": len(automatic_selection.normal_clips),
+                        "selectedShortCount": len(automatic_selection.shorts),
+                    },
+                    codex_summary_path,
+                )
+            else:
+                scoring_result = (
+                    _score_candidate_list(
+                        automatic_candidates,
+                        settings=automatic_settings,
+                        audio_features=audio_features,
+                        silence_segments=silence_segments,
+                        visual_quality=visual_quality,
+                        scorer=deps.openai_scorer,
+                    )
+                    if automatic_candidates
+                    else ScoringResult(candidates=[])
+                )
+                automatic_selection = select_candidates(
+                    scoring_result.candidates,
                     settings=automatic_settings,
                     audio_features=audio_features,
                     silence_segments=silence_segments,
+                )
+                automatic_selection, automatic_scored, openai_scoring_summary = _ensure_selected_candidates_openai_scored(
+                    automatic_selection,
+                    scoring_result.candidates,
+                    settings=automatic_settings,
+                    audio_features=audio_features,
                     visual_quality=visual_quality,
-                    scorer=deps.openai_scorer,
+                    scorer=scoring_result.openai_scorer,
+                    openai_summary=scoring_result.openai_summary,
                 )
-                if automatic_candidates
-                else ScoringResult(candidates=[])
-            )
-            automatic_selection = select_candidates(
-                scoring_result.candidates,
-                settings=automatic_settings,
-                audio_features=audio_features,
-                silence_segments=silence_segments,
-            )
-            automatic_selection, automatic_scored, openai_scoring_summary = _ensure_selected_candidates_openai_scored(
-                automatic_selection,
-                scoring_result.candidates,
-                settings=automatic_settings,
-                audio_features=audio_features,
-                visual_quality=visual_quality,
-                scorer=scoring_result.openai_scorer,
-                openai_summary=scoring_result.openai_summary,
-            )
-            automatic_selection, automatic_scored, _ = (
-                _automatic_selection_with_diverse_refined_shorts(
-                    automatic_scored,
-                    transcript_segments=transcript_segments,
-                    silence_segments=silence_segments,
-                    scene_segments=scene_segments,
-                    settings=automatic_settings,
-                    timeline_duration=float(video.duration or visual_quality.duration),
-                    audio_features=audio_features,
-                    heatmap_segments=heatmap_result.segments,
+                automatic_selection, automatic_scored, _ = (
+                    _automatic_selection_with_diverse_refined_shorts(
+                        automatic_scored,
+                        transcript_segments=transcript_segments,
+                        silence_segments=silence_segments,
+                        scene_segments=scene_segments,
+                        settings=automatic_settings,
+                        timeline_duration=float(video.duration or visual_quality.duration),
+                        audio_features=audio_features,
+                        heatmap_segments=heatmap_reference_segments,
+                    )
                 )
-            )
             scored_candidates = [*automatic_scored, *manual_candidates]
             selection = merge_manual_candidates_into_selection(
                 automatic_selection,

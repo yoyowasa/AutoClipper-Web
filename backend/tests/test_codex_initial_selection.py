@@ -236,6 +236,7 @@ def test_valid_response_converts_to_existing_candidate_selection() -> None:
     ]
     assert result.summary == {
         "provider": "codex",
+        "phase": "initial",
         "status": "completed",
         "fallbackUsed": False,
         "error": None,
@@ -297,7 +298,7 @@ def test_job_settings_reject_clip_counts_above_ui_limits() -> None:
         JobSettings(normalClipCount=0, shortCount=25)
 
 
-def test_heatmap_interval_mode_requires_positive_actual_overlap() -> None:
+def test_heatmap_reference_does_not_require_positive_overlap_or_data() -> None:
     heatmap = [HeatmapSegment(start_time=40, end_time=55, value=0.9)]
     request = _request(
         settings=_settings(heatmapIntervalMode=True),
@@ -312,20 +313,15 @@ def test_heatmap_interval_mode_requires_positive_actual_overlap() -> None:
         request,
         response.model_copy(update={"selected_clips": proposals}),
     )
-    assert result.selection.shorts == []
-    assert result.summary["droppedShortCandidates"] == [
-        {
-            "proposalId": "short_1",
-            "code": "codex_initial_selection_heatmap_required",
-            "message": "JSON区間モードの選定が人気区間と重なっていません。",
-        }
-    ]
-
-    with pytest.raises(ValidationError, match="positive heatmap"):
-        _request(settings=_settings(heatmapIntervalMode=True), heatmap=[])
+    assert len(result.selection.shorts) == 1
+    assert result.summary["droppedShortCandidates"] == []
+    assert _request(
+        settings=_settings(heatmapIntervalMode=True),
+        heatmap=[],
+    ).heatmap == []
 
 
-def test_heatmap_interval_mode_maps_valid_seeds_to_candidates() -> None:
+def test_heatmap_reference_annotates_without_owning_candidate_boundaries() -> None:
     request = _request(
         settings=_settings(heatmapIntervalMode=True),
         heatmap=[
@@ -343,9 +339,32 @@ def test_heatmap_interval_mode_maps_valid_seeds_to_candidates() -> None:
         response.model_copy(update={"selected_clips": proposals}),
     )
 
-    assert all(item.generation_source == "heatmap_interval" for item in result.candidates)
-    assert result.candidates[0].heatmap_seed_value == 0.9
-    assert result.candidates[1].heatmap_seed_value == 0.8
+    assert all(item.generation_source is None for item in result.candidates)
+    assert all(item.heatmap_direct_score is None for item in result.candidates)
+    assert all(item.heatmap_seed_value is None for item in result.candidates)
+    assert result.candidates[0].heatmap_score == 9
+    assert result.candidates[1].heatmap_score == 8
+
+
+def test_heatmap_reference_is_opt_in_clamped_and_drops_outside_ranges() -> None:
+    heatmap = [
+        HeatmapSegment(start_time=190, end_time=201, value=0.9),
+        HeatmapSegment(start_time=210, end_time=220, value=0.8),
+    ]
+
+    disabled = _request(
+        settings=_settings(heatmapIntervalMode=False),
+        heatmap=heatmap,
+    )
+    enabled = _request(
+        settings=_settings(heatmapIntervalMode=True),
+        heatmap=heatmap,
+    )
+
+    assert disabled.heatmap == []
+    assert len(enabled.heatmap) == 1
+    assert enabled.heatmap[0].start == 190
+    assert enabled.heatmap[0].end == 200
 
 
 def test_cross_type_overlap_only_applies_when_enabled() -> None:
@@ -576,7 +595,8 @@ def test_shared_file_bridge_success_writes_contract_files(
     assert request_payload["threadScope"] == "job_codex"
     assert '"jobId":"job_codex"' in request_payload["prompt"]
     assert '"shortCandidateCount":3' in request_payload["prompt"]
-    assert "同じheatmapピーク" in request_payload["prompt"]
+    assert "人気度は候補の優先順位を考える参考情報にだけ" in request_payload["prompt"]
+    assert "人気区間との重なりを必須条件にせず" in request_payload["prompt"]
     assert "momentKey" in request_payload["prompt"]
     assert "parentStart/parentEnd" in request_payload["prompt"]
     assert request_payload["responseSchema"]["additionalProperties"] is False

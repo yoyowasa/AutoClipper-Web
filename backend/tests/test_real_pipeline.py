@@ -34,7 +34,6 @@ from app.jobs.runner import (
     _build_openai_scoring_pool,
     _codex_selection_with_diverse_refined_shorts,
     _ensure_selected_candidates_openai_scored,
-    _require_all_requested_heatmap_candidate_types,
     _score_candidate_list,
     _transcript_quality_diagnostics,
     _transcription_language_setting,
@@ -92,19 +91,6 @@ def test_clip_plan_selection_empty_uses_dedicated_failure_code(tmp_path: Path) -
 
     assert exc_info.value.code == "no_usable_selection"
     assert exc_info.value.message == ("Pipeline completed analysis but selection produced no usable clips.")
-
-
-def test_heatmap_type_presence_is_relaxed_only_for_codex_strict_quality() -> None:
-    strict_codex_selection = CandidateSelection(
-        selectionPolicy="strict_quality",
-        requestedNormalCount=1,
-        requestedShortCount=1,
-    )
-    fill_codex_selection = strict_codex_selection.model_copy(update={"selection_policy": "fill_requested"})
-
-    assert not _require_all_requested_heatmap_candidate_types(strict_codex_selection)
-    assert _require_all_requested_heatmap_candidate_types(fill_codex_selection)
-    assert _require_all_requested_heatmap_candidate_types(None)
 
 
 def test_long_form_quality_detects_clustered_japanese_repetition_and_sparse_coverage() -> None:
@@ -635,16 +621,16 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert selected_normal["original_start"] is not None
     assert selected_normal["refined_start"] is not None
     assert selected_normal["boundary_refined"] is not None
-    assert selected_normal["heatmap_value"] == 0.75
-    assert selected_normal["heatmap_score"] == 7.5
+    assert selected_normal["heatmap_value"] is None
+    assert selected_normal["heatmap_score"] is None
     assert selected_short["title"]
     assert selected_short["overlay_title"]
     assert selected_short["title_source"] == "transcript_fallback"
     assert selected_short["original_start"] is not None
     assert selected_short["refined_start"] is not None
     assert selected_short["boundary_refined"] is not None
-    assert selected_short["heatmap_value"] == 0.75
-    assert selected_short["heatmap_score"] == 7.5
+    assert selected_short["heatmap_value"] is None
+    assert selected_short["heatmap_score"] is None
     raw_transcript = json.loads((job_dir / "raw_transcript_segments.json").read_text(encoding="utf-8"))
     processed_transcript = json.loads((job_dir / "transcript_segments.json").read_text(encoding="utf-8"))
     assert raw_transcript[0]["text"] == "why automation mistakes matter before launch"
@@ -700,8 +686,8 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert candidate_summary["candidates_with_transcript_text"] == candidate_summary["total_candidates"]
     assert candidate_summary["avg_rule_score"] is not None
     assert candidate_summary["avg_final_score"] is not None
-    assert candidate_summary["heatmap_annotated_count"] == candidate_summary["total_candidates"]
-    assert candidate_summary["avg_heatmap_value"] == 0.75
+    assert candidate_summary["heatmap_annotated_count"] == 0
+    assert candidate_summary["avg_heatmap_value"] is None
 
     selected_summary = json.loads((job_dir / "selected_clips_summary.json").read_text(encoding="utf-8"))
     assert selected_summary["selected_normal_count"] == 1
@@ -766,7 +752,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "short_01.ass" not in names
 
 
-def test_pipeline_uses_heatmap_intervals_as_candidate_source_when_mode_is_on(
+def test_pipeline_uses_heatmap_as_reference_without_forcing_candidate_boundaries(
     client: TestClient,
 ) -> None:
     media = b"fake interval mode video"
@@ -869,19 +855,19 @@ def test_pipeline_uses_heatmap_intervals_as_candidate_source_when_mode_is_on(
     job_dir = storage.job_outputs(created["jobId"])
     selected = json.loads((job_dir / "selected_clips.json").read_text(encoding="utf-8"))
     clips = [*selected["normalClips"], *selected["shorts"]]
-    assert len(clips) == 2
-    assert all(clip["start"] < 168.0 and clip["end"] > 150.0 for clip in clips)
-    assert all(clip["generation_source"] == "heatmap_interval" for clip in clips)
-    assert all(clip["heatmap_seed_value"] == 1.0 for clip in clips)
-    assert all(clip["heatmap_direct_score"] > 0 for clip in clips)
+    assert clips
+    assert all((clip["start"], clip["end"]) != (150.0, 168.0) for clip in clips)
+    assert all(clip.get("generation_source") != "heatmap_interval" for clip in clips)
+    assert all(clip.get("heatmap_seed_value") is None for clip in clips)
+    assert all(clip.get("heatmap_direct_score") is None for clip in clips)
 
     generation_summary = json.loads((job_dir / "candidate_generation_summary.json").read_text(encoding="utf-8"))
-    assert generation_summary["by_type"]["normal"]["strategy"] == "heatmap_intervals"
-    assert generation_summary["by_type"]["short"]["strategy"] == "heatmap_intervals"
+    assert generation_summary["by_type"]["normal"].get("strategy") != "heatmap_intervals"
+    assert generation_summary["by_type"]["short"].get("strategy") != "heatmap_intervals"
     heatmap_summary = json.loads((job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8"))
     assert heatmap_summary["interval_mode_requested"] is True
     assert heatmap_summary["interval_mode_applied"] is True
-    assert heatmap_summary["selection_behavior"] == "heatmap_intervals"
+    assert heatmap_summary["selection_behavior"] == "content_with_heatmap_reference"
     status = client.get(f"/api/jobs/{created['jobId']}").json()
     assert status["status"] == "completed"
     assert status["details"]["heatmapIntervalModeApplied"] is True
@@ -918,7 +904,7 @@ def test_stale_clip_plan_preview_cleanup_ignores_file_errors(
     assert not removable_stale_path.exists()
 
 
-def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candidates(
+def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1022,7 +1008,22 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
     job_dir = storage.job_outputs(created["jobId"])
     initial_candidates = json.loads((job_dir / "candidates.json").read_text(encoding="utf-8"))
     assert initial_candidates
-    assert all(candidate["generation_source"] == "heatmap_interval" for candidate in initial_candidates)
+    assert all(candidate.get("generation_source") != "heatmap_interval" for candidate in initial_candidates)
+    initial_generation_summary = json.loads(
+        (job_dir / "candidate_generation_summary.json").read_text(encoding="utf-8")
+    )
+    assert initial_generation_summary["by_type"]["normal"].get("strategy") != (
+        "heatmap_intervals"
+    )
+    assert initial_generation_summary["by_type"]["short"].get("strategy") != (
+        "heatmap_intervals"
+    )
+    initial_heatmap_summary = json.loads(
+        (job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8")
+    )
+    assert initial_heatmap_summary["selection_behavior"] == (
+        "content_with_heatmap_reference"
+    )
     initial_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
     initial_clip_ids = {clip["id"] for clip in initial_plan["clips"]}
     initial_preview_payloads = {clip["previewVideoUrl"]: client.get(clip["previewVideoUrl"]).content for clip in initial_plan["clips"]}
@@ -1111,7 +1112,7 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
     rolled_back_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
     assert rolled_back_plan["settings"]["heatmapIntervalMode"] is True
     assert {clip["id"] for clip in rolled_back_plan["clips"]} == initial_clip_ids
-    assert initial_clip_ids - attempted_clip_ids
+    assert attempted_clip_ids
     for preview_url, expected_payload in initial_preview_payloads.items():
         preview_response = client.get(preview_url)
         assert preview_response.status_code == 200
@@ -1143,7 +1144,7 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
     heatmap_summary = json.loads((job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8"))
     assert heatmap_summary["interval_mode_requested"] is False
     assert heatmap_summary["interval_mode_applied"] is False
-    assert heatmap_summary["selection_behavior"] == "supporting_score"
+    assert heatmap_summary["selection_behavior"] == "content_only"
     revised_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
     assert revised_plan["revision"] == 2
     assert revised_plan["settings"]["heatmapIntervalMode"] is False
@@ -1153,7 +1154,7 @@ def test_clip_plan_reselection_can_switch_from_heatmap_intervals_to_legacy_candi
         assert stored_job.settings_json["heatmapIntervalMode"] is False
 
 
-def test_pipeline_fails_instead_of_falling_back_when_interval_sidecar_is_tampered(
+def test_pipeline_falls_back_to_content_candidates_when_heatmap_reference_is_tampered(
     client: TestClient,
 ) -> None:
     media = b"fake tamper video"
@@ -1188,7 +1189,18 @@ def test_pipeline_fails_instead_of_falling_back_when_interval_sidecar_is_tampere
         "/api/jobs",
         json={
             "videoId": upload["videoId"],
-            "settings": {"heatmapIntervalMode": True},
+            "settings": {
+                "normalClipCount": 1,
+                "shortCount": 0,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 180,
+                "heatmapIntervalMode": True,
+                "minFinalScore": 0,
+                "rejectIncompleteSentence": False,
+                "enableBoundaryRefinement": False,
+                "useOpenAIScoring": False,
+                "burnSubtitles": False,
+            },
         },
     ).json()
     storage = app.dependency_overrides[get_storage_paths]()
@@ -1197,6 +1209,19 @@ def test_pipeline_fails_instead_of_falling_back_when_interval_sidecar_is_tampere
         assert job is not None
         sidecar_path = storage.resolve_video_heatmap(job.video.id, job.video.stored_path)
     sidecar_path.write_text("{}", encoding="utf-8")
+
+    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
+        Path(output_path).write_bytes(b"fake wav")
+        return Path(output_path)
+
+    def fake_render(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> Path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(output_path).write_bytes(b"rendered")
+        return Path(output_path)
 
     run_autoclipper_job(
         created["jobId"],
@@ -1209,17 +1234,38 @@ def test_pipeline_fails_instead_of_falling_back_when_interval_sidecar_is_tampere
                 height=1080,
                 fps=30.0,
                 has_audio=True,
-            )
+            ),
+            extract_audio=fake_extract,
+            transcribe_audio=lambda _path: fake_transcript(),
+            detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
+            detect_silence=lambda _path, _duration: [],
+            compute_audio_features=lambda _path, duration, segments: build_audio_features(
+                duration=duration,
+                silence_segments=segments,
+                volume_peak=0.5,
+            ),
+            detect_black_screen=lambda _path: [],
+            normal_renderer=fake_render,
+            short_renderer=fake_render,
         ),
     )
 
     status = client.get(f"/api/jobs/{created['jobId']}").json()
-    assert status["status"] == "failed"
-    assert status["error"]["code"] == "heatmap_interval_mode_unavailable"
-    summary = json.loads((storage.job_outputs(created["jobId"]) / "heatmap_validation_summary.json").read_text(encoding="utf-8"))
+    assert status["status"] == "completed"
+    job_dir = storage.job_outputs(created["jobId"])
+    summary = json.loads(
+        (job_dir / "heatmap_validation_summary.json").read_text(encoding="utf-8")
+    )
     assert summary["status"] == "invalid_fallback"
     assert summary["interval_mode_requested"] is True
     assert summary["interval_mode_applied"] is False
+    assert summary["selection_behavior"] == "content_only"
+    candidates = json.loads((job_dir / "candidates.json").read_text(encoding="utf-8"))
+    assert candidates
+    assert all(
+        candidate.get("generation_source") != "heatmap_interval"
+        for candidate in candidates
+    )
 
 
 @pytest.mark.parametrize(
@@ -2645,7 +2691,9 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
                 "shortMinDuration": 20,
                 "shortMaxDuration": 75,
                 "enableBoundaryRefinement": False,
-                "burnSubtitles": False,
+                "burnSubtitles": True,
+                "requireClipPlanReview": True,
+                "requireSubtitleReview": True,
             },
         },
     ).json()
@@ -2752,6 +2800,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
             detect_black_screen=lambda _path: [],
             normal_renderer=fake_render,
             short_renderer=fake_render,
+            subtitle_review_preview_renderer=fake_render,
             codex_initial_selector=fake_codex_selector,
         ),
     )
@@ -2762,11 +2811,66 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     selected = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
     assert selected["normalClips"][0]["start"] == 0.0
     assert selected["shorts"][0]["start"] == 145.0
-    summary = json.loads((storage.job_outputs(created["jobId"]) / "codex_initial_selection_summary.json").read_text(encoding="utf-8"))
+    summary_path = storage.job_outputs(created["jobId"]) / "codex_initial_selection_summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["phase"] == "initial"
     assert summary["status"] == "completed"
     status = client.get(f"/api/jobs/{created['jobId']}").json()
     assert status["details"]["codexInitialSelectionSelectedNormalCount"] == 1
     assert status["details"]["codexInitialSelectionSelectedShortCount"] == 1
+    assert status["status"] == "awaiting_clip_review"
+
+    initial_summary_payload = summary_path.read_bytes()
+    queued_reselections: list[str] = []
+    app.dependency_overrides[get_enqueue_clip_plan_reselection] = (
+        lambda: queued_reselections.append
+    )
+    reselect_response = client.post(
+        f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+        json={
+            "normalClipSelectionPreset": "auto",
+            "shortClipSelectionPreset": "auto",
+            "normalClipGuidance": "",
+            "shortClipGuidance": "",
+            "excludeIntroOutro": True,
+            "excludePromotionalContent": False,
+            "selectionPolicy": "strict_quality",
+            "useOpenAIScoring": False,
+            "heatmapIntervalMode": False,
+        },
+    )
+    assert reselect_response.status_code == 202
+    assert queued_reselections == [created["jobId"]]
+
+    reselect_statuses = run_clip_plan_reselection(
+        created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage,
+        dependencies=AutoClipperPipelineDependencies(
+            probe_metadata=lambda _path: VideoMetadata(
+                duration=240.0,
+                width=1920,
+                height=1080,
+                fps=30.0,
+                has_audio=True,
+            ),
+            subtitle_review_preview_renderer=fake_render,
+            codex_initial_selector=fake_codex_selector,
+        ),
+    )
+
+    assert reselect_statuses[-1] == "awaiting_clip_review"
+    assert len(selector_calls) == 2
+    assert selector_calls[1]["heatmap_segments"] == ()
+    assert summary_path.read_bytes() == initial_summary_payload
+    reselection_summary = json.loads(
+        (
+            storage.job_outputs(created["jobId"])
+            / "codex_reselection_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert reselection_summary["phase"] == "reselection"
+    assert reselection_summary["status"] == "completed"
 
 
 def test_codex_short_pool_rejects_duplicate_and_backfills_after_refinement() -> None:

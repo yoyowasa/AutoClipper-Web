@@ -22,8 +22,9 @@ from app.scoring.heatmap import candidate_heatmap_features
 from app.video.heatmap import HeatmapSegment
 
 
-CODEX_INITIAL_SELECTION_PROMPT_VERSION = "codex_initial_selection_v3"
+CODEX_INITIAL_SELECTION_PROMPT_VERSION = "codex_initial_selection_v4"
 CODEX_INITIAL_SELECTION_SUMMARY_FILENAME = "codex_initial_selection_summary.json"
+CODEX_RESELECTION_SUMMARY_FILENAME = "codex_reselection_summary.json"
 CODEX_INITIAL_SELECTION_BRIDGE_DIRNAME = "codex_bridge"
 CODEX_INITIAL_SELECTION_REQUESTS_DIRNAME = "requests"
 CODEX_INITIAL_SELECTION_RESPONSES_DIRNAME = "responses"
@@ -43,20 +44,24 @@ SHORT_CANDIDATE_MULTIPLIER = 3
 MAX_SHORT_CANDIDATE_COUNT = 24
 
 CODEX_INITIAL_SELECTION_PROMPT = """あなたは日本語動画の切り抜き編集者です。
-入力の時刻付き全文字幕、人気区間、通常・ショート別の制約だけを根拠に、公開に値する区間を選んでください。
+入力の時刻付き全文字幕、任意の人気度参考情報、通常・ショート別の制約だけを根拠に、公開に値する区間を選んでください。
 - timestampSemantics は source_absolute_seconds です。start/end は元動画の絶対秒で返してください。
-- 通常は一つの話題が自立して完結する区間、ショートは短時間でフック・反応・結論が成立する区間を選びます。
+- まず全文字幕から話題の開始・展開・結論を把握してください。
+  通常は一つの話題が自立して完結する区間、ショートはその話題から短時間でフック・反応・結論が成立する区間を選びます。
 - 挨拶、宣伝、長い前置き、文の途中で切れる区間は優先しません。
 - evidenceSegmentIds は選定理由を直接裏付け、選択範囲と重なる字幕IDだけを返してください。
-- 人気区間値は動画内の相対値0〜1で、再生数ではありません。
-- heatmapIntervalMode=true の場合、各clipはvalue>0の人気区間と実際に重なり、そのIDをheatmapSegmentIdsへ含めてください。
+- 人気区間値は動画内の相対値0〜1で、再生数でも切り抜き境界でもありません。
+- heatmapIntervalMode=true の場合も、人気度は候補の優先順位を考える参考情報にだけ使ってください。
+  字幕上の話題のまとまりを優先し、人気区間との重なりを必須条件にせず、開始・終了を人気区間の端へ合わせないでください。
+- heatmapIntervalMode=false または人気区間が空の場合は、字幕内容だけで選んでください。
+- heatmapSegmentIds は実際に参考にした人気区間IDだけを返し、参考にしなかった場合は空配列にしてください。
 - requestedShortCountではなくshortCandidateCountまでショート候補を多めに返し、後段で独立したrequestedCount本を選べるようにしてください。
 - selectionPolicy=fill_requested の場合、通常はrequestedCountと同数を返してください。
   ショートはshortCandidateCountを目標に多めに返し、独立候補が不足する場合は
   水増しせずshortCandidateCount未満で返してください。
 - selectionPolicy=strict_quality の場合はconfidence>=0.6の公開に値する区間だけを、
   通常はrequestedCount以下、ショートはshortCandidateCount以下で返してください。良い場面が不足する場合は水増しせず本数を減らしてください。
-- 同じ話題、同じ出来事、同じオチ、同じheatmapピークを時刻だけ数秒ずらして複数候補にしないでください。
+- 同じ話題、同じ出来事、同じオチを時刻だけ数秒ずらして複数候補にしないでください。
 - ショートのmomentKeyは、時刻や候補番号ではなく、同じ見せ場なら常に同じになる
   簡潔な意味キーにしてください。異なる見せ場には異なるキーを付けてください。
 - ショートのstart/endは完成区間、parentStart/parentEndはそれを含む文脈区間です。
@@ -242,8 +247,6 @@ class CodexInitialSelectionRequest(_StrictModel):
             raise ValueError("heatmap segments must be ordered")
         if any(item.end > self.source_duration + SOURCE_TIME_TOLERANCE_SECONDS for item in [*self.transcript, *self.heatmap]):
             raise ValueError("input segment exceeds source duration")
-        if self.constraints.heatmap_interval_mode and not any(item.value > 0 for item in self.heatmap):
-            raise ValueError("heatmap interval mode requires a positive heatmap segment")
         return self
 
     def prompt_payload(self) -> dict[str, Any]:
@@ -385,6 +388,7 @@ CodexInitialSelectionSummaryStatus = Literal[
 
 class CodexInitialSelectionSummary(_StrictModel):
     provider: Literal["codex"] = "codex"
+    phase: Literal["initial", "reselection"] = "initial"
     status: CodexInitialSelectionSummaryStatus
     fallback_used: bool = Field(alias="fallbackUsed")
     error: CodexInitialSelectionSummaryError | None = None
@@ -427,6 +431,10 @@ def codex_initial_selection_response_output_path(
 
 def codex_initial_selection_summary_output_path(output_dir: str | Path) -> Path:
     return Path(output_dir) / CODEX_INITIAL_SELECTION_SUMMARY_FILENAME
+
+
+def codex_reselection_summary_output_path(output_dir: str | Path) -> Path:
+    return Path(output_dir) / CODEX_RESELECTION_SUMMARY_FILENAME
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
@@ -555,10 +563,27 @@ def build_codex_initial_selection_request(
         (segment for segment in transcript_segments if segment.text.strip()),
         key=lambda item: (item.start, item.end),
     )
-    clean_heatmap = sorted(
-        heatmap_segments,
-        key=lambda item: (item.start_time, item.end_time),
+    reference_heatmap = (
+        heatmap_segments
+        if _bool_setting(settings, "heatmapIntervalMode", False)
+        else ()
     )
+    clean_heatmap: list[HeatmapSegment] = []
+    for segment in sorted(
+        reference_heatmap,
+        key=lambda item: (item.start_time, item.end_time),
+    ):
+        start = max(0.0, min(float(segment.start_time), video_duration))
+        end = max(0.0, min(float(segment.end_time), video_duration))
+        if end <= start:
+            continue
+        clean_heatmap.append(
+            HeatmapSegment(
+                start_time=round(start, 3),
+                end_time=round(end, 3),
+                value=float(segment.value),
+            )
+        )
     request = CodexInitialSelectionRequest(
         jobId=job_id,
         requestId=uuid4().hex,
@@ -929,21 +954,16 @@ def _proposal_candidate(
         )
 
     heatmap_by_id = {item.id: item for item in request.heatmap}
-    try:
-        referenced_heatmap = [heatmap_by_id[item_id] for item_id in proposal.heatmap_segment_ids]
-    except KeyError as exc:
+    unknown_heatmap_ids = [
+        item_id
+        for item_id in proposal.heatmap_segment_ids
+        if item_id not in heatmap_by_id
+    ]
+    if unknown_heatmap_ids:
         raise CodexInitialSelectionError(
             "codex_initial_selection_heatmap_unknown",
             "Codex初期選定の人気区間根拠が入力に存在しません。",
-        ) from exc
-    if request.constraints.heatmap_interval_mode and not any(
-        item.value > 0 and _overlaps(proposal.start, proposal.end, item.start, item.end) for item in referenced_heatmap
-    ):
-        raise CodexInitialSelectionError(
-            "codex_initial_selection_heatmap_required",
-            "JSON区間モードの選定が人気区間と重なっていません。",
         )
-
     transcript_segments = [
         TranscriptSegment(
             start=item.start,
@@ -969,31 +989,20 @@ def _proposal_candidate(
     heatmap_value: float | None = None
     heatmap_overlap: float | None = None
     heatmap_score: float | None = None
-    heatmap_direct_score: float | None = None
     if heatmap_segments:
         heatmap_value, heatmap_overlap = candidate_heatmap_features(candidate, heatmap_segments)
         heatmap_score = round(heatmap_value * 10.0, 6)
-        if request.constraints.heatmap_interval_mode:
-            heatmap_direct_score = round(
-                min(1.0, heatmap_value * heatmap_overlap / candidate.duration),
-                6,
-            )
-
-    seed = next(
-        (item for item in referenced_heatmap if item.value > 0 and _overlaps(proposal.start, proposal.end, item.start, item.end)),
-        None,
-    )
     score = round(proposal.confidence * 100.0, 6)
     return candidate.model_copy(
         update={
-            "generation_source": ("heatmap_interval" if request.constraints.heatmap_interval_mode else None),
+            "generation_source": None,
             "heatmap_value": heatmap_value,
             "heatmap_overlap_seconds": heatmap_overlap,
             "heatmap_score": heatmap_score,
-            "heatmap_direct_score": heatmap_direct_score,
-            "heatmap_seed_start": seed.start if seed is not None else None,
-            "heatmap_seed_end": seed.end if seed is not None else None,
-            "heatmap_seed_value": seed.value if seed is not None else None,
+            "heatmap_direct_score": None,
+            "heatmap_seed_start": None,
+            "heatmap_seed_end": None,
+            "heatmap_seed_value": None,
             "ai_score": score,
             "final_score": score,
             "should_use": True,

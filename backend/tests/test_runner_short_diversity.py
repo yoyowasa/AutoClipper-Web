@@ -173,7 +173,7 @@ def test_cross_type_overlap_setting_remains_enforced_after_refinement() -> None:
     assert [candidate.id for candidate in selection.shorts] == ["short_distinct"]
 
 
-def test_json_mode_keeps_same_heatmap_segment_as_hard_duplicate() -> None:
+def test_json_reference_does_not_make_same_heatmap_segment_a_duplicate() -> None:
     candidates = [
         _candidate(
             "short_1",
@@ -211,5 +211,8 @@ def test_json_mode_keeps_same_heatmap_segment_as_hard_duplicate() -> None:
         audio_features=_audio(80),
     )
 
-    assert [candidate.id for candidate in selection.shorts] == ["short_1", "short_3"]
-    assert "same_heatmap_segment" in diversity.rejected[0].reasons
+    assert [candidate.id for candidate in selection.shorts] == ["short_1", "short_2"]
+    assert all(
+        "same_heatmap_segment" not in rejection.reasons
+        for rejection in diversity.rejected
+    )

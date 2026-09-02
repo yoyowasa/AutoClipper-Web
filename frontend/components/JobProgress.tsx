@@ -7,8 +7,8 @@ const errorLabels: Record<string, string> = {
   audio_extraction_failed: "動画の音声を読み込めません",
   transcript_unusable: "文字起こし結果を利用できません",
   transcription_quality_fallback_failed: "文字起こしの再試行に失敗しました",
-  heatmap_interval_mode_unavailable: "JSON区間モードを適用できません",
-  heatmap_interval_mode_no_candidates: "JSON区間から候補を作成できません",
+  heatmap_interval_mode_unavailable: "人気度JSONを参照できません",
+  heatmap_interval_mode_no_candidates: "字幕内容から候補を作成できません",
   codex_initial_selection_failed: "Codex初期選定に失敗しました",
   codex_initial_selection_unavailable: "Codex初期選定を開始できません",
   no_usable_selection: "選定基準を満たす候補がありません",
@@ -67,19 +67,19 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
     heatmapSelectionBehavior !== "manual_ranges";
   let heatmapLabel: string | null = null;
   if (heatmapIntervalModeApplied) {
-    heatmapLabel = `JSON区間モードで候補生成（${heatmapSegmentCount}区間）`;
+    heatmapLabel = `字幕選定で人気度JSONを参考（${heatmapSegmentCount}区間）`;
   } else if (heatmapIntervalModeRequested && heatmapSelectionBehavior === "manual_ranges") {
-    heatmapLabel = "手動指定区間を優先（JSON区間モード対象なし）";
+    heatmapLabel = "手動指定区間を優先（人気度JSONは境界に不使用）";
   } else if (heatmapModeUnavailable) {
-    heatmapLabel = "JSON区間モードを適用できず停止";
+    heatmapLabel = "人気度JSONを参照できないため字幕内容だけで選定";
   } else if (heatmapStatus === "applied") {
-    heatmapLabel = `人気区間を補助評価に使用（${heatmapSegmentCount}区間）`;
+    heatmapLabel = `人気度JSONあり・現在は字幕内容だけで選定（${heatmapSegmentCount}区間）`;
   } else if (heatmapStatus === "unavailable") {
-    heatmapLabel = "人気区間データなし（従来評価）";
+    heatmapLabel = "人気度JSONなし（内容のみで選定）";
   } else if (heatmapStatus === "invalid_fallback") {
-    heatmapLabel = "人気区間JSON不一致（従来評価）";
+    heatmapLabel = "人気度JSON不一致（内容のみで選定）";
   } else if (heatmapStatus === "not_provided") {
-    heatmapLabel = "人気区間JSONなし（従来評価）";
+    heatmapLabel = "人気度JSONなし（内容のみで選定）";
   }
   const initialSelectionProvider =
     job.details.initialSelectionProvider === "codex" ? "codex" : "legacy";

@@ -923,8 +923,8 @@ export default function ClipPlanReviewPage() {
               <p className="text-sm font-semibold text-neutral-900">候補基準</p>
               <p className="mt-1 text-xs leading-5 text-neutral-600">
                 {draftSettings.heatmapIntervalMode
-                  ? "人気区間JSONを起点に候補を作り、既存の品質条件で絞ります。"
-                  : "字幕・音声・映像で候補を作り、有効なJSON値は最大+10点の補助評価として使います。"}
+                  ? "字幕・会話内容から場面を選び、人気度JSONは優先度の参考にだけ使います。開始・終了はJSON区間へ合わせません。"
+                  : "字幕・会話内容だけで場面と開始・終了を選びます。"}
               </p>
             </div>
             <div
@@ -947,7 +947,7 @@ export default function ClipPlanReviewPage() {
                   )
                 }
               >
-                従来評価
+                内容のみ
               </button>
               <button
                 aria-pressed={draftSettings.heatmapIntervalMode}
@@ -964,7 +964,7 @@ export default function ClipPlanReviewPage() {
                   )
                 }
               >
-                JSON区間
+                JSONを参考
               </button>
             </div>
           </div>
