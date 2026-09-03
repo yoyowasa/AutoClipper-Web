@@ -16,6 +16,7 @@ from app.jobs.runner import (
     run_subtitle_review_render,
 )
 from app.jobs.title_hook_suggestions import run_title_hook_suggestion_generation
+from app.jobs.thumbnail_regeneration import run_export_thumbnail_regeneration
 
 JobEnqueue = Callable[[str], None]
 TerminalRetryAllowed = Callable[[], bool]
@@ -33,6 +34,7 @@ SubtitleReviewHookSceneUpdateEnqueue = Callable[
 SubtitleReviewPreviewEnqueue = Callable[[str, str, str], None]
 TitleHookSuggestionsEnqueue = Callable[[str, str, str], None]
 RenderEnqueue = Callable[[str, int], None]
+ThumbnailRegenerationEnqueue = Callable[[str, int], None]
 ACTIVE_RETRY_RQ_STATUSES = {
     JobStatus.CREATED,
     JobStatus.QUEUED,
@@ -217,6 +219,33 @@ def enqueue_title_hook_suggestions(
         raise
 
 
+def enqueue_export_thumbnail_regeneration(export_id: str, revision: int) -> None:
+    queue = get_queue()
+    rq_job_id = f"thumbnail-regeneration-{export_id}-r{revision}"
+    existing = queue.fetch_job(rq_job_id)
+    if existing is not None:
+        if existing.get_status(refresh=True) in ACTIVE_RETRY_RQ_STATUSES:
+            return
+        existing.delete()
+    try:
+        queue.enqueue(
+            run_export_thumbnail_regeneration,
+            export_id,
+            revision,
+            job_timeout=900,
+            job_id=rq_job_id,
+            unique=True,
+        )
+    except DuplicateJobError:
+        concurrent = queue.fetch_job(rq_job_id)
+        if (
+            concurrent is not None
+            and concurrent.get_status(refresh=True) in ACTIVE_RETRY_RQ_STATUSES
+        ):
+            return
+        raise
+
+
 def enqueue_clip_plan_reselection(job_id: str) -> None:
     queue = get_queue()
     queue.enqueue(run_clip_plan_reselection, job_id, job_timeout=3600)
@@ -307,3 +336,7 @@ def get_enqueue_title_hook_suggestions() -> TitleHookSuggestionsEnqueue:
 
 def get_enqueue_render_job() -> RenderEnqueue:
     return enqueue_subtitle_review_render
+
+
+def get_enqueue_thumbnail_regeneration() -> ThumbnailRegenerationEnqueue:
+    return enqueue_export_thumbnail_regeneration

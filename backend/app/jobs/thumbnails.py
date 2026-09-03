@@ -66,6 +66,11 @@ def _write_metadata(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def write_export_metadata(path: str | Path, payload: dict[str, Any]) -> None:
+    """Atomically update published export metadata."""
+    _write_metadata(Path(path), payload)
+
+
 def _candidate_map(selection: CandidateSelection) -> dict[str, Candidate]:
     return {
         candidate.id: candidate
@@ -77,6 +82,10 @@ def _thumbnail_output_path(job_output_dir: Path, export: ExportItem) -> Path:
     type_dir = "shorts" if export.type == "short" else "normal"
     stem = Path(str(export.video_path)).stem
     return job_output_dir / "thumbnails" / type_dir / f"{stem}.jpg"
+
+
+def thumbnail_output_path(job_output_dir: str | Path, export: ExportItem) -> Path:
+    return _thumbnail_output_path(Path(job_output_dir), export)
 
 
 def _normal_frame_seconds(candidate: Candidate) -> float:
@@ -124,7 +133,7 @@ def _ready_metadata(
         "thumbnail_width": result.width,
         "thumbnail_height": result.height,
         "thumbnail_template_version": (
-            "raden_normal_v1" if result.kind == "normal" else "short_hook_frame_v1"
+            "raden_normal_v3" if result.kind == "normal" else "short_hook_frame_v1"
         ),
         "thumbnail_error_code": None,
     }

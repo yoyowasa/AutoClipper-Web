@@ -2,11 +2,16 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ResultVideoCard } from "../../../components/ResultVideoCard";
 import { SaveFileButton } from "../../../components/SaveFileButton";
-import { createClipReedit, getJobResults, toBrowserApiUrl } from "../../../lib/api";
+import {
+  createClipReedit,
+  getJobResults,
+  regenerateExportThumbnail,
+  toBrowserApiUrl
+} from "../../../lib/api";
 import type { JobAuditSummary, JobResultsResponse, ResultExportItem } from "../../../lib/types";
 
 const IMPORTANT_AUDIT_WARNINGS = [
@@ -82,24 +87,41 @@ export default function ResultsPage() {
   const [results, setResults] = useState<JobResultsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reopeningClipId, setReopeningClipId] = useState<string | null>(null);
+  const [regeneratingThumbnailId, setRegeneratingThumbnailId] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadResults = useCallback(async () => {
     if (!jobId) {
       return;
     }
-
-    async function loadResults() {
-      try {
-        const payload = await getJobResults(jobId);
-        setResults(payload);
-        setError(null);
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Results fetch failed");
-      }
+    try {
+      const payload = await getJobResults(jobId);
+      setResults(payload);
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Results fetch failed");
     }
-
-    void loadResults();
   }, [jobId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadResults();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadResults]);
+
+  const thumbnailGenerationActive = Boolean(
+    results?.normalClips.some((item) => item.thumbnailStatus === "generating")
+  );
+
+  useEffect(() => {
+    if (!thumbnailGenerationActive) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadResults();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [loadResults, thumbnailGenerationActive]);
 
   async function reopenForEditing(item: ResultExportItem) {
     if (!item.candidateId) {
@@ -120,6 +142,47 @@ export default function ResultsPage() {
           : "完成jobを再編集用に開けませんでした"
       );
       setReopeningClipId(null);
+    }
+  }
+
+  async function regenerateThumbnail(item: ResultExportItem) {
+    const frameSeconds = Math.min(
+      item.duration,
+      Math.max(0, item.thumbnailFrameSeconds ?? item.duration * 0.38)
+    );
+    const subjectAnchorX = item.thumbnailSubjectAnchorX ?? 1;
+    setRegeneratingThumbnailId(item.id);
+    setError(null);
+    try {
+      await regenerateExportThumbnail(item.id, {
+        frameSeconds,
+        subjectAnchorX,
+        advanceFrame: true
+      });
+      setResults((current) =>
+        current
+          ? {
+              ...current,
+              normalClips: current.normalClips.map((clip) =>
+                clip.id === item.id
+                  ? {
+                      ...clip,
+                      thumbnailSubjectAnchorX: subjectAnchorX,
+                      thumbnailStatus: "generating"
+                    }
+                  : clip
+              )
+            }
+          : current
+      );
+      setRegeneratingThumbnailId(null);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "サムネだけの再生成を開始できませんでした"
+      );
+      setRegeneratingThumbnailId(null);
     }
   }
 
@@ -188,8 +251,11 @@ export default function ResultsPage() {
                     item={item}
                     auditAvailable={Boolean(results.auditSummary)}
                     isReediting={reopeningClipId === item.candidateId}
+                    isRegeneratingThumbnail={regeneratingThumbnailId === item.id}
                     onReedit={results.canReopenForEditing ? reopenForEditing : undefined}
+                    onRegenerateThumbnail={regenerateThumbnail}
                     suggestedFilename={`normal_${String(index + 1).padStart(2, "0")}.mp4`}
+                    thumbnailPriority={index === 0}
                   />
                 ))}
               </div>

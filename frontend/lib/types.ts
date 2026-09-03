@@ -304,8 +304,17 @@ export type ResultExportItem = {
   downloadUrl: string;
   thumbnailUrl: string | null;
   thumbnailDownloadUrl: string | null;
-  thumbnailStatus: "not_generated" | "ready" | "failed" | null;
+  thumbnailStatus: "not_generated" | "generating" | "ready" | "failed" | null;
   thumbnailFilename: string | null;
+  thumbnailFrameSeconds: number | null;
+  thumbnailSubjectAnchorX: number | null;
+  thumbnailRenderRevision: number;
+};
+
+export type ThumbnailRegenerationResponse = {
+  exportId: string;
+  status: "generating";
+  revision: number;
 };
 
 export type JobAuditSummary = {

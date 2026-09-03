@@ -14,6 +14,8 @@ from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
 from app.db import Base, get_db
 from app.jobs.runner import _create_zip
+from app.jobs.queue import get_enqueue_thumbnail_regeneration
+from app.jobs.thumbnail_regeneration import run_export_thumbnail_regeneration
 from app.jobs.thumbnails import generate_export_thumbnails
 from app.main import app
 from app.models import ExportItem, Job, Video
@@ -522,3 +524,211 @@ def test_thumbnail_endpoint_rejects_path_outside_published_job(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "thumbnail is not published"
+
+
+def test_completed_normal_thumbnail_can_be_queued_without_rerendering_video(
+    thumbnail_client: TestClient,
+) -> None:
+    storage = app.dependency_overrides[get_storage_paths]()
+    job_dir = storage.job_outputs("job_regenerate")
+    video_path = job_dir / "normal" / "normal_01.mp4"
+    metadata_path = job_dir / "normal" / "normal_01.json"
+    thumbnail_path = job_dir / "thumbnails" / "normal" / "normal_01.jpg"
+    source_path = storage.uploads / "source.mp4"
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"source")
+    video_path.write_bytes(b"completed video")
+    thumbnail_path.write_bytes(b"old thumbnail")
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "candidate_id": "cand_regenerate",
+                "start": 120.0,
+                "thumbnail_status": "ready",
+                "thumbnail_path": str(thumbnail_path),
+                "thumbnail_frame_seconds": 4.0,
+                "thumbnail_render_revision": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with next(app.dependency_overrides[get_db]()) as db:
+        video = Video(
+            id="vid_regenerate",
+            original_filename="source.mp4",
+            stored_path=str(source_path),
+        )
+        job = Job(
+            id="job_regenerate",
+            video_id=video.id,
+            status="completed",
+            progress=100,
+            current_step="Completed",
+            settings_json={},
+        )
+        export = ExportItem(
+            id="exp_regenerate",
+            job_id=job.id,
+            video_id=video.id,
+            candidate_id="cand_regenerate",
+            type="normal",
+            title="通常切り抜き",
+            duration=30,
+            score=90,
+            video_path=str(video_path),
+            metadata_path=str(metadata_path),
+        )
+        db.add_all([video, job, export])
+        db.commit()
+
+    queued: list[tuple[str, int]] = []
+    app.dependency_overrides[get_enqueue_thumbnail_regeneration] = (
+        lambda: lambda export_id, revision: queued.append((export_id, revision))
+    )
+
+    response = thumbnail_client.post(
+        "/api/exports/exp_regenerate/thumbnail/regenerate",
+        json={"frameSeconds": 8.5, "subjectAnchorX": 1, "advanceFrame": True},
+    )
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "exportId": "exp_regenerate",
+        "status": "generating",
+        "revision": 1,
+    }
+    assert queued == [("exp_regenerate", 1)]
+    assert video_path.read_bytes() == b"completed video"
+    assert thumbnail_path.read_bytes() == b"old thumbnail"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["thumbnail_status"] == "generating"
+    assert metadata["thumbnail_frame_seconds"] == pytest.approx(8.5)
+    assert metadata["thumbnail_subject_anchor_x"] == pytest.approx(1)
+    assert metadata["thumbnail_advance_frame"] is True
+    assert metadata["thumbnail_variant_index"] == 0
+    assert metadata["thumbnail_request_revision"] == 1
+
+
+def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'worker.db'}",
+        connect_args={"check_same_thread": False},
+    )
+    testing_session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    Base.metadata.create_all(bind=engine)
+    storage = StoragePaths(tmp_path / "storage")
+    storage.ensure()
+    job_dir = storage.job_outputs("job_worker")
+    video_path = job_dir / "normal" / "normal_01.mp4"
+    metadata_path = job_dir / "normal" / "normal_01.json"
+    thumbnail_path = job_dir / "thumbnails" / "normal" / "normal_01.jpg"
+    source_path = storage.uploads / "source.mp4"
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    thumbnail_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"source video")
+    video_path.write_bytes(b"completed video")
+    thumbnail_path.write_bytes(b"old thumbnail")
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "start": 3600.0,
+                "thumbnail_kicker": "見どころ",
+                "thumbnail_line1": "一行目",
+                "thumbnail_line2": "二行目",
+                "thumbnail_frame_seconds": 12.5,
+                "thumbnail_subject_anchor_x": 1.0,
+                "thumbnail_advance_frame": True,
+                "thumbnail_variant_index": 3,
+                "thumbnail_request_revision": 2,
+                "thumbnail_render_revision": 1,
+                "thumbnail_status": "generating",
+                "thumbnail_path": str(thumbnail_path),
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with testing_session() as db:
+        video = Video(
+            id="vid_worker",
+            original_filename="source.mp4",
+            stored_path=str(source_path),
+        )
+        job = Job(
+            id="job_worker",
+            video_id=video.id,
+            status="completed",
+            progress=100,
+            current_step="Completed",
+            settings_json={},
+        )
+        export = ExportItem(
+            id="exp_worker",
+            job_id=job.id,
+            video_id=video.id,
+            candidate_id="cand_worker",
+            type="normal",
+            title="通常切り抜き",
+            duration=40,
+            score=90,
+            video_path=str(video_path),
+            metadata_path=str(metadata_path),
+        )
+        db.add_all([video, job, export])
+        db.commit()
+
+    received: dict[str, object] = {}
+    selected: dict[str, object] = {}
+
+    def fake_frame_selector(
+        input_path: str | Path,
+        **kwargs: object,
+    ) -> float:
+        selected.update(input_path=Path(input_path), **kwargs)
+        return 28.0
+
+    def fake_renderer(
+        input_path: str | Path,
+        output_path: str | Path,
+        **kwargs: object,
+    ) -> ThumbnailRenderResult:
+        received.update(input_path=Path(input_path), **kwargs)
+        rendered = Path(output_path)
+        rendered.parent.mkdir(parents=True, exist_ok=True)
+        rendered.write_bytes(b"new thumbnail")
+        return ThumbnailRenderResult(
+            path=rendered,
+            kind="normal",
+            source_timestamp=float(kwargs["frame_time"]),
+            width=1280,
+            height=720,
+        )
+
+    run_export_thumbnail_regeneration(
+        "exp_worker",
+        2,
+        session_factory=testing_session,
+        paths=storage,
+        normal_renderer=fake_renderer,
+        frame_selector=fake_frame_selector,
+    )
+
+    assert video_path.read_bytes() == b"completed video"
+    assert thumbnail_path.read_bytes() == b"new thumbnail"
+    assert received["input_path"] == source_path
+    assert received["frame_time"] == pytest.approx(3628.0)
+    assert received["subject_anchor_x"] == pytest.approx(1)
+    assert selected["input_path"] == source_path
+    assert selected["clip_start"] == pytest.approx(3600.0)
+    assert selected["clip_end"] == pytest.approx(3640.0)
+    assert selected["variant_index"] == 3
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["thumbnail_status"] == "ready"
+    assert metadata["thumbnail_render_revision"] == 2
+    assert metadata["thumbnail_template_version"] == "raden_normal_v3"
+    assert metadata["thumbnail_frame_seconds"] == pytest.approx(28.0)
+    assert metadata["thumbnail_advance_frame"] is False
+    engine.dispose()

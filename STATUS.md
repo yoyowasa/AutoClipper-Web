@@ -9365,3 +9365,58 @@ pip check: pass
 
 - 既存Jobの保存済み候補は自動置換しない。新規Jobまたはユーザー操作による再選定から新方式を使う。
 - 孤立Codex回帰で除外したShort 1本は、無理に代替候補で本数を埋めていない。
+
+## 2026-09-03 通常サムネの実績テンプレ化と単体再生成
+
+### 目的
+
+- 通常サムネを承認済みサンプルと同じ基本形へ揃え、完成動画を変えずに結果画面から1枚だけ再生成する。
+
+### 現在状態・変更
+
+- 承認済みサンプルから人物だけを除いた背景・装飾を固定ベースへ採用した。
+- 人物は元動画から毎回取得し、顔検出時は顔基準、未検出時は配信画面の右下人物基準で拡大する。
+- `サムネだけ再生成`を押すたびに6つの時刻候補を巡回し、人物の表情・場面を切り替える。
+- 左上の小見出しと白／黄の2行見出しを、承認済みの位置・色・縁取り・傾きへ揃えた。
+- 見出し幅を制限し、右側の人物の顔へ重ならないようにした。
+- 結果画面の各通常動画へ`サムネだけ再生成`を追加した。Shortには追加していない。
+- 再生成はRQ background jobで1枚だけ処理し、完成MP4と他サムネは変更しない。
+- 再生成中は旧サムネを維持し、成功後にrevision付きURLで新画像へ更新する。
+- 先頭サムネをpriority読込にし、結果画面のLCP warningを防止した。
+
+### 変更ファイル
+
+- `backend/app/assets/thumbnail_templates/raden_normal_v1/background.png`
+- `backend/app/assets/thumbnail_templates/raden_normal_v1/template.json`
+- `backend/app/jobs/thumbnail_frame_selection.py`
+- `backend/app/render/render_thumbnail.py`
+- `backend/app/jobs/thumbnail_regeneration.py`
+- `backend/app/jobs/thumbnails.py`
+- `backend/app/jobs/queue.py`
+- `backend/app/api/exports.py`
+- `backend/app/api/jobs.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_thumbnail_rendering.py`
+- `backend/tests/test_thumbnail_integration.py`
+- `backend/tests/test_thumbnail_frame_selection.py`
+- `frontend/app/results/[jobId]/page.tsx`
+- `frontend/components/ResultVideoCard.tsx`
+- `frontend/lib/api.ts`
+- `frontend/lib/types.ts`
+- `design-qa.md`
+
+### 最小検証
+
+- backend全体: `984 passed, 1 skipped`。workspace内のテストDBを明示して全件成功。
+- backend/launcher/scripts ruff: 成功。
+- frontend: `typecheck`、`lint`、`build` 成功。
+- 実Job `job_c3929427d1414bb6a9a05ec82c57d5ab`: 1本目を連続再生成し、フレーム`42.270秒 -> 126.809秒 -> 211.348秒 -> 274.752秒`と画像SHA-256が毎回変化することを確認。
+- 完成MP4 SHA-256: 再生成前後とも`C46325670A81F2304D9E6EA376E5618670CCD0EC22132F092AA1C72036A3C261`。
+- 参照・実装サムネを同じ`1280x720`で並べ、背景、人物位置、文字階層、顔との非干渉を確認。
+- 結果画面: 再生成後のサムネ表示、操作部の重なりなし、Browser console error`0`・warning`0`を確認。
+- Docker: backend / frontend / workerを最新実装で再buildし、backend health `200`を確認。
+
+### 未解決事項
+
+- 儒烏風亭らでん以外の出演者用テンプレは未実装。
+- ユーザー受入は未確認。

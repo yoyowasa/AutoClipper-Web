@@ -21,6 +21,7 @@ import type {
   SubtitleReviewConvertToShortRequest,
   SubtitleReviewFinalizeResponse,
   SubtitleReviewShortBannerSettings,
+  ThumbnailRegenerationResponse,
   TitleHookSuggestionResponse,
   VideoUploadResponse,
   YouTubePostingProfile,
@@ -587,6 +588,23 @@ export async function retryJob(jobId: string): Promise<JobCreateResponse> {
     method: "POST"
   });
   return parseJsonResponse<JobCreateResponse>(response);
+}
+
+export async function regenerateExportThumbnail(
+  exportId: string,
+  request: { frameSeconds: number; subjectAnchorX: number; advanceFrame?: boolean }
+): Promise<ThumbnailRegenerationResponse> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/exports/${exportId}/thumbnail/regenerate`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(request)
+    }
+  );
+  return parseJsonResponse<ThumbnailRegenerationResponse>(response);
 }
 
 export async function updateSubtitleReviewShortBannerSettings(

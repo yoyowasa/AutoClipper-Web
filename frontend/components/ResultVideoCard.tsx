@@ -72,6 +72,9 @@ function thumbnailStatusLabel(
   if (status === "failed") {
     return "サムネ生成失敗";
   }
+  if (status === "generating") {
+    return "サムネだけ再生成中";
+  }
   if (status === "ready") {
     return hasPublishedUrl ? "サムネ完成" : "サムネ情報不整合";
   }
@@ -85,13 +88,21 @@ export function ResultVideoCard({
   item,
   auditAvailable = false,
   onReedit,
+  onRegenerateThumbnail,
   isReediting = false,
+  isRegeneratingThumbnail = false,
+  thumbnailPriority = false,
   suggestedFilename
 }: {
   item: ResultExportItem;
   auditAvailable?: boolean;
   onReedit?: (item: ResultExportItem) => void;
+  onRegenerateThumbnail?: (
+    item: ResultExportItem
+  ) => void;
   isReediting?: boolean;
+  isRegeneratingThumbnail?: boolean;
+  thumbnailPriority?: boolean;
   suggestedFilename: string;
 }) {
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
@@ -169,6 +180,7 @@ export function ResultVideoCard({
                   item.type === "short" ? "aspect-[9/16] max-h-[34rem]" : "aspect-video"
                 }`}
                 height={item.type === "short" ? 1920 : 720}
+                priority={thumbnailPriority}
                 src={thumbnailUrl}
                 unoptimized
                 width={item.type === "short" ? 1080 : 1280}
@@ -201,6 +213,35 @@ export function ResultVideoCard({
             >
               {thumbnailLabel}
             </div>
+          ) : null}
+          {item.type === "normal" && onRegenerateThumbnail ? (
+            <section className="border border-amber-300 bg-amber-50 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-neutral-950">
+                    サムネだけ再生成
+                  </h3>
+                  <p className="mt-1 text-xs text-neutral-600">
+                    承認済みの文字とデザインは維持し、押すたびに人物の場面だけを切り替えます。完成動画は変更しません。
+                  </p>
+                </div>
+                {item.thumbnailStatus === "generating" ? (
+                  <span className="text-xs font-semibold text-amber-800" role="status">
+                    生成中
+                  </span>
+                ) : null}
+              </div>
+              <button
+                className="mt-3 min-h-11 w-full bg-amber-600 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
+                disabled={isRegeneratingThumbnail || item.thumbnailStatus === "generating"}
+                type="button"
+                onClick={() => onRegenerateThumbnail(item)}
+              >
+                {item.thumbnailStatus === "generating"
+                  ? "サムネだけ再生成中"
+                  : "サムネだけ再生成"}
+              </button>
+            </section>
           ) : null}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
             <span>title: {readableToken(item.titleSource)}</span>

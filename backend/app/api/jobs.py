@@ -673,19 +673,31 @@ def _result_item(
     thumbnail_status_value = metadata.get("thumbnail_status")
     thumbnail_status = (
         thumbnail_status_value
-        if thumbnail_status_value in {"not_generated", "ready", "failed"}
+        if thumbnail_status_value in {"not_generated", "generating", "ready", "failed"}
         else "not_generated"
     )
     thumbnail_path_value = metadata.get("thumbnail_path")
-    thumbnail_ready = thumbnail_status == "ready" and isinstance(
+    thumbnail_ready = thumbnail_status in {"ready", "generating"} and isinstance(
         thumbnail_path_value,
         str,
     )
+    try:
+        thumbnail_render_revision = max(
+            0,
+            int(metadata.get("thumbnail_render_revision", 0)),
+        )
+    except (TypeError, ValueError):
+        thumbnail_render_revision = 0
+    thumbnail_revision_query = f"?revision={thumbnail_render_revision}"
     thumbnail_url = (
-        f"/api/exports/{export.id}/thumbnail" if thumbnail_ready else None
+        f"/api/exports/{export.id}/thumbnail{thumbnail_revision_query}"
+        if thumbnail_ready
+        else None
     )
     thumbnail_download_url = (
-        f"/api/exports/{export.id}/thumbnail/download" if thumbnail_ready else None
+        f"/api/exports/{export.id}/thumbnail/download{thumbnail_revision_query}"
+        if thumbnail_ready
+        else None
     )
     thumbnail_filename_value = metadata.get("thumbnail_filename")
     thumbnail_filename = (
@@ -799,6 +811,16 @@ def _result_item(
         thumbnailDownloadUrl=thumbnail_download_url,
         thumbnailStatus=thumbnail_status,
         thumbnailFilename=thumbnail_filename,
+        thumbnailFrameSeconds=_number_or_none(
+            _first_value(
+                metadata.get("thumbnail_frame_seconds"),
+                selected.get("thumbnail_frame_seconds"),
+            )
+        ),
+        thumbnailSubjectAnchorX=_number_or_none(
+            _first_value(metadata.get("thumbnail_subject_anchor_x"), 1.0)
+        ),
+        thumbnailRenderRevision=thumbnail_render_revision,
     )
 
 

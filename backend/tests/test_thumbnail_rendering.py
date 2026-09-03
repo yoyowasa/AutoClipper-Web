@@ -3,10 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw, ImageStat
 
 from app.render.render_thumbnail import (
     DEFAULT_NORMAL_FONT_PATH,
+    DEFAULT_NORMAL_TEMPLATE_PATH,
     build_extract_thumbnail_frame_command,
     render_normal_thumbnail,
     render_short_thumbnail,
@@ -59,7 +60,8 @@ def test_render_normal_thumbnail_uses_template_and_fits_long_japanese_text(
     )
 
     assert DEFAULT_NORMAL_FONT_PATH.is_file()
-    assert commands
+    assert len(commands) == 1
+    assert commands[0][commands[0].index("-ss") + 1] == "18.250"
     assert result.path == output
     assert result.kind == "normal"
     assert result.source_timestamp == 18.25
@@ -73,13 +75,19 @@ def test_render_normal_thumbnail_uses_template_and_fits_long_japanese_text(
             for red, green, blue in pixels.crop((0, 180, 650, 620)).getdata()
             if red > 190 and green > 150 and blue < 130
         )
-        subject_pixels = sum(
-            1
-            for red, green, blue in pixels.crop((850, 100, 1200, 650)).getdata()
-            if red > 130 and 70 < green < 180 and blue < 130
-        )
+        with Image.open(DEFAULT_NORMAL_TEMPLATE_PATH.parent / "background.png") as base:
+            reference_background = base.convert("RGB").resize(
+                (1280, 720),
+                Image.Resampling.LANCZOS,
+            ).crop((900, 100, 1200, 650))
+        subject_difference = ImageStat.Stat(
+            ImageChops.difference(
+                pixels.crop((900, 100, 1200, 650)),
+                reference_background,
+            )
+        ).mean
     assert yellow_pixels > 300
-    assert subject_pixels > 10_000
+    assert max(subject_difference) > 8
 
 
 @pytest.mark.parametrize(
