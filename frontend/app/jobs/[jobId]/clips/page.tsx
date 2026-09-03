@@ -10,6 +10,7 @@ import {
 } from "../../../../components/ClipBoundaryEditor";
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
 import { ClipSelectionEditor } from "../../../../components/ClipSelectionEditor";
+import { InitialSelectionStatusBanner } from "../../../../components/InitialSelectionStatusBanner";
 import { ManualClipPlanEditor } from "../../../../components/ManualClipPlanEditor";
 import {
   approveClipPlan,
@@ -675,6 +676,16 @@ export default function ClipPlanReviewPage() {
           </div>
         </div>
       </div>
+
+      {!isManualWorkflow && job ? (
+        <div className="sticky top-0 z-20 w-full bg-[#f7f7f4] px-5 pt-4">
+          <InitialSelectionStatusBanner
+            currentStep={job.currentStep}
+            details={job.details}
+            jobStatus={job.status}
+          />
+        </div>
+      ) : null}
 
       {error ? (
         <div className="mt-4 w-full px-5">

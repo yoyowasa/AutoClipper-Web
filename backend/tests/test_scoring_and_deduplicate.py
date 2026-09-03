@@ -135,6 +135,44 @@ def test_rule_score_detects_japanese_hooks_and_guidance() -> None:
     assert breakdown.transcript_length_score > 0
 
 
+def test_rule_score_separates_normal_structure_from_short_reaction() -> None:
+    explanatory = make_candidate(
+        "cand_explanation",
+        0.0,
+        180.0,
+        "美学っていうのは何か。理由を説明すると、例えば作品の見方が変わります。"
+        "だから答えが一つではないことが大事です。",
+        candidate_type="normal",
+    )
+    repeated_reading = make_candidate(
+        "cand_reading",
+        200.0,
+        380.0,
+        "山田さんスーパーチャットありがとう。佐藤さんありがとう。鈴木さんありがとう。"
+        "高橋さんスパチャありがとう。田中さん読み上げ不要、ありがとうございます。",
+        candidate_type="normal",
+    )
+    short_reaction = make_candidate(
+        "cand_short_reaction",
+        400.0,
+        430.0,
+        "スーパーチャットありがとう。え、まさか、そんなことある？やばい、面白い。",
+        candidate_type="short",
+    )
+
+    explanatory_score = score_candidate(explanatory)
+    repeated_reading_score = score_candidate(repeated_reading)
+    short_score = score_candidate(short_reaction)
+    scored_reading = apply_rule_score(repeated_reading)
+
+    assert explanatory_score.hook_score >= 10.0
+    assert explanatory_score.final_score > repeated_reading_score.final_score
+    assert repeated_reading_score.generic_content_penalty >= 15.0
+    assert "normal_low_value_reading" in scored_reading.risk_flags
+    assert short_score.hook_score > 0
+    assert short_score.generic_content_penalty == 0.0
+
+
 def test_rule_score_penalizes_generic_outro_when_requested() -> None:
     outro = make_candidate(
         "cand_outro",

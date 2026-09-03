@@ -8,9 +8,10 @@ from app.audio.volume_features import AudioFeatures, silence_seconds
 from app.candidates.merge_boundaries import Candidate
 from app.scoring.clip_preferences import (
     CandidateClipPreference,
-    generic_content_flags,
-    generic_content_penalty,
     guidance_match_score,
+    normal_topic_structure_score,
+    selection_content_flags,
+    selection_content_penalty,
 )
 
 
@@ -238,7 +239,11 @@ def score_candidate(
     volume_peak = audio_features.volume_peak if audio_features else 0.5
     preference = selection_preference or CandidateClipPreference()
 
-    hook = hook_keyword_score(candidate.transcript_text, hook_keywords=hook_keywords)
+    hook = (
+        hook_keyword_score(candidate.transcript_text, hook_keywords=hook_keywords)
+        if candidate.type == "short"
+        else normal_topic_structure_score(candidate.transcript_text)
+    )
     guidance = guidance_match_score(candidate.transcript_text, preference)
     silence = silence_ratio_score(silence_ratio)
     speech = speech_density_score(speech_density)
@@ -247,7 +252,11 @@ def score_candidate(
     peak = audio_peak_score(volume_peak)
     heatmap = heatmap_popularity_score(candidate.heatmap_value)
     penalty = incomplete_boundary_penalty(candidate.transcript_text)
-    generic_penalty = generic_content_penalty(candidate.transcript_text, preference)
+    generic_penalty = selection_content_penalty(
+        candidate.transcript_text,
+        preference,
+        candidate.type,
+    )
     final = _clamp(
         hook
         + guidance
@@ -292,7 +301,11 @@ def apply_rule_score(
     )
     preference = selection_preference or CandidateClipPreference()
     flags = list(candidate.risk_flags)
-    for flag in generic_content_flags(candidate.transcript_text, preference):
+    for flag in selection_content_flags(
+        candidate.transcript_text,
+        preference,
+        candidate.type,
+    ):
         if flag not in flags:
             flags.append(flag)
     return candidate.model_copy(

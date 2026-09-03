@@ -493,6 +493,10 @@ def test_create_job_persists_codex_initial_selection_and_exposes_summary(
                 "requested_short_count": 3,
                 "selected_normal_count": 2,
                 "selected_short_count": 3,
+                "promptVersion": "codex_initial_selection_v4",
+                "requestId": "1" * 32,
+                "attemptCount": 1,
+                "hostErrorCode": None,
             }
         ),
         encoding="utf-8",
@@ -509,6 +513,52 @@ def test_create_job_persists_codex_initial_selection_and_exposes_summary(
     assert details["codexInitialSelectionRequestedShortCount"] == 3
     assert details["codexInitialSelectionSelectedNormalCount"] == 2
     assert details["codexInitialSelectionSelectedShortCount"] == 3
+    assert details["codexInitialSelectionPhase"] == "initial"
+    assert details["codexInitialSelectionPromptVersion"] == (
+        "codex_initial_selection_v4"
+    )
+    assert details["codexInitialSelectionRequestId"] == "1" * 32
+    assert details["codexInitialSelectionAttemptCount"] == 1
+    assert details["codexInitialSelectionHostErrorCode"] is None
+
+    (output_dir / "codex_reselection_summary.json").write_text(
+        json.dumps(
+            {
+                "phase": "reselection",
+                "status": "fallback",
+                "fallbackUsed": True,
+                "requestedNormalCount": 2,
+                "requestedShortCount": 3,
+                "selectedNormalCount": 0,
+                "selectedShortCount": 0,
+                "promptVersion": "codex_initial_selection_v4",
+                "requestId": "2" * 32,
+                "attemptCount": 2,
+                "hostErrorCode": "response_schema_contract_mismatch",
+                "error": {
+                    "code": "codex_initial_selection_host_failed",
+                    "message": "Codex再選定を実行できませんでした。",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    latest_details = client.get(f"/api/jobs/{job_id}").json()["details"]
+    assert latest_details["codexInitialSelectionPhase"] == "reselection"
+    assert latest_details["codexInitialSelectionStatus"] == "fallback"
+    assert latest_details["codexInitialSelectionFallbackUsed"] is True
+    assert latest_details["codexInitialSelectionRequestId"] == "2" * 32
+    assert latest_details["codexInitialSelectionAttemptCount"] == 2
+    assert latest_details["codexInitialSelectionHostErrorCode"] == (
+        "response_schema_contract_mismatch"
+    )
+    assert latest_details["codexInitialSelectionErrorCode"] == (
+        "codex_initial_selection_host_failed"
+    )
+    assert latest_details["codexInitialSelectionErrorMessage"] == (
+        "Codex再選定を実行できませんでした。"
+    )
 
 
 def test_upload_video_rejects_invalid_heatmap_and_cleans_up_media(client: TestClient) -> None:
@@ -2804,7 +2854,7 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["minSubtitleDuration"] == 1.1
         assert job.settings_json["maxSubtitleDuration"] == 4.2
         assert job.settings_json["minGapBetweenSubtitles"] == 0.08
-        assert job.settings_json["selectionPolicy"] == "fill_requested"
+        assert job.settings_json["selectionPolicy"] == "strict_quality"
         assert job.settings_json["crossTypeOverlapDedupe"] is False
         assert job.settings_json["heatmapIntervalMode"] is False
         assert job.settings_json["initialSelectionProvider"] == "legacy"
@@ -3719,7 +3769,7 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["maxCandidateGenerationMemoryMb"]["default"] == 12000
     assert properties["candidateChunkSeconds"]["default"] == 600.0
     assert properties["candidateChunkOverlapSeconds"]["default"] == 75.0
-    assert properties["selectionPolicy"]["default"] == "fill_requested"
+    assert properties["selectionPolicy"]["default"] == "strict_quality"
     assert properties["crossTypeOverlapDedupe"]["default"] is False
     assert properties["heatmapIntervalMode"]["default"] is False
     assert properties["openaiCandidateLimit"]["default"] == 40

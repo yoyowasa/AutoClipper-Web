@@ -26,8 +26,11 @@ TRANSIENT_ERROR_NAMES = {
 SYSTEM_PROMPT = (
     "Score clip candidates for a fully automated clipping app. "
     "Judge whether each candidate matches the supplied content preference and works as a standalone clip. "
-    "Normal clips should contain a focused, complete topic. Shorts should contain a strong hook, reaction, "
-    "punchline, or concise useful point. Reject generic greetings, endings, and promotional filler when the "
+    "Normal clips should cover a major stream topic as a self-contained question, explanation, concrete example, "
+    "and conclusion when those elements exist; penalize ranges dominated by name reading, repeated thanks, or "
+    "superchat reading without substantive explanation. Shorts should contain a strong opening reaction, surprise, "
+    "punchline, or concise complete point; a comment or superchat may be the trigger for a good Short. "
+    "Reject generic greetings, endings, and promotional filler when the "
     "preference asks for their exclusion. When heatmap_features are present, their value is a relative 0-to-1 "
     "popularity signal within this video, not a view count. Use it only as supporting evidence and never as the "
     "sole reason to select a clip. Return only the requested structured JSON. Do not ask for video files."

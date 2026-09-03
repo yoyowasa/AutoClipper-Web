@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -15,6 +16,29 @@ from app.video.scene_detect import SceneSegment
 
 
 CandidateType = Literal["short", "normal"]
+DurationBand = tuple[float, float]
+
+NORMAL_DURATION_BANDS: tuple[DurationBand, ...] = (
+    (90.0, 180.0),
+    (180.0, 300.0),
+    (300.0, 600.0),
+)
+SHORT_DURATION_BANDS: tuple[DurationBand, ...] = (
+    (20.0, 35.0),
+    (35.0, 50.0),
+    (50.0, 75.0),
+)
+_TOPIC_SILENCE_SECONDS = 1.5
+_SEMANTIC_GAP_SECONDS = 0.5
+_TOPIC_PREFIX_PATTERN = re.compile(
+    r"^(?:さて|では|じゃあ|次(?:に|は)?|ところで|ここから|今回は|今日は|質問|お便り|コメント)"
+)
+_QUESTION_END_PATTERN = re.compile(
+    r"(?:ですか|ますか|でしょうか|なんだろう|なのか|のかな|かな|なぜ|どうして|どう|何|どこ|いつ|誰|どれ)[。…]*$"
+)
+_COMPLETION_END_PATTERN = re.compile(
+    r"(?:ということです|ってことです|なんですよ|と思います|でした|ですね|なんです|わけです|以上)[。…]*$"
+)
 OpenAIScoreSource = Literal[
     "preselection_pool",
     "finalist_on_demand",
@@ -128,6 +152,7 @@ class Candidate(BaseModel):
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
     moment_key: str | None = Field(default=None, min_length=1, max_length=80)
+    topic_key: str | None = Field(default=None, min_length=1, max_length=80)
     parent_start: float | None = Field(default=None, ge=0)
     parent_end: float | None = Field(default=None, ge=0)
     evidence_segment_ids: list[str] | None = Field(default=None, max_length=128)
@@ -256,10 +281,18 @@ class _LightweightCandidate:
     speech_seconds: float
     silence_ratio: float
     rank_score: float
+    topic_key: str
 
     @property
     def key(self) -> tuple[CandidateType, float, float]:
         return (self.candidate_type, self.start, self.end)
+
+
+@dataclass(frozen=True)
+class _BoundarySignals:
+    start_scores: dict[float, int]
+    end_scores: dict[float, int]
+    topic_starts: tuple[float, ...]
 
 
 def parse_generation_settings(settings: CandidateGenerationSettings | dict[str, Any] | None) -> CandidateGenerationSettings:
@@ -371,6 +404,146 @@ def _round_time(value: float) -> float:
     return round(float(value), 3)
 
 
+def duration_bands_for_range(
+    candidate_type: CandidateType,
+    min_duration: float,
+    max_duration: float,
+) -> tuple[DurationBand, ...]:
+    """Split the configured hard range at the product's meaningful duration bands."""
+    if max_duration < min_duration:
+        return ()
+    preset = NORMAL_DURATION_BANDS if candidate_type == "normal" else SHORT_DURATION_BANDS
+    internal_edges = sorted(
+        {
+            edge
+            for band in preset
+            for edge in band
+            if min_duration < edge < max_duration
+        }
+    )
+    edges = [float(min_duration), *internal_edges, float(max_duration)]
+    bands = tuple(
+        (_round_time(lower), _round_time(upper))
+        for lower, upper in zip(edges, edges[1:])
+        if upper > lower
+    )
+    if bands:
+        return bands
+    return ((_round_time(min_duration), _round_time(max_duration)),)
+
+
+def duration_band_index(duration: float, bands: Sequence[DurationBand]) -> int:
+    for index, (lower, upper) in enumerate(bands):
+        if duration >= lower - 0.001 and (
+            duration < upper - 0.001 or (index == len(bands) - 1 and duration <= upper + 0.001)
+        ):
+            return index
+    return max(0, len(bands) - 1)
+
+
+def duration_band_label(band: DurationBand) -> str:
+    lower, upper = band
+    return f"{lower:g}-{upper:g}"
+
+
+def _looks_like_question(text: str) -> bool:
+    clean = re.sub(r"\s+", "", text.strip())
+    if not clean:
+        return False
+    return "?" in clean or "？" in clean or _QUESTION_END_PATTERN.search(clean) is not None
+
+
+def _looks_like_completion(text: str) -> bool:
+    clean = re.sub(r"\s+", "", text.strip())
+    if not clean:
+        return False
+    return clean.endswith(("。", "！", "!", "？", "?")) or _COMPLETION_END_PATTERN.search(clean) is not None
+
+
+def _looks_like_topic_start(text: str) -> bool:
+    clean = re.sub(r"\s+", "", text.strip())
+    return bool(clean and _TOPIC_PREFIX_PATTERN.search(clean))
+
+
+def _record_boundary(target: dict[float, int], time_seconds: float, score: int) -> None:
+    clean = _round_time(time_seconds)
+    target[clean] = max(score, target.get(clean, 0))
+
+
+def _semantic_boundary_signals(
+    transcript_segments: Sequence[TranscriptSegment],
+    scene_segments: Sequence[SceneSegment],
+    silence_segments: Sequence[SilenceSegment],
+    timeline_duration: float,
+) -> _BoundarySignals:
+    start_scores: dict[float, int] = {0.0: 6}
+    end_scores: dict[float, int] = {_round_time(timeline_duration): 6}
+    topic_starts = {0.0}
+
+    ordered_transcript = sorted(transcript_segments, key=lambda segment: (segment.start, segment.end))
+    for index, segment in enumerate(ordered_transcript):
+        start = _round_time(segment.start)
+        end = _round_time(segment.end)
+        # Whisper segments remain valid fallback boundaries, while semantic cues rank higher.
+        _record_boundary(start_scores, start, 1)
+        _record_boundary(end_scores, end, 1)
+        if index == 0:
+            _record_boundary(start_scores, start, 5)
+            topic_starts.add(start)
+        if index == len(ordered_transcript) - 1:
+            _record_boundary(end_scores, end, 5)
+        text = segment.text.strip()
+        if _looks_like_question(text):
+            _record_boundary(start_scores, start, 6)
+            _record_boundary(end_scores, end, 4)
+            topic_starts.add(start)
+        if _looks_like_topic_start(text):
+            _record_boundary(start_scores, start, 5)
+            topic_starts.add(start)
+        if _looks_like_completion(text):
+            _record_boundary(end_scores, end, 5)
+
+        if index > 0:
+            previous = ordered_transcript[index - 1]
+            gap = max(0.0, float(segment.start) - float(previous.end))
+            if gap >= _SEMANTIC_GAP_SECONDS:
+                score = 5 if gap >= _TOPIC_SILENCE_SECONDS else 3
+                _record_boundary(end_scores, previous.end, score)
+                _record_boundary(start_scores, segment.start, score)
+            if gap >= _TOPIC_SILENCE_SECONDS:
+                topic_starts.add(start)
+
+    for segment in silence_segments:
+        _record_boundary(end_scores, segment.start, 6)
+        _record_boundary(start_scores, segment.end, 6)
+        if segment.duration >= _TOPIC_SILENCE_SECONDS:
+            topic_starts.add(_round_time(segment.end))
+
+    # Scene cuts are weak fallback signals. They never outrank speech completion or silence.
+    for segment in scene_segments:
+        _record_boundary(start_scores, segment.start, 2)
+        _record_boundary(end_scores, segment.end, 2)
+
+    valid_topic_starts = tuple(
+        sorted(value for value in topic_starts if 0 <= value < timeline_duration)
+    )
+    return _BoundarySignals(
+        start_scores={key: value for key, value in start_scores.items() if 0 <= key < timeline_duration},
+        end_scores={key: value for key, value in end_scores.items() if 0 < key <= timeline_duration},
+        topic_starts=valid_topic_starts,
+    )
+
+
+def _topic_key_for_range(start: float, end: float, topic_starts: Sequence[float]) -> str:
+    early_limit = min(end, start + 15.0)
+    next_index = bisect_left(topic_starts, start)
+    if next_index < len(topic_starts) and topic_starts[next_index] <= early_limit:
+        anchor = topic_starts[next_index]
+    else:
+        anchor = topic_starts[next_index - 1] if next_index > 0 else 0.0
+    return f"topic_{int(round(anchor * 1000))}"
+
+
 def merge_boundaries(
     transcript_segments: Sequence[TranscriptSegment],
     scene_segments: Sequence[SceneSegment],
@@ -455,31 +628,17 @@ def make_candidate_id(candidate_type: CandidateType, start: float, end: float, t
     return f"cand_{candidate_type}_{int(start * 1000)}_{int(end * 1000)}_{digest}"
 
 
-def _preferred_candidate_duration(min_duration: float, max_duration: float) -> float:
-    duration_span = max(max_duration - min_duration, 1.0)
-    return min(
-        max_duration,
-        min_duration + min(60.0, duration_span * 0.4),
-    )
-
-
 def _candidate_rank_score(
     *,
     duration: float,
-    min_duration: float,
-    max_duration: float,
     transcript_char_count: int,
     speech_seconds: float,
     silence_ratio: float,
 ) -> float:
-    duration_span = max(max_duration - min_duration, 1.0)
-    preferred_duration = _preferred_candidate_duration(min_duration, max_duration)
-    duration_scale = max(30.0, min(120.0, duration_span * 0.5))
-    duration_fit = 1.0 / (1.0 + abs(duration - preferred_duration) / duration_scale)
     speech_density = min(1.0, speech_seconds / max(duration, 1.0))
     text_signal = min(1.0, transcript_char_count / 600)
     silence_signal = max(0.0, 1.0 - silence_ratio)
-    return speech_density * 30.0 + text_signal * 15.0 + duration_fit * 45.0 + silence_signal * 10.0
+    return speech_density * 45.0 + text_signal * 35.0 + silence_signal * 20.0
 
 
 def _materialize_candidate(
@@ -509,6 +668,7 @@ def _materialize_candidate(
         transcript_char_count=lightweight.transcript_char_count,
         speech_seconds=round(lightweight.speech_seconds, 6),
         silence_ratio=round(lightweight.silence_ratio, 6),
+        topic_key=lightweight.topic_key,
     )
 
 
@@ -521,6 +681,7 @@ class _BoundedCandidateKeeper:
         max_candidates: int,
         timeline_duration: float,
         transcript_segment_count: int,
+        duration_bands: Sequence[DurationBand],
         heartbeat: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.settings = settings
@@ -528,14 +689,19 @@ class _BoundedCandidateKeeper:
         self.effective_kept_limit = min(max_candidates, settings.max_kept_candidates_per_type)
         self.timeline_duration = timeline_duration
         self.transcript_segment_count = transcript_segment_count
+        self.duration_bands = tuple(duration_bands)
         self.heartbeat = heartbeat
-        self.buckets: dict[int, dict[tuple[CandidateType, float, float], _LightweightCandidate]] = {}
+        self.buckets: dict[
+            tuple[int, int],
+            dict[tuple[CandidateType, float, float], _LightweightCandidate],
+        ] = {}
         self.chunks_processed = 0
         self.raw_candidates_considered = 0
         self.dropped_due_to_cap = 0
         self.dropped_due_to_duplicate = 0
         self.dropped_due_to_no_transcript = 0
         self.dropped_due_to_invalid_duration = 0
+        self.considered_by_duration_band = [0 for _ in self.duration_bands]
         self.memory_guard_triggered = False
         self.peak_memory_mb: float | None = None
 
@@ -544,6 +710,14 @@ class _BoundedCandidateKeeper:
 
     def start_bucket_index(self, start: float) -> int:
         return int(start // self.settings.candidate_start_bucket_seconds)
+
+    def duration_band_index(self, duration: float) -> int:
+        return duration_band_index(duration, self.duration_bands)
+
+    @staticmethod
+    def _reserved_band_limit(total_limit: int, band_index: int, band_count: int) -> int:
+        base, remainder = divmod(total_limit, max(1, band_count))
+        return max(1, base + (1 if band_index < remainder else 0))
 
     def _update_memory(self) -> None:
         current = _current_rss_mb()
@@ -564,7 +738,9 @@ class _BoundedCandidateKeeper:
 
     def consider(self, candidate: _LightweightCandidate) -> bool:
         self.raw_candidates_considered += 1
-        bucket = self.buckets.setdefault(self.bucket_index(candidate.start), {})
+        band_index = self.duration_band_index(candidate.duration)
+        self.considered_by_duration_band[band_index] += 1
+        bucket = self.buckets.setdefault((self.bucket_index(candidate.start), band_index), {})
         if candidate.key in bucket:
             self.dropped_due_to_duplicate += 1
             self.maybe_heartbeat()
@@ -573,13 +749,18 @@ class _BoundedCandidateKeeper:
         same_start_bucket = [
             (key, item) for key, item in bucket.items() if self.start_bucket_index(item.start) == self.start_bucket_index(candidate.start)
         ]
-        if len(same_start_bucket) >= self.settings.max_candidates_per_start_bucket:
+        start_bucket_limit = self._reserved_band_limit(
+            self.settings.max_candidates_per_start_bucket,
+            band_index,
+            len(self.duration_bands),
+        )
+        if len(same_start_bucket) >= start_bucket_limit:
             worst_key, worst_candidate = min(
                 same_start_bucket,
                 key=lambda item: (
                     item[1].rank_score,
                     item[1].transcript_char_count,
-                    -item[1].duration,
+                    item[1].duration,
                     -item[1].start,
                 ),
             )
@@ -590,7 +771,12 @@ class _BoundedCandidateKeeper:
             self.maybe_heartbeat()
             return True
 
-        if len(bucket) < self.settings.max_candidates_per_time_bucket:
+        time_bucket_limit = self._reserved_band_limit(
+            self.settings.max_candidates_per_time_bucket,
+            band_index,
+            len(self.duration_bands),
+        )
+        if len(bucket) < time_bucket_limit:
             bucket[candidate.key] = candidate
             self.maybe_heartbeat()
             return True
@@ -600,7 +786,7 @@ class _BoundedCandidateKeeper:
             key=lambda item: (
                 item[1].rank_score,
                 item[1].transcript_char_count,
-                -item[1].duration,
+                item[1].duration,
                 -item[1].start,
             ),
         )
@@ -621,10 +807,22 @@ class _BoundedCandidateKeeper:
         deduplicated = deduplicate_candidates(candidates)
         if len(deduplicated) > self.effective_kept_limit:
             self.dropped_due_to_cap += len(deduplicated) - self.effective_kept_limit
-        return limit_candidates_by_timeline(deduplicated, self.effective_kept_limit)
+        return limit_candidates_by_timeline_and_duration_band(
+            deduplicated,
+            self.effective_kept_limit,
+            self.duration_bands,
+        )
 
     def summary(self) -> dict[str, Any]:
         kept_before_materialize = sum(len(bucket) for bucket in self.buckets.values())
+        kept_by_duration_band = {
+            duration_band_label(band): sum(
+                len(bucket)
+                for (time_bucket, band_index), bucket in self.buckets.items()
+                if band_index == index
+            )
+            for index, band in enumerate(self.duration_bands)
+        }
         return {
             "type": self.candidate_type,
             "video_duration": round(self.timeline_duration, 6),
@@ -650,6 +848,16 @@ class _BoundedCandidateKeeper:
                 "candidateChunkOverlapSeconds": self.settings.candidate_chunk_overlap_seconds,
                 "effectiveKeptLimit": self.effective_kept_limit,
             },
+            "duration_bands": [
+                {
+                    "label": duration_band_label(band),
+                    "min_duration": band[0],
+                    "max_duration": band[1],
+                    "considered": self.considered_by_duration_band[index],
+                    "kept_before_materialize": kept_by_duration_band[duration_band_label(band)],
+                }
+                for index, band in enumerate(self.duration_bands)
+            ],
         }
 
 
@@ -712,13 +920,37 @@ def limit_candidates_by_timeline(candidates: Sequence[Candidate], max_candidates
     return sorted(limited, key=lambda item: (item.start, item.duration, item.type, item.id))
 
 
-def _duration_targets(min_duration: float, max_duration: float, step_seconds: float) -> list[float]:
-    targets = {float(min_duration), float(max_duration)}
-    current = float(min_duration)
-    while current <= max_duration:
-        targets.add(round(current, 3))
-        current += step_seconds
-    return sorted(targets)
+def limit_candidates_by_timeline_and_duration_band(
+    candidates: Sequence[Candidate],
+    max_candidates: int,
+    duration_bands: Sequence[DurationBand],
+) -> list[Candidate]:
+    """Reserve room for every populated duration band before applying the global cap."""
+    ordered = sorted(candidates, key=lambda item: (item.start, item.duration, item.type, item.id))
+    if len(ordered) <= max_candidates:
+        return ordered
+
+    groups: dict[int, list[Candidate]] = {}
+    for candidate in ordered:
+        band_index = duration_band_index(candidate.duration, duration_bands)
+        groups.setdefault(band_index, []).append(candidate)
+
+    band_order = sorted(groups)
+    base_quota, quota_remainder = divmod(max_candidates, len(band_order))
+    limited: list[Candidate] = []
+    selected_ids: set[str] = set()
+    for order_index, band_index in enumerate(band_order):
+        quota = base_quota + (1 if order_index < quota_remainder else 0)
+        selected = limit_candidates_by_timeline(groups[band_index], quota)
+        limited.extend(selected)
+        selected_ids.update(candidate.id for candidate in selected)
+
+    if len(limited) < max_candidates:
+        remaining = [candidate for candidate in ordered if candidate.id not in selected_ids]
+        limited.extend(
+            limit_candidates_by_timeline(remaining, max_candidates - len(limited))
+        )
+    return sorted(limited, key=lambda item: (item.start, item.duration, item.type, item.id))
 
 
 def _candidate_end_targets(
@@ -726,19 +958,12 @@ def _candidate_end_targets(
     boundaries: Sequence[float],
     min_duration: float,
     max_duration: float,
-    step_seconds: float,
-    timeline_duration: float,
 ) -> list[float]:
     minimum_end = start + min_duration
     maximum_end = start + max_duration
     left = bisect_left(boundaries, minimum_end)
     right = bisect_right(boundaries, maximum_end)
-    targets = set(boundaries[left:right])
-    for duration in _duration_targets(min_duration, max_duration, step_seconds):
-        target = start + duration
-        if target <= timeline_duration:
-            targets.add(_round_time(target))
-    return sorted(targets)
+    return list(boundaries[left:right])
 
 
 def _spread_across_timeline(values: Sequence[float], limit: int) -> list[float]:
@@ -756,22 +981,34 @@ def _prioritize_end_targets(
     targets: Sequence[float],
     *,
     start: float,
-    min_duration: float,
-    max_duration: float,
+    duration_bands: Sequence[DurationBand],
+    boundary_scores: dict[float, int],
     limit: int,
+    rotation: int = 0,
 ) -> list[float]:
     if limit <= 0:
         return []
-    preferred_duration = _preferred_candidate_duration(min_duration, max_duration)
-    ranked = sorted(
-        targets,
-        key=lambda end: (
-            abs((end - start) - preferred_duration),
-            abs((end - start) - min_duration),
-            end,
-        ),
-    )
-    return ranked[:limit]
+    groups: dict[int, list[float]] = {}
+    for end in targets:
+        band_index = duration_band_index(end - start, duration_bands)
+        groups.setdefault(band_index, []).append(end)
+    for group in groups.values():
+        group.sort(key=lambda end: (-boundary_scores.get(_round_time(end), 0), end))
+
+    band_order = sorted(groups)
+    if band_order:
+        offset = rotation % len(band_order)
+        band_order = band_order[offset:] + band_order[:offset]
+    prioritized: list[float] = []
+    while len(prioritized) < limit and any(groups.values()):
+        for band_index in band_order:
+            group = groups[band_index]
+            if not group:
+                continue
+            prioritized.append(group.pop(0))
+            if len(prioritized) >= limit:
+                break
+    return prioritized
 
 
 def _configured_duration_range(
@@ -780,11 +1017,12 @@ def _configured_duration_range(
     max_duration: float,
     step_seconds: float,
     speech_boundary_tolerance: float,
-) -> dict[str, float]:
+) -> dict[str, float | bool]:
     return {
         "min_duration": round(float(min_duration), 6),
         "max_duration": round(float(max_duration), 6),
         "step_seconds": round(float(step_seconds), 6),
+        "target_step_applied": False,
         "speech_boundary_tolerance": round(float(speech_boundary_tolerance), 6),
     }
 
@@ -809,13 +1047,10 @@ def _chunk_ranges(
 
 def _raw_start_candidates(
     boundaries: Sequence[float],
-    transcript_segments: Sequence[TranscriptSegment],
     chunk_start: float,
     chunk_end: float,
 ) -> list[float]:
-    starts = {boundary for boundary in boundaries[:-1] if chunk_start <= boundary < chunk_end}
-    starts.update(segment.start for segment in transcript_segments if chunk_start <= segment.start < chunk_end)
-    return sorted(starts)
+    return sorted(boundary for boundary in boundaries if chunk_start <= boundary < chunk_end)
 
 
 def generate_window_candidates_with_summary(
@@ -832,6 +1067,7 @@ def generate_window_candidates_with_summary(
     heartbeat: Callable[[dict[str, Any]], None] | None = None,
 ) -> CandidateGenerationResult:
     parsed_settings = settings or CandidateGenerationSettings(max_candidates=max_candidates)
+    duration_bands = duration_bands_for_range(candidate_type, min_duration, max_duration)
     configured_duration_range = _configured_duration_range(
         min_duration=min_duration,
         max_duration=max_duration,
@@ -859,16 +1095,41 @@ def generate_window_candidates_with_summary(
                 "memory_guard_triggered": False,
                 "configured_caps": parsed_settings.model_dump(),
                 "configured_duration_range": configured_duration_range,
+                "duration_bands": [
+                    {
+                        "label": duration_band_label(band),
+                        "min_duration": band[0],
+                        "max_duration": band[1],
+                        "considered": 0,
+                        "kept_before_materialize": 0,
+                        "kept": 0,
+                    }
+                    for band in duration_bands
+                ],
+                "duration_band_counts": {
+                    duration_band_label(band): 0 for band in duration_bands
+                },
+                "boundary_policy": "semantic_transcript_question_completion_silence",
             },
         )
 
-    boundaries = merge_boundaries(
+    boundary_signals = _semantic_boundary_signals(
         transcript_segments,
         scene_segments,
         silence_segments,
-        duration=timeline_duration,
+        timeline_duration,
     )
-    if not boundaries:
+    start_boundaries = sorted(
+        boundary for boundary, score in boundary_signals.start_scores.items() if score >= 5
+    )
+    end_boundaries = sorted(
+        boundary for boundary, score in boundary_signals.end_scores.items() if score >= 4
+    )
+    if len(start_boundaries) < 2:
+        start_boundaries = sorted(boundary_signals.start_scores)
+    if len(end_boundaries) < 2:
+        end_boundaries = sorted(boundary_signals.end_scores)
+    if not start_boundaries or not end_boundaries:
         return CandidateGenerationResult(
             candidates=[],
             summary={
@@ -884,6 +1145,21 @@ def generate_window_candidates_with_summary(
                 "memory_guard_triggered": False,
                 "configured_caps": parsed_settings.model_dump(),
                 "configured_duration_range": configured_duration_range,
+                "duration_bands": [
+                    {
+                        "label": duration_band_label(band),
+                        "min_duration": band[0],
+                        "max_duration": band[1],
+                        "considered": 0,
+                        "kept_before_materialize": 0,
+                        "kept": 0,
+                    }
+                    for band in duration_bands
+                ],
+                "duration_band_counts": {
+                    duration_band_label(band): 0 for band in duration_bands
+                },
+                "boundary_policy": "semantic_transcript_question_completion_silence",
             },
         )
 
@@ -895,6 +1171,7 @@ def generate_window_candidates_with_summary(
         max_candidates=max_candidates,
         timeline_duration=timeline_duration,
         transcript_segment_count=len(transcript_segments),
+        duration_bands=duration_bands,
         heartbeat=heartbeat,
     )
     chunk_ranges = _chunk_ranges(
@@ -908,14 +1185,14 @@ def generate_window_candidates_with_summary(
     raw_candidate_caps_by_chunk = [
         max(1, base_raw_candidate_cap + (1 if index < raw_candidate_cap_remainder else 0)) for index in range(chunk_count)
     ]
+    exact_duration_fallback_candidates_considered = 0
     for chunk_index, (chunk_start, chunk_end) in enumerate(chunk_ranges):
         keeper.chunks_processed += 1
         raw_candidate_cap_for_chunk = raw_candidate_caps_by_chunk[chunk_index]
         chunk_raw_candidates = 0
         chunk_cap_reached = False
         raw_starts = _raw_start_candidates(
-            boundaries,
-            transcript_segments,
+            start_boundaries,
             chunk_start,
             chunk_end,
         )
@@ -948,26 +1225,41 @@ def generate_window_candidates_with_summary(
 
             end_targets = _candidate_end_targets(
                 start,
-                boundaries,
+                end_boundaries,
                 min_duration=min_duration,
                 max_duration=max_duration,
-                step_seconds=step_seconds,
-                timeline_duration=timeline_duration,
             )
+            exact_duration_fallback_targets: set[float] = set()
+            if abs(max_duration - min_duration) <= 0.001:
+                exact_end = _round_time(start + min_duration)
+                if exact_end <= timeline_duration + 0.001 and exact_end not in {
+                    _round_time(value) for value in end_targets
+                }:
+                    end_targets.append(exact_end)
+                    end_targets.sort()
+                    exact_duration_fallback_targets.add(exact_end)
             start_budget = base_budget + (1 if start_index < budget_remainder else 0)
             prioritized_targets = _prioritize_end_targets(
                 end_targets,
                 start=start,
-                min_duration=min_duration,
-                max_duration=max_duration,
+                duration_bands=duration_bands,
+                boundary_scores=boundary_signals.end_scores,
                 limit=max(1, start_budget),
+                rotation=start_index,
             )
             keeper.dropped_due_to_cap += max(0, len(end_targets) - len(prioritized_targets))
             for raw_end in prioritized_targets:
-                end = adjust_end_to_speech_boundary(
-                    raw_end,
-                    transcript_segments,
-                    tolerance=speech_boundary_tolerance,
+                is_exact_duration_fallback = (
+                    _round_time(raw_end) in exact_duration_fallback_targets
+                )
+                end = (
+                    _round_time(raw_end)
+                    if is_exact_duration_fallback
+                    else adjust_end_to_speech_boundary(
+                        raw_end,
+                        transcript_segments,
+                        tolerance=speech_boundary_tolerance,
+                    )
                 )
                 if end > timeline_duration:
                     end = timeline_duration
@@ -975,7 +1267,10 @@ def generate_window_candidates_with_summary(
                 if duration < min_duration or duration > max_duration:
                     keeper.dropped_due_to_invalid_duration += 1
                     continue
-                if is_inside_speech(end, transcript_segments):
+                if not is_exact_duration_fallback and is_inside_speech(
+                    end,
+                    transcript_segments,
+                ):
                     continue
 
                 transcript_range = transcript_index.range_for(start, end)
@@ -1001,20 +1296,38 @@ def generate_window_candidates_with_summary(
                         silence_ratio=round(silence_ratio, 6),
                         rank_score=_candidate_rank_score(
                             duration=duration,
-                            min_duration=min_duration,
-                            max_duration=max_duration,
                             transcript_char_count=transcript_range.char_count,
                             speech_seconds=transcript_range.speech_seconds,
                             silence_ratio=silence_ratio,
                         ),
+                        topic_key=_topic_key_for_range(
+                            start,
+                            end,
+                            boundary_signals.topic_starts,
+                        ),
                     )
                 )
+                if is_exact_duration_fallback:
+                    exact_duration_fallback_candidates_considered += 1
                 chunk_raw_candidates += 1
 
     candidates = keeper.materialize(transcript_index)
     summary = keeper.summary()
     summary["configured_duration_range"] = configured_duration_range
     summary["candidates_kept_by_type"] = {candidate_type: len(candidates)}
+    duration_band_counts = {
+        duration_band_label(band): sum(
+            1 for candidate in candidates if duration_band_index(candidate.duration, duration_bands) == index
+        )
+        for index, band in enumerate(duration_bands)
+    }
+    summary["duration_band_counts"] = duration_band_counts
+    for band_summary in summary["duration_bands"]:
+        band_summary["kept"] = duration_band_counts[band_summary["label"]]
+    summary["boundary_policy"] = "semantic_transcript_question_completion_silence"
+    summary["exact_duration_fallback_candidates_considered"] = (
+        exact_duration_fallback_candidates_considered
+    )
     summary["raw_candidate_caps_by_chunk"] = raw_candidate_caps_by_chunk
     summary["stopped_due_to_raw_candidate_cap"] = False
     return CandidateGenerationResult(candidates=candidates, summary=summary)
@@ -1060,6 +1373,16 @@ def merge_candidate_generation_summaries(
         for candidate_type, summary in by_type.items()
         if isinstance(duration_range := summary.get("configured_duration_range"), dict)
     }
+    duration_bands_by_type = {
+        candidate_type: duration_bands
+        for candidate_type, summary in by_type.items()
+        if isinstance(duration_bands := summary.get("duration_bands"), list)
+    }
+    duration_band_counts_by_type = {
+        candidate_type: duration_band_counts
+        for candidate_type, summary in by_type.items()
+        if isinstance(duration_band_counts := summary.get("duration_band_counts"), dict)
+    }
     return {
         "video_duration": round(video_duration, 6),
         "transcript_segment_count": transcript_segment_count,
@@ -1084,6 +1407,8 @@ def merge_candidate_generation_summaries(
         "memory_guard_triggered": any(bool(summary.get("memory_guard_triggered")) for summary in summaries),
         "configured_caps": configured_caps,
         "configured_duration_ranges": configured_duration_ranges,
+        "duration_bands_by_type": duration_bands_by_type,
+        "duration_band_counts_by_type": duration_band_counts_by_type,
         "by_type": by_type,
     }
 

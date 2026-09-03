@@ -9252,3 +9252,116 @@ pip check: pass
 
 - 既存jobの候補は自動で選び直さない。新規jobまたは再選定の実行時から新方式を使う。
 - 旧JSON候補生成モジュールは互換維持のため残しているが、製品の実行経路からは呼び出さない。
+
+## 2026-09-03 Codex選定失敗の可視化とBridge互換性復旧
+
+### 目的
+
+- Codex初期選定が失敗した場合にローカル仮選定をおすすめ結果として誤認させず、Bridge更新差分による失敗を起動時に自動復旧する。
+
+### 現在状態・変更
+
+- Codex Bridgeのbuild・contract・task schema fingerprintをstatus、request、responseへ追加した。
+- launcher起動時にBridge契約不一致を検出し、旧プロセスの終了を確認してから現行Bridgeを再起動する。
+- 初期選定を最大2回実行し、再試行時は新しいrequestIdを使う。
+- 初期選定要約へphase、promptVersion、requestId、attemptCount、hostErrorCodeを保存し、APIへ公開する。
+- Job進捗画面と切り抜き予定画面へ共通の選定状態表示を追加した。
+- Codex失敗時は `ローカル仮選定` と `おすすめ結果ではありません` を常時表示する。
+- 現在稼働中のBridgeを現行契約版へ更新し、ready状態を確認した。
+
+### 変更ファイル
+
+- `launcher/codex_bridge.py`
+- `launcher/controller.py`
+- `backend/app/candidates/codex_initial_selection.py`
+- `backend/app/api/jobs.py`
+- `frontend/components/InitialSelectionStatusBanner.tsx`
+- `frontend/lib/initialSelectionStatus.ts`
+- `frontend/components/JobProgress.tsx`
+- `frontend/app/jobs/[jobId]/clips/page.tsx`
+- `frontend/lib/types.ts`
+- `frontend/package.json`
+- `backend/tests/test_windows_launcher.py`
+- `backend/tests/test_codex_host_bridge.py`
+- `backend/tests/test_codex_initial_selection.py`
+- `backend/tests/test_api_routes.py`
+- `frontend/tests/initialSelectionStatus.test.ts`
+
+### 最小検証
+
+- backend全体: `952 passed, 1 skipped`。
+- backend/launcher ruff: 成功。
+- Bridge/初期選定/API関連: `202 passed`。
+- launcher停止待機の追加回帰: `50 passed`。
+- frontend: 選定状態UIテスト、`typecheck`、`lint`、`build` 成功。
+- Docker: backend/worker/frontendを再build・起動し、backend healthy、health `200`、frontend `200`。
+- 稼働中Bridge: build・contract・initial-selection schema fingerprint設定済み、state `ready` を確認。
+- Chrome実画面: 既存fallback jobで `ローカル仮選定`、`おすすめ結果ではありません`、エラーコードを確認し、候補一覧・動画・時刻入力との重なりなし。
+
+### 未解決事項
+
+- 既存jobの候補は自動再選定しない。表示だけ正しい状態へ更新される。
+- 実Jobを変更するCodex再選定は未実行。次回の新規選定またはユーザー操作による再選定で成功経路を実運用確認する。
+
+## 2026-09-03 尺収束廃止・通常Short分離・長尺二段階Codex選定
+
+### 目的
+
+- 通常150秒／Short 42秒付近への候補収束を廃止し、内容の自然な境界と用途別の公開価値で選定する。
+- 長尺文字起こしを一括投入せず、ローカル話題要約から重要話題を選んだ後、その周辺字幕だけで境界を精密化する。
+
+### 現在状態・変更
+
+- min/maxを目標尺ではなく制約として扱い、話題開始、質問、回答完了、無音を候補境界にした。
+- 候補保持枠を通常 `90–180 / 180–300 / 300–600秒`、Short `20–35 / 35–50 / 50–75秒` に分け、生成済みの長い良質候補が上限処理で消えないようにした。
+- `minDuration == maxDuration` の明示的な固定尺だけ、自然終端がない場合に `start + duration` を最終手段として許可する。可変尺では使用しない。
+- 通常は主要テーマ、質問から結論までの完結性、単独理解を評価し、名前読み、連続お礼、スパチャ読みだけの区間を減点する。
+- Shortは反応、驚き、オチ、短い完結を評価し、コメント・スパチャ由来も許可する。
+- 通常は別 `topicKey` かつ区間重複50%未満から選ぶ。
+- `selectionPolicy` 未指定時を `strict_quality` に変更し、良質候補不足時は本数不足を許容する。明示的な `fill_requested` の互換動作は残した。
+- 長尺選定を、ローカル話題ブロック作成、Codex重要話題選定、選定周辺の元字幕による境界精密化の二段階にした。
+- 非連続の `topicBlockIds` を拒否し、精密化入力を選定topicの周辺字幕だけに限定した。
+- Codexが返した有効候補poolでは、最終選定候補を保持した上で各尺帯の候補枠を予約する。最終選定尺の人工的な分散は行わない。
+- 通常候補poolもShortと同様に全件を境界補正へ渡し、補正後に `strict_quality`、`topicKey`、重複率で最終選定する。
+- Codex候補1件の不正で全体をfallbackせず、その候補だけを除外する。
+- 実Job成果物を変更しない読み取り専用回帰スクリプトを追加した。
+- frontend依存関係を監査修正し、npm脆弱性0件にした。
+
+### 変更ファイル
+
+- `backend/app/candidates/merge_boundaries.py`
+- `backend/app/candidates/select_candidates.py`
+- `backend/app/candidates/codex_initial_selection.py`
+- `backend/app/jobs/runner.py`
+- `backend/app/scoring/clip_preferences.py`
+- `backend/app/scoring/rule_score.py`
+- `backend/app/scoring/openai_score.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_candidate_generation.py`
+- `backend/tests/test_quality_gate_and_selection.py`
+- `backend/tests/test_scoring_and_deduplicate.py`
+- `backend/tests/test_codex_initial_selection.py`
+- `backend/tests/test_real_pipeline.py`
+- `backend/tests/test_regression_selection_from_artifacts.py`
+- `scripts/regression_selection_from_artifacts.py`
+- `scripts/smoke_runtime.py`
+- `package-lock.json`
+
+### 最小検証
+
+- backend全体: `980 passed, 1 skipped`。警告3件は既存のStarlette/Pillow非推奨警告。
+- backend/launcher/scripts ruff: 成功。
+- frontend: 選定状態UIテスト、`typecheck`、`lint`、`build` 成功。
+- `npm audit --audit-level=high`: `0 vulnerabilities`。
+- Docker: backend/worker/frontendを再build・起動し、backend healthy、health `200`、実Jobclip画面 `200`。
+- 稼働中Codex Bridge: 現行build・contractで `ready`。
+- 実Job `job_12504e9baec64c5c8d5d83edac44797c` のローカル回帰は成功。通常候補は旧 `1199 / 1 / 0` から各尺帯 `400 / 400 / 400`、Short候補は旧 `19 / 1168 / 13` から `400 / 400 / 400` になった。
+- 同Jobの孤立Codex回帰は話題ブロック118件から7話題を選び、元字幕489区間だけで精密化した。有効選定は通常2本 `245.28秒 / 483.26秒`、Short 4本 `20.16–50.64秒`。親区間違反のShort 1本は個別除外した。
+- 通常2本は別 `topicKey`、相互重複0、連続お礼・スパチャ読み0。現代アート・キュビズムの説明区間を選定した。
+- 実Jobの対象artifact 8件は前後SHA-256一致。DB、動画処理、元成果物書込み、OpenAI APIは使用していない。
+- `git diff --check`: 成功。
+
+### 未解決事項
+
+- 既存Jobの保存済み候補は自動置換しない。新規Jobまたはユーザー操作による再選定から新方式を使う。
+- 孤立Codex回帰で除外したShort 1本は、無理に代替候補で本数を埋めていない。

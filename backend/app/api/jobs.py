@@ -1540,11 +1540,25 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
         else:
             details["automationGateState"] = "evaluating"
 
-    codex_summary = _read_json_if_exists(
+    initial_codex_summary = _read_json_if_exists(
         output_dir / "codex_initial_selection_summary.json"
+    )
+    reselection_codex_summary = _read_json_if_exists(
+        output_dir / "codex_reselection_summary.json"
+    )
+    codex_summary = (
+        reselection_codex_summary
+        if isinstance(reselection_codex_summary, dict)
+        else initial_codex_summary
     )
     if isinstance(codex_summary, dict):
         details["codexInitialSelectionSummaryAvailable"] = True
+        details["codexInitialSelectionPhase"] = _first_value(
+            codex_summary.get("phase"),
+            "reselection"
+            if isinstance(reselection_codex_summary, dict)
+            else "initial",
+        )
         details["codexInitialSelectionStatus"] = _first_value(
             codex_summary.get("status"),
             codex_summary.get("state"),
@@ -1585,14 +1599,33 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
             codex_summary.get("selectedShortCount"),
             len(shorts) if isinstance(shorts, list) else None,
         )
+        details["codexInitialSelectionPromptVersion"] = _first_value(
+            codex_summary.get("prompt_version"),
+            codex_summary.get("promptVersion"),
+        )
+        details["codexInitialSelectionRequestId"] = _first_value(
+            codex_summary.get("request_id"),
+            codex_summary.get("requestId"),
+        )
+        details["codexInitialSelectionAttemptCount"] = _first_value(
+            codex_summary.get("attempt_count"),
+            codex_summary.get("attemptCount"),
+        )
+        details["codexInitialSelectionHostErrorCode"] = _first_value(
+            codex_summary.get("host_error_code"),
+            codex_summary.get("hostErrorCode"),
+        )
         summary_error = codex_summary.get("error")
         if isinstance(summary_error, dict):
+            details["codexInitialSelectionErrorCode"] = summary_error.get("code")
+            details["codexInitialSelectionErrorMessage"] = summary_error.get("message")
             details["codexInitialSelectionError"] = _first_value(
                 summary_error.get("message"),
                 summary_error.get("code"),
             )
         elif summary_error is not None:
             details["codexInitialSelectionError"] = str(summary_error)
+            details["codexInitialSelectionErrorMessage"] = str(summary_error)
     else:
         details["codexInitialSelectionSummaryAvailable"] = False
 

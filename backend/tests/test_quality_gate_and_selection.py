@@ -89,6 +89,7 @@ def test_fill_requested_backfills_below_min_final_score_with_metadata() -> None:
             "normalClipCount": 1,
             "shortCount": 0,
             "minFinalScore": 60.0,
+            "selectionPolicy": "fill_requested",
         },
     )
 
@@ -103,6 +104,31 @@ def test_fill_requested_backfills_below_min_final_score_with_metadata() -> None:
     assert selection.selected_above_threshold_count == 0
     assert selection.selected_below_threshold_backfill_count == 1
     assert selection.rejected_candidates == []
+
+
+def test_missing_selection_policy_defaults_to_strict_quality() -> None:
+    candidate = make_candidate(
+        "normal_low_default_strict",
+        "normal",
+        0.0,
+        60.0,
+        "Complete but low scoring normal candidate.",
+        final_score=45.0,
+    )
+
+    selection = select_candidates(
+        [candidate],
+        settings={
+            "normalClipCount": 1,
+            "shortCount": 0,
+            "minFinalScore": 60.0,
+        },
+    )
+
+    assert selection.selection_policy == "strict_quality"
+    assert selection.normal_clips == []
+    assert selection.unfilled_requested_counts == {"normal": 1, "short": 0}
+    assert selection.rejected_candidates[0].reasons == ["low_final_score"]
 
 
 def test_strict_quality_preserves_low_score_rejection() -> None:
@@ -124,6 +150,107 @@ def test_strict_quality_preserves_low_score_rejection() -> None:
     assert selection.rejected_candidates[0].candidate_id == "normal_low"
     assert selection.rejected_candidates[0].reasons == ["low_final_score"]
     assert selection.selection_policy == "strict_quality"
+
+
+def test_normal_selection_requires_distinct_topic_keys() -> None:
+    same_topic_best = make_candidate(
+        "normal_art_best",
+        "normal",
+        0.0,
+        180.0,
+        "美学とは何かを説明します。",
+        final_score=95.0,
+    ).model_copy(update={"topic_key": "topic_art"})
+    same_topic_duplicate = make_candidate(
+        "normal_art_duplicate",
+        "normal",
+        240.0,
+        420.0,
+        "美学の具体例を続けて説明します。",
+        final_score=94.0,
+    ).model_copy(update={"topic_key": "topic_art"})
+    other_topic = make_candidate(
+        "normal_history",
+        "normal",
+        600.0,
+        780.0,
+        "文化財を残す理由と歴史を説明します。",
+        final_score=90.0,
+    ).model_copy(update={"topic_key": "topic_history"})
+
+    selection = select_candidates(
+        [same_topic_best, same_topic_duplicate, other_topic],
+        settings={
+            "normalClipCount": 2,
+            "shortCount": 0,
+            "selectionPolicy": "strict_quality",
+            "minFinalScore": 60.0,
+        },
+    )
+
+    assert [candidate.id for candidate in selection.normal_clips] == [
+        "normal_art_best",
+        "normal_history",
+    ]
+    duplicate = next(
+        rejection
+        for rejection in selection.rejected_candidates
+        if rejection.candidate_id == "normal_art_duplicate"
+    )
+    assert duplicate.reasons == ["duplicate_topic"]
+    assert duplicate.details["topicKey"] == "topic_art"
+
+
+def test_normal_selection_rejects_near_duplicate_ranges_even_when_topic_keys_differ() -> None:
+    candidates = [
+        make_candidate(
+            "normal_art_wide",
+            "normal",
+            2788.16,
+            2915.16,
+            "キュビズムと美術の説明です。",
+            final_score=95.0,
+        ).model_copy(update={"topic_key": "topic_2788160"}),
+        make_candidate(
+            "normal_art_nested",
+            "normal",
+            2839.64,
+            2934.58,
+            "別の質問を起点にした同じ美術説明です。",
+            final_score=94.0,
+        ).model_copy(update={"topic_key": "topic_2839640"}),
+        make_candidate(
+            "normal_history",
+            "normal",
+            3550.3,
+            3728.6,
+            "展覧会を二周する理由と具体例です。",
+            final_score=90.0,
+        ).model_copy(update={"topic_key": "topic_3550300"}),
+    ]
+
+    selection = select_candidates(
+        candidates,
+        settings={
+            "normalClipCount": 2,
+            "shortCount": 0,
+            "selectionPolicy": "strict_quality",
+            "maxOverlapRatio": 0.8,
+            "minFinalScore": 60.0,
+        },
+    )
+
+    assert [candidate.id for candidate in selection.normal_clips] == [
+        "normal_art_wide",
+        "normal_history",
+    ]
+    rejection = next(
+        item
+        for item in selection.rejected_candidates
+        if item.candidate_id == "normal_art_nested"
+    )
+    assert rejection.reasons == ["high_overlap"]
+    assert rejection.details["overlapRatio"] > 0.5
 
 
 def test_selection_refills_rejected_candidates_and_separates_types() -> None:
@@ -219,6 +346,7 @@ def test_fill_requested_relaxes_overlap_when_needed() -> None:
             "shortCount": 0,
             "maxOverlapRatio": 0.8,
             "minFinalScore": 60.0,
+            "selectionPolicy": "fill_requested",
         },
     )
 
@@ -268,6 +396,7 @@ def test_fill_requested_keeps_hard_gate_failures_rejected() -> None:
             "normalClipCount": 2,
             "shortCount": 0,
             "minFinalScore": 60.0,
+            "selectionPolicy": "fill_requested",
         },
     )
 

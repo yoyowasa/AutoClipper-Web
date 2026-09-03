@@ -20,6 +20,7 @@ from app.scoring.quality_gate import (
 
 SELECTED_CLIPS_FILENAME = "selected_clips.json"
 SelectionPolicy = Literal["fill_requested", "strict_quality"]
+NORMAL_TOPIC_MAX_OVERLAP_RATIO = 0.5
 
 
 class CandidateRejection(BaseModel):
@@ -35,7 +36,7 @@ class CandidateSelection(BaseModel):
     normal_clips: list[Candidate] = Field(default_factory=list, alias="normalClips")
     shorts: list[Candidate] = Field(default_factory=list)
     rejected_candidates: list[CandidateRejection] = Field(default_factory=list, alias="rejectedCandidates")
-    selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
+    selection_policy: SelectionPolicy = Field(default="strict_quality", alias="selectionPolicy")
     requested_normal_count: int = Field(default=0, alias="requestedNormalCount")
     requested_short_count: int = Field(default=0, alias="requestedShortCount")
     hard_gate_passed_count: int = Field(default=0, alias="hardGatePassedCount")
@@ -61,7 +62,7 @@ class CandidateSelectionSettings(BaseModel):
     short_count: int = Field(default=3, ge=0)
     max_overlap_ratio: float = Field(default=0.8, ge=0, le=1)
     cross_type_overlap_dedupe: bool = False
-    selection_policy: SelectionPolicy = "fill_requested"
+    selection_policy: SelectionPolicy = "strict_quality"
     quality_gate: QualityGateSettings = Field(default_factory=QualityGateSettings)
 
 
@@ -194,6 +195,42 @@ def _overlap_rejection(
     return None
 
 
+def _same_type_overlap_threshold(
+    candidate_type: CandidateType,
+    configured_threshold: float,
+) -> float:
+    """Keep normal clips from representing the same explanatory passage."""
+
+    if candidate_type == "normal":
+        return min(configured_threshold, NORMAL_TOPIC_MAX_OVERLAP_RATIO)
+    return configured_threshold
+
+
+def _normal_topic_rejection(
+    candidate: Candidate,
+    selected: Sequence[Candidate],
+) -> CandidateRejection | None:
+    if candidate.type != "normal" or not candidate.topic_key:
+        return None
+    topic_key = candidate.topic_key.casefold()
+    for selected_candidate in selected:
+        if (
+            selected_candidate.type == "normal"
+            and selected_candidate.topic_key
+            and selected_candidate.topic_key.casefold() == topic_key
+        ):
+            return CandidateRejection(
+                candidate_id=candidate.id,
+                type=candidate.type,
+                reasons=["duplicate_topic"],
+                details={
+                    "topicKey": candidate.topic_key,
+                    "duplicateOf": selected_candidate.id,
+                },
+            )
+    return None
+
+
 def _max_overlap_ratio(candidate: Candidate, selected: Sequence[Candidate]) -> float:
     if not selected:
         return 0.0
@@ -263,16 +300,29 @@ def _append_selected_from_pool(
     overlap_threshold: float | None = None,
     overlap_relaxed: bool = False,
 ) -> None:
-    threshold = settings.max_overlap_ratio if overlap_threshold is None else overlap_threshold
+    configured_threshold = (
+        settings.max_overlap_ratio if overlap_threshold is None else overlap_threshold
+    )
     for candidate in pool:
         if len(selected) >= requested_count:
             return
         if candidate.id in selected_ids:
             continue
+        topic_rejection = _normal_topic_rejection(candidate, selected)
+        if topic_rejection is not None:
+            overlap_rejections_by_id[candidate.id] = topic_rejection
+            continue
         overlap_rejection = _overlap_rejection(
             candidate,
             selected=selected,
-            max_overlap_ratio=threshold,
+            max_overlap_ratio=(
+                configured_threshold
+                if overlap_relaxed
+                else _same_type_overlap_threshold(
+                    candidate.type,
+                    configured_threshold,
+                )
+            ),
         )
         if overlap_rejection is not None:
             overlap_rejections_by_id[candidate.id] = overlap_rejection
@@ -314,10 +364,17 @@ def _record_final_overlap_rejections(
     for candidate in candidates:
         if candidate.id in selected_ids:
             continue
+        topic_rejection = _normal_topic_rejection(candidate, selected)
+        if topic_rejection is not None:
+            overlap_rejections_by_id.setdefault(candidate.id, topic_rejection)
+            continue
         overlap_rejection = _overlap_rejection(
             candidate,
             selected=selected,
-            max_overlap_ratio=settings.max_overlap_ratio,
+            max_overlap_ratio=_same_type_overlap_threshold(
+                candidate.type,
+                settings.max_overlap_ratio,
+            ),
         )
         if overlap_rejection is not None:
             overlap_rejections_by_id.setdefault(candidate.id, overlap_rejection)
@@ -372,10 +429,18 @@ def _select_strict_for_type(
             continue
         hard_gate_passed_count += 1
 
+        topic_rejection = _normal_topic_rejection(candidate, selected)
+        if topic_rejection is not None:
+            overlap_rejections_by_id[candidate.id] = topic_rejection
+            continue
+
         overlap_rejection = _overlap_rejection(
             candidate,
             selected=selected,
-            max_overlap_ratio=settings.max_overlap_ratio,
+            max_overlap_ratio=_same_type_overlap_threshold(
+                candidate.type,
+                settings.max_overlap_ratio,
+            ),
         )
         if overlap_rejection is not None:
             overlap_rejections_by_id[candidate.id] = overlap_rejection

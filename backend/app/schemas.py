@@ -438,7 +438,7 @@ class JobSettings(BaseModel):
     subtitle_correction_batch_size: int = Field(default=40, ge=1, le=100, alias="subtitleCorrectionBatchSize")
     subtitle_correction_context_segments: int = Field(default=2, ge=0, le=10, alias="subtitleCorrectionContextSegments")
     subtitle_correction_fallback_enabled: bool = Field(default=True, alias="subtitleCorrectionFallbackEnabled")
-    selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
+    selection_policy: SelectionPolicy = Field(default="strict_quality", alias="selectionPolicy")
     cross_type_overlap_dedupe: bool = Field(default=False, alias="crossTypeOverlapDedupe")
     heatmap_interval_mode: bool = Field(default=False, alias="heatmapIntervalMode")
     initial_selection_provider: InitialSelectionProvider = Field(

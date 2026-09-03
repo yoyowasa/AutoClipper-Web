@@ -1,5 +1,6 @@
 import type { JobStatusResponse } from "../lib/types";
 import { automationGateDisplay } from "../lib/automationQuality";
+import { InitialSelectionStatusBanner } from "./InitialSelectionStatusBanner";
 import { StatusBadge } from "./StatusBadge";
 
 const errorLabels: Record<string, string> = {
@@ -81,53 +82,6 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
   } else if (heatmapStatus === "not_provided") {
     heatmapLabel = "人気度JSONなし（内容のみで選定）";
   }
-  const initialSelectionProvider =
-    job.details.initialSelectionProvider === "codex" ? "codex" : "legacy";
-  const codexSelectionStatus =
-    typeof job.details.codexInitialSelectionStatus === "string"
-      ? job.details.codexInitialSelectionStatus
-      : null;
-  const codexFallbackUsed = job.details.codexInitialSelectionFallbackUsed === true;
-  const codexSelectionError =
-    typeof job.details.codexInitialSelectionError === "string"
-      ? job.details.codexInitialSelectionError
-      : null;
-  const codexRequestedNormal = detailNumber("codexInitialSelectionRequestedNormalCount");
-  const codexRequestedShort = detailNumber("codexInitialSelectionRequestedShortCount");
-  const codexSelectedNormal = detailNumber("codexInitialSelectionSelectedNormalCount");
-  const codexSelectedShort = detailNumber("codexInitialSelectionSelectedShortCount");
-  const codexSelectionFinished =
-    codexSelectionStatus === "ready" ||
-    codexSelectionStatus === "completed" ||
-    codexSelectionStatus === "success";
-  let codexSelectionLabel: string | null = null;
-  let codexSelectionTone = "text-sky-700";
-  if (initialSelectionProvider === "codex") {
-    if (codexFallbackUsed) {
-      codexSelectionLabel = "Codex初期選定を使えず、従来選定に切り替えました";
-      codexSelectionTone = "text-amber-700";
-    } else if (codexSelectionError || codexSelectionStatus === "failed") {
-      codexSelectionLabel = `Codex初期選定に失敗${
-        codexSelectionError ? `: ${codexSelectionError}` : ""
-      }`;
-      codexSelectionTone = "text-red-700";
-    } else if (
-      codexSelectionStatus === "queued" ||
-      codexSelectionStatus === "running" ||
-      codexSelectionStatus === "selecting"
-    ) {
-      codexSelectionLabel = "Codexで初期選定中";
-    } else if (codexSelectionFinished) {
-      codexSelectionLabel = `Codex初期選定: 通常 ${codexSelectedNormal ?? 0}/${
-        codexRequestedNormal ?? "-"
-      }・ショート ${codexSelectedShort ?? 0}/${codexRequestedShort ?? "-"}`;
-      codexSelectionTone = "text-emerald-700";
-    } else if (job.status === "selecting_clips") {
-      codexSelectionLabel = "Codexで初期選定中";
-    } else {
-      codexSelectionLabel = "Codexで初期選定（文字起こし完了後に実行）";
-    }
-  }
   const showCorrectionProgress =
     job.status === "correcting_subtitles" &&
     correctionProgress !== null &&
@@ -194,14 +148,11 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
           </p>
         ) : null}
 
-        {codexSelectionLabel ? (
-          <p
-            className={`text-xs ${codexSelectionTone}`}
-            data-testid="codex-initial-selection-status"
-          >
-            {codexSelectionLabel}
-          </p>
-        ) : null}
+        <InitialSelectionStatusBanner
+          currentStep={job.currentStep}
+          details={job.details}
+          jobStatus={job.status}
+        />
 
         {automationGate.visible ? (
           <div

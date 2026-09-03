@@ -148,6 +148,23 @@ def make_project(tmp_path: Path, *, env_text: str = "OPENAI_API_KEY=test-secret\
     return root
 
 
+def compatible_bridge_status(
+    module: Path,
+    *,
+    pid: int,
+    state: str = "ready",
+    **extra: object,
+) -> dict[str, object]:
+    return {
+        "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
+        "state": state,
+        "pid": pid,
+        "bridgeBuildFingerprint": launcher_controller.bridge_build_fingerprint(module),
+        "contractFingerprint": launcher_controller.BRIDGE_CONTRACT_FINGERPRINT,
+        **extra,
+    }
+
+
 def make_controller(
     root: Path,
     runner: FakeRunner,
@@ -841,11 +858,7 @@ def test_launcher_starts_codex_bridge_with_host_python(tmp_path: Path) -> None:
         status.parent.mkdir(parents=True, exist_ok=True)
         status.write_text(
             json.dumps(
-                {
-                    "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
-                    "state": "ready",
-                    "pid": 321,
-                }
+                compatible_bridge_status(module, pid=321)
             ),
             encoding="utf-8",
         )
@@ -874,6 +887,139 @@ def test_launcher_starts_codex_bridge_with_host_python(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "fingerprint_field",
+    ["bridgeBuildFingerprint", "contractFingerprint"],
+)
+def test_launcher_restarts_live_bridge_when_fingerprint_is_stale(
+    tmp_path: Path,
+    fingerprint_field: str,
+) -> None:
+    root = make_project(tmp_path)
+    module = root / "launcher" / "codex_bridge.py"
+    module.parent.mkdir()
+    module.write_text("# current bridge fixture\n", encoding="utf-8")
+    status = root / "storage" / "codex_bridge" / "status.json"
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(
+        json.dumps(
+            {
+                **compatible_bridge_status(module, pid=111),
+                fingerprint_field: "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    stop_request = root / "storage" / "codex_bridge" / "stop.request"
+    observed: list[list[str]] = []
+
+    def process_checker(pid: int) -> bool:
+        if pid == 111:
+            return not stop_request.exists()
+        return pid == 222
+
+    def start_bridge(command: list[str], _cwd: Path) -> None:
+        observed.append(list(command))
+        status.write_text(
+            json.dumps(compatible_bridge_status(module, pid=222)),
+            encoding="utf-8",
+        )
+
+    controller = make_controller(
+        root,
+        FakeRunner(),
+        background_process_starter=start_bridge,
+        process_checker=process_checker,
+    )
+
+    assert controller.ensure_codex_bridge_running(timeout=1, poll_interval=0.1)
+    assert len(observed) == 1
+    assert json.loads(status.read_text(encoding="utf-8"))["pid"] == 222
+    assert not stop_request.exists()
+
+
+def test_launcher_rejects_live_bridge_with_stale_contract_fingerprint(
+    tmp_path: Path,
+) -> None:
+    root = make_project(tmp_path)
+    module = root / "launcher" / "codex_bridge.py"
+    module.parent.mkdir()
+    module.write_text("# current bridge fixture\n", encoding="utf-8")
+    status = root / "storage" / "codex_bridge" / "status.json"
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(
+        json.dumps(
+            {
+                **compatible_bridge_status(module, pid=111),
+                "contractFingerprint": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    controller = make_controller(
+        root,
+        FakeRunner(),
+        process_checker=lambda pid: pid == 111,
+    )
+
+    assert controller.codex_bridge_ready() is False
+
+
+def test_launcher_waits_for_stopped_bridge_process_to_exit_before_restart(
+    tmp_path: Path,
+) -> None:
+    root = make_project(tmp_path)
+    module = root / "launcher" / "codex_bridge.py"
+    module.parent.mkdir()
+    module.write_text("# current bridge fixture\n", encoding="utf-8")
+    status = root / "storage" / "codex_bridge" / "status.json"
+    status.parent.mkdir(parents=True, exist_ok=True)
+    status.write_text(
+        json.dumps(
+            {
+                **compatible_bridge_status(module, pid=111),
+                "bridgeBuildFingerprint": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    stop_request = root / "storage" / "codex_bridge" / "stop.request"
+    process_checks = 0
+    observed: list[list[str]] = []
+
+    def process_checker(pid: int) -> bool:
+        nonlocal process_checks
+        if pid == 111:
+            process_checks += 1
+            if stop_request.exists():
+                status.write_text(
+                    json.dumps(
+                        compatible_bridge_status(module, pid=111, state="stopped")
+                    ),
+                    encoding="utf-8",
+                )
+            return process_checks < 4
+        return pid == 222
+
+    def start_bridge(command: list[str], _cwd: Path) -> None:
+        observed.append(list(command))
+        status.write_text(
+            json.dumps(compatible_bridge_status(module, pid=222)),
+            encoding="utf-8",
+        )
+
+    controller = make_controller(
+        root,
+        FakeRunner(),
+        background_process_starter=start_bridge,
+        process_checker=process_checker,
+    )
+
+    assert controller.ensure_codex_bridge_running(timeout=1, poll_interval=0.1)
+    assert process_checks >= 4
+    assert len(observed) == 1
+
+
 def test_launcher_start_continues_when_codex_bridge_is_unavailable(
     tmp_path: Path,
 ) -> None:
@@ -887,12 +1033,12 @@ def test_launcher_start_continues_when_codex_bridge_is_unavailable(
         status.parent.mkdir(parents=True, exist_ok=True)
         status.write_text(
             json.dumps(
-                {
-                    "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
-                    "state": "error",
-                    "pid": 0,
-                    "errorCode": "codex_login_missing",
-                }
+                compatible_bridge_status(
+                    module,
+                    pid=0,
+                    state="error",
+                    errorCode="codex_login_missing",
+                )
             ),
             encoding="utf-8",
         )
@@ -923,11 +1069,7 @@ def test_bridge_start_does_not_delete_existing_status_during_race(
     status.parent.mkdir(parents=True, exist_ok=True)
     status.write_text(
         json.dumps(
-            {
-                "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
-                "state": "ready",
-                "pid": 111,
-            }
+                compatible_bridge_status(module, pid=111)
         ),
         encoding="utf-8",
     )
@@ -937,11 +1079,7 @@ def test_bridge_start_does_not_delete_existing_status_during_race(
         existing_status_seen.append(status.is_file())
         status.write_text(
             json.dumps(
-                {
-                    "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
-                    "state": "ready",
-                    "pid": 222,
-                }
+                compatible_bridge_status(module, pid=222)
             ),
             encoding="utf-8",
         )
@@ -966,11 +1104,7 @@ def test_launcher_stop_signals_live_codex_bridge(tmp_path: Path) -> None:
     status.parent.mkdir(parents=True, exist_ok=True)
     status.write_text(
         json.dumps(
-            {
-                "schemaVersion": launcher_controller.BRIDGE_PROTOCOL_VERSION,
-                "state": "ready",
-                "pid": 654,
-            }
+                compatible_bridge_status(module, pid=654)
         ),
         encoding="utf-8",
     )

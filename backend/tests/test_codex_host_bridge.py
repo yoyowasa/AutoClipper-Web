@@ -17,17 +17,23 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.candidates.codex_initial_selection import (  # noqa: E402
     CodexInitialSelectionHostResponse,
     codex_initial_selection_response_schema,
+    codex_topic_selection_response_schema,
 )
 from app.scoring.title_hook_suggestions import TITLE_HOOK_GENERATION_SCHEMA  # noqa: E402
 
 from launcher.codex_bridge import (  # noqa: E402
+    BRIDGE_BUILD_FINGERPRINT,
+    BRIDGE_CONTRACT_FINGERPRINT,
     BRIDGE_PROTOCOL_VERSION,
     EXPECTED_RESPONSE_SCHEMA_SHA256,
     INITIAL_CLIP_SELECTION_TASK,
+    INITIAL_CLIP_TOPIC_SELECTION_TASK,
     INITIAL_CLIP_SELECTION_TIMEOUT_SECONDS,
+    MAX_PROMPT_CHARS,
     REQUEST_TASK,
     TITLE_HOOK_OUTPUT_SCHEMA,
     _response_schema_sha256,
+    _write_status,
     BridgeRequest,
     CodexRunResult,
     atomic_write_json,
@@ -103,6 +109,15 @@ def test_title_hook_bridge_schema_matches_backend_generation_contract() -> None:
     assert EXPECTED_RESPONSE_SCHEMA_SHA256[REQUEST_TASK] == _response_schema_sha256(
         TITLE_HOOK_OUTPUT_SCHEMA
     )
+
+
+def test_two_stage_selection_schemas_match_backend_contracts() -> None:
+    assert EXPECTED_RESPONSE_SCHEMA_SHA256[
+        INITIAL_CLIP_TOPIC_SELECTION_TASK
+    ] == _response_schema_sha256(codex_topic_selection_response_schema())
+    assert EXPECTED_RESPONSE_SCHEMA_SHA256[
+        INITIAL_CLIP_SELECTION_TASK
+    ] == _response_schema_sha256(codex_initial_selection_response_schema())
 
 
 def test_title_hook_bridge_schema_avoids_unsupported_unique_items() -> None:
@@ -271,8 +286,8 @@ def test_invalid_image_escape_is_rejected_without_codex_execution(tmp_path: Path
 
     assert response["state"] == "failed"
     assert response["error"] == {
-        "code": "request_invalid",
-        "message": "Codex bridge request failed.",
+        "code": "image_path_outside_storage",
+        "message": "Codex bridge request validation failed.",
     }
     assert called is False
 
@@ -410,7 +425,23 @@ def test_processing_request_refreshes_status_heartbeat_until_response(
     assert final_status["state"] == "ready"
     assert final_status["requestState"] == "idle"
     assert final_status["requestId"] is None
+    assert final_status["bridgeBuildFingerprint"] == BRIDGE_BUILD_FINGERPRINT
+    assert final_status["contractFingerprint"] == BRIDGE_CONTRACT_FINGERPRINT
+    assert final_status["taskSchemaFingerprints"] == EXPECTED_RESPONSE_SCHEMA_SHA256
     assert (paths.responses / f"{request_id}.json").is_file()
+
+
+def test_error_and_stopped_status_keep_bridge_contract_metadata(tmp_path: Path) -> None:
+    paths = bridge_paths(tmp_path)
+    ensure_bridge_directories(paths)
+
+    for state in ("error", "stopped"):
+        _write_status(paths, state, errorCode="fixture" if state == "error" else None)
+        status = json.loads(paths.status.read_text(encoding="utf-8"))
+        assert status["state"] == state
+        assert status["bridgeBuildFingerprint"] == BRIDGE_BUILD_FINGERPRINT
+        assert status["contractFingerprint"] == BRIDGE_CONTRACT_FINGERPRINT
+        assert status["taskSchemaFingerprints"] == EXPECTED_RESPONSE_SCHEMA_SHA256
 
 
 def test_thread_id_parser_ignores_untrusted_non_uuid_values() -> None:
@@ -492,13 +523,63 @@ def test_initial_selection_uses_supplied_schema_and_extended_timeout(
     CodexInitialSelectionHostResponse.model_validate(response)
 
 
-def test_one_hour_dense_transcript_prompt_fits_bridge_limit(tmp_path: Path) -> None:
+def test_initial_topic_selection_returns_completed_host_response(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / "AutoClipper Web"
+    paths = bridge_paths(project_root)
+    ensure_bridge_directories(paths)
+    request_id = "2" * 32
+    request_path = paths.processing / f"{request_id}.json"
+    payload = request_payload(request_id)
+    payload["task"] = INITIAL_CLIP_TOPIC_SELECTION_TASK
+    payload["responseSchema"] = codex_topic_selection_response_schema()
+    atomic_write_json(request_path, payload)
+    thread_id = str(uuid.uuid4())
+
+    def fake_runner(
+        command: list[str] | tuple[str, ...],
+        _prompt: str,
+        _cwd: Path,
+        _timeout: float,
+        _stop_request: Path | None,
+    ) -> CodexRunResult:
+        command_list = list(command)
+        output_path = Path(
+            command_list[command_list.index("--output-last-message") + 1]
+        )
+        output_path.write_text(
+            json.dumps({"selectedTopics": []}),
+            encoding="utf-8",
+        )
+        return CodexRunResult(
+            0,
+            json.dumps({"type": "thread.started", "thread_id": thread_id}),
+        )
+
+    response = process_request_file(
+        request_path,
+        project_root=project_root,
+        codex_executable="codex.exe",
+        runner=fake_runner,
+    )
+
+    assert response["state"] == "completed"
+    assert response["threadId"] == thread_id
+    CodexInitialSelectionHostResponse.model_validate(response)
+
+
+def test_two_stage_prompt_limit_rejects_full_transcript_payload(tmp_path: Path) -> None:
     payload = request_payload("dense-transcript")
-    payload["prompt"] = "字" * 320_000
+    payload["prompt"] = "字" * MAX_PROMPT_CHARS
 
     request = validate_request(payload, tmp_path)
 
-    assert len(request.prompt) == 320_000
+    assert len(request.prompt) == MAX_PROMPT_CHARS
+
+    payload["prompt"] += "字"
+    with pytest.raises(ValueError, match="prompt_too_large"):
+        validate_request(payload, tmp_path)
 
 
 def test_initial_selection_failed_envelope_matches_worker_contract(
@@ -568,8 +649,10 @@ def test_initial_selection_rejects_missing_or_external_response_schema(
         runner=fake_runner,
     )
 
-    assert missing_response["error"]["code"] == "request_invalid"
-    assert external_response["error"]["code"] == "request_invalid"
+    assert missing_response["error"]["code"] == "response_schema_missing"
+    assert external_response["error"]["code"] == (
+        "response_schema_external_ref_forbidden"
+    )
     assert called is False
 
 
@@ -600,7 +683,10 @@ def test_task_schema_contract_rejects_valid_but_modified_schema(
         runner=fake_runner,
     )
 
-    assert response["error"]["code"] == "request_invalid"
+    assert response["error"]["code"] == "response_schema_contract_mismatch"
+    assert response["error"]["message"] == (
+        "Response schema does not match the running Codex bridge contract."
+    )
     assert called is False
 
 

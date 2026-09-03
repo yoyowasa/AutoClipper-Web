@@ -228,6 +228,25 @@ export type JobStatusDetails = Record<string, unknown> & {
   automationGateAttentionClipIds?: string[];
   automationGateAutoPassedClips?: number;
   automationGateAttentionClips?: number;
+  initialSelectionProvider?: "legacy" | "codex";
+  codexInitialSelectionSummaryAvailable?: boolean;
+  codexInitialSelectionPhase?: "initial" | "reselection" | string | null;
+  codexInitialSelectionStatus?: string | null;
+  codexInitialSelectionFallbackUsed?: boolean;
+  codexInitialSelectionFallbackReason?: string | null;
+  codexInitialSelectionError?: string | null;
+  codexInitialSelectionRequestedNormalCount?: number | null;
+  codexInitialSelectionRequestedShortCount?: number | null;
+  codexInitialSelectionSelectedNormalCount?: number | null;
+  codexInitialSelectionSelectedShortCount?: number | null;
+  codexInitialSelectionRetryCount?: number | null;
+  codexInitialSelectionAttemptCount?: number | null;
+  codexInitialSelectionAttempt?: number | null;
+  codexInitialSelectionHostErrorCode?: string | null;
+  codexInitialSelectionErrorCode?: string | null;
+  codexInitialSelectionErrorMessage?: string | null;
+  codexInitialSelectionPromptVersion?: string | null;
+  codexInitialSelectionRequestId?: string | null;
 };
 
 export type JobStatusResponse = {

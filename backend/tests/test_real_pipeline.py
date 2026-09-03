@@ -2038,6 +2038,7 @@ def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_d
                 "shortCount": 0,
                 "normalMinDuration": 20,
                 "normalMaxDuration": 60,
+                "selectionPolicy": "fill_requested",
                 "useOpenAIScoring": False,
                 "burnSubtitles": False,
             },
@@ -2712,6 +2713,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
         final_score=95.0,
         should_use=True,
         reason="Codex selected a complete topic.",
+        topic_key="automation-mistakes",
         selection_reason="codex_direct",
         used_ai_score=True,
     )
@@ -2949,6 +2951,181 @@ def test_codex_short_pool_rejects_duplicate_and_backfills_after_refinement() -> 
     assert diversity.unfilled_count == 0
     assert selection.unfilled_requested_counts["short"] == 0
     assert any(rejection.candidate_id == "short-shifted" for rejection in selection.rejected_candidates)
+
+
+def test_codex_normal_pool_is_refined_and_reselected_by_quality(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    initially_selected = Candidate(
+        id="normal-initial",
+        type="normal",
+        start=0,
+        end=100,
+        duration=100,
+        transcript_text="最初の候補です。",
+        final_score=80,
+        should_use=True,
+        topic_key="initial-topic",
+        selection_reason="codex_direct",
+    )
+    retained_long = Candidate(
+        id="normal-retained-long",
+        type="normal",
+        start=200,
+        end=560,
+        duration=360,
+        transcript_text="長尺の重要テーマを最後まで説明する候補です。",
+        final_score=95,
+        should_use=True,
+        topic_key="important-long-topic",
+        selection_reason="codex_direct",
+    )
+    result = CodexInitialSelectionResult(
+        selection=CandidateSelection(
+            normalClips=[initially_selected],
+            selectionPolicy="strict_quality",
+            requestedNormalCount=1,
+        ),
+        candidates=[initially_selected, retained_long],
+        summary={},
+    )
+    refined_normal_ids: list[str] = []
+    original_refiner = runner_module._selection_with_refined_boundaries
+
+    def capture_normal_pool(*args: Any, **kwargs: Any) -> Any:
+        selection = args[0]
+        refined_normal_ids.extend(candidate.id for candidate in selection.normal_clips)
+        return original_refiner(*args, **kwargs)
+
+    monkeypatch.setattr(
+        runner_module,
+        "_selection_with_refined_boundaries",
+        capture_normal_pool,
+    )
+
+    selection, scored, _ = _codex_selection_with_diverse_refined_shorts(
+        result,
+        transcript_segments=[],
+        silence_segments=[],
+        scene_segments=[],
+        settings={
+            "enableBoundaryRefinement": False,
+            "normalClipCount": 1,
+            "shortCount": 0,
+            "selectionPolicy": "strict_quality",
+        },
+        timeline_duration=600,
+    )
+
+    assert refined_normal_ids == ["normal-retained-long", "normal-initial"]
+    assert [candidate.id for candidate in selection.normal_clips] == [
+        "normal-retained-long"
+    ]
+    assert {candidate.id for candidate in scored} == {
+        "normal-initial",
+        "normal-retained-long",
+    }
+
+
+def test_codex_normal_pool_keeps_topic_overlap_and_quality_gates_when_fill_requested() -> None:
+    primary = Candidate(
+        id="normal-primary",
+        type="normal",
+        start=0,
+        end=200,
+        duration=200,
+        transcript_text="主要テーマを完結して説明します。",
+        final_score=99,
+        should_use=True,
+        topic_key="primary-topic",
+    )
+    duplicate_topic = Candidate(
+        id="normal-duplicate-topic",
+        type="normal",
+        start=300,
+        end=500,
+        duration=200,
+        transcript_text="同じ主要テーマの別候補です。",
+        final_score=98,
+        should_use=True,
+        topic_key="primary-topic",
+    )
+    overlapping_topic = Candidate(
+        id="normal-overlap",
+        type="normal",
+        start=100,
+        end=260,
+        duration=160,
+        transcript_text="別題材ですが範囲が重なる候補です。",
+        final_score=97,
+        should_use=True,
+        topic_key="overlapping-topic",
+    )
+    distinct = Candidate(
+        id="normal-distinct",
+        type="normal",
+        start=600,
+        end=800,
+        duration=200,
+        transcript_text="独立した別テーマを説明します。",
+        final_score=90,
+        should_use=True,
+        topic_key="distinct-topic",
+    )
+    low_quality = Candidate(
+        id="normal-low-quality",
+        type="normal",
+        start=900,
+        end=1100,
+        duration=200,
+        transcript_text="低品質候補です。",
+        final_score=50,
+        should_use=True,
+        topic_key="low-quality-topic",
+    )
+    result = CodexInitialSelectionResult(
+        selection=CandidateSelection(
+            normalClips=[primary, distinct],
+            selectionPolicy="fill_requested",
+            requestedNormalCount=3,
+        ),
+        candidates=[
+            primary,
+            duplicate_topic,
+            overlapping_topic,
+            distinct,
+            low_quality,
+        ],
+        summary={},
+    )
+
+    selection, _, _ = _codex_selection_with_diverse_refined_shorts(
+        result,
+        transcript_segments=[],
+        silence_segments=[],
+        scene_segments=[],
+        settings={
+            "enableBoundaryRefinement": False,
+            "normalClipCount": 3,
+            "shortCount": 0,
+            "maxOverlapRatio": 0.8,
+            "selectionPolicy": "fill_requested",
+        },
+        timeline_duration=1200,
+    )
+
+    assert [candidate.id for candidate in selection.normal_clips] == [
+        "normal-primary",
+        "normal-distinct",
+    ]
+    assert selection.unfilled_requested_counts["normal"] == 1
+    reasons_by_id = {
+        rejection.candidate_id: rejection.reasons
+        for rejection in selection.rejected_candidates
+    }
+    assert reasons_by_id["normal-duplicate-topic"] == ["duplicate_topic"]
+    assert reasons_by_id["normal-overlap"] == ["high_overlap"]
+    assert reasons_by_id["normal-low-quality"] == ["low_final_score"]
 
 
 def test_codex_short_pool_does_not_pad_when_distinct_moments_are_insufficient() -> None:

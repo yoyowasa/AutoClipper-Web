@@ -1909,11 +1909,17 @@ def _codex_selection_with_diverse_refined_shorts(
         return (-(score if score is not None else 0.0), candidate.id)
 
     candidate_pool = list(result.candidates)
+    normal_pool = sorted(
+        (candidate for candidate in candidate_pool if candidate.type == "normal"),
+        key=rank_key,
+    )
     short_pool = sorted(
         (candidate for candidate in candidate_pool if candidate.type == "short"),
         key=rank_key,
     )
-    pool_selection = result.selection.model_copy(update={"shorts": short_pool})
+    pool_selection = result.selection.model_copy(
+        update={"normal_clips": normal_pool, "shorts": short_pool}
+    )
     refined_pool_selection, refined_candidates = _selection_with_refined_boundaries(
         pool_selection,
         candidate_pool,
@@ -1928,11 +1934,40 @@ def _codex_selection_with_diverse_refined_shorts(
     cross_type_rejections: list[CandidateRejection] = []
     eligible_shorts: list[Candidate] = []
     parsed_settings = parse_selection_settings(settings)
+    missing_topic_rejections = [
+        CandidateRejection(
+            candidateId=candidate.id,
+            type="normal",
+            reasons=["post_refinement_missing_topic_key"],
+        )
+        for candidate in refined_pool_selection.normal_clips
+        if not (candidate.topic_key or "").strip()
+    ]
+    normal_selection = select_candidates(
+        [
+            candidate
+            for candidate in refined_pool_selection.normal_clips
+            if (candidate.topic_key or "").strip()
+        ],
+        settings=parsed_settings.model_copy(
+            update={
+                "normal_clip_count": result.selection.requested_normal_count,
+                "short_count": 0,
+                "selection_policy": "strict_quality",
+            }
+        ),
+        silence_segments=silence_segments,
+    )
+    selected_normals = normal_selection.normal_clips
+    normal_pool_rejections = [
+        *missing_topic_rejections,
+        *normal_selection.rejected_candidates,
+    ]
     for candidate in refined_pool_selection.shorts:
         conflicting_normal = next(
             (
                 normal
-                for normal in refined_pool_selection.normal_clips
+                for normal in selected_normals
                 if parsed_settings.cross_type_overlap_dedupe and time_overlap_ratio(candidate, normal) >= parsed_settings.max_overlap_ratio
             ),
             None,
@@ -1971,12 +2006,20 @@ def _codex_selection_with_diverse_refined_shorts(
     ]
     normal_unfilled = max(
         0,
-        result.selection.requested_normal_count - len(refined_pool_selection.normal_clips),
+        result.selection.requested_normal_count - len(selected_normals),
     )
     short_unfilled = diversity.unfilled_count
     unfilled_reason_counts: dict[str, dict[str, int]] = {}
     if normal_unfilled:
-        unfilled_reason_counts["normal"] = {"insufficient_codex_candidates": normal_unfilled}
+        normal_rejection_counts = Counter(
+            reason
+            for rejection in normal_pool_rejections
+            for reason in rejection.reasons
+        )
+        unfilled_reason_counts["normal"] = {
+            "insufficient_codex_candidates": normal_unfilled,
+            **normal_rejection_counts,
+        }
     if short_unfilled:
         unfilled_reason_counts["short"] = {
             "insufficient_distinct_moments": short_unfilled,
@@ -1986,9 +2029,11 @@ def _codex_selection_with_diverse_refined_shorts(
 
     final_selection = refined_pool_selection.model_copy(
         update={
+            "normal_clips": selected_normals,
             "shorts": list(diversity.selected),
             "rejected_candidates": [
                 *refined_pool_selection.rejected_candidates,
+                *normal_pool_rejections,
                 *cross_type_rejections,
                 *diversity_rejections,
             ],

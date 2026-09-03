@@ -10,6 +10,7 @@
     "lint": "eslint . --max-warnings=0",
     "test:overlay-fit": "tsx tests/overlayTextFit.golden.ts",
     "test:automation-ui": "tsx tests/automationQuality.test.ts",
+    "test:initial-selection-ui": "tsx tests/initialSelectionStatus.test.ts",
     "test:browser-file-save": "tsx tests/browserFileSave.test.ts",
     "test:youtube-posting": "tsx tests/youtubePosting.test.ts"
   },

@@ -121,6 +121,49 @@ GENERIC_GUIDANCE_TERMS = {
     "している",
 }
 
+NORMAL_QUESTION_MARKERS = (
+    "なぜ",
+    "どうして",
+    "とは",
+    "って何",
+    "っていうのは",
+    "なんだろう",
+    "何が",
+    "どんな",
+    "どういう",
+    "ですか",
+)
+
+NORMAL_EXPLANATION_MARKERS = (
+    "理由",
+    "説明",
+    "解説",
+    "仕組み",
+    "というのは",
+    "つまり",
+    "要するに",
+)
+
+NORMAL_EXAMPLE_MARKERS = (
+    "例えば",
+    "たとえば",
+    "具体的",
+    "実際",
+    "ケース",
+    "例を",
+)
+
+NORMAL_CONCLUSION_MARKERS = (
+    "結論",
+    "だから",
+    "なので",
+    "ということ",
+    "大事",
+    "重要",
+    "と思います",
+    "になります",
+)
+
 
 @dataclass(frozen=True)
 class CandidateClipPreference:
@@ -233,6 +276,75 @@ def generic_content_flags(text: str, preference: CandidateClipPreference) -> lis
         flags.append("generic_intro_outro")
     if preference.exclude_promotional_content and _pattern_penalty(text, PROMOTIONAL_PATTERNS) > 0:
         flags.append("promotional_content")
+    return flags
+
+
+def normal_topic_structure_score(text: str) -> float:
+    """Score an explanatory topic without rewarding a particular duration."""
+
+    normalized = normalize_content_text(text)
+    groups = (
+        (NORMAL_QUESTION_MARKERS, 4.0),
+        (NORMAL_EXPLANATION_MARKERS, 4.0),
+        (NORMAL_EXAMPLE_MARKERS, 3.0),
+        (NORMAL_CONCLUSION_MARKERS, 4.0),
+    )
+    matched_groups = 0
+    score = 0.0
+    for markers, weight in groups:
+        if any(normalize_content_text(marker) in normalized for marker in markers):
+            matched_groups += 1
+            score += weight
+    if matched_groups >= 3:
+        score += 2.0
+    return min(15.0, score)
+
+
+def normal_low_value_reading_penalty(text: str) -> float:
+    """Penalize normal clips dominated by name/thanks/superchat reading.
+
+    Shorts intentionally do not use this penalty because a short reaction to a
+    comment or superchat can still be a complete highlight.
+    """
+
+    normalized = normalize_content_text(text)
+    thanks_count = normalized.count("ありがとう")
+    superchat_count = normalized.count("スーパーチャット") + normalized.count("スパチャ")
+    readout_count = normalized.count("読み上げ不要") + normalized.count("読みます")
+    name_suffix_count = normalized.count("さん")
+    penalty = (
+        min(14.0, thanks_count * 2.5)
+        + min(8.0, superchat_count * 3.0)
+        + min(5.0, readout_count * 2.5)
+        + min(6.0, max(0, name_suffix_count - 2) * 1.5)
+    )
+    structure_score = normal_topic_structure_score(text)
+    if structure_score >= 10.0:
+        penalty *= 0.35
+    elif structure_score >= 4.0:
+        penalty *= 0.65
+    return min(25.0, penalty)
+
+
+def selection_content_penalty(
+    text: str,
+    preference: CandidateClipPreference,
+    candidate_type: Literal["normal", "short"],
+) -> float:
+    penalty = generic_content_penalty(text, preference)
+    if candidate_type == "normal":
+        penalty += normal_low_value_reading_penalty(text)
+    return min(25.0, penalty)
+
+
+def selection_content_flags(
+    text: str,
+    preference: CandidateClipPreference,
+    candidate_type: Literal["normal", "short"],
+) -> list[str]:
+    flags = generic_content_flags(text, preference)
+    if candidate_type == "normal" and normal_low_value_reading_penalty(text) >= 5.0:
+        flags.append("normal_low_value_reading")
     return flags
 
 

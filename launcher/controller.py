@@ -15,8 +15,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .codex_bridge import (
+    BRIDGE_CONTRACT_FINGERPRINT,
     BRIDGE_PROTOCOL_VERSION,
     atomic_write_json,
+    bridge_build_fingerprint,
     bridge_paths,
     process_is_running,
 )
@@ -498,9 +500,23 @@ class LauncherController:
         return (
             status.get("schemaVersion") == BRIDGE_PROTOCOL_VERSION
             and status.get("state") == "ready"
+            and self._codex_bridge_compatibility_error(status) is None
             and pid > 0
             and self.process_checker(pid)
         )
+
+    def _codex_bridge_compatibility_error(
+        self,
+        status: dict[str, object],
+    ) -> str | None:
+        expected_build = bridge_build_fingerprint(self.codex_bridge_module)
+        if not expected_build:
+            return "codex_bridge_build_unreadable"
+        if status.get("bridgeBuildFingerprint") != expected_build:
+            return "codex_bridge_build_mismatch"
+        if status.get("contractFingerprint") != BRIDGE_CONTRACT_FINGERPRINT:
+            return "codex_bridge_contract_mismatch"
+        return None
 
     def ensure_codex_bridge_running(
         self, *, timeout: float = 20.0, poll_interval: float = 0.25
@@ -511,6 +527,16 @@ class LauncherController:
             return False
 
         self.codex_bridge_paths.root.mkdir(parents=True, exist_ok=True)
+        existing_status = self._codex_bridge_status()
+        try:
+            existing_pid = int(existing_status.get("pid") or 0)
+        except (TypeError, ValueError):
+            existing_pid = 0
+        if existing_pid > 0 and self.process_checker(existing_pid):
+            self.stop_codex_bridge(
+                timeout=min(max(timeout, 1.0), 10.0),
+                poll_interval=poll_interval,
+            )
         self.codex_bridge_paths.stop_request.unlink(missing_ok=True)
         baseline_status = self._codex_bridge_status()
         command = [
@@ -574,9 +600,6 @@ class LauncherController:
         attempts = max(1, math.ceil(max(0.0, timeout) / safe_interval))
         for attempt in range(attempts):
             if not self.process_checker(pid):
-                return True
-            current = self._codex_bridge_status()
-            if current.get("state") == "stopped":
                 return True
             if attempt < attempts - 1:
                 self.sleeper(safe_interval)
