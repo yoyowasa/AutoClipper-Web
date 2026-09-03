@@ -16,23 +16,29 @@ def _usable_face_times(
     start: float,
     end: float,
 ) -> list[float]:
-    """Return sampled times where a usable, right-side face is visible."""
+    """Return sampled times where a usable, right-side face is visible.
+
+    配信画面では同一フレームの衣装やUIを顔として誤検出する場合がある。
+    右側かつ上側にある十分な大きさの検出を人物の顔として優先する。
+    """
     grouped: dict[float, FaceDetection] = {}
     for detection in detections:
         if not start <= detection.start <= end:
             continue
-        if detection.center_x < 0.48 or not 0.38 <= detection.center_y <= 0.86:
+        if detection.center_x < 0.48 or not 0.20 <= detection.center_y <= 0.72:
             continue
-        if detection.width < 0.03 or detection.height < 0.03:
+        if detection.width < 0.04 or detection.height < 0.07:
             continue
         previous = grouped.get(detection.start)
-        score = detection.width * detection.height * (0.75 + detection.center_x * 0.25)
-        previous_score = (
-            previous.width * previous.height * (0.75 + previous.center_x * 0.25)
-            if previous is not None
-            else -1.0
+        current_priority = (
+            detection.center_y,
+            -(detection.width * detection.height),
         )
-        if score > previous_score:
+        previous_priority = (
+            previous.center_y,
+            -(previous.width * previous.height),
+        ) if previous is not None else (float("inf"), 0.0)
+        if current_priority < previous_priority:
             grouped[detection.start] = detection
     return sorted(grouped)
 
@@ -52,8 +58,7 @@ def _candidate_times(
     selected: list[float] = []
     for target in targets:
         if not remaining:
-            selected.append(target)
-            continue
+            break
         closest = min(remaining, key=lambda value: abs(value - target))
         selected.append(closest)
         remaining.remove(closest)

@@ -939,6 +939,10 @@ class ThumbnailRegenerationRequest(BaseModel):
     frame_seconds: float = Field(alias="frameSeconds", ge=0)
     subject_anchor_x: float = Field(default=1.0, alias="subjectAnchorX", ge=0, le=1)
     advance_frame: bool = Field(default=False, alias="advanceFrame")
+    crop_mode: Literal["standard", "close"] = Field(
+        default="standard",
+        alias="cropMode",
+    )
 
 
 class ThumbnailRegenerationResponse(BaseModel):

@@ -145,7 +145,10 @@ export default function ResultsPage() {
     }
   }
 
-  async function regenerateThumbnail(item: ResultExportItem) {
+  async function regenerateThumbnail(
+    item: ResultExportItem,
+    cropMode: "standard" | "close"
+  ) {
     const frameSeconds = Math.min(
       item.duration,
       Math.max(0, item.thumbnailFrameSeconds ?? item.duration * 0.38)
@@ -157,7 +160,8 @@ export default function ResultsPage() {
       await regenerateExportThumbnail(item.id, {
         frameSeconds,
         subjectAnchorX,
-        advanceFrame: true
+        advanceFrame: true,
+        cropMode
       });
       setResults((current) =>
         current

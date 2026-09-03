@@ -235,6 +235,7 @@ def regenerate_export_thumbnail(
         "thumbnail_subject_anchor_x": round(request.subject_anchor_x, 3),
         "thumbnail_advance_frame": request.advance_frame,
         "thumbnail_variant_index": variant_index,
+        "thumbnail_crop_mode": request.crop_mode,
         "thumbnail_request_revision": revision,
         "thumbnail_error_code": None,
     }

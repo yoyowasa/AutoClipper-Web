@@ -133,7 +133,7 @@ def _ready_metadata(
         "thumbnail_width": result.width,
         "thumbnail_height": result.height,
         "thumbnail_template_version": (
-            "raden_normal_v3" if result.kind == "normal" else "short_hook_frame_v1"
+            "raden_normal_v4" if result.kind == "normal" else "short_hook_frame_v1"
         ),
         "thumbnail_error_code": None,
     }

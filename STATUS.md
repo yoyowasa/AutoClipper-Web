@@ -9392,6 +9392,7 @@ pip check: pass
 - `backend/app/render/render_thumbnail.py`
 - `backend/app/jobs/thumbnail_regeneration.py`
 - `backend/app/jobs/thumbnails.py`
+- `backend/app/jobs/thumbnails.py`
 - `backend/app/jobs/queue.py`
 - `backend/app/api/exports.py`
 - `backend/app/api/jobs.py`
@@ -9419,4 +9420,52 @@ pip check: pass
 ### 未解決事項
 
 - 儒烏風亭らでん以外の出演者用テンプレは未実装。
+- ユーザー受入は未確認。
+
+## 2026-09-03 通常サムネの胴体誤検出修正・顔寄り選択
+
+### 目的
+
+- サムネ再生成で人物の顔ではなく胴体だけが大写しになる問題を防ぎ、顔寄り構図も選べるようにする。
+
+### 現在状態・変更
+
+- 実Jobの顔検出結果を確認し、上側の実顔より大きい衣装部分の誤検出を選んでいたことを特定した。
+- 候補選定と描画時クロップの両方で、右側・上側・最小寸法を満たす顔を優先する。
+- 顔検出済み候補が6件未満でも、未検証時刻で穴埋めせず、顔が確認できた時刻だけを巡回する。
+- 結果画面の再生成操作を`別場面（上半身）`と`別場面（顔寄り）`へ分けた。
+- 顔寄りは顔の表示高を`0.34`、上半身は`0.25`として同じテンプレ内で切り替える。
+- 選択した寄り方を`thumbnail_crop_mode`へ保存し、workerの描画へ渡す。
+
+### 変更ファイル
+
+- `backend/app/api/exports.py`
+- `backend/app/jobs/thumbnail_frame_selection.py`
+- `backend/app/jobs/thumbnail_regeneration.py`
+- `backend/app/render/render_thumbnail.py`
+- `backend/app/schemas.py`
+- `backend/tests/test_thumbnail_frame_selection.py`
+- `backend/tests/test_thumbnail_integration.py`
+- `backend/tests/test_thumbnail_rendering.py`
+- `frontend/app/results/[jobId]/page.tsx`
+- `frontend/components/ResultVideoCard.tsx`
+- `frontend/lib/api.ts`
+- `design-qa.md`
+- `STATUS.md`
+
+### 最小検証
+
+- thumbnail関連: `26 passed`。
+- backend全体: `988 passed, 1 skipped`（workspace内basetempで再実行）。
+- ruff: 対象4ファイルで成功。
+- frontend: `typecheck`、`lint`、`build`成功。
+- Docker: backend / workerを`raden_normal_v4`を含む最新版で再buildし、backend health `200`を確認。
+- 実Job `job_c3929427d1414bb6a9a05ec82c57d5ab`: `normal_02`を`130.283秒`、`normal_03`を`60.991秒`で再生成し、両方とも頭・顔・上半身が表示されることを画像確認した。
+- 画像SHA-256: `normal_02`は`168FB1... -> 6C676B...`、`normal_03`は`AD5B04... -> D7123D...`へ変化した。
+- `normal_01`で顔寄りを実行し、`thumbnail_crop_mode=close`、`thumbnail_template_version=raden_normal_v4`、フレーム`274.75秒`、顔・頭の余白、文字との非干渉を確認した。
+- 完成MP4 SHA-256は`C46325670A81F2304D9E6EA376E5618670CCD0EC22132F092AA1C72036A3C261`のままで不変。
+- Browser console: error`0`・warning`0`。
+
+### 未解決事項
+
 - ユーザー受入は未確認。

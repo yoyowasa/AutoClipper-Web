@@ -98,7 +98,8 @@ export function ResultVideoCard({
   auditAvailable?: boolean;
   onReedit?: (item: ResultExportItem) => void;
   onRegenerateThumbnail?: (
-    item: ResultExportItem
+    item: ResultExportItem,
+    cropMode: "standard" | "close"
   ) => void;
   isReediting?: boolean;
   isRegeneratingThumbnail?: boolean;
@@ -222,7 +223,7 @@ export function ResultVideoCard({
                     サムネだけ再生成
                   </h3>
                   <p className="mt-1 text-xs text-neutral-600">
-                    承認済みの文字とデザインは維持し、押すたびに人物の場面だけを切り替えます。完成動画は変更しません。
+                    承認済みの文字とデザインは維持し、人物の場面と寄り方を切り替えます。完成動画は変更しません。
                   </p>
                 </div>
                 {item.thumbnailStatus === "generating" ? (
@@ -231,16 +232,28 @@ export function ResultVideoCard({
                   </span>
                 ) : null}
               </div>
-              <button
-                className="mt-3 min-h-11 w-full bg-amber-600 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
-                disabled={isRegeneratingThumbnail || item.thumbnailStatus === "generating"}
-                type="button"
-                onClick={() => onRegenerateThumbnail(item)}
-              >
-                {item.thumbnailStatus === "generating"
-                  ? "サムネだけ再生成中"
-                  : "サムネだけ再生成"}
-              </button>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <button
+                  className="min-h-11 bg-amber-600 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
+                  disabled={isRegeneratingThumbnail || item.thumbnailStatus === "generating"}
+                  type="button"
+                  onClick={() => onRegenerateThumbnail(item, "standard")}
+                >
+                  {item.thumbnailStatus === "generating"
+                    ? "再生成中"
+                    : "別場面（上半身）"}
+                </button>
+                <button
+                  className="min-h-11 bg-neutral-950 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
+                  disabled={isRegeneratingThumbnail || item.thumbnailStatus === "generating"}
+                  type="button"
+                  onClick={() => onRegenerateThumbnail(item, "close")}
+                >
+                  {item.thumbnailStatus === "generating"
+                    ? "再生成中"
+                    : "別場面（顔寄り）"}
+                </button>
+              </div>
             </section>
           ) : null}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">

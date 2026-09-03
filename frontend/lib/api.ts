@@ -592,7 +592,12 @@ export async function retryJob(jobId: string): Promise<JobCreateResponse> {
 
 export async function regenerateExportThumbnail(
   exportId: string,
-  request: { frameSeconds: number; subjectAnchorX: number; advanceFrame?: boolean }
+  request: {
+    frameSeconds: number;
+    subjectAnchorX: number;
+    advanceFrame?: boolean;
+    cropMode?: "standard" | "close";
+  }
 ): Promise<ThumbnailRegenerationResponse> {
   const response = await fetch(
     `${API_BASE_URL}/api/exports/${exportId}/thumbnail/regenerate`,

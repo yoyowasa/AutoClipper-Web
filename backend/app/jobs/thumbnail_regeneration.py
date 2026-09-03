@@ -21,6 +21,10 @@ from app.storage.paths import StoragePaths, get_storage_paths
 SessionFactory = Callable[[], Session]
 NormalThumbnailRenderer = Callable[..., ThumbnailRenderResult]
 ThumbnailFrameSelector = Callable[..., float]
+THUMBNAIL_FACE_HEIGHT_RATIOS = {
+    "standard": 0.25,
+    "close": 0.34,
+}
 
 
 def _current_revision(payload: dict[str, Any]) -> int:
@@ -116,6 +120,9 @@ def run_export_thumbnail_regeneration(
             source_start = float(payload.get("start", 0.0))
             source_timestamp = source_start + min(frame_seconds, float(export.duration))
             subject_anchor_x = float(payload.get("thumbnail_subject_anchor_x", 1.0))
+            crop_mode = str(payload.get("thumbnail_crop_mode") or "standard")
+            if crop_mode not in THUMBNAIL_FACE_HEIGHT_RATIOS:
+                crop_mode = "standard"
             output_path = thumbnail_output_path(storage.job_outputs(export.job_id), export)
             output_path.resolve(strict=False).relative_to(
                 storage.job_outputs(export.job_id).resolve(strict=False)
@@ -131,6 +138,7 @@ def run_export_thumbnail_regeneration(
                 title_first_line=str(payload.get("thumbnail_line1") or "").strip(),
                 title_second_line=str(payload.get("thumbnail_line2") or "").strip(),
                 subject_anchor_x=min(1.0, max(0.0, subject_anchor_x)),
+                face_height_ratio=THUMBNAIL_FACE_HEIGHT_RATIOS[crop_mode],
             )
             if result.path.resolve() != temp_output.resolve() or not temp_output.is_file():
                 raise RuntimeError("thumbnail renderer returned an unpublished path")
@@ -154,9 +162,10 @@ def run_export_thumbnail_regeneration(
                     "thumbnail_source_time_basis": "source_video_absolute",
                     "thumbnail_width": result.width,
                     "thumbnail_height": result.height,
-                    "thumbnail_template_version": "raden_normal_v3",
+                    "thumbnail_template_version": "raden_normal_v4",
                     "thumbnail_frame_seconds": round(frame_seconds, 3),
                     "thumbnail_variant_index": variant_index,
+                    "thumbnail_crop_mode": crop_mode,
                     "thumbnail_advance_frame": False,
                     "thumbnail_render_revision": revision,
                     "thumbnail_error_code": None,

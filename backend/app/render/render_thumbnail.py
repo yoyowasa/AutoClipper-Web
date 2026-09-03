@@ -158,8 +158,24 @@ def _cover_frame(
     return source.resize((width, height), Image.Resampling.LANCZOS)
 
 
+def _select_primary_face(
+    faces: list[tuple[float, float, float, float]],
+) -> tuple[float, float, float, float] | None:
+    usable = [
+        face
+        for face in faces
+        if face[0] >= 0.46
+        and 0.20 <= face[1] <= 0.72
+        and face[2] >= 0.04
+        and face[3] >= 0.07
+    ]
+    if not usable:
+        return None
+    return min(usable, key=lambda face: (face[1], -(face[2] * face[3])))
+
+
 def _primary_face(image: Image.Image) -> tuple[float, float, float, float] | None:
-    """Detect the largest usable face in the right half of one source frame."""
+    """Detect the upper-most usable face in the right half of one source frame."""
     try:
         import cv2
         import numpy as np
@@ -180,13 +196,11 @@ def _primary_face(image: Image.Image) -> tuple[float, float, float, float] | Non
         minSize=(36, 36),
     )
     height, width = gray.shape[:2]
-    usable: list[tuple[float, float, float, float]] = []
+    normalized_faces: list[tuple[float, float, float, float]] = []
     for x, y, face_width, face_height in faces:
         center_x = (float(x) + float(face_width) / 2) / width
         center_y = (float(y) + float(face_height) / 2) / height
-        if center_x < 0.46 or not 0.38 <= center_y <= 0.88:
-            continue
-        usable.append(
+        normalized_faces.append(
             (
                 center_x,
                 center_y,
@@ -194,9 +208,7 @@ def _primary_face(image: Image.Image) -> tuple[float, float, float, float] | Non
                 float(face_height) / height,
             )
         )
-    if not usable:
-        return None
-    return max(usable, key=lambda face: face[2] * face[3] * (0.75 + face[0] * 0.25))
+    return _select_primary_face(normalized_faces)
 
 
 def _portrait_frame(
@@ -206,6 +218,7 @@ def _portrait_frame(
     *,
     frame_config: dict[str, Any],
     anchor_x: float,
+    face_height_ratio: float | None = None,
 ) -> Image.Image:
     source = image.convert("RGB")
     face = _primary_face(source)
@@ -239,7 +252,17 @@ def _portrait_frame(
         return crop.resize((width, height), Image.Resampling.LANCZOS)
 
     center_x, center_y, _face_width, face_height = face
-    target_face_height = max(0.05, float(frame_config.get("face_height_ratio", 0.25)))
+    target_face_height = min(
+        0.5,
+        max(
+            0.05,
+            float(
+                frame_config.get("face_height_ratio", 0.25)
+                if face_height_ratio is None
+                else face_height_ratio
+            ),
+        ),
+    )
     crop_height = source.height * face_height / target_face_height
     crop_height = min(
         source.height * float(frame_config.get("max_crop_height_ratio", 0.72)),
@@ -470,6 +493,7 @@ def _compose_normal_thumbnail(
     template: dict[str, Any],
     font_path: Path,
     subject_anchor_x: float | None,
+    face_height_ratio: float | None = None,
     background_image: Image.Image | None = None,
 ) -> Image.Image:
     canvas_config = template["canvas"]
@@ -511,6 +535,7 @@ def _compose_normal_thumbnail(
         frame_height,
         frame_config=frame_config,
         anchor_x=anchor_x,
+        face_height_ratio=face_height_ratio,
     ).convert("RGBA")
     fitted_frame.putalpha(_feather_mask(frame_width, frame_height, frame_config))
     canvas.alpha_composite(fitted_frame, (frame_x, frame_y))
@@ -598,6 +623,7 @@ def render_normal_thumbnail(
     ffmpeg_bin: str = "ffmpeg",
     command_runner: ThumbnailCommandRunner = _run_command,
     subject_anchor_x: float | None = None,
+    face_height_ratio: float | None = None,
 ) -> ThumbnailRenderResult:
     """Render a 1280x720 normal thumbnail.
 
@@ -640,6 +666,7 @@ def render_normal_thumbnail(
                         template=template,
                         font_path=selected_font,
                         subject_anchor_x=subject_anchor_x,
+                        face_height_ratio=face_height_ratio,
                         background_image=source_background,
                     )
             else:
@@ -651,6 +678,7 @@ def render_normal_thumbnail(
                     template=template,
                     font_path=selected_font,
                     subject_anchor_x=subject_anchor_x,
+                    face_height_ratio=face_height_ratio,
                 )
     composed.save(output, format="JPEG", quality=94, optimize=True, subsampling=0)
     return ThumbnailRenderResult(

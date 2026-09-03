@@ -589,7 +589,12 @@ def test_completed_normal_thumbnail_can_be_queued_without_rerendering_video(
 
     response = thumbnail_client.post(
         "/api/exports/exp_regenerate/thumbnail/regenerate",
-        json={"frameSeconds": 8.5, "subjectAnchorX": 1, "advanceFrame": True},
+        json={
+            "frameSeconds": 8.5,
+            "subjectAnchorX": 1,
+            "advanceFrame": True,
+            "cropMode": "close",
+        },
     )
 
     assert response.status_code == 202
@@ -607,6 +612,7 @@ def test_completed_normal_thumbnail_can_be_queued_without_rerendering_video(
     assert metadata["thumbnail_subject_anchor_x"] == pytest.approx(1)
     assert metadata["thumbnail_advance_frame"] is True
     assert metadata["thumbnail_variant_index"] == 0
+    assert metadata["thumbnail_crop_mode"] == "close"
     assert metadata["thumbnail_request_revision"] == 1
 
 
@@ -642,6 +648,7 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
                 "thumbnail_subject_anchor_x": 1.0,
                 "thumbnail_advance_frame": True,
                 "thumbnail_variant_index": 3,
+                "thumbnail_crop_mode": "close",
                 "thumbnail_request_revision": 2,
                 "thumbnail_render_revision": 1,
                 "thumbnail_status": "generating",
@@ -721,6 +728,7 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
     assert received["input_path"] == source_path
     assert received["frame_time"] == pytest.approx(3628.0)
     assert received["subject_anchor_x"] == pytest.approx(1)
+    assert received["face_height_ratio"] == pytest.approx(0.34)
     assert selected["input_path"] == source_path
     assert selected["clip_start"] == pytest.approx(3600.0)
     assert selected["clip_end"] == pytest.approx(3640.0)
@@ -728,7 +736,8 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["thumbnail_status"] == "ready"
     assert metadata["thumbnail_render_revision"] == 2
-    assert metadata["thumbnail_template_version"] == "raden_normal_v3"
+    assert metadata["thumbnail_template_version"] == "raden_normal_v4"
     assert metadata["thumbnail_frame_seconds"] == pytest.approx(28.0)
+    assert metadata["thumbnail_crop_mode"] == "close"
     assert metadata["thumbnail_advance_frame"] is False
     engine.dispose()

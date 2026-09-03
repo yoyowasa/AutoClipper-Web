@@ -5,9 +5,11 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageChops, ImageDraw, ImageStat
 
+import app.render.render_thumbnail as thumbnail_renderer
 from app.render.render_thumbnail import (
     DEFAULT_NORMAL_FONT_PATH,
     DEFAULT_NORMAL_TEMPLATE_PATH,
+    _select_primary_face,
     build_extract_thumbnail_frame_command,
     render_normal_thumbnail,
     render_short_thumbnail,
@@ -22,6 +24,60 @@ def _synthetic_frame(path: Path, *, size: tuple[int, int]) -> None:
         fill=(196, 128, 84),
     )
     image.save(path, format="JPEG", quality=95)
+
+
+def test_primary_face_prefers_head_over_larger_lower_false_positive() -> None:
+    selected = _select_primary_face(
+        [
+            (0.67, 0.29, 0.08, 0.15),
+            (0.66, 0.51, 0.13, 0.24),
+            (0.64, 0.75, 0.08, 0.15),
+        ]
+    )
+
+    assert selected == (0.67, 0.29, 0.08, 0.15)
+
+
+def test_portrait_frame_supports_a_closer_face_crop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = Image.new("RGB", (320, 180))
+    pixels = source.load()
+    for y in range(source.height):
+        for x in range(source.width):
+            pixels[x, y] = (x % 256, y, (x + y) % 256)
+    monkeypatch.setattr(
+        thumbnail_renderer,
+        "_primary_face",
+        lambda _image: (0.68, 0.32, 0.08, 0.15),
+    )
+    frame_config = {
+        "face_height_ratio": 0.25,
+        "min_crop_height_ratio": 0.30,
+        "max_crop_height_ratio": 0.90,
+        "face_target_x": 0.68,
+        "face_target_y": 0.34,
+        "anchor_x": 1.0,
+    }
+
+    standard = thumbnail_renderer._portrait_frame(
+        source,
+        160,
+        180,
+        frame_config=frame_config,
+        anchor_x=1.0,
+        face_height_ratio=0.25,
+    )
+    close = thumbnail_renderer._portrait_frame(
+        source,
+        160,
+        180,
+        frame_config=frame_config,
+        anchor_x=1.0,
+        face_height_ratio=0.34,
+    )
+
+    assert ImageChops.difference(standard, close).getbbox() is not None
 
 
 def test_build_extract_thumbnail_frame_command_does_not_resize() -> None:
