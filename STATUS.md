@@ -9533,3 +9533,13 @@ pip check: pass
 - 検証: `git diff --check` 成功。前項のテスト結果を引き継ぎ、実装コードへの追加変更なし。
 - 再起動: Docker Desktop起動コマンドを実行したが、Dockerエンジンは未起動。起動ログに `sailor-ingest.sock` の削除/アクセス失敗とbackend終了を確認。Docker API用named pipeへ接続不可、WSLのdocker-desktopはStopped。
 - 未解決: Docker実行環境の復旧が必要。compose更新版の起動・通常環境への反映は未完了。workspace外のソケット削除、Docker初期化、動画データ削除は実施していない。
+
+## 2026-09-08 Docker実行用ソケット復旧・更新版起動
+
+- 目的: ユーザー承認を受け、Dockerの起動障害を復旧し、PUSH済み更新版を通常環境へ反映する。
+- 観測: Dockerプロセス/WSL停止中でも実行用ソケット参照がError 1920。runフォルダーACLはユーザーFullControl。最初のソケット退避後、docker-secrets-engine/engine.sockでも同じ起動エラーを確認。
+- 対応: Docker停止確認後、LocalAppData/Docker/runとLocalAppData/docker-secrets-engineを同じ親の`.stale-20260908-*`へ退避。空フォルダーを再作成しDocker Desktopを起動。途中の退避先も削除せず保持。Docker初期化、WSLディスク削除、動画/DB/ボリューム削除は行っていない。
+- 結果: 2か所を同時に退避した後、Docker Engine 29.7.2が応答。LauncherController.start(rebuild=True, open_browser=False)で更新版を再ビルド/起動成功。
+- 最小検証: backend/frontend/redis/workerの4サービスrunning、backend healthy。GET /healthとfrontend /uploadはHTTP 200。worker profile=gpu、CUDA devices=1。Codex bridge ready。コンテナ内でsubtitle_styles、outer_outline_width、framing_zoom上限3.0を確認。ローカル限定キルゴフォントのread-only mountも存在確認。
+- 変更ファイル: STATUS.mdのみ。アプリコードの追加変更なし。既存の未追跡サムネ素材・storage/qaは対象外。
+- 未確認: 再起動後の実素材での新規書き出しは未実施。やさしさゴシック原本待ちは継続。ソケットが残存した元の原因までは確定していない。
