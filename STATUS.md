@@ -9525,3 +9525,11 @@ pip check: pass
 - やさしさゴシックは公式BOOTHログインが必要。ユーザーに原本ZIP/フォントを依頼済み。未追加であり、似たフォントへの代替はしていない。
 - Dockerエンジンに接続できず、compose通常起動環境への反映・実素材での顔アップ受入は未確認。Docker設定の起動成功とは扱わない。
 - この作業のcommit/PUSHは未実施。
+
+## 2026-09-08 字幕個別書式のPUSH・再起動試行
+
+- 目的: 検証済みの字幕個別書式・二重縁取り・顔アップ変更をPUSHし、通常環境へ反映する。
+- PUSH: `dc07537` を `origin/codex/task-132-content-first-selection` へ送信成功。既存の未追跡サムネ素材・storage/qaは対象外。再配布禁止フォントは含めていない。
+- 検証: `git diff --check` 成功。前項のテスト結果を引き継ぎ、実装コードへの追加変更なし。
+- 再起動: Docker Desktop起動コマンドを実行したが、Dockerエンジンは未起動。起動ログに `sailor-ingest.sock` の削除/アクセス失敗とbackend終了を確認。Docker API用named pipeへ接続不可、WSLのdocker-desktopはStopped。
+- 未解決: Docker実行環境の復旧が必要。compose更新版の起動・通常環境への反映は未完了。workspace外のソケット削除、Docker初期化、動画データ削除は実施していない。
