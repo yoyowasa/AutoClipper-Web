@@ -1,5 +1,6 @@
 import math
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
@@ -42,6 +43,12 @@ DEFAULT_TITLE_ALIGNMENT = 8
 DEFAULT_SUBTITLE_PRIMARY_COLOR = "#FFFFFF"
 DEFAULT_SUBTITLE_OUTLINE_COLOR = "#000000"
 TEXT_FONT_PRESETS: dict[TextFontPreset, tuple[str, bool]] = {
+    "chikara_yowaku": ("851CHIKARA-YOWAKU", False),
+    "keifont": ("Keifont", False),
+    "mushin": ("Mushin", False),
+    "ankoku_zonji": ("AnkokuZombic", False),
+    "killgo_nb": ("GN-KMBFont-UB-NewstyleKanaB", False),
+    "tanuki_magic": ("Tanuki Permanent Marker", False),
     "sans": ("Noto Sans CJK JP", False),
     "sans_bold": ("Noto Sans CJK JP", True),
     "noto_black": ("Noto Sans JP Black", False),
@@ -106,6 +113,7 @@ class SubtitleEvent:
     start: float
     end: float
     text: str
+    style: ClipTextStyle | None = None
 
 
 @dataclass(frozen=True)
@@ -244,6 +252,8 @@ class ResolvedTextStyle:
     y_percent: float
     position_mode: TextStylePositionMode
     position_override: bool
+    outer_outline_color: str = "#FFFFFF"
+    outer_outline_width: int = 0
 
 
 def _coerce_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
@@ -742,6 +752,8 @@ def _segment_events(segment: TranscriptSegment, layout: SubtitleLayout) -> list[
 
 
 def _can_merge_events(previous: SubtitleEvent, current: SubtitleEvent, layout: SubtitleLayout) -> bool:
+    if previous.style != current.style:
+        return False
     gap = current.start - previous.end
     if gap < -0.01:
         return False
@@ -769,6 +781,7 @@ def _merge_adjacent_events(events: Sequence[SubtitleEvent], layout: SubtitleLayo
                 start=previous.start,
                 end=event.end,
                 text=_normalize_text(f"{previous.text} {event.text}"),
+                style=previous.style,
             )
             continue
         merged.append(event)
@@ -792,7 +805,7 @@ def _apply_minimum_display_duration(
         end = min(target_end, max_end) if max_end > event.start else event.end
         if end <= event.start:
             end = event.end
-        adjusted.append(SubtitleEvent(start=event.start, end=round(end, 3), text=event.text))
+        adjusted.append(replace(event, end=round(end, 3)))
     return adjusted
 
 
@@ -805,8 +818,13 @@ def subtitle_events_for_candidate(
         SubtitleLayout.short() if candidate.type == "short" else SubtitleLayout.normal()
     )
     raw_events: list[SubtitleEvent] = []
-    for segment in clipped_transcript_segments(transcript_segments, candidate):
-        raw_events.extend(_segment_events(segment, active_layout))
+    styles_by_range = {(item.start, item.end): item.style for item in candidate.subtitle_styles}
+    for source_segment in transcript_segments:
+        override = styles_by_range.get((source_segment.start, source_segment.end))
+        for segment in clipped_transcript_segments([source_segment], candidate):
+            raw_events.extend(
+                replace(event, style=override) for event in _segment_events(segment, active_layout)
+            )
     merged = _merge_adjacent_events(raw_events, active_layout)
     adjusted = _apply_minimum_display_duration(
         merged,
@@ -863,6 +881,7 @@ def _subtitle_events_with_hook_scene(
                 start=round(max(shifted_start, suppression_end), 3),
                 end=shifted_end,
                 text=event.text,
+                style=event.style,
             )
         )
     return shifted_body_events, output_duration
@@ -1083,6 +1102,8 @@ def resolve_clip_text_style(
         y_percent=y_percent,
         position_mode=position_mode,
         position_override=position_override,
+        outer_outline_color=style.outer_outline_color if style else "#FFFFFF",
+        outer_outline_width=style.outer_outline_width if style else 0,
     )
 
 
@@ -1122,6 +1143,18 @@ def _clip_style_line(
         margin_x=resolved.margin_x,
         bold=resolved.bold,
     )
+
+
+def _outlined_dialogues(line: str, style: ResolvedTextStyle) -> list[str]:
+    if not style.outer_outline_width:
+        return [line]
+    parts = line.split(",", 9)
+    parts[0] = f"Dialogue: {int(parts[0].split(':')[1]) - 1}"
+    # Both layers share identical glyphs, line breaks, coordinates and times.
+    text = re.sub(r"\\(?:bord[0-9.]+|3c&H[0-9A-Fa-f]+&?|shad[0-9.]+)", "", parts[9])
+    color = _ass_color(style.outer_outline_color, "#FFFFFF")[4:]  # BGR, without ASS alpha
+    parts[9] = rf"{{\bord{style.outline_width + style.outer_outline_width}\3c&H{color}&\shad0}}" + text
+    return [",".join(parts), line]
 
 
 def build_ass_document(
@@ -1200,7 +1233,7 @@ def build_ass_document(
                 font_name=resolved_title_style.font_name,
                 font_size=resolved_title_style.font_size,
                 margin_x=resolved_title_style.margin_x,
-                outline_width=resolved_title_style.outline_width,
+                outline_width=resolved_title_style.outline_width + resolved_title_style.outer_outline_width,
                 shadow=resolved_title_style.shadow,
                 alignment=resolved_title_style.alignment,
                 x_percent=resolved_title_style.x_percent,
@@ -1214,14 +1247,14 @@ def build_ass_document(
                 if resolved_title_style.position_override
                 else ""
             )
-            lines.append(
+            lines.extend(_outlined_dialogues(
                 "Dialogue: "
                 f"1,{format_ass_timestamp(title_start)},{format_ass_timestamp(output_duration)},"
                 f"Title,,0,0,0,,"
                 f"{title_position}"
                 rf"{{\fs{title_fit.effective_font_size}}}"
-                f"{_escape_ass_text(title_fit.ass_text)}"
-            )
+                f"{_escape_ass_text(title_fit.ass_text)}", resolved_title_style
+            ))
 
     if include_hook:
         resolved_hook_style = resolve_clip_text_style(
@@ -1235,7 +1268,7 @@ def build_ass_document(
             font_name=resolved_hook_style.font_name,
             font_size=resolved_hook_style.font_size,
             margin_x=resolved_hook_style.margin_x,
-            outline_width=resolved_hook_style.outline_width,
+            outline_width=resolved_hook_style.outline_width + resolved_hook_style.outer_outline_width,
             shadow=resolved_hook_style.shadow,
             alignment=resolved_hook_style.alignment,
             x_percent=resolved_hook_style.x_percent,
@@ -1249,25 +1282,28 @@ def build_ass_document(
             if resolved_hook_style.position_override
             else ""
         )
-        lines.append(
+        lines.extend(_outlined_dialogues(
             "Dialogue: "
             f"2,{format_ass_timestamp(0.0)},{format_ass_timestamp(hook_end)},"
             f"Hook,Hook,0,0,0,,"
             f"{hook_position}"
             rf"{{\fs{hook_fit.effective_font_size}}}"
-            f"{_escape_ass_text(hook_fit.ass_text)}"
-        )
+            f"{_escape_ass_text(hook_fit.ass_text)}", resolved_hook_style
+        ))
 
-    resolved_subtitle_style = resolve_clip_text_style(
-        candidate.subtitle_style,
-        active_layout,
-        role="subtitle",
-    )
-    subtitle_position = _subtitle_position_tag(
-        candidate.subtitle_style,
-        active_layout,
-    )
     for event in subtitle_events:
+        event_style = event.style or candidate.subtitle_style
+        resolved_subtitle_style = resolve_clip_text_style(event_style, active_layout, role="subtitle")
+        subtitle_position = _subtitle_position_tag(event_style, active_layout)
+        overrides = ""
+        if event.style is not None:
+            resolved = resolved_subtitle_style
+            overrides = (
+                rf"{{\fn{resolved.font_name}\b{int(resolved.bold)}"
+                rf"\1c&H{_ass_color(resolved.primary_color, '#FFFFFF')[4:]}&"
+                rf"\3c&H{_ass_color(resolved.outline_color, '#000000')[4:]}&"
+                rf"\bord{resolved.outline_width}\an{resolved.alignment}}}"
+            )
         split_text = split_subtitle_lines(
             event.text,
             max_chars_per_line=active_layout.max_chars_per_line,
@@ -1279,20 +1315,20 @@ def build_ass_document(
             font_name=resolved_subtitle_style.font_name,
             font_size=resolved_subtitle_style.font_size,
             margin_x=resolved_subtitle_style.margin_x,
-            outline_width=resolved_subtitle_style.outline_width,
+            outline_width=resolved_subtitle_style.outline_width + resolved_subtitle_style.outer_outline_width,
             shadow=resolved_subtitle_style.shadow,
             alignment=resolved_subtitle_style.alignment,
             x_percent=resolved_subtitle_style.x_percent,
             max_lines=min(DEFAULT_SUBTITLE_MAX_LINES, active_layout.max_lines),
         )
         text = _escape_ass_text(subtitle_fit.ass_text)
-        lines.append(
+        lines.extend(_outlined_dialogues(
             "Dialogue: "
             f"0,{format_ass_timestamp(event.start)},{format_ass_timestamp(event.end)},"
-            f"Subtitle,,0,0,0,,{subtitle_position}"
+            f"Subtitle,,0,0,0,,{overrides}{subtitle_position}"
             rf"{{\fs{subtitle_fit.effective_font_size}}}"
-            f"{text}"
-        )
+            f"{text}", resolved_subtitle_style
+        ))
 
     return "\n".join(lines) + "\n"
 

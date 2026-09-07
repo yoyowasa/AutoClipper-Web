@@ -10,6 +10,12 @@ OVERLAY_MIN_FONT_SIZE_PX = 36
 _PUNCTUATION_BREAKS = frozenset("。、！？!?")
 _SOFT_JA_BOUNDARIES = frozenset("でにはをがともやへ")
 _FONT_SIZE_SCALES = {
+    "851CHIKARA-YOWAKU": 1.0,
+    "Keifont": 1024 / 1134,
+    "Mushin": 1.0,
+    "AnkokuZombic": 1.0,
+    "GN-KMBFont-UB-NewstyleKanaB": 1024 / 1230,
+    "Tanuki Permanent Marker": 1.0,
     "Noto Serif CJK JP": 1000 / 1437,
     "Rounded Mplus 1c ExtraBold": 1000 / 1395,
     "Corporate-Logo-Bold-ver3": 1000 / 1400,

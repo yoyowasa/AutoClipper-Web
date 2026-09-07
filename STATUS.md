@@ -9469,3 +9469,59 @@ pip check: pass
 ### 未解決事項
 
 - ユーザー受入は未確認。
+
+## 2026-09-07 承認済み旧Jobの容量整理
+
+### 目的・変更
+
+- ユーザーが削除を承認した8 Jobに対象を固定し、更新日時・参照関係を再確認した。
+- `job_94f59bdad538465783074aaca14da152`は編集中Jobから参照されていたため保護。残り7 Job、対応Export 16件、未参照Videoレコード5件を削除した。
+- 共有元動画4.13 GiBは残存Videoが使用しているため保護。元動画実体3ファイルを含む459ファイル、8.178 GiBを削除した。当初12.62 GiBの見積もりは親Job・共有実体の保護を反映していなかったため訂正。
+- 対象は`storage/outputs`、`storage/temp`、`storage/uploads/.blobs`、`storage/heatmaps`の検証済み絶対パスのみ。`youtube`は変更していない。
+- 実行記録: `.codex_tmp/cleanup-20260907/manifest.json`、`result.json`。削除前DB: 同ディレクトリの`autoclipper-before.db`。運用用スクリプト: `.codex_tmp/cleanup-approved-20260907.ps1`。
+- DBバックアップは整合性とSHA-256を確認。動画実体の退避コピーは作成していないため、このバックアップだけでは削除動画は復元できない。
+
+### 最小検証結果
+
+- storage: 34.312 -> 26.134 GiB。C:空き258.50 GiB（27.89%）。
+- 残存Job 26件（completed 22、予定確認3、字幕確認1）、Video 7件、Export 40件。
+- DB `integrity_check=ok`、`foreign_key_check`違反0。残存Job/Exportの全行が削除前と一致。
+- 残存成果物1222ファイルの存在・サイズ一致、編集中JSON 91件のSHA-256一致、残存元動画の存在を確認。
+
+### 未解決事項
+
+- アプリの自動清掃は今回変更していない。既存清掃の親Job参照保護は未実装であり、今回の整理は参照保護付きの限定スクリプトで行った。
+
+## 2026-09-07 字幕1件ごとの書式・二重縁取り・ショート顔アップ
+
+### 目的・仕様変更
+
+- 通常/ショート共通の字幕書式を維持し、選択した字幕1件だけフォント・色・サイズ・位置・縁を上書きする。部分文字列単位の変更は対象外。
+- 字幕一覧の「この字幕の書式」で該当位置へ移動し、書式エディタを個別モードへ切り替える。「共通書式を編集」「個別設定を解除」を用意。OKまで即時プレビュー、OKで対象clipのみ保存。
+- 文字色・内縁色/幅に外縁色/幅を追加。外縁幅0が既定。タイトル・フック・通常字幕すべて対応。
+- ショートの拡大上限160%→300%。標準100%・顔アップ180%・顔アップ強240%の選択肢を追加。上下左右の既存調整と組み合わせる。
+
+### 変更ファイル・実装
+
+- backend: `candidates/merge_boundaries.py`、`schemas.py`、`jobs/subtitle_review.py`、`api/jobs.py`、`render/subtitles_ass.py`、`render/crop_strategy.py`、`overlay_text.py`。
+- frontend: `app/jobs/[jobId]/subtitles/page.tsx`、`components/ClipTextStyleEditor.tsx`、`lib/types.ts`、`lib/api.ts`、`lib/clipTextStyle.ts`、`lib/subtitlePreview.ts`、`app/globals.css`。
+- 個別書式は元字幕のstart/endと紐付けてclip単位で保持。API省略時は保持、空配列で解除。別clip・隣接/重複字幕への流出を防ぎ、再編集からCandidate/ASSまで引き継ぐ。
+- ASSの二層Dialogueとブラウザの二層文字を実装。改行/fit計算に外縁幅も含める。CSS strokeはASS半径に合わせて直径換算。
+- 851チカラヨワク、けいふぉんと！、無心、暗黒ゾン字、たぬき油性マジックを公式配布由来の未改変ファイルで追加。ライセンスは`frontend/public/fonts/README.md`と同梱文書に記録。
+- キルゴUかなNBは原配布readmeで再配布禁止のためローカルのみ導入。TTFはgitignore/dockerignore対象。別PCへの同梱やイメージ配布はしない。Dockerではローカルfontsディレクトリをread-only mount。
+- 検証追加: `backend/tests/test_phrase_styles.py`、`frontend/tests/phraseStyles.test.ts`。
+
+### 検証結果
+
+- backend全体: `996 passed, 1 skipped`。ruff成功。テスト用DB/storageを`.codex_tmp`配下へ隔離。
+- 初回はroot cwd由来のDB相対パス不一致で既存manual workflow 2件失敗。隔離した絶対パスを指定して再実行し成功。本番DB/編集中Jobは変更していない。
+- frontend: typecheck、lint、build、overlay-fit golden、phraseStylesテスト成功。
+- 分離したQAデータを使い、Chromeで個別書式選択→色/サイズ/外縁変更→OK保存payloadを確認。共通書式nullのまま、個別1件だけ保存。pageerror 0。
+- ローカルFFmpeg/libassで追加6書体の二重縁取りPNGを出力。けいふぉんとの同一保存設定を比較し、赤文字bboxは1080×1920換算で最大4.1px差（ブラウザ縮小表示に伴う丸めを含む）。全書体のピクセル完全一致を保証した結果ではない。
+- QA記録: `.codex_tmp/phrase-qa/`。QA用3009サーバーは停止。Next devが今回自動生成したfrontendのAGENTS/CLAUDEファイルのみ除去し、無関係な変更は残していない。
+
+### 未解決事項
+
+- やさしさゴシックは公式BOOTHログインが必要。ユーザーに原本ZIP/フォントを依頼済み。未追加であり、似たフォントへの代替はしていない。
+- Dockerエンジンに接続できず、compose通常起動環境への反映・実素材での顔アップ受入は未確認。Docker設定の起動成功とは扱わない。
+- この作業のcommit/PUSHは未実施。

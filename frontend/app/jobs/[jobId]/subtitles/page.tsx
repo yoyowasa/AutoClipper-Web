@@ -188,6 +188,7 @@ function shortTitleOutputExpected({
 }
 
 type ClipContentDraft = {
+  subtitleStyles: NonNullable<SubtitleReviewClip["subtitleStyles"]>;
   publicationTitle: string;
   titleCandidates: PostTitleCandidate[];
   recommendedTitleId: string | null;
@@ -276,6 +277,7 @@ function shortFramingEquals(
 }
 
 type ShortFramingRangeProps = {
+  presets?: ReadonlyArray<{ label: string; value: number }>;
   ariaLabel: string;
   disabled: boolean;
   endLabel: string;
@@ -291,6 +293,7 @@ type ShortFramingRangeProps = {
 };
 
 function ShortFramingRange({
+  presets,
   ariaLabel,
   disabled,
   endLabel,
@@ -305,7 +308,7 @@ function ShortFramingRange({
   onCommit
 }: ShortFramingRangeProps) {
   return (
-    <label className="min-w-0 border border-neutral-300 bg-white px-3 py-2">
+    <div className="min-w-0 border border-neutral-300 bg-white px-3 py-2">
       <span className="flex items-center justify-between gap-2 text-xs font-semibold text-neutral-700">
         <span>{label}</span>
         <span>{valueLabel}</span>
@@ -329,7 +332,13 @@ function ShortFramingRange({
         <span>{startLabel}</span>
         <span>{endLabel}</span>
       </span>
-    </label>
+      {presets ? <div className="mt-2 flex flex-wrap gap-1">
+        {presets.map((preset) => <button key={preset.value} type="button" disabled={disabled}
+          aria-pressed={Math.abs(value - preset.value) < 0.01}
+          className="border px-2 py-1 text-xs aria-pressed:bg-sky-100"
+          onClick={() => { onChange(preset.value); onCommit(preset.value); }}>{preset.label}</button>)}
+      </div> : null}
+    </div>
   );
 }
 
@@ -502,7 +511,8 @@ function contentDraftForClip(clip: SubtitleReviewClip): ClipContentDraft {
     thumbnailFrameSeconds: clip.thumbnailFrameSeconds ?? null,
     titleStyle: clip.titleStyle,
     hookStyle: clip.hookStyle,
-    subtitleStyle: clip.subtitleStyle
+    subtitleStyle: clip.subtitleStyle,
+    subtitleStyles: clip.subtitleStyles ?? []
   };
 }
 
@@ -524,6 +534,8 @@ function stylesEqual(
     left.primaryColor === right.primaryColor &&
     left.outlineColor === right.outlineColor &&
     left.outlineWidth === right.outlineWidth &&
+    (left.outerOutlineWidth ?? 0) === (right.outerOutlineWidth ?? 0) &&
+    (left.outerOutlineColor ?? "#FFFFFF") === (right.outerOutlineColor ?? "#FFFFFF") &&
     left.xPercent === right.xPercent &&
     left.yPercent === right.yPercent &&
     left.positionMode === right.positionMode
@@ -559,11 +571,13 @@ function isClipContentDirty(
         draft.thumbnailFrameSeconds !== (clip.thumbnailFrameSeconds ?? null) ||
         !stylesEqual(draft.titleStyle, clip.titleStyle) ||
         !stylesEqual(draft.hookStyle, clip.hookStyle) ||
-        !stylesEqual(draft.subtitleStyle, clip.subtitleStyle))
+        !stylesEqual(draft.subtitleStyle, clip.subtitleStyle) ||
+        JSON.stringify(draft.subtitleStyles) !== JSON.stringify(clip.subtitleStyles ?? []))
   );
 }
 
 export default function SubtitleReviewPage() {
+  const [styledSegmentId, setStyledSegmentId] = useState<string | null>(null);
   const params = useParams();
   const router = useRouter();
   const jobId = useMemo(() => readJobId(params.jobId), [params.jobId]);
@@ -1305,7 +1319,10 @@ export default function SubtitleReviewPage() {
       segments: selectedSegments.map((segment) => ({
         start: segment.start,
         end: segment.end,
-        text: drafts[segment.id] ?? segment.text
+        text: drafts[segment.id] ?? segment.text,
+        style: selectedClipContentDraft?.subtitleStyles.find(
+          (item) => item.start === segment.start && item.end === segment.end
+        )?.style
       })),
       candidateStart: selectedClip.start,
       candidateEnd: selectedClip.end,
@@ -1324,7 +1341,8 @@ export default function SubtitleReviewPage() {
     hookSceneDuration,
     hookSuppressionEnd,
     selectedClip,
-    selectedSegments
+    selectedSegments,
+    selectedClipContentDraft?.subtitleStyles
   ]);
   const activePreviewSubtitleEvent = useMemo(
     () =>
@@ -1455,6 +1473,7 @@ export default function SubtitleReviewPage() {
   }
 
   function selectClip(clip: SubtitleReviewClip) {
+    setStyledSegmentId(null);
     videoRef.current?.pause();
     suggestionPlaybackEndRef.current = null;
     setPreviewingSuggestionId(null);
@@ -1703,7 +1722,17 @@ export default function SubtitleReviewPage() {
       updateClipContentDraft(selectedClip.id, { hookStyle: style });
       return;
     }
-    updateClipContentDraft(selectedClip.id, { subtitleStyle: style });
+    const segment = selectedSegments.find((item) => item.id === styledSegmentId);
+    if (segment && selectedClipContentDraft) {
+      const remaining = selectedClipContentDraft.subtitleStyles.filter(
+        (item) => item.start !== segment.start || item.end !== segment.end
+      );
+      updateClipContentDraft(selectedClip.id, {
+        subtitleStyles: style ? [...remaining, { start: segment.start, end: segment.end, style }] : remaining
+      });
+    } else {
+      updateClipContentDraft(selectedClip.id, { subtitleStyle: style });
+    }
   }
 
   function changeSelectedShortFraming(
@@ -1745,7 +1774,7 @@ export default function SubtitleReviewPage() {
     const nextFraming = {
       framingOffsetX: clamp(framing.framingOffsetX, -100, 100),
       framingOffsetY: clamp(framing.framingOffsetY, -100, 100),
-      framingZoom: clamp(framing.framingZoom, 1, 1.6)
+      framingZoom: clamp(framing.framingZoom, 1, 3)
     };
     const savedFraming = {
       framingOffsetX: clip.framingOffsetX,
@@ -2242,6 +2271,7 @@ export default function SubtitleReviewPage() {
         titleStyle: selectedClipContentDraft.titleStyle,
         hookStyle: selectedClipContentDraft.hookStyle,
         subtitleStyle: selectedClipContentDraft.subtitleStyle,
+        subtitleStyles: selectedClipContentDraft.subtitleStyles,
         segments: segmentUpdates
       });
       if (isCurrentReviewMutation(mutationGeneration)) {
@@ -2342,6 +2372,7 @@ export default function SubtitleReviewPage() {
           titleStyle: selectedClipContentDraft.titleStyle,
           hookStyle: selectedClipContentDraft.hookStyle,
           subtitleStyle: selectedClipContentDraft.subtitleStyle,
+          subtitleStyles: selectedClipContentDraft.subtitleStyles,
           segments: segmentUpdates
         });
         if (isCurrentReviewMutation(mutationGeneration)) {
@@ -2883,10 +2914,11 @@ export default function SubtitleReviewPage() {
                           />
                           <ShortFramingRange
                             ariaLabel="このショートの拡大率"
+                            presets={[{ value: 1, label: "標準" }, { value: 1.8, label: "顔アップ" }, { value: 2.4, label: "顔アップ強" }]}
                             disabled={!isEditable || savingShortFramingClipId !== null}
-                            endLabel="160%"
+                            endLabel="300%"
                             label="拡大"
-                            max={1.6}
+                            max={3}
                             min={1}
                             startLabel="標準"
                             step={0.05}
@@ -3014,7 +3046,7 @@ export default function SubtitleReviewPage() {
                               }
                               previewWidth={selectedClip.previewWidth}
                               resolvedStyle={selectedResolvedClipTextStyles.subtitle}
-                              style={selectedClipTextStyles.subtitle}
+                              style={activePreviewSubtitleEvent?.style ?? selectedClipTextStyles.subtitle}
                               subtitleMaxCharsPerLine={
                                 selectedClip.subtitleMaxCharsPerLine
                               }
@@ -3685,6 +3717,8 @@ export default function SubtitleReviewPage() {
                   </div>
 
                   <ClipTextStyleEditor
+                    subtitleScopeLabel={selectedSegments.some((s) => s.id === styledSegmentId) ? "選択した字幕1件だけ" : "このclipの共通字幕"}
+                    onCommonSubtitleStyle={() => setStyledSegmentId(null)}
                     clipType={selectedClip.type}
                     disabled={!isEditable}
                     hookText={selectedClipContentDraft?.hookText ?? ""}
@@ -3701,7 +3735,13 @@ export default function SubtitleReviewPage() {
                     shortBottomBannerUrl={toApiUrl(
                       `/api/jobs/${jobId}/subtitle-review/banner-assets/bottom`
                     )}
-                    styles={selectedClipTextStyles}
+                    styles={{
+                      ...selectedClipTextStyles,
+                      subtitle: selectedClipContentDraft?.subtitleStyles.find((item) => {
+                        const segment = selectedSegments.find((s) => s.id === styledSegmentId);
+                        return segment && item.start === segment.start && item.end === segment.end;
+                      })?.style ?? selectedClipTextStyles.subtitle
+                    }}
                     resolvedStyles={selectedResolvedClipTextStyles}
                     defaultResolvedStyles={selectedDefaultResolvedClipTextStyles}
                     subtitleMaxCharsPerLine={selectedClip.subtitleMaxCharsPerLine}
@@ -3711,7 +3751,10 @@ export default function SubtitleReviewPage() {
                     subtitleText={stylePreviewSubtitleText}
                     titleText={selectedClipContentDraft?.title ?? ""}
                     onChange={updateClipTextStyle}
-                    onSelectedTargetChange={setSelectedTextStyleTarget}
+                    onSelectedTargetChange={(target) => {
+                      setSelectedTextStyleTarget(target);
+                      setStyledSegmentId(null);
+                    }}
                   />
                 </div>
                 <div className="flex min-h-[640px] min-w-0 flex-col bg-white lg:col-span-1 lg:col-start-3 lg:row-start-1 2xl:col-span-1 2xl:col-start-3 2xl:row-start-1 2xl:min-h-0">
@@ -3811,6 +3854,17 @@ export default function SubtitleReviewPage() {
                                 下のOKでまとめて保存
                               </span>
                             ) : null}
+                            <button type="button" disabled={!isEditable}
+                              className="border border-sky-600 px-2 py-1 text-xs text-sky-800"
+                              aria-pressed={styledSegmentId === segment.id}
+                              onClick={() => {
+                                setStyledSegmentId(segment.id);
+                                setSelectedTextStyleTarget("subtitle");
+                                seekToSubtitle(segment.start);
+                              }}>
+                              {selectedClipContentDraft?.subtitleStyles.some((s) => s.start === segment.start && s.end === segment.end)
+                                ? "個別書式を編集" : "この字幕の書式"}
+                            </button>
                           </div>
                         </div>
                       );

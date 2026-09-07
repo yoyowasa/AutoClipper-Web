@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   CLIP_TEXT_FONT_GROUPS,
@@ -34,6 +34,8 @@ type ResolvedClipTextStyles = Record<
 >;
 
 type ClipTextStyleEditorProps = {
+  subtitleScopeLabel?: string;
+  onCommonSubtitleStyle?: () => void;
   clipType: ExportType;
   disabled?: boolean;
   layout?: "stacked" | "workspace";
@@ -189,6 +191,8 @@ function styleDraftFromResolved(style: ResolvedClipTextStyle): ClipTextStyle {
     primaryColor: style.primaryColor,
     outlineColor: style.outlineColor,
     outlineWidth: style.outlineWidth,
+    outerOutlineWidth: style.outerOutlineWidth ?? 0,
+    outerOutlineColor: style.outerOutlineColor ?? "#FFFFFF",
     xPercent,
     yPercent,
     positionMode: style.positionMode
@@ -240,7 +244,7 @@ export function ClipTextOverlay({
     fontSize: style.fontSize,
     fontSizeScale: fontMetrics.fontSizeScale,
     marginX: style.marginX,
-    outlineWidth: style.outlineWidth,
+    outlineWidth: style.outlineWidth + (style.outerOutlineWidth ?? 0),
     shadow: style.shadow,
     alignment: style.alignment,
     xPercent: style.xPercent,
@@ -253,9 +257,17 @@ export function ClipTextOverlay({
   const effectiveFontSize = overlayFit.effectiveFontSize;
   const fontSizePercent =
     ((effectiveFontSize * fontMetrics.fontSizeScale) / outputWidth) * 100;
-  const outlinePercent = (style.outlineWidth / outputWidth) * 100;
+  const outlinePercent = (style.outlineWidth / outputWidth) * 200;
   const shadowPercent = (style.shadow / outputWidth) * 100;
-  return (
+  return (<>
+    {(style.outerOutlineWidth ?? 0) > 0 ? <p aria-hidden="true"
+      className="pointer-events-none absolute z-30 m-0 max-w-none whitespace-pre text-center"
+      style={{ color: style.primaryColor, fontFamily: subtitleFontFamily(style.fontName),
+        fontSize: `${fontSizePercent}cqw`, fontWeight: style.fontPreset ? clipTextFontWeight(style.fontPreset) : style.bold ? 700 : 400,
+        lineHeight: fontMetrics.lineHeight, left: `${style.xPercent}%`, top: `${style.yPercent}%`,
+        transform: alignmentTransform(style.alignment), paintOrder: "stroke fill",
+        WebkitTextStroke: `${(style.outlineWidth + (style.outerOutlineWidth ?? 0)) / outputWidth * 200}cqw ${style.outerOutlineColor ?? "#FFFFFF"}`
+      }}>{previewText}</p> : null}
     <p
       aria-hidden="true"
       className="pointer-events-none absolute z-30 m-0 max-w-none whitespace-pre text-center"
@@ -275,12 +287,13 @@ export function ClipTextOverlay({
         top: `${style.yPercent}%`,
         transform: alignmentTransform(style.alignment),
         WebkitTextStroke: `${outlinePercent}cqw ${style.outlineColor}`,
+        paintOrder: "stroke fill",
         textShadow: `${shadowPercent}cqw ${shadowPercent}cqw 0 rgba(0, 0, 0, 0.5)`
       }}
     >
       {previewText}
     </p>
-  );
+  </>);
 }
 
 export function ClipTextStylePreview({
@@ -347,18 +360,12 @@ export function ClipTextStylePreview({
     fontSize: style.fontSize,
     fontSizeScale: fontMetrics.fontSizeScale,
     marginX: style.marginX,
-    outlineWidth: style.outlineWidth,
+    outlineWidth: style.outlineWidth + (style.outerOutlineWidth ?? 0),
     shadow: style.shadow,
     alignment: style.alignment,
     xPercent: style.xPercent,
     maxLines: previewMaxLines
   });
-  const previewText = overlayFit.lines.join("\n");
-  const effectivePreviewFontSize = overlayFit.effectiveFontSize;
-  const previewFontSizePercent =
-    ((effectivePreviewFontSize * fontMetrics.fontSizeScale) / outputWidth) * 100;
-  const previewOutlinePercent = (style.outlineWidth / outputWidth) * 100;
-  const previewShadowPercent = (style.shadow / outputWidth) * 100;
   const sizeClass =
     displayMode === "workspace"
       ? clipType === "short"
@@ -444,29 +451,10 @@ export function ClipTextStylePreview({
         </div>
       ) : (
         <>
-          <p
-            className="absolute z-30 m-0 max-w-none whitespace-pre text-center"
-            data-overlay-fits={String(overlayFit.fits)}
-            style={{
-              color: style.primaryColor,
-              fontFamily: subtitleFontFamily(style.fontName),
-              fontSize: `${previewFontSizePercent}cqw`,
-              fontWeight:
-                style.fontPreset !== null
-                  ? clipTextFontWeight(style.fontPreset)
-                  : style.bold
-                    ? 700
-                    : 400,
-              lineHeight: fontMetrics.lineHeight,
-              left: `${style.xPercent}%`,
-              top: `${style.yPercent}%`,
-              transform: alignmentTransform(style.alignment),
-              WebkitTextStroke: `${previewOutlinePercent}cqw ${style.outlineColor}`,
-              textShadow: `${previewShadowPercent}cqw ${previewShadowPercent}cqw 0 rgba(0, 0, 0, 0.5)`
-            }}
-          >
-            {previewText}
-          </p>
+          <ClipTextOverlay clipType={clipType} target={target} style={styles[target]}
+            resolvedStyle={resolvedStyles[target]} defaultResolvedStyle={defaultResolvedStyles[target]}
+            subtitleMaxCharsPerLine={subtitleMaxCharsPerLine} subtitleMaxLines={subtitleMaxLines}
+            previewWidth={outputWidth} text={previewSample} />
           {!overlayFit.fits ? (
             <span className="absolute inset-x-2 bottom-2 z-40 bg-red-700/90 px-2 py-1 text-center text-[9px] font-semibold text-white">
               2行に収まりません。文字を短くするかサイズを調整してください
@@ -479,6 +467,8 @@ export function ClipTextStylePreview({
 }
 
 export function ClipTextStyleEditor({
+  subtitleScopeLabel,
+  onCommonSubtitleStyle,
   clipType,
   disabled = false,
   layout = "stacked",
@@ -502,6 +492,7 @@ export function ClipTextStyleEditor({
   onChange,
   onSelectedTargetChange
 }: ClipTextStyleEditorProps) {
+  const [failedFont, setFailedFont] = useState<string | null>(null);
   const [internalTarget, setInternalTarget] = useState<ClipTextTarget>("title");
   const availableTargets: ClipTextTarget[] = ["title", "hook", "subtitle"];
   const requestedTarget = selectedTarget ?? internalTarget;
@@ -530,6 +521,15 @@ export function ClipTextStyleEditor({
     x: Math.round((outputWidth * style.xPercent) / 100),
     y: Math.round((outputHeight * style.yPercent) / 100)
   };
+
+  useEffect(() => {
+    let active = true;
+    document.fonts.load(`400 16px ${JSON.stringify(style.fontName)}`).then(
+      () => { if (active) setFailedFont(null); },
+      () => { if (active) setFailedFont(style.fontName); }
+    );
+    return () => { active = false; };
+  }, [style.fontName]);
 
   function updateStyle(patch: Partial<ClipTextStyle>) {
     const draft = storedStyle ?? styleDraftFromResolved(style);
@@ -565,6 +565,10 @@ export function ClipTextStyleEditor({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h4 className="text-sm font-semibold text-neutral-950">書体・サイズ</h4>
+            {target === "subtitle" && subtitleScopeLabel ? <div className="mt-2 bg-sky-50 p-2 text-xs">
+              <span>{subtitleScopeLabel}</span>
+              <button type="button" className="ml-2 underline" onClick={onCommonSubtitleStyle}>共通書式を編集</button>
+            </div> : null}
             <p className="mt-0.5 text-[10px] text-neutral-500">
               選択中のclipだけに反映
             </p>
@@ -609,6 +613,9 @@ export function ClipTextStyleEditor({
 
         <label className="mt-2 flex flex-col gap-1 text-xs font-semibold text-neutral-700">
           {TARGET_LABELS[target]}の書体
+          {failedFont === style.fontName ? <span role="alert" className="text-red-700">
+            このフォントを読み込めません。ローカル導入ファイルを確認してください。
+          </span> : null}
           <select
             className="min-h-9 border border-neutral-300 bg-white px-2 text-sm font-normal"
             disabled={disabled}
@@ -658,7 +665,7 @@ export function ClipTextStyleEditor({
             />
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700">
-            縁の太さ
+            内側の縁の太さ
             <input
               className="h-9 border border-neutral-300 bg-white px-2 text-sm font-normal"
               disabled={disabled}
@@ -670,6 +677,18 @@ export function ClipTextStyleEditor({
                 updateStyle({ outlineWidth: Number(event.target.value) })
               }
             />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700">
+            外側の縁の太さ（0でOFF）
+            <input aria-label="外側の縁の太さ" className="h-9 border border-neutral-300 px-2"
+              disabled={disabled} type="number" min={0} max={20} value={style.outerOutlineWidth ?? 0}
+              onChange={(event) => updateStyle({ outerOutlineWidth: Number(event.target.value) })} />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700">
+            外側の縁の色
+            <input aria-label="外側の縁の色" className="h-9 w-12 border border-neutral-300 p-1"
+              disabled={disabled} type="color" value={style.outerOutlineColor ?? "#FFFFFF"}
+              onChange={(event) => updateStyle({ outerOutlineColor: event.target.value.toUpperCase() })} />
           </label>
         </div>
       </div>

@@ -155,8 +155,8 @@ def _append_subtitles(video_filter: str, subtitle_path: str | Path | None) -> st
 
 
 def _framing_scale(value: int, zoom: float) -> int:
-    if not 1.0 <= zoom <= 1.6:
-        raise ValueError("framing zoom must be between 1.0 and 1.6")
+    if not 1.0 <= zoom <= 3.0:
+        raise ValueError("framing zoom must be between 1.0 and 3.0")
     scaled = max(2, round(value * zoom))
     return scaled if scaled % 2 == 0 else scaled + 1
 

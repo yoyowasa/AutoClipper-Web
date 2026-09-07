@@ -2,6 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face { font-family: "851CHIKARA-YOWAKU"; src: url("/fonts/851CHIKARA-YOWAKU.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Keifont"; src: url("/fonts/keifont.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Mushin"; src: url("/fonts/mushin.otf") format("opentype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "AnkokuZombic"; src: url("/fonts/Zomzi.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "GN-KMBFont-UB-NewstyleKanaB"; src: url("/fonts/GN-KillGothic-U-KanaNB.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Tanuki Permanent Marker"; src: url("/fonts/TanukiMagic.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+
 @font-face {
   font-family: "Source Han Sans JP Heavy";
   src: url("/fonts/SourceHanSansJP-Heavy.otf") format("opentype");

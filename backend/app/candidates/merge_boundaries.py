@@ -53,6 +53,7 @@ TitleSource = Literal[
     "manual_review",
 ]
 TextFontPreset = Literal[
+    "chikara_yowaku", "keifont", "mushin", "ankoku_zonji", "killgo_nb", "tanuki_magic",
     "sans",
     "sans_bold",
     "noto_black",
@@ -89,6 +90,8 @@ class ClipTextStyle(BaseModel):
         alias="outlineColor",
     )
     outline_width: int = Field(default=5, ge=0, le=20, alias="outlineWidth")
+    outer_outline_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", alias="outerOutlineColor")
+    outer_outline_width: int = Field(default=0, ge=0, le=20, alias="outerOutlineWidth")
     x_percent: float = Field(default=50, ge=5, le=95, alias="xPercent")
     y_percent: float = Field(default=85, ge=5, le=95, alias="yPercent")
     position_mode: Literal["explicit", "layout"] = Field(
@@ -97,6 +100,18 @@ class ClipTextStyle(BaseModel):
     )
 
     model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
+
+
+class SubtitleStyleOverride(BaseModel):
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+    style: ClipTextStyle
+
+    @model_validator(mode="after")
+    def valid_range(self) -> "SubtitleStyleOverride":
+        if self.end <= self.start:
+            raise ValueError("subtitle style range must have positive duration")
+        return self
 
 
 class Candidate(BaseModel):
@@ -146,9 +161,10 @@ class Candidate(BaseModel):
     title_style: ClipTextStyle | None = None
     hook_style: ClipTextStyle | None = None
     subtitle_style: ClipTextStyle | None = None
+    subtitle_styles: list[SubtitleStyleOverride] = Field(default_factory=list, max_length=1000)
     framing_offset_x: float = Field(default=0.0, ge=-100, le=100)
     framing_offset_y: float = Field(default=0.0, ge=-100, le=100)
-    framing_zoom: float = Field(default=1.0, ge=1.0, le=1.6)
+    framing_zoom: float = Field(default=1.0, ge=1.0, le=3.0)
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
     moment_key: str | None = Field(default=None, min_length=1, max_length=80)

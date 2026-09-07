@@ -955,6 +955,7 @@ def _reedit_candidate(
         title_style=review_clip.title_style,
         hook_style=review_clip.hook_style,
         subtitle_style=review_clip.subtitle_style,
+        subtitle_styles=review_clip.subtitle_styles,
         framing_offset_x=review_clip.framing_offset_x,
         framing_offset_y=review_clip.framing_offset_y,
         framing_zoom=review_clip.framing_zoom,
@@ -3707,6 +3708,8 @@ def update_subtitle_review_clip_content(
                 style_updates["hook_style"] = request.hook_style
             if "subtitle_style" in request.model_fields_set:
                 style_updates["subtitle_style"] = request.subtitle_style
+            if "subtitle_styles" in request.model_fields_set:
+                style_updates["subtitle_styles"] = request.subtitle_styles
             document = update_review_clip_content(
                 document,
                 clip_id,
@@ -4247,6 +4250,8 @@ def apply_subtitle_review_clip(
                 style_updates["hook_style"] = request.hook_style
             if "subtitle_style" in request.model_fields_set:
                 style_updates["subtitle_style"] = request.subtitle_style
+            if "subtitle_styles" in request.model_fields_set:
+                style_updates["subtitle_styles"] = request.subtitle_styles
             if "publication_title" in request.model_fields_set:
                 style_updates["publication_title"] = request.publication_title
             resolved_title_candidates = list(request.title_candidates)

@@ -7,7 +7,7 @@ from typing import Any, Literal, Sequence
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPreset
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle, SubtitleStyleOverride, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.overlay_text import normalize_overlay_text
@@ -70,6 +70,8 @@ class ResolvedClipTextStyle(BaseModel):
         alias="outlineColor",
     )
     outline_width: int = Field(ge=0, alias="outlineWidth")
+    outer_outline_color: str = Field(default="#FFFFFF", alias="outerOutlineColor")
+    outer_outline_width: int = Field(default=0, ge=0, alias="outerOutlineWidth")
     shadow: int = Field(ge=0)
     bold: bool
     alignment: int = Field(ge=1, le=9)
@@ -130,9 +132,10 @@ class SubtitleReviewClip(BaseModel):
     title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
+    subtitle_styles: list[SubtitleStyleOverride] = Field(default_factory=list, alias="subtitleStyles")
     framing_offset_x: float = Field(default=0.0, ge=-100, le=100, alias="framingOffsetX")
     framing_offset_y: float = Field(default=0.0, ge=-100, le=100, alias="framingOffsetY")
-    framing_zoom: float = Field(default=1.0, ge=1.0, le=1.6, alias="framingZoom")
+    framing_zoom: float = Field(default=1.0, ge=1.0, le=3.0, alias="framingZoom")
     resolved_title_style: ResolvedClipTextStyle | None = Field(
         default=None,
         alias="resolvedTitleStyle",
@@ -388,6 +391,8 @@ def _resolved_style_model(style: ResolvedTextStyle) -> ResolvedClipTextStyle:
         primaryColor=style.primary_color,
         outlineColor=style.outline_color,
         outlineWidth=style.outline_width,
+        outerOutlineWidth=style.outer_outline_width,
+        outerOutlineColor=style.outer_outline_color,
         shadow=style.shadow,
         bold=style.bold,
         alignment=style.alignment,
@@ -548,6 +553,7 @@ def build_subtitle_review(
                 titleStyle=candidate.title_style,
                 hookStyle=candidate.hook_style,
                 subtitleStyle=candidate.subtitle_style,
+                subtitleStyles=candidate.subtitle_styles,
                 framingOffsetX=candidate.framing_offset_x,
                 framingOffsetY=candidate.framing_offset_y,
                 framingZoom=candidate.framing_zoom,
@@ -675,6 +681,7 @@ def update_review_clip_content(
     title_style: ClipTextStyle | None | object = _STYLE_UNSET,
     hook_style: ClipTextStyle | None | object = _STYLE_UNSET,
     subtitle_style: ClipTextStyle | None | object = _STYLE_UNSET,
+    subtitle_styles: list[SubtitleStyleOverride] | object = _STYLE_UNSET,
     title_candidates: Sequence[YouTubeTitleCandidate] | object = _STYLE_UNSET,
     recommended_title_id: str | None | object = _STYLE_UNSET,
     selected_title_id: str | None | object = _STYLE_UNSET,
@@ -744,6 +751,18 @@ def update_review_clip_content(
     next_subtitle_style = (
         clip.subtitle_style if subtitle_style is _STYLE_UNSET else subtitle_style
     )
+    next_subtitle_styles = (
+        clip.subtitle_styles if subtitle_styles is _STYLE_UNSET else list(subtitle_styles)
+    )
+    valid_ranges = {
+        (segment.start, segment.end)
+        for segment in document.segments if segment.id in clip.segment_ids
+    }
+    override_ranges = [(item.start, item.end) for item in next_subtitle_styles]
+    if len(set(override_ranges)) != len(override_ranges) or any(
+        pair not in valid_ranges for pair in override_ranges
+    ):
+        raise ValueError("subtitle style must target a unique segment in this clip")
     next_title_candidates = (
         clip.title_candidates
         if title_candidates is _STYLE_UNSET
@@ -869,6 +888,7 @@ def update_review_clip_content(
         or clip.title_style != next_title_style
         or clip.hook_style != next_hook_style
         or clip.subtitle_style != next_subtitle_style
+        or clip.subtitle_styles != next_subtitle_styles
         or clip.title_candidates != next_title_candidates
         or clip.recommended_title_id != next_recommended_title_id
         or clip.selected_title_id != next_selected_title_id
@@ -899,6 +919,7 @@ def update_review_clip_content(
         next_subtitle_style if isinstance(next_subtitle_style, ClipTextStyle) else None
     )
     clip.title_candidates = next_title_candidates
+    clip.subtitle_styles = next_subtitle_styles
     clip.recommended_title_id = next_recommended_title_id
     clip.selected_title_id = next_selected_title_id
     clip.youtube_description = next_youtube_description
@@ -930,8 +951,8 @@ def update_review_clip_framing(
         raise ValueError("framing can only be changed for short clips")
     if not -100 <= framing_offset_x <= 100 or not -100 <= framing_offset_y <= 100:
         raise ValueError("framing offsets must be between -100 and 100")
-    if not 1.0 <= framing_zoom <= 1.6:
-        raise ValueError("framing zoom must be between 1.0 and 1.6")
+    if not 1.0 <= framing_zoom <= 3.0:
+        raise ValueError("framing zoom must be between 1.0 and 3.0")
 
     next_x = round(float(framing_offset_x), 2)
     next_y = round(float(framing_offset_y), 2)
@@ -1204,6 +1225,7 @@ def apply_reviewed_clip_content(
         updates["hook_style"] = clip.hook_style
         updates["title_style"] = clip.title_style
         updates["subtitle_style"] = clip.subtitle_style
+        updates["subtitle_styles"] = clip.subtitle_styles
         updates["framing_offset_x"] = clip.framing_offset_x
         updates["framing_offset_y"] = clip.framing_offset_y
         updates["framing_zoom"] = clip.framing_zoom

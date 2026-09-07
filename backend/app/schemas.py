@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from app.candidates.merge_boundaries import ClipTextStyle
+from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
 from app.posting_metadata import (
     PostMetadataSource,
     YouTubePostingProfile,
@@ -606,6 +606,7 @@ class SubtitleReviewClipContentUpdateRequest(BaseModel):
     title_style: ClipTextStyle | None = Field(default=None, alias="titleStyle")
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
+    subtitle_styles: list[SubtitleStyleOverride] = Field(default_factory=list, max_length=1000, alias="subtitleStyles")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -613,7 +614,7 @@ class SubtitleReviewClipContentUpdateRequest(BaseModel):
 class SubtitleReviewClipFramingUpdateRequest(BaseModel):
     framing_offset_x: float = Field(ge=-100, le=100, alias="framingOffsetX")
     framing_offset_y: float = Field(ge=-100, le=100, alias="framingOffsetY")
-    framing_zoom: float = Field(ge=1.0, le=1.6, alias="framingZoom")
+    framing_zoom: float = Field(ge=1.0, le=3.0, alias="framingZoom")
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 

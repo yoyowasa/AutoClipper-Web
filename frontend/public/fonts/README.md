@@ -27,7 +27,31 @@ subtitle passages.
 | `DelaGothicOne-Regular.ttf` | Dela Gothic One | `4FF87A0965F1B0505E5A2C58424BC6AD3CFF27E56A82F21C2FC9D6B0E3857EE2` | [Google Fonts](https://github.com/google/fonts/tree/main/ofl/delagothicone) | SIL OFL 1.1 (`LICENSE-DelaGothicOne.txt`) |
 | `Corporate-Logo-Bold-ver3.otf` | コーポレート・ロゴ Bold | `88239D1B11D1F70CDB3A5805791AE6BC0C1B8667BB67FADEE20D73EDF28CBEB3` | [Logotype.jp](https://logotype.jp/corporate-logo-font-dl.html) | SIL OFL 1.1 (`LICENSE-CorporateLogo.txt`) |
 
-## Not bundled
+## 2026-09-07: Phrase styles
+
+Unmodified font binaries; backend ASS and browser CSS use the same files and Windows ascent/descent metrics.
+
+| Font | File | Official source / terms |
+| --- | --- | --- |
+| 851チカラヨワク 0.02 | `851CHIKARA-YOWAKU.ttf` | https://pm85122.onamae.jp/851ch-yw.html ; free redistribution/commercial use, no resale or false authorship |
+| けいふぉんと！ | `keifont.ttf` | https://font.sumomo.ne.jp/font_1.html ; Apache 2.0 and M+ notices alongside |
+| 無心 1.04 | `mushin.otf` | https://modi.jpn.org/font_mushin.php ; MODI terms in LICENSE-Mushin.txt |
+| 暗黒ゾン字 | `Zomzi.ttf` | https://www.ankokukoubou.com/font/ankokuzonji.htm ; author explicitly permits redistribution on current page (lines 38–42), superseding old archive readme |
+| たぬき油性マジック 1.22 | `TanukiMagic.ttf` | https://tanukifont.com/tanuki-permanent-marker/ ; LICENSE-TanukiMagic.txt |
+
+### Local-only font
+
+キルゴUかなNB: official author package `GN-KillGothic_U.zip`, available via
+https://forest.watch.impress.co.jp/library/software/killgothic_u/ .
+Archive readme allows video/commercial use but prohibits redistribution of font files without permission.
+`GN-KillGothic-U-KanaNB.ttf` and `local/LICENSE-Killgo.txt` are therefore gitignored and **must not be deployed or redistributed**.
+On another PC, obtain the original package and place this TTF at `frontend/public/fonts/GN-KillGothic-U-KanaNB.ttf`.
+Use only on the user's local app. A missing file is not supplied with this repository.
+
+### Pending file
+
+やさしさゴシック: https://booth.pm/ja/items/5980376 . Official download requires login.
+Do not substitute やさしさゴシック手書き, Bold, or another font; add only after the original file and IPA/M+ terms are available.
 
 `ラノベPOP V2` is not bundled yet. Its official BOOTH download requires a user
 login, so an unverified third-party copy is not used. Do not expose the preset

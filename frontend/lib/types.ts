@@ -349,6 +349,7 @@ export type SubtitleReviewSegment = {
 };
 
 export type ClipTextFontPreset =
+  | "chikara_yowaku" | "keifont" | "mushin" | "ankoku_zonji" | "killgo_nb" | "tanuki_magic"
   | "sans"
   | "sans_bold"
   | "noto_black"
@@ -369,6 +370,8 @@ export type ClipTextStyle = {
   primaryColor: string;
   outlineColor: string;
   outlineWidth: number;
+  outerOutlineWidth?: number;
+  outerOutlineColor?: string;
   xPercent: number;
   yPercent: number;
   positionMode: "explicit" | "layout";
@@ -381,6 +384,8 @@ export type ResolvedClipTextStyle = {
   primaryColor: string;
   outlineColor: string;
   outlineWidth: number;
+  outerOutlineWidth?: number;
+  outerOutlineColor?: string;
   shadow: number;
   bold: boolean;
   alignment: number;
@@ -392,7 +397,10 @@ export type ResolvedClipTextStyle = {
   positionOverride: boolean;
 };
 
+export type SubtitleStyleOverride = { start: number; end: number; style: ClipTextStyle };
+
 export type SubtitleReviewClip = {
+  subtitleStyles?: SubtitleStyleOverride[];
   id: string;
   type: ExportType;
   title: string;

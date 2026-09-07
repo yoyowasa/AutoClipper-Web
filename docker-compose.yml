@@ -24,13 +24,7 @@ services:
     volumes:
       - ./storage:/app/storage
       - ./youtube:/app/youtube:ro
-      - ./frontend/public/fonts/SourceHanSansJP-Heavy.otf:/app/fonts/SourceHanSansJP-Heavy.otf:ro
-      - ./frontend/public/fonts/NotoSansJP-Black.ttf:/app/fonts/NotoSansJP-Black.ttf:ro
-      - ./frontend/public/fonts/MPLUS1-ExtraBold.ttf:/app/fonts/MPLUS1-ExtraBold.ttf:ro
-      - ./frontend/public/fonts/MPLUSRounded1c-ExtraBold.ttf:/app/fonts/MPLUSRounded1c-ExtraBold.ttf:ro
-      - ./frontend/public/fonts/851CHIKARA-DZUYOKU-kanaA.ttf:/app/fonts/851CHIKARA-DZUYOKU-kanaA.ttf:ro
-      - ./frontend/public/fonts/DelaGothicOne-Regular.ttf:/app/fonts/DelaGothicOne-Regular.ttf:ro
-      - ./frontend/public/fonts/Corporate-Logo-Bold-ver3.otf:/app/fonts/Corporate-Logo-Bold-ver3.otf:ro
+      - ./frontend/public/fonts:/app/fonts:ro
     depends_on:
       - redis
     healthcheck:
@@ -57,13 +51,7 @@ services:
       AUTOCLIPPER_RUNTIME_PROFILE: cpu
     volumes:
       - ./storage:/app/storage
-      - ./frontend/public/fonts/SourceHanSansJP-Heavy.otf:/app/fonts/SourceHanSansJP-Heavy.otf:ro
-      - ./frontend/public/fonts/NotoSansJP-Black.ttf:/app/fonts/NotoSansJP-Black.ttf:ro
-      - ./frontend/public/fonts/MPLUS1-ExtraBold.ttf:/app/fonts/MPLUS1-ExtraBold.ttf:ro
-      - ./frontend/public/fonts/MPLUSRounded1c-ExtraBold.ttf:/app/fonts/MPLUSRounded1c-ExtraBold.ttf:ro
-      - ./frontend/public/fonts/851CHIKARA-DZUYOKU-kanaA.ttf:/app/fonts/851CHIKARA-DZUYOKU-kanaA.ttf:ro
-      - ./frontend/public/fonts/DelaGothicOne-Regular.ttf:/app/fonts/DelaGothicOne-Regular.ttf:ro
-      - ./frontend/public/fonts/Corporate-Logo-Bold-ver3.otf:/app/fonts/Corporate-Logo-Bold-ver3.otf:ro
+      - ./frontend/public/fonts:/app/fonts:ro
     depends_on:
       - redis
 
@@ -77,6 +65,8 @@ services:
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
       - "127.0.0.1:3000:3000"
+    volumes:
+      - ./frontend/public/fonts:/app/frontend/public/fonts:ro
     depends_on:
       - backend
 

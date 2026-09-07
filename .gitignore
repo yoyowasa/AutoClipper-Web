@@ -50,3 +50,7 @@ ID146_*/
 Thumbs.db
 .idea/
 .vscode/
+# User-installed fonts with redistribution restrictions (never commit/deploy).
+frontend/public/fonts/GN-KillGothic-U-KanaNB.ttf
+frontend/public/fonts/local/*
+!frontend/public/fonts/local/.gitkeep

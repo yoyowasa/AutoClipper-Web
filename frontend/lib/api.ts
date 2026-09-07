@@ -406,6 +406,7 @@ export async function updateSubtitleReviewClipContent(
     titleStyle: ClipTextStyle | null;
     hookStyle: ClipTextStyle | null;
     subtitleStyle: ClipTextStyle | null;
+    subtitleStyles?: import("./types").SubtitleStyleOverride[];
   }
 ): Promise<SubtitleReviewDocument> {
   const response = await fetch(
@@ -656,6 +657,7 @@ export async function applySubtitleReviewClip(
     hookStyle: ClipTextStyle | null;
     subtitleStyle: ClipTextStyle | null;
     segments: Array<{ segmentId: string; text: string }>;
+    subtitleStyles?: import("./types").SubtitleStyleOverride[];
   }
 ): Promise<SubtitleReviewDocument> {
   const response = await fetch(

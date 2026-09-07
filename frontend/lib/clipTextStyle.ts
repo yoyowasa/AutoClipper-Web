@@ -21,6 +21,17 @@ export type ClipTextFontGroup = {
 
 export const CLIP_TEXT_FONT_GROUPS: ReadonlyArray<ClipTextFontGroup> = [
   {
+    label: "追加書体（通常・ショート共通）",
+    options: [
+      { value: "chikara_yowaku", label: "851チカラヨワク", fontName: "851CHIKARA-YOWAKU", fontWeight: 400 },
+      { value: "keifont", label: "けいふぉんと！", fontName: "Keifont", fontWeight: 400 },
+      { value: "mushin", label: "無心（むしん）", fontName: "Mushin", fontWeight: 400 },
+      { value: "ankoku_zonji", label: "暗黒ゾン字", fontName: "AnkokuZombic", fontWeight: 400 },
+      { value: "killgo_nb", label: "キルゴUかなNB（ローカル導入）", fontName: "GN-KMBFont-UB-NewstyleKanaB", fontWeight: 400 },
+      { value: "tanuki_magic", label: "たぬき油性マジック", fontName: "Tanuki Permanent Marker", fontWeight: 400 }
+    ]
+  },
+  {
     label: "通常字幕向け",
     options: [
       {
@@ -135,6 +146,12 @@ const DEFAULT_ASS_PREVIEW_FONT_METRICS: AssPreviewFontMetrics = {
 // while CSS font-size uses the em square. Keep these metrics paired so the
 // live browser overlay has the same glyph size and line pitch as FFmpeg.
 const ASS_PREVIEW_FONT_METRICS = new Map<string, AssPreviewFontMetrics>([
+  ["851CHIKARA-YOWAKU", { fontSizeScale: 1, lineHeight: 1 }],
+  ["Keifont", { fontSizeScale: 1024 / 1134, lineHeight: 1134 / 1024 }],
+  ["Mushin", { fontSizeScale: 1, lineHeight: 1 }],
+  ["AnkokuZombic", { fontSizeScale: 1, lineHeight: 1 }],
+  ["GN-KMBFont-UB-NewstyleKanaB", { fontSizeScale: 1024 / 1230, lineHeight: 1230 / 1024 }],
+  ["Tanuki Permanent Marker", { fontSizeScale: 1, lineHeight: 1 }],
   ["Noto Sans CJK JP", DEFAULT_ASS_PREVIEW_FONT_METRICS],
   ["Noto Sans Mono CJK JP", DEFAULT_ASS_PREVIEW_FONT_METRICS],
   ["Noto Sans JP Black", DEFAULT_ASS_PREVIEW_FONT_METRICS],
@@ -299,6 +316,8 @@ export function resolvedClipTextStyle(
     primaryColor: style.primaryColor,
     outlineColor: style.outlineColor,
     outlineWidth: style.outlineWidth,
+    outerOutlineWidth: style.outerOutlineWidth ?? 0,
+    outerOutlineColor: style.outerOutlineColor ?? "#FFFFFF",
     xPercent: explicitPosition ? style.xPercent : fallback.xPercent,
     yPercent: explicitPosition ? style.yPercent : fallback.yPercent,
     alignment: explicitPosition ? 5 : fallback.alignment,

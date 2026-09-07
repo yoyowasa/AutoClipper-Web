@@ -1,10 +1,14 @@
+import type { ClipTextStyle } from "./types";
+
 type SubtitlePreviewSegment = {
+  style?: ClipTextStyle;
   start: number;
   end: number;
   text: string;
 };
 
 export type SubtitlePreviewEvent = {
+  style?: ClipTextStyle;
   start: number;
   end: number;
   text: string;
@@ -415,6 +419,7 @@ function eventsForSegment(
       end = Math.min(segment.end, cursor + 0.01);
     }
     events.push({
+      ...(segment.style ? { style: segment.style } : {}),
       start: roundMilliseconds(cursor),
       end: roundMilliseconds(end),
       text: chunk
@@ -430,6 +435,9 @@ function canMergeEvents(
   options: SubtitlePreviewEventOptions
 ): boolean {
   const gap = current.start - previous.end;
+  if (JSON.stringify(previous.style ?? null) !== JSON.stringify(current.style ?? null)) {
+    return false;
+  }
   if (gap < -0.01) {
     return false;
   }
@@ -458,6 +466,7 @@ function mergeAdjacentEvents(
     const previous = merged.at(-1);
     if (previous && canMergeEvents(previous, event, options)) {
       merged[merged.length - 1] = {
+        ...previous,
         start: previous.start,
         end: event.end,
         text: normalizeText(`${previous.text} ${event.text}`)
@@ -515,6 +524,7 @@ export function subtitlePreviewEvents(
       ...eventsForSegment(
         {
           start: roundMilliseconds(start - options.candidateStart),
+          ...(segment.style ? { style: segment.style } : {}),
           end: roundMilliseconds(end - options.candidateStart),
           text
         },
@@ -555,6 +565,7 @@ export function subtitlePreviewEvents(
           Math.max(shiftedStart, suppressionEnd)
         ),
         end: Math.min(shiftedEnd, outputDuration),
+        ...(event.style ? { style: event.style } : {}),
         text: event.text
       }
     ];
