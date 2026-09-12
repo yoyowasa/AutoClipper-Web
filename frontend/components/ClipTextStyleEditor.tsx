@@ -34,6 +34,7 @@ type ResolvedClipTextStyles = Record<
 >;
 
 type ClipTextStyleEditorProps = {
+  scopeDescription?: string;
   subtitleScopeLabel?: string;
   onCommonSubtitleStyle?: () => void;
   clipType: ExportType;
@@ -467,6 +468,7 @@ export function ClipTextStylePreview({
 }
 
 export function ClipTextStyleEditor({
+  scopeDescription = "選択中のclipだけに反映",
   subtitleScopeLabel,
   onCommonSubtitleStyle,
   clipType,
@@ -570,7 +572,7 @@ export function ClipTextStyleEditor({
               <button type="button" className="ml-2 underline" onClick={onCommonSubtitleStyle}>共通書式を編集</button>
             </div> : null}
             <p className="mt-0.5 text-[10px] text-neutral-500">
-              選択中のclipだけに反映
+              {scopeDescription}
             </p>
           </div>
           <span
@@ -665,7 +667,7 @@ export function ClipTextStyleEditor({
             />
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700">
-            内側の縁の太さ
+            内縁の幅
             <input
               className="h-9 border border-neutral-300 bg-white px-2 text-sm font-normal"
               disabled={disabled}
@@ -679,16 +681,10 @@ export function ClipTextStyleEditor({
             />
           </label>
           <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700">
-            外側の縁の太さ（0でOFF）
-            <input aria-label="外側の縁の太さ" className="h-9 border border-neutral-300 px-2"
+            外縁の幅（0でOFF）
+            <input aria-label="外縁の幅" className="h-9 border border-neutral-300 px-2"
               disabled={disabled} type="number" min={0} max={20} value={style.outerOutlineWidth ?? 0}
               onChange={(event) => updateStyle({ outerOutlineWidth: Number(event.target.value) })} />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-semibold text-neutral-700">
-            外側の縁の色
-            <input aria-label="外側の縁の色" className="h-9 w-12 border border-neutral-300 p-1"
-              disabled={disabled} type="color" value={style.outerOutlineColor ?? "#FFFFFF"}
-              onChange={(event) => updateStyle({ outerOutlineColor: event.target.value.toUpperCase() })} />
           </label>
         </div>
       </div>
@@ -898,10 +894,10 @@ export function ClipTextStyleEditor({
             </fieldset>
 
             <fieldset className="mt-3">
-              <legend className="text-xs font-semibold text-neutral-700">縁取り色</legend>
+              <legend className="text-xs font-semibold text-neutral-700">内縁の色</legend>
               <div className="mt-1 flex min-h-9 flex-wrap items-center gap-1.5">
                 <input
-                  aria-label="縁取り色を選択"
+                  aria-label="内縁の色を選択"
                   className="h-9 w-10 border border-neutral-300 bg-white p-1"
                   disabled={disabled}
                   type="color"
@@ -912,13 +908,41 @@ export function ClipTextStyleEditor({
                 />
                 {["#000000", "#FFFFFF", "#1F2937", "#7F1D1D"].map((color) => (
                   <button
-                    aria-label={`縁取り色 ${color}`}
+                    aria-label={`内縁の色 ${color}`}
                     className="h-7 w-7 border border-neutral-400"
                     disabled={disabled}
                     key={color}
                     style={{ backgroundColor: color }}
                     type="button"
                     onClick={() => updateStyle({ outlineColor: color })}
+                  />
+                ))}
+              </div>
+            </fieldset>
+
+            <fieldset className="mt-3">
+              <legend className="text-xs font-semibold text-neutral-700">外縁の色</legend>
+              <div className="mt-1 flex min-h-9 flex-wrap items-center gap-1.5">
+                <input
+                  aria-label="外縁の色"
+                  className="h-9 w-10 border border-neutral-300 bg-white p-1"
+                  disabled={disabled}
+                  type="color"
+                  value={style.outerOutlineColor ?? "#FFFFFF"}
+                  onChange={(event) =>
+                    updateStyle({ outerOutlineColor: event.target.value.toUpperCase() })
+                  }
+                />
+                {COLOR_PRESETS.map((color) => (
+                  <button
+                    aria-label={`外縁の色 ${color}`}
+                    aria-pressed={(style.outerOutlineColor ?? "#FFFFFF") === color}
+                    className="h-7 w-7 border border-neutral-400 aria-pressed:ring-2 aria-pressed:ring-sky-600"
+                    disabled={disabled}
+                    key={color}
+                    style={{ backgroundColor: color }}
+                    type="button"
+                    onClick={() => updateStyle({ outerOutlineColor: color })}
                   />
                 ))}
               </div>

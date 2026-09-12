@@ -10,6 +10,9 @@ from typing import Any, Literal
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.thumbnail_style import NormalThumbnailStyle
+from app.short_banners import banner_asset_path
+
 
 THUMBNAIL_TEMPLATE_DIR = (
     Path(__file__).resolve().parents[1]
@@ -624,6 +627,7 @@ def render_normal_thumbnail(
     command_runner: ThumbnailCommandRunner = _run_command,
     subject_anchor_x: float | None = None,
     face_height_ratio: float | None = None,
+    character_style: dict[str, Any] | None = None,
 ) -> ThumbnailRenderResult:
     """Render a 1280x720 normal thumbnail.
 
@@ -642,6 +646,19 @@ def render_normal_thumbnail(
         raise FileNotFoundError(
             f"normal thumbnail background image not found: {background_image_path}"
         )
+    plain_background = None
+    if character_style is not None:
+        style = NormalThumbnailStyle.model_validate(character_style)
+        template["colors"].update({
+            "title_first": style.title_color,
+            "title_second": style.second_title_color,
+            "title_outer_stroke": style.outline_color,
+        })
+        if style.design == "custom":
+            background_image_path = banner_asset_path(style.background_asset_id)
+        elif style.design == "plain":
+            background_image_path = None
+            plain_background = Image.new("RGBA", (1280, 720), style.background_color)
     selected_font = Path(font_path) if font_path is not None else Path(template_path).parent / template["font"]
     if not selected_font.is_file():
         raise FileNotFoundError(f"normal thumbnail font not found: {selected_font}")
@@ -679,6 +696,7 @@ def render_normal_thumbnail(
                     font_path=selected_font,
                     subject_anchor_x=subject_anchor_x,
                     face_height_ratio=face_height_ratio,
+                    background_image=plain_background,
                 )
     composed.save(output, format="JPEG", quality=94, optimize=True, subsampling=0)
     return ThumbnailRenderResult(

@@ -665,7 +665,7 @@ def test_review_selection_separates_publication_and_overlay_titles(
 
 
 @pytest.mark.parametrize("post_metadata_source", ["codex", "manual"])
-def test_apply_manualizes_ai_posting_copy_when_subtitles_change_in_same_save(
+def test_apply_rejects_stale_ai_but_keeps_manual_copy_when_subtitles_change(
     title_hook_api: dict[str, Any],
     post_metadata_source: str,
 ) -> None:
@@ -705,6 +705,14 @@ def test_apply_manualizes_ai_posting_copy_when_subtitles_change_in_same_save(
         },
     )
 
+    if post_metadata_source == "codex":
+        assert response.status_code == 422
+        saved_review = load_subtitle_review(
+            subtitle_review_output_path(title_hook_api["storage"].job_outputs(title_hook_api["job_id"]))
+        )
+        assert saved_review == review
+        return
+
     assert response.status_code == 200
     saved = next(item for item in response.json()["clips"] if item["id"] == "short_1")
     assert saved["publicationTitle"] == "公開用タイトル"
@@ -716,6 +724,82 @@ def test_apply_manualizes_ai_posting_copy_when_subtitles_change_in_same_save(
     assert saved["descriptionEvidenceSegmentIds"] == []
     assert saved["postMetadataSource"] == "manual"
     assert saved["postMetadataRevisionHash"] is None
+
+
+@pytest.mark.parametrize("clip_id", ["normal_1", "short_1"])
+@pytest.mark.parametrize("source", ["codex", "manual"])
+def test_posting_set_generated_from_unsaved_subtitles_survives_confirmation_and_export(
+    title_hook_api: dict[str, Any], clip_id: str, source: str,
+) -> None:
+    review = title_hook_api["review"]
+    clip = next(item for item in review.clips if item.id == clip_id)
+    segments = {segment.id: segment for segment in review.segments}
+    drafts = [{"segmentId": sid, "text": segments[sid].text + " 訂正済み"} for sid in clip.segment_ids]
+    generation_input = build_title_hook_suggestion_input(
+        review, clip_id, [TitleHookDraftSegment.model_validate(item) for item in drafts], model="codex-default",
+    )
+    result = _suggestion_result()
+    suggestions = normalize_title_hook_suggestions(result, clip_duration=clip.duration)
+    artifact = queued_title_hook_suggestions(generation_input).model_copy(update={
+        "state": "ready", "suggestions": suggestions, "recommended_suggestion_id": suggestions[0].id,
+        "youtube_description": result.youtube_description, "hashtags": result.hashtags,
+    })
+    job_id = title_hook_api["job_id"]
+    output_dir = title_hook_api["storage"].job_outputs(job_id)
+    write_title_hook_suggestions(artifact, title_hook_suggestions_path(output_dir, clip_id))
+    source_url = "https://www.youtube.com/watch?v=gUgiNlCT8GM"
+    with title_hook_api["session_factory"]() as db:
+        job = db.get(Job, job_id)
+        job.settings_json = {
+            **job.settings_json, "youtubeSourceTitle": "元の配信", "youtubeSourceUrl": source_url,
+            "youtubePostingProfile": {"performerName": "儒烏風亭らでん", "baseTags": ["らでん"], "baseHashtags": ["#ReGLOSS"]},
+        }
+        db.commit()
+    description = "手で整えた説明文" if source == "manual" else result.youtube_description
+    payload = {
+        "title": suggestions[0].overlay_title,
+        "publicationTitle": "手で整えた公開タイトル" if source == "manual" else suggestions[0].publication_title,
+        "hookText": "", "hookDurationSeconds": 2, "segments": drafts,
+        "titleCandidates": [
+            {"id": s.id, "title": s.publication_title, "intent": s.intent, "reason": s.reason}
+            for s in suggestions
+        ],
+        "recommendedTitleId": suggestions[0].id,
+        "selectedTitleId": None if source == "manual" else suggestions[0].id,
+        "youtubeDescription": description, "youtubeHashtags": result.hashtags, "youtubeTags": [],
+        "postMetadataSource": source, "postMetadataRevisionHash": generation_input.revision_hash,
+    }
+    url = f"/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/apply"
+    response = title_hook_api["client"].post(url, json=payload)
+    assert response.status_code == 200, response.text
+    saved = next(item for item in response.json()["clips"] if item["id"] == clip_id)
+    assert len(saved["titleCandidates"]) == 3
+    assert saved["selectedTitleId"] == payload["selectedTitleId"]
+    assert saved["postMetadataSource"] == source
+    assert saved["postMetadataRevisionHash"] == generation_input.revision_hash
+    assert saved["youtubeDescription"].startswith(description)
+    assert source_url in saved["youtubeDescription"]
+    assert "出演：" in saved["youtubeDescription"]
+    assert "らでん" in saved["youtubeTags"]
+    if source == "codex" and clip.type == "short":
+        assert "#shortsfunny" in saved["youtubeHashtags"]
+
+    # A second save must preserve edited text/tags and not duplicate credits.
+    payload.update({key: saved[key] for key in ("youtubeDescription", "youtubeHashtags", "youtubeTags")})
+    again = title_hook_api["client"].post(url, json=payload)
+    assert again.status_code == 200, again.text
+    again_clip = next(item for item in again.json()["clips"] if item["id"] == clip_id)
+    assert again_clip["youtubeDescription"] == saved["youtubeDescription"]
+    assert again_clip["youtubeTags"] == saved["youtubeTags"]
+    restored = load_subtitle_review(subtitle_review_output_path(output_dir))
+    selection = apply_reviewed_clip_content(title_hook_api["selection"], restored)
+    exported = next(item for item in [*selection.normal_clips, *selection.shorts] if item.id == clip_id)
+    json_path, markdown_path = write_youtube_posting_artifacts([exported], output_dir / "posting-assertion")
+    posting = json.loads(json_path.read_text(encoding="utf-8"))["clips"][0]
+    assert len(posting["titleCandidates"]) == 3
+    assert posting["selectedTitleId"] == payload["selectedTitleId"]
+    assert source_url in markdown_path.read_text(encoding="utf-8")
+    assert posting["youtubeTags"] == saved["youtubeTags"]
 
 
 def test_apply_rejects_codex_posting_copy_already_stale_before_save(
@@ -1126,6 +1210,7 @@ def test_worker_uses_text_only_fallback_and_normalizes_clip_relative_scene(
     assert generator.frames == []
     assert generator.payload is not None
     assert set(generator.payload) == {
+        "normalTitleSuffix",
         "clipType",
         "clipDurationSeconds",
         "timestampSemantics",

@@ -14,7 +14,6 @@ import {
   cleanupExpiredStorage,
   createJob,
   getStorageStatus,
-  getYouTubePostingProfile,
   reopenCompletedVideo,
   saveYouTubePostingProfile,
   uploadVideo
@@ -110,25 +109,6 @@ function UploadForm() {
         if (active) {
           setStorageStatusError("容量情報を取得できません。アップロードは続行できます。");
         }
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    void getYouTubePostingProfile()
-      .then((document) => {
-        if (active) {
-          setSettings((current) => ({
-            ...current,
-            youtubePostingProfile: document.profile
-          }));
-        }
-      })
-      .catch(() => {
-        // 投稿プリセットが未保存でも動画作成は続行できる。
       });
     return () => {
       active = false;
@@ -247,7 +227,9 @@ function UploadForm() {
               requireSubtitleReview: true
             }
           : { ...settings, workflowMode: "automatic" };
-      const job = await createJob(uploaded.videoId, jobSettings);
+      const job = await createJob(uploaded.videoId, {
+        ...jobSettings, useOpenAIScoring: false, ensureSelectedOpenAIScored: false, subtitleCorrectionMode: "off"
+      });
       router.push(
         uploadMode === "manual" ? `/jobs/${job.jobId}/clips` : `/jobs/${job.jobId}`
       );

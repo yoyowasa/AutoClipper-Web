@@ -255,3 +255,16 @@ def test_youtube_posting_copy_keeps_legacy_ai_copy_without_profile() -> None:
     assert copy.description == "clip内容の要約"
     assert copy.hashtags == ["#雑談", "#切り抜き"]
     assert copy.tags == ["雑談", "切り抜き"]
+
+
+def test_youtube_posting_copy_does_not_duplicate_existing_source_or_performer() -> None:
+    kwargs = {
+        "clip_type": "normal", "source_title": "元配信", "source_url": "https://www.youtube.com/watch?v=gUgiNlCT8GM",
+        "profile": {"performerName": "儒烏風亭らでん"},
+    }
+    first = build_youtube_posting_copy(**kwargs, fallback_description="手入力の説明")
+    second = build_youtube_posting_copy(**kwargs, fallback_description=first.description)
+    assert second.description == first.description
+    partial = build_youtube_posting_copy(**kwargs, fallback_description="手入力の説明\n\n出演：\n儒烏風亭らでん")
+    assert partial.description.count("出演：") == 1
+    assert partial.description.count("元配信：") == 1

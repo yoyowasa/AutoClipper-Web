@@ -3,6 +3,7 @@
 import type { ClipSettings } from "../lib/types";
 import { ClipSelectionEditor } from "./ClipSelectionEditor";
 import { ManualClipRangeEditor } from "./ManualClipRangeEditor";
+import { ShortBannerPresetManager } from "./ShortBannerPresetManager";
 import { SubtitleStyleEditor } from "./SubtitleStyleEditor";
 import {
   isManualTimeMode,
@@ -46,7 +47,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   openaiCandidateLimit: 8,
   openaiModel: "gpt-5.5",
   openaiFallbackToRuleScore: true,
-  ensureSelectedOpenAIScored: true,
+  ensureSelectedOpenAIScored: false,
   openaiFinalistScoringLimit: 7,
   enableBoundaryRefinement: true,
   boundaryLeadingPaddingSeconds: 0.4,
@@ -177,10 +178,11 @@ export function SettingsPanel({
             : "grid gap-5 md:grid-cols-2"
         }
       >
-        <label className="flex flex-col gap-2">
+        <div className={`upload-settings-summary grid min-w-0 items-end gap-3 md:col-span-2 ${workspace ? "2xl:col-span-4" : ""}`}>
+        <label className="flex min-w-0 flex-col gap-2">
           <span className="text-sm font-medium text-neutral-700">処理モード</span>
           <select
-            className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+            className="min-h-10 min-w-0 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm"
             disabled={disabled}
             value={settings.mode}
             onChange={(event) =>
@@ -192,10 +194,10 @@ export function SettingsPanel({
           </select>
         </label>
 
-        <label className="flex flex-col gap-2">
+        <label className="flex min-w-0 flex-col gap-2">
           <span className="text-sm font-medium text-neutral-700">動画タイプ</span>
           <select
-            className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
+            className="min-h-10 min-w-0 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm"
             disabled={disabled}
             value={settings.profile}
             onChange={(event) =>
@@ -209,7 +211,7 @@ export function SettingsPanel({
           </select>
         </label>
 
-        <fieldset className="md:col-span-2">
+        <fieldset className="min-w-0">
           <legend className="text-sm font-medium text-neutral-700">作成する動画</legend>
           <div
             aria-label="生成対象"
@@ -225,7 +227,7 @@ export function SettingsPanel({
             ).map(([value, label]) => (
               <button
                 aria-pressed={outputMode === value}
-                className={`min-h-10 px-3 text-sm font-medium ${
+                className={`min-h-8 whitespace-nowrap px-2 text-xs font-medium ${
                   outputMode === value ? "bg-neutral-950 text-white" : "text-neutral-600"
                 }`}
                 disabled={disabled}
@@ -241,17 +243,11 @@ export function SettingsPanel({
 
         {settings.normalClipCount > 0 ? (
           <label
-            className={`flex flex-col gap-2 ${
-              workspace
-                ? settings.shortCount === 0
-                  ? "md:col-span-2 2xl:col-span-4"
-                  : "2xl:col-span-2"
-                : ""
-            }`}
+            className="flex min-w-0 flex-col gap-2"
           >
             <span className="text-sm font-medium text-neutral-700">通常切り抜きの本数</span>
             <input
-              className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+              className="min-h-10 min-w-0 w-full rounded-md border border-neutral-300 px-3 text-sm"
               disabled={disabled}
               max={12}
               min={1}
@@ -270,17 +266,11 @@ export function SettingsPanel({
 
         {settings.shortCount > 0 ? (
           <label
-            className={`flex flex-col gap-2 ${
-              workspace
-                ? settings.normalClipCount === 0
-                  ? "md:col-span-2 2xl:col-span-4"
-                  : "2xl:col-span-2"
-                : ""
-            }`}
+            className="flex min-w-0 flex-col gap-2"
           >
             <span className="text-sm font-medium text-neutral-700">ショートの本数</span>
             <input
-              className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+              className="min-h-10 min-w-0 w-full rounded-md border border-neutral-300 px-3 text-sm"
               disabled={disabled}
               max={24}
               min={1}
@@ -296,6 +286,8 @@ export function SettingsPanel({
             />
           </label>
         ) : null}
+
+        </div>
 
         <ManualClipRangeEditor
           disabled={disabled}
@@ -323,17 +315,10 @@ export function SettingsPanel({
             </h3>
             <span className="text-xs text-neutral-500">表示方法と確認工程</span>
           </div>
-          <div
-            className={`mt-3 grid items-end gap-3 ${
-              settings.shortCount > 0
-                ? "lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
-                : "lg:grid-cols-[auto]"
-            }`}
-          >
+          <div className="mt-3 grid items-start gap-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,0.8fr)_auto]" data-testid="short-review-length-row">
             {settings.shortCount > 0 ? (
-              <>
-                <label className="flex min-w-0 flex-col gap-2">
-                  <span className="text-sm font-medium text-neutral-700">ショート画面</span>
+                <label className="flex min-w-0 items-center gap-2">
+                  <span className="shrink-0 text-sm font-medium text-neutral-700">ショート画面</span>
                   <select
                     className="min-h-10 w-full border border-neutral-300 bg-white px-3 text-sm"
                     disabled={disabled || settings.shortCount === 0}
@@ -351,77 +336,10 @@ export function SettingsPanel({
                     <option value="blur_background">ぼかし背景</option>
                   </select>
                 </label>
-
-                <fieldset className="flex min-w-0 flex-col gap-2">
-                  <legend className="text-sm font-medium text-neutral-700">
-                    ショート帯（基本ON）
-                  </legend>
-                  <div className="grid min-h-10 grid-cols-2 border border-neutral-300 bg-white">
-                    <label className="flex cursor-pointer items-center gap-2 border-r border-neutral-300 px-3">
-                      <input
-                        checked={settings.shortTopBannerEnabled}
-                        className="h-4 w-4"
-                        disabled={disabled || settings.shortCount === 0}
-                        type="checkbox"
-                        onChange={(event) =>
-                          onChange({
-                            ...settings,
-                            shortTopBannerEnabled: event.target.checked
-                          })
-                        }
-                      />
-                      <span className="text-sm font-medium text-neutral-700">上: 柄帯</span>
-                    </label>
-                    <label className="flex cursor-pointer items-center gap-2 px-3">
-                      <input
-                        checked={settings.shortBottomBannerEnabled}
-                        className="h-4 w-4"
-                        disabled={disabled || settings.shortCount === 0}
-                        type="checkbox"
-                        onChange={(event) =>
-                          onChange({
-                            ...settings,
-                            shortBottomBannerEnabled: event.target.checked
-                          })
-                        }
-                      />
-                      <span className="text-sm font-medium text-neutral-700">下: ロゴ</span>
-                    </label>
-                  </div>
-                  <p className="text-xs leading-5 text-neutral-500">
-                    上帯と下帯の間へ映像を収め、人物が帯に隠れない画角で書き出します。
-                  </p>
-                </fieldset>
-              </>
-            ) : null}
-
-            <label className="flex min-h-10 items-center gap-3 border border-neutral-300 bg-white px-3 lg:justify-self-start">
-              <input
-                checked={settings.burnSubtitles}
-                className="h-4 w-4"
-                disabled={disabled || exceptionOnlyAutomation}
-                type="checkbox"
-                onChange={(event) =>
-                  onChange({
-                    ...settings,
-                    burnSubtitles: event.target.checked,
-                    automationMode:
-                      !event.target.checked &&
-                      (settings.automationMode === "shadow" || exceptionOnlyAutomation)
-                        ? "manual"
-                        : settings.automationMode
-                  })
-                }
-              />
-              <span className="whitespace-nowrap text-sm font-medium text-neutral-700">
-                字幕を焼き込む
-              </span>
-            </label>
-          </div>
-
-          <details className="mt-3" data-testid="review-settings-details">
+            ) : <span />}
+          <details className="min-w-0" data-testid="review-settings-details">
             <summary className="cursor-pointer text-sm font-medium text-neutral-700">
-              <span className="ml-1 inline-flex w-[calc(100%_-_1.25rem)] items-center justify-between gap-3 align-middle">
+              <span className="ml-1 inline-flex w-[calc(100%_-_1.25rem)] items-center justify-between gap-2 align-middle">
                 <span>開始後の確認</span>
                 <span className="text-xs font-normal text-neutral-500">
                   {settings.automationMode === "auto"
@@ -546,13 +464,11 @@ export function SettingsPanel({
               ) : null}
             </div>
           </details>
-        </section>
-
-        <details className={workspace ? "md:col-span-2 2xl:col-span-4" : "md:col-span-2"}>
+<details className="min-w-0">
           <summary className="cursor-pointer text-sm font-medium text-neutral-700">
             詳細な長さ設定
           </summary>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium text-neutral-700">Normal min seconds</span>
               <input
@@ -642,6 +558,31 @@ export function SettingsPanel({
             </label>
           </div>
         </details>
+            <label className="flex min-h-10 items-center gap-3 border border-neutral-300 bg-white px-3 lg:justify-self-start">
+              <input
+                checked={settings.burnSubtitles}
+                className="h-4 w-4"
+                disabled={disabled || exceptionOnlyAutomation}
+                type="checkbox"
+                onChange={(event) =>
+                  onChange({
+                    ...settings,
+                    burnSubtitles: event.target.checked,
+                    automationMode:
+                      !event.target.checked &&
+                      (settings.automationMode === "shadow" || exceptionOnlyAutomation)
+                        ? "manual"
+                        : settings.automationMode
+                  })
+                }
+              />
+              <span className="whitespace-nowrap text-sm font-medium text-neutral-700">
+                字幕を焼き込む
+              </span>
+            </label>
+          </div>
+          {settings.shortCount > 0 && <ShortBannerPresetManager key={settings.characterPresetName ?? "legacy"} disabled={disabled} settings={settings} onChange={onChange} />}
+        </section>
 
         <div className={workspace ? "md:col-span-2 2xl:col-span-4" : "md:col-span-2"}>
           <SubtitleStyleEditor disabled={disabled} settings={settings} onChange={onChange} />
@@ -723,178 +664,7 @@ export function SettingsPanel({
               </div>
             </div>
 
-            <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">OpenAI字幕校正</span>
-              <select
-                className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-                data-testid="subtitle-correction-mode"
-                disabled={disabled}
-                value={settings.subtitleCorrectionMode}
-                onChange={(event) =>
-                  onChange({
-                    ...settings,
-                    subtitleCorrectionMode: event.target.value as ClipSettings["subtitleCorrectionMode"]
-                  })
-                }
-              >
-                <option value="off">使用しない</option>
-                <option value="openai">誤変換を校正する</option>
-              </select>
-            </label>
 
-            {settings.subtitleCorrectionMode === "openai" && (
-              <>
-                <label className="flex flex-col gap-2">
-                  <span className="text-sm font-medium text-neutral-700">校正対象</span>
-                  <select
-                    className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-                    disabled={disabled}
-                    value={settings.subtitleCorrectionScope}
-                    onChange={(event) =>
-                      onChange({
-                        ...settings,
-                        subtitleCorrectionScope: event.target.value as ClipSettings["subtitleCorrectionScope"]
-                      })
-                    }
-                  >
-                    <option value="all">すべての字幕</option>
-                    <option value="suspicious">疑わしい字幕のみ</option>
-                  </select>
-                </label>
-
-                {settings.subtitleCorrectionScope === "suspicious" ? (
-                  <label className="flex flex-col gap-2">
-                    <span className="text-sm font-medium text-neutral-700">疑わしさの閾値</span>
-                    <input
-                      className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                      disabled={disabled}
-                      max={1}
-                      min={0}
-                      step={0.05}
-                      type="number"
-                      value={settings.subtitleCorrectionSuspicionThreshold}
-                      onChange={(event) =>
-                        onChange({
-                          ...settings,
-                          subtitleCorrectionSuspicionThreshold: Number(event.target.value)
-                        })
-                      }
-                    />
-                  </label>
-                ) : null}
-
-                <label className="flex flex-col gap-2">
-                  <span className="text-sm font-medium text-neutral-700">校正モデル</span>
-                  <input
-                    className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                    disabled={disabled}
-                    type="text"
-                    value={settings.subtitleCorrectionModel}
-                    onChange={(event) =>
-                      onChange({ ...settings, subtitleCorrectionModel: event.target.value })
-                    }
-                  />
-                </label>
-
-                <label className="flex flex-col gap-2">
-                  <span className="text-sm font-medium text-neutral-700">推論量</span>
-                  <select
-                    className="min-h-10 rounded-md border border-neutral-300 bg-white px-3 text-sm"
-                    disabled={disabled}
-                    value={settings.subtitleCorrectionReasoningEffort}
-                    onChange={(event) =>
-                      onChange({
-                        ...settings,
-                        subtitleCorrectionReasoningEffort:
-                          event.target.value as ClipSettings["subtitleCorrectionReasoningEffort"]
-                      })
-                    }
-                  >
-                    <option value="default">モデル既定</option>
-                    <option value="none">なし（省コスト・高速、重要字幕は要確認）</option>
-                    <option value="minimal">最小</option>
-                    <option value="low">低</option>
-                    <option value="medium">中</option>
-                    <option value="high">高</option>
-                    <option value="xhigh">特高</option>
-                    <option value="max">最大</option>
-                  </select>
-                </label>
-
-                <label className="flex flex-col gap-2">
-                  <span className="text-sm font-medium text-neutral-700">適用信頼度</span>
-                  <input
-                    className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                    disabled={disabled}
-                    max={1}
-                    min={0}
-                    step={0.05}
-                    type="number"
-                    value={settings.subtitleCorrectionMinConfidence}
-                    onChange={(event) =>
-                      onChange({
-                        ...settings,
-                        subtitleCorrectionMinConfidence: Number(event.target.value)
-                      })
-                    }
-                  />
-                </label>
-
-                <label className="flex flex-col gap-2">
-                  <span className="text-sm font-medium text-neutral-700">1回の字幕数</span>
-                  <input
-                    className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                    disabled={disabled}
-                    max={100}
-                    min={1}
-                    step={1}
-                    type="number"
-                    value={settings.subtitleCorrectionBatchSize}
-                    onChange={(event) =>
-                      onChange({
-                        ...settings,
-                        subtitleCorrectionBatchSize: Number(event.target.value)
-                      })
-                    }
-                  />
-                </label>
-
-                <label className="flex flex-col gap-2">
-                  <span className="text-sm font-medium text-neutral-700">前後の文脈数</span>
-                  <input
-                    className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                    disabled={disabled}
-                    max={10}
-                    min={0}
-                    step={1}
-                    type="number"
-                    value={settings.subtitleCorrectionContextSegments}
-                    onChange={(event) =>
-                      onChange({
-                        ...settings,
-                        subtitleCorrectionContextSegments: Number(event.target.value)
-                      })
-                    }
-                  />
-                </label>
-
-                <label className="flex min-h-10 items-center gap-3 self-end">
-                  <input
-                    checked={settings.subtitleCorrectionFallbackEnabled}
-                    className="h-4 w-4"
-                    disabled={disabled}
-                    type="checkbox"
-                    onChange={(event) =>
-                      onChange({
-                        ...settings,
-                        subtitleCorrectionFallbackEnabled: event.target.checked
-                      })
-                    }
-                  />
-                  <span className="text-sm font-medium text-neutral-700">API失敗時は元字幕を使用</span>
-                </label>
-              </>
-            )}
           </div>
         </details>
       </div>

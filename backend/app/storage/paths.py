@@ -24,6 +24,10 @@ class StoragePaths:
     def heatmaps(self) -> Path:
         return self.root / "heatmaps"
 
+    @property
+    def banner_assets(self) -> Path:
+        return self.root / "banner_assets"
+
     def ensure(self) -> None:
         self.uploads.mkdir(parents=True, exist_ok=True)
         self.temp.mkdir(parents=True, exist_ok=True)

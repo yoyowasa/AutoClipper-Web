@@ -1,6 +1,7 @@
 import hashlib
 import json
 import mimetypes
+from app.short_banners import banner_asset_path, resolve_banner_path
 import shutil
 from datetime import timedelta
 from pathlib import Path
@@ -1896,6 +1897,19 @@ def create_job(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="video not found")
 
     settings = request.settings
+    if settings.short_count > 0:
+        for position, enabled, default_path in (
+            ("top", settings.short_top_banner_enabled, DEFAULT_SHORT_TOP_BANNER_PATH),
+            ("bottom", settings.short_bottom_banner_enabled, DEFAULT_SHORT_BOTTOM_BANNER_PATH),
+        ):
+            if enabled and not resolve_banner_path(
+                settings.model_dump(by_alias=True), position, default_path, paths
+            ).is_file():
+                raise HTTPException(422, "帯画像が見つかりません。画像を選び直してください。")
+    thumbnail_style = settings.normal_thumbnail_style
+    if settings.normal_clip_count > 0 and thumbnail_style and thumbnail_style.design == "custom":
+        if not banner_asset_path(thumbnail_style.background_asset_id, paths).is_file():
+            raise HTTPException(422, "サムネイル背景画像が見つかりません。")
     automatic_output = (settings.normal_clip_count > 0 and not settings.normal_clip_time_ranges) or (
         settings.short_count > 0 and not settings.short_clip_time_ranges
     )
@@ -3192,9 +3206,11 @@ def get_subtitle_review_banner_asset(
     job_id: str,
     position: Literal["top", "bottom"],
     db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
 ) -> FileResponse:
-    _get_job_or_404(db, job_id)
-    asset_path = DEFAULT_SHORT_TOP_BANNER_PATH if position == "top" else DEFAULT_SHORT_BOTTOM_BANNER_PATH
+    job = _get_job_or_404(db, job_id)
+    default_path = DEFAULT_SHORT_TOP_BANNER_PATH if position == "top" else DEFAULT_SHORT_BOTTOM_BANNER_PATH
+    asset_path = resolve_banner_path(job.settings_json, position, default_path, paths)
     if not asset_path.is_file():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -4229,14 +4245,13 @@ def apply_subtitle_review_clip(
             or clip.description_evidence_segment_ids
             or clip.post_metadata_revision_hash
         )
-        manualize_stale_payload = revision_changed_in_save and (
-            stale_codex_payload
-            or (
-                request.post_metadata_source == "manual"
-                and (incoming_ai_state or stored_ai_state)
-            )
+        manualize_stale_payload = (
+            revision_changed_in_save
+            and request.post_metadata_source == "manual"
+            and request.post_metadata_revision_hash != prospective_revision_hash
+            and (incoming_ai_state or stored_ai_state)
         )
-        if stale_codex_payload and not manualize_stale_payload:
+        if stale_codex_payload:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="AI proposal is stale; regenerate it from the current subtitles",
@@ -4323,6 +4338,29 @@ def apply_subtitle_review_clip(
                         "youtube_description": posting_copy.description,
                         "youtube_hashtags": posting_copy.hashtags,
                         "youtube_tags": posting_copy.tags,
+                    }
+                )
+            elif supplied_posting_fields and request.post_metadata_source == "manual":
+                # Manual edits keep their wording; source credits and default tags
+                # must not disappear just because the copy is no longer AI-owned.
+                manual_description = (
+                    request.youtube_description if "youtube_description" in supplied_posting_fields else clip.youtube_description
+                )
+                manual_hashtags = request.youtube_hashtags if "youtube_hashtags" in supplied_posting_fields else clip.youtube_hashtags
+                manual_tags = request.youtube_tags if "youtube_tags" in supplied_posting_fields else clip.youtube_tags
+                posting_copy = build_youtube_posting_copy(
+                    clip_type=clip.type,
+                    source_title=str((job.settings_json or {}).get("youtubeSourceTitle") or ""),
+                    source_url=str((job.settings_json or {}).get("youtubeSourceUrl") or ""),
+                    profile=(job.settings_json or {}).get("youtubePostingProfile"),
+                    fallback_description=manual_description,
+                    topic_hashtags=manual_hashtags,
+                )
+                style_updates.update(
+                    {
+                        "youtube_description": posting_copy.description,
+                        "youtube_hashtags": manual_hashtags or posting_copy.hashtags,
+                        "youtube_tags": manual_tags or posting_copy.tags,
                     }
                 )
             if "title_candidates" in supplied_posting_fields:

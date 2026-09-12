@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models import ExportItem, Job, Video
+from app.source_clip_history import backfill_completed_history
 from app.storage.locking import storage_mutation_lock
 from app.storage.paths import StoragePaths
 from app.video.heatmap import heatmap_sidecar_path
@@ -377,6 +378,8 @@ def _cleanup_expired_storage_unlocked(
             )
         ).all()
     )
+    # Preserve lightweight usage before retiring old metadata and job rows.
+    backfill_completed_history(session, paths)
     claimed_jobs = _claim_expired_jobs(session, candidate_job_ids, terminal_cutoff)
     job_ids = [job_id for job_id, _video_id in claimed_jobs]
     filesystem_targets = [

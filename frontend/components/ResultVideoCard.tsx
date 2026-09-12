@@ -114,7 +114,8 @@ export function ResultVideoCard({
   const youtubeHashtags = normalizedHashtags(item.youtubeHashtags ?? []);
   const youtubeTags = item.youtubeTags ?? [];
   const hasPostMetadata = Boolean(
-    titleCandidates.length > 0 ||
+    item.title.trim() ||
+      titleCandidates.length > 0 ||
       youtubeDescription ||
       youtubeHashtags.length > 0 ||
       youtubeTags.length > 0
@@ -358,7 +359,12 @@ export function ResultVideoCard({
                   </div>
                 ))}
               </div>
-            ) : null}
+            ) : (
+              <div className="mt-3 border bg-white p-2">
+                <p className="text-[10px] font-semibold text-neutral-600">公開用タイトル</p>
+                <p className="mt-1 break-words font-medium text-neutral-950">{item.title}</p>
+              </div>
+            )}
             {youtubeDescription ? (
               <p className="mt-3 whitespace-pre-wrap leading-5 text-neutral-700">
                 {youtubeDescription}

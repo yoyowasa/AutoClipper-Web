@@ -68,6 +68,12 @@ SOFT_JA_BOUNDARIES = "でにはをがともやへ"
 
 @dataclass(frozen=True)
 class SubtitleRenderSettings:
+    short_title_style: ClipTextStyle | None = None
+    short_hook_style: ClipTextStyle | None = None
+    short_subtitle_style: ClipTextStyle | None = None
+    normal_title_style: ClipTextStyle | None = None
+    normal_hook_style: ClipTextStyle | None = None
+    normal_subtitle_style: ClipTextStyle | None = None
     max_chars_per_line_short: int = DEFAULT_SHORT_MAX_CHARS_PER_LINE
     max_chars_per_line_normal: int = DEFAULT_NORMAL_MAX_CHARS_PER_LINE
     max_lines: int = DEFAULT_SUBTITLE_MAX_LINES
@@ -140,6 +146,9 @@ class SubtitleLayout:
     min_gap_between_subtitles: float
     subtitle_x_percent: float | None = None
     subtitle_y_percent: float | None = None
+    default_title_style: ClipTextStyle | None = None
+    default_hook_style: ClipTextStyle | None = None
+    default_subtitle_style: ClipTextStyle | None = None
 
     @classmethod
     def short(cls, settings: SubtitleRenderSettings | dict[str, Any] | None = None) -> "SubtitleLayout":
@@ -147,6 +156,9 @@ class SubtitleLayout:
         return cls(
             width=SHORT_WIDTH,
             height=SHORT_HEIGHT,
+            default_title_style=parsed_settings.short_title_style,
+            default_hook_style=parsed_settings.short_hook_style,
+            default_subtitle_style=parsed_settings.short_subtitle_style,
             font_name=parsed_settings.short_font_name or parsed_settings.subtitle_font_name,
             title_font_name=parsed_settings.title_font_name,
             font_size=parsed_settings.short_font_size or DEFAULT_SHORT_SUBTITLE_FONT_SIZE,
@@ -195,6 +207,9 @@ class SubtitleLayout:
         return cls(
             width=safe_width,
             height=safe_height,
+            default_title_style=parsed_settings.normal_title_style,
+            default_hook_style=parsed_settings.normal_hook_style,
+            default_subtitle_style=parsed_settings.normal_subtitle_style,
             font_name=parsed_settings.normal_font_name or parsed_settings.subtitle_font_name,
             title_font_name=parsed_settings.title_font_name,
             font_size=font_size,
@@ -358,6 +373,12 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
         return settings
 
     aliases = {
+        "shortTitleStyle": "short_title_style",
+        "shortHookStyle": "short_hook_style",
+        "shortSubtitleStyle": "short_subtitle_style",
+        "normalTitleStyle": "normal_title_style",
+        "normalHookStyle": "normal_hook_style",
+        "normalSubtitleStyle": "normal_subtitle_style",
         "maxCharsPerLineShort": "max_chars_per_line_short",
         "maxCharsPerLineNormal": "max_chars_per_line_normal",
         "maxLines": "max_lines",
@@ -423,6 +444,18 @@ def parse_subtitle_settings(settings: SubtitleRenderSettings | dict[str, Any] | 
         maximum=20.0,
     )
     return SubtitleRenderSettings(
+        short_title_style=(ClipTextStyle.model_validate(normalized["short_title_style"])
+                            if normalized.get("short_title_style") is not None else None),
+        short_hook_style=(ClipTextStyle.model_validate(normalized["short_hook_style"])
+                            if normalized.get("short_hook_style") is not None else None),
+        short_subtitle_style=(ClipTextStyle.model_validate(normalized["short_subtitle_style"])
+                            if normalized.get("short_subtitle_style") is not None else None),
+        normal_title_style=(ClipTextStyle.model_validate(normalized["normal_title_style"])
+                            if normalized.get("normal_title_style") is not None else None),
+        normal_hook_style=(ClipTextStyle.model_validate(normalized["normal_hook_style"])
+                            if normalized.get("normal_hook_style") is not None else None),
+        normal_subtitle_style=(ClipTextStyle.model_validate(normalized["normal_subtitle_style"])
+                            if normalized.get("normal_subtitle_style") is not None else None),
         max_chars_per_line_short=_coerce_int(
             normalized.get("max_chars_per_line_short"),
             DEFAULT_SHORT_MAX_CHARS_PER_LINE,
@@ -1006,6 +1039,8 @@ def resolve_clip_text_style(
     *,
     role: TextStyleRole,
 ) -> ResolvedTextStyle:
+    if style is None:
+        style = getattr(layout, f"default_{role}_style")
     is_subtitle = role == "subtitle"
     fallback_font_name = layout.font_name if is_subtitle else layout.title_font_name
     fallback_font_size = layout.font_size if is_subtitle else layout.title_font_size

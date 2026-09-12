@@ -43,8 +43,14 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 def init_db() -> None:
     import app.models  # noqa: F401
+    from pathlib import Path
+    from app.source_clip_history import backfill_completed_history
+    from app.storage.paths import StoragePaths
 
     Base.metadata.create_all(bind=engine)
+    with Session(engine) as db:
+        backfill_completed_history(db, StoragePaths(Path(settings.storage_root)))
+        db.commit()
 
 
 def get_db() -> Generator[Session, None, None]:

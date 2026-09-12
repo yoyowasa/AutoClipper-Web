@@ -1213,7 +1213,8 @@ def test_subject_estimation_uses_off_center_motion_signal() -> None:
     assert signal.sampled_frames == 4
 
 
-def test_render_selected_short_candidates_creates_exports_visible_in_results(client: TestClient) -> None:
+@pytest.mark.parametrize("custom_banner", [False, True])
+def test_render_selected_short_candidates_creates_exports_visible_in_results(client: TestClient, custom_banner: bool) -> None:
     upload = client.post(
         "/api/videos/upload",
         files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
@@ -1275,6 +1276,16 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, created["jobId"])
         assert job is not None
+        expected_top = "short_top_banner.png"
+        if custom_banner:
+            import io
+            from PIL import Image
+            from app.short_banners import store_banner_image
+            image = io.BytesIO()
+            Image.new("RGB", (90, 30), "cyan").save(image, format="PNG")
+            asset_id = store_banner_image(image.getvalue(), storage)
+            job.settings_json = {**job.settings_json, "shortTopBannerAssetId": asset_id}
+            expected_top = f"{asset_id}.png"
 
         result = render_selected_short_candidates(
             db=db,
@@ -1307,7 +1318,7 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert renderer_calls[0]["framing_offset_x"] == 15.0
     assert renderer_calls[0]["framing_offset_y"] == -10.0
     assert renderer_calls[0]["framing_zoom"] == 1.2
-    assert all(Path(call["top_banner_path"]).name == "short_top_banner.png" for call in renderer_calls)
+    assert all(Path(call["top_banner_path"]).name == expected_top for call in renderer_calls)
     assert all(Path(call["bottom_banner_path"]).name == "short_bottom_banner.png" for call in renderer_calls)
 
     shorts_dir = storage.outputs / created["jobId"] / "shorts"

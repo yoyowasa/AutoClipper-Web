@@ -409,12 +409,14 @@ def find_codex_executable() -> str | None:
     if not local_app_data:
         return None
     bin_root = Path(local_app_data) / "OpenAI" / "Codex" / "bin"
-    candidates = sorted(
-        bin_root.glob("*/codex.exe"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    return str(candidates[0]) if candidates else None
+    candidates: list[tuple[float, str]] = []
+    for path in bin_root.glob("*/codex.exe"):
+        try:
+            candidates.append((path.stat().st_mtime, str(path)))
+        except OSError:
+            # Desktop updates can remove an old version during discovery.
+            continue
+    return max(candidates)[1] if candidates else None
 
 
 def safe_codex_environment() -> dict[str, str]:
@@ -967,7 +969,7 @@ def process_request_file(
     request_path: Path,
     *,
     project_root: Path,
-    codex_executable: str,
+    codex_executable: str | None = None,
     runner: CodexRunner = run_codex_command,
     timeout: float = DEFAULT_CODEX_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
@@ -1015,6 +1017,15 @@ def process_request_file(
             request=request,
         )
 
+    # Do not retain the versioned Desktop CLI path across requests.
+    executable = codex_executable or find_codex_executable()
+    if not executable:
+        return _failed_response(
+            request.request_id,
+            "codex_cli_missing",
+            request=request,
+        )
+
     session_dir = private_paths.sessions / request.request_id
     session_dir.mkdir(parents=True, exist_ok=True)
     work_dir = private_paths.work / request.request_id
@@ -1027,7 +1038,7 @@ def process_request_file(
     )
     output_path.unlink(missing_ok=True)
     command = build_codex_command(
-        codex_executable,
+        executable,
         request,
         session_dir=session_dir,
         schema_path=schema_path,
@@ -1046,6 +1057,23 @@ def process_request_file(
         effective_timeout,
         paths.stop_request,
     )
+    if (
+        codex_executable is None
+        and result.returncode == 127
+        and result.stderr == "codex_start_failed"
+        and not paths.stop_request.exists()
+    ):
+        # Retry only a failure to start, never an already-running generation.
+        refreshed_executable = find_codex_executable()
+        if refreshed_executable and refreshed_executable != executable:
+            command[0] = refreshed_executable
+            result = runner(
+                command,
+                PROMPT_GUARD + request.prompt + "\n\n" + PROMPT_GUARD,
+                session_dir,
+                effective_timeout,
+                paths.stop_request,
+            )
     thread_id = thread_id_from_jsonl(result.stdout) or request.thread_id
     if thread_id:
         try:
@@ -1065,6 +1093,7 @@ def process_request_file(
     if result.returncode != 0:
         code = {
             124: "codex_timeout",
+            127: "codex_start_failed",
             130: "codex_cancelled",
         }.get(result.returncode, "codex_failed")
         return _failed_response(
@@ -1120,7 +1149,7 @@ def process_pending_requests(
     paths: BridgePaths,
     *,
     project_root: Path,
-    codex_executable: str,
+    codex_executable: str | None = None,
     runner: CodexRunner = run_codex_command,
     timeout: float = DEFAULT_CODEX_TIMEOUT_SECONDS,
     status_heartbeat_seconds: float = STATUS_HEARTBEAT_INTERVAL_SECONDS,
@@ -1299,7 +1328,6 @@ def serve(
             process_pending_requests(
                 paths,
                 project_root=root,
-                codex_executable=codex_executable,
                 runner=runner,
                 timeout=timeout,
             )

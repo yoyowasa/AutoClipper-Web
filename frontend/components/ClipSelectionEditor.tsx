@@ -109,8 +109,6 @@ export function ClipSelectionEditor({
               ? "border-amber-300 bg-amber-50 text-amber-900"
               : usesCodexInitialSelection
                 ? "border-emerald-300 bg-emerald-50 text-emerald-800"
-              : settings.useOpenAIScoring
-              ? "border-sky-300 bg-sky-50 text-sky-800"
               : "border-neutral-300 bg-neutral-50 text-neutral-600"
           }`}
         >
@@ -118,15 +116,13 @@ export function ClipSelectionEditor({
             ? "時間指定・自動選定なし"
             : usesCodexInitialSelection
               ? "Codexで初期選定"
-            : settings.useOpenAIScoring
-              ? "AI文脈判定"
               : "ローカル語句判定"}
         </span>
       </div>
       <p className="mt-2 text-xs leading-5 text-neutral-600">
         {usesCodexInitialSelection
           ? "文字起こし完了後、全体の文脈から通常・ショートの区間をCodexが直接選びます。"
-          : "従来選定は候補をローカル評価します。必要な場合だけOpenAI APIの文脈判定を追加できます。"}
+          : "従来選定は候補をローカルで評価します。"}
       </p>
 
       <div className={`mt-4 grid gap-4 ${compact ? "" : "lg:grid-cols-2"}`}>
@@ -167,10 +163,8 @@ export function ClipSelectionEditor({
               onChange({
                 ...settings,
                 initialSelectionProvider: event.target.checked ? "codex" : "legacy",
-                useOpenAIScoring: event.target.checked ? false : settings.useOpenAIScoring,
-                ensureSelectedOpenAIScored: event.target.checked
-                  ? false
-                  : settings.ensureSelectedOpenAIScored
+                useOpenAIScoring: false,
+                ensureSelectedOpenAIScored: false
               })
             }
           />
@@ -225,26 +219,7 @@ export function ClipSelectionEditor({
             品質優先（良い場面がなければ本数を減らす）
           </span>
         </label>
-        <label className="flex min-h-11 items-start gap-3 border border-neutral-300 px-4 py-3">
-          <input
-            checked={settings.useOpenAIScoring}
-            className="mt-0.5 h-4 w-4"
-            disabled={disabled || !hasAutomaticOutput || usesCodexInitialSelection}
-            type="checkbox"
-            onChange={(event) =>
-              onChange({
-                ...settings,
-                useOpenAIScoring: event.target.checked
-              })
-            }
-          />
-          <span>
-            <span className="block text-sm font-medium text-neutral-800">AIで内容を判定</span>
-            <span className="mt-1 block text-xs text-neutral-500">
-              従来候補にOpenAI APIを使用・最大{settings.openaiCandidateLimit}候補
-            </span>
-          </span>
-        </label>
+
       </div>
     </section>
   );

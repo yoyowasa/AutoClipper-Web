@@ -69,6 +69,17 @@ export type ClipTimeRange = {
 };
 
 export type ClipSettings = {
+  characterPresetName?: string;
+  channelName?: string;
+  normalTitleSuffix?: string | null;
+  normalThumbnailStyle?: NormalThumbnailStyle | null;
+  shortTitleStyle?: ClipTextStyle;
+  shortHookStyle?: ClipTextStyle;
+  shortSubtitleStyle?: ClipTextStyle;
+  normalTitleStyle?: ClipTextStyle;
+  normalHookStyle?: ClipTextStyle;
+  normalSubtitleStyle?: ClipTextStyle;
+
   workflowMode: WorkflowMode;
   automationMode: AutomationMode;
   manualSubtitleMode: ManualSubtitleMode;
@@ -140,6 +151,9 @@ export type ClipSettings = {
   shortLayout: "auto" | "face_tracking_crop" | "center_crop" | "blur_background";
   shortOverlayTitleMode: "auto" | "always" | "high_quality_only" | "never";
   shortTopBannerEnabled: boolean;
+  shortTopBannerAssetId?: string;
+  shortBottomBannerAssetId?: string;
+  shortBannerPresetName?: string;
   shortBottomBannerEnabled: boolean;
   enableTranscriptPostProcessing?: boolean;
   transcriptNormalizeUnicode?: boolean;
@@ -614,4 +628,13 @@ export type ClipPlanTranscriptSegment = {
   end: number;
   text: string;
   confidence: number | null;
+};
+
+export type NormalThumbnailStyle = {
+  design: "raden" | "plain" | "custom";
+  backgroundAssetId?: string | null;
+  backgroundColor: string;
+  titleColor: string;
+  secondTitleColor: string;
+  outlineColor: string;
 };

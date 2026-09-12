@@ -12,6 +12,7 @@ from app.candidates.select_candidates import CandidateSelection
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.overlay_text import normalize_overlay_text
 from app.posting_metadata import (
+    NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX,
     PostMetadataSource,
     YouTubeTitleCandidate,
     ensure_publication_title_suffix,
@@ -86,6 +87,7 @@ class ResolvedClipTextStyle(BaseModel):
 
 
 class SubtitleReviewClip(BaseModel):
+    normal_title_suffix: str = Field(default=NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, max_length=80, alias="normalTitleSuffix")
     id: str
     type: Literal["normal", "short"]
     title: str
@@ -215,6 +217,7 @@ class SubtitleReviewClip(BaseModel):
             self.publication_title = ensure_publication_title_suffix(
                 self.publication_title or self.title,
                 clip_type=self.type,
+                suffix=self.normal_title_suffix,
             )
             self.title_candidates = [
                 candidate.model_copy(
@@ -222,6 +225,7 @@ class SubtitleReviewClip(BaseModel):
                         "title": ensure_publication_title_suffix(
                             candidate.title,
                             clip_type=self.type,
+                            suffix=self.normal_title_suffix,
                         )
                     }
                 )
@@ -315,11 +319,11 @@ def _candidate_title(candidate: Candidate, index: int) -> str:
     return (candidate.overlay_title or candidate.title or f"{prefix} {index:02d}").strip()
 
 
-def _candidate_publication_title(candidate: Candidate) -> str | None:
+def _candidate_publication_title(candidate: Candidate, suffix: str = NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX) -> str | None:
     title = (candidate.title or "").strip()
     if not title:
         return None
-    return ensure_publication_title_suffix(title, clip_type=candidate.type)
+    return ensure_publication_title_suffix(title, clip_type=candidate.type, suffix=suffix)
 
 
 def _segment_id(index: int) -> str:
@@ -523,6 +527,9 @@ def build_subtitle_review(
         for index in indices:
             affected_clips.setdefault(index, []).append(candidate.id)
 
+    normal_title_suffix = (render_settings or {}).get("normalTitleSuffix")
+    if normal_title_suffix is None:
+        normal_title_suffix = NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX
     clips: list[SubtitleReviewClip] = []
     for candidate in selected_candidates:
         type_indices[candidate.type] += 1
@@ -531,7 +538,8 @@ def build_subtitle_review(
                 id=candidate.id,
                 type=candidate.type,
                 title=_candidate_title(candidate, type_indices[candidate.type]),
-                publicationTitle=_candidate_publication_title(candidate),
+                publicationTitle=_candidate_publication_title(candidate, normal_title_suffix),
+                normalTitleSuffix=normal_title_suffix,
                 originalTitle=_candidate_title(candidate, type_indices[candidate.type]),
                 hookText=candidate.hook_text or "",
                 hookDurationSeconds=candidate.hook_duration_seconds or 3.0,
@@ -709,6 +717,7 @@ def update_review_clip_content(
         current_derived_title = ensure_publication_title_suffix(
             clip.title,
             clip_type=clip.type,
+            suffix=clip.normal_title_suffix,
         )
         if (
             clip.publication_title is None
@@ -736,11 +745,13 @@ def update_review_clip_content(
         next_publication_title = ensure_publication_title_suffix(
             next_publication_title,
             clip_type=clip.type,
+            suffix=clip.normal_title_suffix,
         )
     elif next_publication_title:
         next_publication_title = ensure_publication_title_suffix(
             next_publication_title,
             clip_type=clip.type,
+            suffix=clip.normal_title_suffix,
         )
     if len(normalized_hook) > 120:
         raise ValueError("hook text must be 120 characters or fewer")
@@ -774,6 +785,7 @@ def update_review_clip_content(
                 "title": ensure_publication_title_suffix(
                     candidate.title,
                     clip_type=clip.type,
+                    suffix=clip.normal_title_suffix,
                 )
             }
         )
@@ -1091,7 +1103,7 @@ def convert_review_clip_to_short(
     clip.thumbnail_frame_seconds = None
     if clip.publication_title:
         clip.publication_title = strip_normal_publication_title_suffix(
-            clip.publication_title
+            clip.publication_title, suffix=clip.normal_title_suffix
         )
     clip.start = start
     clip.end = end
@@ -1182,6 +1194,7 @@ def apply_reviewed_clip_content(
         publication_title = ensure_publication_title_suffix(
             clip.publication_title or clip.title,
             clip_type=clip.type,
+            suffix=clip.normal_title_suffix,
         )
         overlay_title = (
             clip.title

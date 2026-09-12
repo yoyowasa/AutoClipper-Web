@@ -41,6 +41,7 @@ import type {
 } from "../../../../lib/types";
 import {
   descriptionWithHashtags,
+  postMetadataApplyPayload,
   tagsFromText,
   youtubeTagsText
 } from "../../../../lib/youtubePosting";
@@ -212,51 +213,6 @@ type ClipContentDraft = {
   hookStyle: ClipTextStyle | null;
   subtitleStyle: ClipTextStyle | null;
 };
-
-type PostMetadataApplyPayload = {
-  titleCandidates: PostTitleCandidate[];
-  recommendedTitleId: string | null;
-  selectedTitleId: string | null;
-  youtubeDescription: string;
-  youtubeHashtags: string[];
-  youtubeTags: string[];
-  descriptionEvidenceSegmentIds: string[];
-  postMetadataSource: string | null;
-  postMetadataRevisionHash: string | null;
-};
-
-function postMetadataApplyPayload(
-  draft: ClipContentDraft,
-  invalidateAiEvidence: boolean
-): PostMetadataApplyPayload {
-  const youtubeDescription = draft.youtubeDescription.trim();
-  const youtubeHashtags = hashtagsFromText(draft.youtubeHashtagsText);
-  const youtubeTags = tagsFromText(draft.youtubeTagsText);
-  if (invalidateAiEvidence) {
-    return {
-      titleCandidates: [],
-      recommendedTitleId: null,
-      selectedTitleId: null,
-      youtubeDescription,
-      youtubeHashtags,
-      youtubeTags,
-      descriptionEvidenceSegmentIds: [],
-      postMetadataSource: "manual",
-      postMetadataRevisionHash: null
-    };
-  }
-  return {
-    titleCandidates: draft.titleCandidates,
-    recommendedTitleId: draft.recommendedTitleId,
-    selectedTitleId: draft.selectedTitleId,
-    youtubeDescription,
-    youtubeHashtags,
-    youtubeTags,
-    descriptionEvidenceSegmentIds: draft.descriptionEvidenceSegmentIds,
-    postMetadataSource: draft.postMetadataSource,
-    postMetadataRevisionHash: draft.postMetadataRevisionHash
-  };
-}
 
 type ShortFramingDrafts = Record<
   string,
@@ -2248,10 +2204,7 @@ export default function SubtitleReviewPage() {
         text: drafts[segment.id] ?? segment.text
       }));
     const savedSegmentIds = new Set(segmentUpdates.map((segment) => segment.segmentId));
-    const postMetadata = postMetadataApplyPayload(
-      selectedClipContentDraft,
-      segmentUpdates.length > 0 || selectedSuggestionsAreStale
-    );
+    const postMetadata = postMetadataApplyPayload(selectedClipContentDraft);
     const mutationGeneration = beginReviewMutation();
     setConfirmingClipId(selectedClip.id);
     setError(null);
@@ -2348,10 +2301,7 @@ export default function SubtitleReviewPage() {
     const savedSegmentIds = new Set(
       segmentUpdates.map((segment) => segment.segmentId)
     );
-    const postMetadata = postMetadataApplyPayload(
-      selectedClipContentDraft,
-      segmentUpdates.length > 0 || selectedSuggestionsAreStale
-    );
+    const postMetadata = postMetadataApplyPayload(selectedClipContentDraft);
     const mutationGeneration = beginReviewMutation();
     setIsConvertingToShort(true);
     setError(null);
@@ -3263,8 +3213,7 @@ export default function SubtitleReviewPage() {
                           updateClipContentDraft(selectedClip.id, {
                             publicationTitle: event.target.value,
                             selectedTitleId: null,
-                            postMetadataSource: "manual",
-                            postMetadataRevisionHash: null
+                            postMetadataSource: "manual"
                           })
                         }
                       />
@@ -3525,8 +3474,7 @@ export default function SubtitleReviewPage() {
                             updateClipContentDraft(selectedClip.id, {
                               youtubeDescription: event.target.value,
                               descriptionEvidenceSegmentIds: [],
-                              postMetadataSource: "manual",
-                              postMetadataRevisionHash: null
+                              postMetadataSource: "manual"
                             })
                           }
                         />
@@ -3546,8 +3494,7 @@ export default function SubtitleReviewPage() {
                           onChange={(event) =>
                             updateClipContentDraft(selectedClip.id, {
                               youtubeHashtagsText: event.target.value,
-                              postMetadataSource: "manual",
-                              postMetadataRevisionHash: null
+                              postMetadataSource: "manual"
                             })
                           }
                         />
@@ -3566,8 +3513,7 @@ export default function SubtitleReviewPage() {
                           onChange={(event) =>
                             updateClipContentDraft(selectedClip.id, {
                               youtubeTagsText: event.target.value,
-                              postMetadataSource: "manual",
-                              postMetadataRevisionHash: null
+                              postMetadataSource: "manual"
                             })
                           }
                         />

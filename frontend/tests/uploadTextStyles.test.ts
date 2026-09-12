@@ -1,0 +1,24 @@
+import assert from "node:assert/strict";
+import { DEFAULT_SETTINGS } from "../components/SettingsPanel";
+import { defaultClipTextStyle } from "../lib/clipTextStyle";
+import { applySubtitleStyle, captureSubtitleStyle, parseSubtitleStylePresetSlots, serializeSubtitleStylePresetSlots } from "../lib/subtitleStylePresets";
+import { uploadDefaultTextStyle, withUploadTextStyle } from "../lib/uploadTextStyles";
+
+const legacy = { name: "legacy", savedAt: "2026-09-12T00:00:00Z", style: { shortSubtitleFontSize: 82 } };
+const slots = parseSubtitleStylePresetSlots(JSON.stringify({ version: 1, slots: [legacy, null, null] }));
+assert.equal(slots.length, 10);
+assert.deepEqual(slots[0], legacy);
+const style = { ...defaultClipTextStyle("hook", "short"), outlineWidth: 3, outerOutlineWidth: 7, outerOutlineColor: "#123456" };
+const settings = withUploadTextStyle(DEFAULT_SETTINGS, "short", "hook", style);
+slots[9] = { name: "ten", savedAt: legacy.savedAt, style: captureSubtitleStyle(settings) };
+const restored = parseSubtitleStylePresetSlots(serializeSubtitleStylePresetSlots(slots));
+assert.deepEqual(restored[9]?.style.shortHookStyle, style);
+const applied = applySubtitleStyle({ ...DEFAULT_SETTINGS, normalClipCount: 4 }, restored[9]!.style);
+assert.equal(applied.normalClipCount, 4);
+assert.deepEqual(applied.shortHookStyle, style);
+assert.equal(applied.normalHookStyle, undefined);
+const oldApplied = applySubtitleStyle(applied, legacy.style);
+assert.equal(oldApplied.shortHookStyle, undefined);
+assert.equal(uploadDefaultTextStyle(oldApplied, "short", "subtitle").fontSize, 82);
+assert.equal(uploadDefaultTextStyle(oldApplied, "normal", "subtitle").fontSize, 65);
+console.log("upload style migration, slot 10 and role isolation passed");

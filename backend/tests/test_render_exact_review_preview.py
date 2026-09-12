@@ -629,3 +629,44 @@ def test_exact_preview_failure_does_not_publish_partial_artifacts(
     assert not list(preview_dir.rglob("*.ass"))
     assert not list(preview_dir.rglob("*.json"))
     assert not list(preview_dir.rglob("*.tmp.*"))
+
+
+def test_custom_banner_changes_preview_hash_and_renderer_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    from PIL import Image
+    import app.short_banners as banners
+    from app.storage.paths import StoragePaths
+
+    paths = StoragePaths(tmp_path / "storage")
+    monkeypatch.setattr(banners, "get_storage_paths", lambda: paths)
+    data = io.BytesIO()
+    Image.new("RGB", (90, 30), "cyan").save(data, format="PNG")
+    asset_id = banners.store_banner_image(data.getvalue(), paths)
+    calls = []
+
+    def renderer(_input: str | Path, output: str | Path, **kwargs: Any) -> Path:
+        calls.append(kwargs)
+        Path(output).write_bytes(b"preview")
+        return Path(output)
+
+    args = dict(
+        candidate=make_candidate("custom_banner", "short"),
+        transcript_segments=[],
+        source_fingerprint="source",
+        source_width=1920,
+        source_height=1080,
+    )
+    original_settings = {"shortTopBannerEnabled": True}
+    custom_settings = {**original_settings, "shortTopBannerAssetId": asset_id}
+    original = build_subtitle_review_preview_spec(settings=original_settings, **args)
+    custom = build_subtitle_review_preview_spec(settings=custom_settings, **args)
+    assert subtitle_review_preview_spec_hash(original) != subtitle_review_preview_spec_hash(custom)
+    assert subtitle_review_preview_spec_hash(build_live_subtitle_review_preview_spec(original)) != subtitle_review_preview_spec_hash(
+        build_live_subtitle_review_preview_spec(custom)
+    )
+    render_exact_subtitle_review_preview(
+        tmp_path / "source.mp4", tmp_path / "preview", settings=custom_settings, short_renderer=renderer, **args
+    )
+    assert len(calls) == 2
+    assert all(call["top_banner_path"] == banners.banner_asset_path(asset_id, paths) for call in calls)
+    assert all("bottom_banner_path" not in call for call in calls)

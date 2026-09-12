@@ -24,6 +24,7 @@ from app.posting_metadata import (
     YouTubeTitleCandidate,
     build_post_metadata_revision_hash,
     build_youtube_posting_copy,
+    NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX,
     ensure_publication_title_suffix,
 )
 from app.scoring.codex_title_hook_suggestions import (
@@ -71,6 +72,7 @@ class TitleHookSuggestionInputSegment(BaseModel):
 
 
 class TitleHookSuggestionInput(BaseModel):
+    normal_title_suffix: str = Field(default=NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, max_length=80, alias="normalTitleSuffix")
     version: int = 1
     prompt_version: str = Field(alias="promptVersion")
     job_id: str = Field(alias="jobId")
@@ -101,6 +103,7 @@ class TitleHookSuggestionInput(BaseModel):
     def prompt_payload(self) -> dict[str, Any]:
         return {
             "clipType": self.clip_type,
+            "normalTitleSuffix": self.normal_title_suffix,
             "clipDurationSeconds": self.clip_duration,
             "timestampSemantics": "clip_relative_seconds",
             "subtitleStatus": "available" if any(item.text.strip() for item in self.segments) else "unavailable",
@@ -264,6 +267,7 @@ def build_title_hook_suggestion_input(
     )
     hash_payload = {
         "promptVersion": TITLE_HOOK_PROMPT_VERSION,
+        "normalTitleSuffix": clip.normal_title_suffix,
         "provider": provider,
         "model": normalized_model,
         "revisionHash": revision_hash,
@@ -293,6 +297,7 @@ def build_title_hook_suggestion_input(
         jobId=document.job_id,
         clipId=clip.id,
         clipType=clip.type,
+        normalTitleSuffix=clip.normal_title_suffix,
         clipStart=clip.start,
         clipEnd=clip.end,
         clipDuration=clip.duration,
@@ -498,6 +503,7 @@ def generate_title_hook_suggestions_for_auto(
         result,
         clip_duration=request.clip_duration,
         clip_type=request.clip_type,
+        suffix=request.normal_title_suffix,
     )
     recommended_index = next(
         (
@@ -561,6 +567,7 @@ def apply_recommended_title_hook_suggestions(
     clip.publication_title = ensure_publication_title_suffix(
         recommended.publication_title,
         clip_type=clip.type,
+        suffix=clip.normal_title_suffix,
     )
     clip.title_edited = True
     clip.hook_text = recommended.hook_text
@@ -585,6 +592,7 @@ def apply_recommended_title_hook_suggestions(
             title=ensure_publication_title_suffix(
                 item.publication_title,
                 clip_type=clip.type,
+                suffix=clip.normal_title_suffix,
             ),
             intent=item.intent,
             reason=item.reason,
@@ -736,6 +744,7 @@ def run_title_hook_suggestion_generation(
             result,
             clip_duration=request.clip_duration,
             clip_type=request.clip_type,
+            suffix=request.normal_title_suffix,
         )
         recommended_index = next(
             (

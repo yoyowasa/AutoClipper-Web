@@ -2693,7 +2693,7 @@ def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) ->
     assert initial_response.status_code == 200
     assert initial_response.json() == {
         "version": 1,
-        "slots": [None, None, None],
+        "slots": [None] * 10,
     }
 
     payload = {
@@ -2743,7 +2743,7 @@ def test_subtitle_style_presets_are_persisted_in_database(client: TestClient) ->
 def test_subtitle_style_presets_reject_invalid_slot_payload(client: TestClient) -> None:
     too_many_slots = client.put(
         "/api/preferences/subtitle-style-presets",
-        json={"version": 1, "slots": [None, None, None, None]},
+        json={"version": 1, "slots": [None] * 11},
     )
     invalid_color = client.put(
         "/api/preferences/subtitle-style-presets",
@@ -2763,6 +2763,24 @@ def test_subtitle_style_presets_reject_invalid_slot_payload(client: TestClient) 
 
     assert too_many_slots.status_code == 422
     assert invalid_color.status_code == 422
+
+
+def test_subtitle_style_slot_ten_roundtrips_all_text_roles(client: TestClient) -> None:
+    styles = {
+        f"{mode}{role}Style": {
+            "fontSize": 88, "outlineWidth": 3, "outerOutlineWidth": 7,
+            "outerOutlineColor": "#123456", "positionMode": "explicit",
+        }
+        for mode in ("short", "normal") for role in ("Title", "Hook", "Subtitle")
+    }
+    slots = [None] * 9 + [{"name": "ten", "savedAt": "2026-09-12T00:00:00Z", "style": styles}]
+    saved = client.put("/api/preferences/subtitle-style-presets", json={"version": 1, "slots": slots})
+    assert saved.status_code == 200
+    retrieved = client.get("/api/preferences/subtitle-style-presets").json()
+    assert len(retrieved["slots"]) == 10
+    assert retrieved == saved.json()
+    for key in styles:
+        assert retrieved["slots"][9]["style"][key]["outerOutlineWidth"] == 7
 
 
 def test_youtube_posting_profile_is_persisted_in_database(client: TestClient) -> None:
@@ -4264,3 +4282,47 @@ def test_upload_and_job_records_are_queryable(client: TestClient) -> None:
 
     assert [video.id for video in videos] == [upload["videoId"]]
     assert [job.id for job in jobs] == [created["jobId"]]
+
+
+def test_named_banner_presets_keep_job_image_snapshot(client: TestClient) -> None:
+    import io
+    from PIL import Image
+
+    def upload_color(color: str) -> str:
+        image = io.BytesIO()
+        Image.new("RGB", (90, 30), color).save(image, format="PNG")
+        response = client.post("/api/preferences/short-banner-assets", files={"file": ("banner.png", image.getvalue(), "image/png")})
+        assert response.status_code == 200
+        return response.json()["assetId"]
+
+    first_id = upload_color("red")
+    second_id = upload_color("blue")
+    preset = {"name": "テスト用", "topAssetId": first_id, "bottomAssetId": second_id, "topEnabled": True, "bottomEnabled": False}
+    assert client.put("/api/preferences/short-banner-presets", json={"presets": [preset]}).status_code == 200
+    assert client.get("/api/preferences/short-banner-presets").json()["presets"] == [preset]
+    upload = client.post("/api/videos/upload", files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")}).json()
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {"shortTopBannerAssetId": first_id, "shortBottomBannerAssetId": second_id, "shortBannerPresetName": "テスト用"},
+        },
+    )
+    assert response.status_code == 201
+    job_id = response.json()["jobId"]
+    preset["topAssetId"] = second_id
+    assert client.put("/api/preferences/short-banner-presets", json={"presets": [preset]}).status_code == 200
+    assert client.put("/api/preferences/short-banner-presets", json={"presets": []}).status_code == 200
+    original = client.get(f"/api/preferences/short-banner-assets/{first_id}")
+    assert client.get(f"/api/jobs/{job_id}/subtitle-review/banner-assets/top").content == original.content
+    assert original.status_code == 200
+    assert (
+        client.post("/api/preferences/short-banner-assets", files={"file": ("fake.png", b"not an image", "image/png")}).status_code == 422
+    )
+    missing = {"videoId": upload["videoId"], "settings": {"shortTopBannerAssetId": "f" * 64}}
+    assert client.post("/api/jobs", json=missing).status_code == 422
+    assert client.get("/api/preferences/short-banner-assets/invalid").status_code == 404
+    ten = [{**preset, "name": f"帯{index}"} for index in range(10)]
+    assert client.put("/api/preferences/short-banner-presets", json={"presets": ten}).status_code == 200
+    assert len(client.get("/api/preferences/short-banner-presets").json()["presets"]) == 10
+    assert client.put("/api/preferences/short-banner-presets", json={"presets": ten + [{**preset, "name": "11件目"}]}).status_code == 422

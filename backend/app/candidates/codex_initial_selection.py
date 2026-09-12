@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType, build_candidate
+from app.candidates.used_ranges import overlaps_used, unused_items, used_ranges
 from app.candidates.select_candidates import CandidateSelection, SelectionPolicy
 from app.scoring.clip_preferences import ClipSelectionPreset
 from app.scoring.heatmap import candidate_heatmap_features
@@ -940,7 +941,7 @@ def build_codex_initial_selection_request(
     settings: dict[str, Any],
 ) -> CodexInitialSelectionRequest:
     clean_transcript = sorted(
-        (segment for segment in transcript_segments if segment.text.strip()),
+        (segment for segment in unused_items(transcript_segments, settings) if segment.text.strip()),
         key=lambda item: (item.start, item.end),
     )
     reference_heatmap = (
@@ -955,7 +956,7 @@ def build_codex_initial_selection_request(
     ):
         start = max(0.0, min(float(segment.start_time), video_duration))
         end = max(0.0, min(float(segment.end_time), video_duration))
-        if end <= start:
+        if end <= start or overlaps_used(start, end, used_ranges(settings)):
             continue
         clean_heatmap.append(
             HeatmapSegment(
@@ -964,12 +965,21 @@ def build_codex_initial_selection_request(
                 value=float(segment.value),
             )
         )
+    constraints = _build_constraints(settings)
+    if used_ranges(settings):
+        guidance = "過去に使用した場面は入力から除外済みです。欠落した時間帯をまたがず、未使用の連続した区間だけを選んでください。"
+        constraints = constraints.model_copy(update={
+            clip_type: getattr(constraints, clip_type).model_copy(update={
+                "guidance": (guidance + "\n" + getattr(constraints, clip_type).guidance)[:1000],
+            })
+            for clip_type in ("normal", "short")
+        })
     request = CodexInitialSelectionRequest(
         jobId=job_id,
         requestId=uuid4().hex,
         inputHash="0" * 64,
         sourceDuration=video_duration,
-        constraints=_build_constraints(settings),
+        constraints=constraints,
         transcript=[
             CodexTranscriptInput(
                 id=f"seg_{index:06d}",

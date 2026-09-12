@@ -122,6 +122,7 @@ def _ready_metadata(
     result: ThumbnailRenderResult,
     output_path: Path,
     source_basis: str,
+    character_style: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         **payload,
@@ -133,7 +134,8 @@ def _ready_metadata(
         "thumbnail_width": result.width,
         "thumbnail_height": result.height,
         "thumbnail_template_version": (
-            "raden_normal_v4" if result.kind == "normal" else "short_hook_frame_v1"
+            ("character_normal_v1" if character_style is not None else "raden_normal_v4")
+            if result.kind == "normal" else "short_hook_frame_v1"
         ),
         "thumbnail_error_code": None,
     }
@@ -162,6 +164,7 @@ def generate_export_thumbnails(
     job_output_dir: str | Path,
     normal_renderer: NormalThumbnailRenderer = render_normal_thumbnail,
     short_renderer: ShortThumbnailRenderer = render_short_thumbnail,
+    character_style: dict[str, Any] | None = None,
 ) -> ThumbnailGenerationBatchResult:
     output_dir = Path(job_output_dir)
     resolved_output_dir = output_dir.resolve(strict=False)
@@ -187,6 +190,7 @@ def generate_export_thumbnails(
                 result = normal_renderer(
                     input_path,
                     output_path,
+                    **({"character_style": character_style} if character_style is not None else {}),
                     frame_time=_normal_frame_seconds(candidate),
                     eyebrow=candidate.thumbnail_kicker.strip(),
                     title_first_line=candidate.thumbnail_line1.strip(),
@@ -213,6 +217,7 @@ def generate_export_thumbnails(
                     result=result,
                     output_path=output_path,
                     source_basis=source_basis,
+                    character_style=character_style,
                 ),
             )
             generated_paths.append(output_path)

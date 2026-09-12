@@ -128,3 +128,13 @@ body {
   background: #fafaf9;
   padding: 0.625rem 0.75rem;
 }
+
+/* Upload essentials fit on one row on desktop; narrow panels wrap naturally. */
+.upload-settings-summary {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+@media (min-width: 1280px) {
+  .upload-settings-summary {
+    grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr) minmax(260px, 1.7fr) minmax(145px, 1fr) minmax(110px, 1fr);
+  }
+}

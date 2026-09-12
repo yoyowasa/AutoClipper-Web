@@ -41,11 +41,13 @@ from launcher.codex_bridge import (  # noqa: E402
     build_codex_command,
     codex_used_disallowed_tool,
     ensure_bridge_directories,
+    find_codex_executable,
     process_pending_requests,
     process_request_file,
     private_bridge_paths,
     run_codex_command,
     safe_codex_environment,
+    serve,
     thread_id_from_jsonl,
     validate_request,
 )
@@ -292,7 +294,13 @@ def test_invalid_image_escape_is_rejected_without_codex_execution(tmp_path: Path
     assert called is False
 
 
-def test_codex_error_does_not_copy_stderr_into_response(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("returncode", "error_code"),
+    [(1, "codex_failed"), (124, "codex_timeout"), (127, "codex_start_failed"), (130, "codex_cancelled")],
+)
+def test_codex_error_does_not_copy_stderr_into_response(
+    tmp_path: Path, returncode: int, error_code: str,
+) -> None:
     project_root = tmp_path / "AutoClipper Web"
     paths = bridge_paths(project_root)
     ensure_bridge_directories(paths)
@@ -304,13 +312,150 @@ def test_codex_error_does_not_copy_stderr_into_response(tmp_path: Path) -> None:
         request_path,
         project_root=project_root,
         codex_executable="codex.exe",
-        runner=lambda *_args: CodexRunResult(1, "", "secret-token-value"),
+        runner=lambda *_args: CodexRunResult(returncode, "", "secret-token-value"),
     )
 
     encoded = json.dumps(response, ensure_ascii=False)
     assert response["state"] == "failed"
-    assert response["error"]["code"] == "codex_failed"  # type: ignore[index]
+    assert response["error"]["code"] == error_code  # type: ignore[index]
     assert "secret-token-value" not in encoded
+
+
+def test_running_bridge_uses_updated_cli_for_each_queued_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "AutoClipper Web"
+    paths = bridge_paths(project_root)
+    ensure_bridge_directories(paths)
+    for request_id in ("request-update-1", "request-update-2"):
+        atomic_write_json(paths.requests / f"{request_id}.json", request_payload(request_id))
+    current_executable = "version-before-start/codex.exe"
+    observed: list[str] = []
+
+    monkeypatch.setattr("launcher.codex_bridge.find_codex_executable", lambda: current_executable)
+
+    def fake_login(executable: str) -> bool:
+        nonlocal current_executable
+        assert executable == "version-before-start/codex.exe"
+        current_executable = "version-after-start/codex.exe"
+        return True
+
+    monkeypatch.setattr("launcher.codex_bridge.codex_login_configured", fake_login)
+
+    def fake_runner(command, _prompt, _cwd, _timeout, _stop_request):
+        nonlocal current_executable
+        observed.append(command[0])
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(suggestion_result()), encoding="utf-8")
+        current_executable = "version-between-requests/codex.exe"
+        return CodexRunResult(
+            0, json.dumps({"type": "thread.started", "thread_id": str(uuid.uuid4())}),
+        )
+
+    assert serve(project_root, runner=fake_runner, once=True) == 0
+    assert observed == ["version-after-start/codex.exe", "version-between-requests/codex.exe"]
+    for response_path in paths.responses.glob("*.json"):
+        assert json.loads(response_path.read_text(encoding="utf-8"))["state"] == "ready"
+    assert len(list(paths.responses.glob("*.json"))) == 2
+
+
+@pytest.mark.parametrize("retry_succeeds", [True, False])
+def test_cli_replaced_during_launch_is_retried_only_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retry_succeeds: bool,
+) -> None:
+    project_root = tmp_path / "AutoClipper Web"
+    paths = bridge_paths(project_root)
+    ensure_bridge_directories(paths)
+    request_path = paths.processing / "request-update.json"
+    atomic_write_json(request_path, request_payload(request_path.stem))
+    executables = iter(["old/codex.exe", "new/codex.exe"])
+    monkeypatch.setattr("launcher.codex_bridge.find_codex_executable", lambda: next(executables))
+    observed: list[list[str]] = []
+
+    def fake_runner(command, _prompt, _cwd, _timeout, _stop_request):
+        observed.append(list(command))
+        if len(observed) == 1 or not retry_succeeds:
+            return CodexRunResult(127, "", "codex_start_failed")
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(suggestion_result()), encoding="utf-8")
+        return CodexRunResult(
+            0, json.dumps({"type": "thread.started", "thread_id": str(uuid.uuid4())}),
+        )
+
+    response = process_request_file(request_path, project_root=project_root, runner=fake_runner)
+    assert [command[0] for command in observed] == ["old/codex.exe", "new/codex.exe"]
+    assert observed[0][1:] == observed[1][1:]
+    assert response["state"] == ("ready" if retry_succeeds else "failed")
+    if not retry_succeeds:
+        assert response["error"]["code"] == "codex_start_failed"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stderr", "replacement", "stopping", "error_code"),
+    [
+        (127, "codex_start_failed", "same/codex.exe", False, "codex_start_failed"),
+        (127, "codex_start_failed", None, False, "codex_start_failed"),
+        (127, "codex_start_failed", "new/codex.exe", True, "codex_start_failed"),
+        (1, "generation failed", "new/codex.exe", False, "codex_failed"),
+        (124, "", "new/codex.exe", False, "codex_timeout"),
+        (130, "", "new/codex.exe", False, "codex_cancelled"),
+    ],
+)
+def test_cli_refresh_does_not_retry_without_a_new_path_or_after_generation_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    returncode: int, stderr: str, replacement: str | None, stopping: bool, error_code: str,
+) -> None:
+    project_root = tmp_path / "AutoClipper Web"
+    paths = bridge_paths(project_root)
+    ensure_bridge_directories(paths)
+    request_path = paths.processing / "request-no-retry.json"
+    atomic_write_json(request_path, request_payload(request_path.stem))
+    executables = iter(["same/codex.exe", replacement])
+    monkeypatch.setattr("launcher.codex_bridge.find_codex_executable", lambda: next(executables))
+    calls = 0
+
+    def fake_runner(*_args):
+        nonlocal calls
+        calls += 1
+        if stopping:
+            paths.stop_request.touch()
+        return CodexRunResult(returncode, "", stderr)
+
+    response = process_request_file(request_path, project_root=project_root, runner=fake_runner)
+    assert calls == 1
+    assert response["error"]["code"] == error_code
+
+
+def test_missing_cli_returns_explicit_error_without_starting_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "AutoClipper Web"
+    paths = bridge_paths(project_root)
+    ensure_bridge_directories(paths)
+    request_path = paths.processing / "request-cli-missing.json"
+    atomic_write_json(request_path, request_payload(request_path.stem))
+    monkeypatch.setattr("launcher.codex_bridge.find_codex_executable", lambda: None)
+
+    def unexpected_runner(*_args):
+        pytest.fail("CLI is missing; generation must not start")
+
+    response = process_request_file(request_path, project_root=project_root, runner=unexpected_runner)
+    assert response["error"]["code"] == "codex_cli_missing"
+
+
+def test_cli_discovery_ignores_version_removed_during_update(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bin_root = tmp_path / "OpenAI" / "Codex" / "bin"
+    removed = bin_root / "old" / "codex.exe"
+    current = bin_root / "new" / "codex.exe"
+    current.parent.mkdir(parents=True)
+    current.touch()
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr("launcher.codex_bridge.shutil.which", lambda _name: None)
+    monkeypatch.setattr(Path, "glob", lambda _path, _pattern: iter([removed, current]))
+
+    assert find_codex_executable() == str(current)
 
 
 def test_pending_request_is_claimed_and_response_is_atomic(tmp_path: Path) -> None:
@@ -412,7 +557,12 @@ def test_processing_request_refreshes_status_heartbeat_until_response(
             and time.monotonic() < deadline
         ):
             time.sleep(0.02)
-            refreshed_status = json.loads(paths.status.read_text(encoding="utf-8"))
+            try:
+                refreshed_status = json.loads(paths.status.read_text(encoding="utf-8"))
+            except PermissionError:
+                # Windows can briefly deny a reader while os.replace publishes status.
+                # Keep the existing deadline and still require an observed heartbeat.
+                continue
         assert refreshed_status["updatedAt"] != first_status["updatedAt"]
     finally:
         release_runner.set()

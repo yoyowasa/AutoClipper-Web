@@ -2671,13 +2671,15 @@ def test_real_pipeline_fails_silent_audio_before_transcription_and_candidates(cl
     assert not (storage.temp / created["jobId"]).exists()
 
 
+@pytest.mark.parametrize("with_history", [False, True])
 def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
+    with_history: bool,
 ) -> None:
     upload = client.post(
         "/api/videos/upload",
-        files={"file": ("codex-source.mp4", b"fake media", "video/mp4")},
+        files={"file": ("codex-source [s481oYpPtKg].mp4", b"fake media", "video/mp4")},
     ).json()
     created = client.post(
         "/api/jobs",
@@ -2700,6 +2702,19 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     ).json()
     storage = app.dependency_overrides[get_storage_paths]()
     selector_calls: list[dict[str, Any]] = []
+
+    if with_history:
+        from app.models import ExportItem, Video
+
+        with next(app.dependency_overrides[get_db]()) as db:
+            prior_video = Video(id="prior_video", original_filename="別画質 [s481oYpPtKg].webm",
+                                stored_path="prior-encoding.webm", duration=240)
+            prior_job = Job(id="prior_job", video=prior_video, status="completed", settings_json={})
+            metadata = storage.job_outputs(prior_job.id) / "normal_01.json"
+            metadata.write_text('{"start":0,"end":100}', encoding="utf-8")
+            db.add(ExportItem(id="prior_export", job=prior_job, video=prior_video, type="normal", title="prior",
+                              duration=100, score=95, video_path="prior.mp4", metadata_path=str(metadata)))
+            db.commit()
 
     normal = Candidate(
         id="codex-normal",
@@ -2735,6 +2750,14 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
 
     def fake_codex_selector(**kwargs: Any) -> CodexInitialSelectionResult:
         selector_calls.append(kwargs)
+        candidates = [normal, short]
+        if with_history:
+            assert kwargs["settings"]["_usedSourceRanges"] == [(0, 100)]
+            candidates.extend([
+                normal.model_copy(update={"id": "unused-normal", "start": 110.0, "end": 210.0,
+                                          "topic_key": "unused-topic"}),
+                short.model_copy(update={"id": "previous-short", "start": 10.0, "end": 40.0}),
+            ])
         selection = CandidateSelection(
             normalClips=[normal],
             shorts=[short],
@@ -2744,7 +2767,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
         )
         return CodexInitialSelectionResult(
             selection=selection,
-            candidates=[normal, short],
+            candidates=candidates,
             summary={
                 "provider": "codex",
                 "status": "completed",
@@ -2811,7 +2834,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     assert selector_calls[0]["job_id"] == created["jobId"]
     assert "scoring_candidates" not in visited
     selected = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
-    assert selected["normalClips"][0]["start"] == 0.0
+    assert selected["normalClips"][0]["start"] == (110.0 if with_history else 0.0)
     assert selected["shorts"][0]["start"] == 145.0
     summary_path = storage.job_outputs(created["jobId"]) / "codex_initial_selection_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -2873,6 +2896,9 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     )
     assert reselection_summary["phase"] == "reselection"
     assert reselection_summary["status"] == "completed"
+    if with_history:
+        selected = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
+        assert all(item["start"] >= 100 for item in [*selected["normalClips"], *selected["shorts"]])
 
 
 def test_codex_short_pool_rejects_duplicate_and_backfills_after_refinement() -> None:

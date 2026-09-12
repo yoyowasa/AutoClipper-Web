@@ -9,10 +9,10 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.posting_metadata import PostTitleIntent, ensure_publication_title_suffix
+from app.posting_metadata import NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, PostTitleIntent, ensure_publication_title_suffix
 
 
-TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v5"
+TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v6"
 REPRESENTATIVE_FRAME_RATIOS = (0.12, 0.38, 0.62, 0.88)
 TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
 TRANSIENT_ERROR_NAMES = {
@@ -27,7 +27,8 @@ SYSTEM_PROMPT = """あなたは日本語動画の編集者です。
 与えられた選定済みclipの修正字幕と代表フレームだけを根拠に、投稿用セットを作成してください。
 - suggestionsは3案固定。intentをfactual、engagement、conciseで1案ずつ作成する。
 - publicationTitle: YouTube公開用。字幕から確認できる人物・状況・出来事だけを書く。
-- clipTypeがnormalならpublicationTitle末尾を「儒烏風亭らでん【ReGLOSS切り抜き】」に固定する。overlayTitleには付けない。
+- clipTypeがnormalならpublicationTitle末尾には入力のnormalTitleSuffixを付ける。空欄なら何も付けない。
+- 未指定の人物名・所属を補わない。overlayTitleには末尾を付けない。
 - overlayTitle: 動画内表示用。最大2行を想定し、短く読みやすくする。
 - hookText: 冒頭から興味を引く短い文。publicationTitleの丸写しにしない。
 - hookSceneStart / hookSceneEnd: clip先頭を0秒とする相対秒。1.5〜3.0秒でclip内に収める。
@@ -527,6 +528,7 @@ def normalize_title_hook_suggestions(
     *,
     clip_duration: float,
     clip_type: str = "short",
+    suffix: str = NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX,
 ) -> list[TitleHookSuggestion]:
     normalized: list[TitleHookSuggestion] = []
     for index, suggestion in enumerate(result.suggestions, start=1):
@@ -543,6 +545,7 @@ def normalize_title_hook_suggestions(
                         "publication_title": ensure_publication_title_suffix(
                             suggestion.publication_title,
                             clip_type=clip_type,
+                            suffix=suffix,
                         ),
                         "hook_duration_seconds": round(
                             min(3.0, max(1.5, suggestion.hook_duration_seconds)),
@@ -569,6 +572,7 @@ def normalize_title_hook_suggestions(
                     "publication_title": ensure_publication_title_suffix(
                         suggestion.publication_title,
                         clip_type=clip_type,
+                        suffix=suffix,
                     ),
                     "hook_duration_seconds": round(duration, 3),
                     "hook_scene_start": round(start, 3),

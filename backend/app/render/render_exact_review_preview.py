@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.short_banners import resolve_banner_path
+
 import json
 import math
 from collections.abc import Callable, Mapping, Sequence
@@ -196,11 +198,11 @@ def _canonical_render_settings(
         )
         if render_settings["shortTopBannerEnabled"]:
             render_settings["shortTopBannerAsset"] = _banner_asset_fingerprint(
-                DEFAULT_SHORT_TOP_BANNER_PATH
+                resolve_banner_path(raw, "top", DEFAULT_SHORT_TOP_BANNER_PATH)
             )
         if render_settings["shortBottomBannerEnabled"]:
             render_settings["shortBottomBannerAsset"] = _banner_asset_fingerprint(
-                DEFAULT_SHORT_BOTTOM_BANNER_PATH
+                resolve_banner_path(raw, "bottom", DEFAULT_SHORT_BOTTOM_BANNER_PATH)
             )
     return render_settings
 
@@ -578,9 +580,9 @@ def render_exact_subtitle_review_preview(
                 ),
             }
             if top_banner_enabled:
-                short_kwargs["top_banner_path"] = DEFAULT_SHORT_TOP_BANNER_PATH
+                short_kwargs["top_banner_path"] = resolve_banner_path(settings, "top", DEFAULT_SHORT_TOP_BANNER_PATH)
             if bottom_banner_enabled:
-                short_kwargs["bottom_banner_path"] = DEFAULT_SHORT_BOTTOM_BANNER_PATH
+                short_kwargs["bottom_banner_path"] = resolve_banner_path(settings, "bottom", DEFAULT_SHORT_BOTTOM_BANNER_PATH)
             if (
                 resolved_candidate.hook_scene_start is not None
                 and resolved_candidate.hook_scene_end is not None

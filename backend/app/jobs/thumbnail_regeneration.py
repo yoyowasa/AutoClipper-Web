@@ -130,9 +130,13 @@ def run_export_thumbnail_regeneration(
             temp_output = output_path.with_name(
                 f".{output_path.stem}.r{revision}.tmp{output_path.suffix}"
             )
+            from app.models import Job
+            job = db.get(Job, export.job_id)
+            character_style = (job.settings_json or {}).get("normalThumbnailStyle") if job else None
             result = normal_renderer(
                 source_path,
                 temp_output,
+                **({"character_style": character_style} if character_style is not None else {}),
                 frame_time=source_timestamp,
                 eyebrow=str(payload.get("thumbnail_kicker") or "").strip(),
                 title_first_line=str(payload.get("thumbnail_line1") or "").strip(),
@@ -162,7 +166,7 @@ def run_export_thumbnail_regeneration(
                     "thumbnail_source_time_basis": "source_video_absolute",
                     "thumbnail_width": result.width,
                     "thumbnail_height": result.height,
-                    "thumbnail_template_version": "raden_normal_v4",
+                    "thumbnail_template_version": "character_normal_v1" if character_style is not None else "raden_normal_v4",
                     "thumbnail_frame_seconds": round(frame_seconds, 3),
                     "thumbnail_variant_index": variant_index,
                     "thumbnail_crop_mode": crop_mode,

@@ -13,6 +13,7 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.title_fallback import candidate_with_title, resolve_candidate_title
 from app.ids import make_id
+from app.short_banners import resolve_banner_path
 from app.models import ExportItem, Job
 from app.render.crop_strategy import (
     CropLayout,
@@ -1288,9 +1289,13 @@ def render_selected_short_candidates(
                 ),
             }
             if short_top_banner_enabled:
-                render_kwargs["top_banner_path"] = DEFAULT_SHORT_TOP_BANNER_PATH
+                render_kwargs["top_banner_path"] = resolve_banner_path(
+                    job.settings_json, "top", DEFAULT_SHORT_TOP_BANNER_PATH, storage_paths
+                )
             if short_bottom_banner_enabled:
-                render_kwargs["bottom_banner_path"] = DEFAULT_SHORT_BOTTOM_BANNER_PATH
+                render_kwargs["bottom_banner_path"] = resolve_banner_path(
+                    job.settings_json, "bottom", DEFAULT_SHORT_BOTTOM_BANNER_PATH, storage_paths
+                )
             if hook_scene_rendered:
                 render_kwargs["hook_scene_start"] = candidate.hook_scene_start
                 render_kwargs["hook_scene_end"] = candidate.hook_scene_end

@@ -195,6 +195,12 @@ from app.jobs.title_hook_suggestions import (
     title_hook_suggestions_path,
 )
 from app.models import ExportItem, Job, Video, utc_now
+from app.candidates.used_ranges import overlaps_used, unused_items, used_ranges
+from app.source_clip_history import (
+    SourceTimelineChanged,
+    record_completed_exports,
+    selection_history_settings,
+)
 from app.posting_metadata import write_youtube_posting_artifacts
 from app.render.render_normal import NormalRenderBatchResult, render_normal_clip, render_selected_normal_candidates
 from app.render.render_exact_review_preview import (
@@ -552,7 +558,7 @@ def _generate_candidates_for_reselection_mode(
         )
         if normal_manual_ranges
         else generate_normal_candidates_with_summary(
-            transcript_segments,
+            unused_items(transcript_segments, settings),
             scene_segments,
             silence_segments,
             settings=settings,
@@ -567,7 +573,7 @@ def _generate_candidates_for_reselection_mode(
         )
         if short_manual_ranges
         else generate_short_candidates_with_summary(
-            transcript_segments,
+            unused_items(transcript_segments, settings),
             scene_segments,
             silence_segments,
             settings=settings,
@@ -678,8 +684,54 @@ def _assign_status(job: Job, status: str) -> None:
 
 def _set_status(db: Session, job: Job, status: str) -> None:
     _assign_status(job, status)
+    if status == "completed":
+        record_completed_exports(db, job)
     db.commit()
     db.refresh(job)
+
+
+def _settings_with_source_history(
+    db: Session, job: Job, video: Video, paths: StoragePaths
+) -> dict[str, Any]:
+    try:
+        settings, summary = selection_history_settings(db, job, video, paths)
+    except SourceTimelineChanged as exc:
+        raise PipelineExpectedError("source_history_timeline_changed", str(exc)) from exc
+    _write_json(paths.job_outputs(job.id) / "source_clip_history_summary.json", summary)
+    return settings
+
+
+def _unused_candidates(candidates: Sequence[Candidate], settings: dict[str, Any]) -> list[Candidate]:
+    ranges = used_ranges(settings)
+    return [
+        candidate for candidate in candidates
+        if candidate.selection_reason == MANUAL_SELECTION_REASON
+        or not overlaps_used(candidate.start, candidate.end, ranges)
+    ]
+
+
+def _filter_selection_history(
+    selection: CandidateSelection, candidates: list[Candidate], settings: dict[str, Any]
+) -> tuple[CandidateSelection, list[Candidate]]:
+    if not used_ranges(settings):
+        return selection, candidates
+    kept = _unused_candidates(candidates, settings)
+    kept_ids = {candidate.id for candidate in kept}
+    normal = _unused_candidates(selection.normal_clips, settings)
+    shorts = _unused_candidates(selection.shorts, settings)
+    rejected = [
+        CandidateRejection(candidateId=candidate.id, type=candidate.type, reasons=["previous_source_usage"])
+        for candidate in candidates if candidate.id not in kept_ids
+    ]
+    return selection.model_copy(update={
+        "normal_clips": normal,
+        "shorts": shorts,
+        "rejected_candidates": [*selection.rejected_candidates, *rejected],
+        "unfilled_requested_counts": {
+            "normal": max(0, selection.requested_normal_count - len(normal)),
+            "short": max(0, selection.requested_short_count - len(shorts)),
+        },
+    }), kept
 
 
 def _try_write_quality_gate_decision(
@@ -1886,9 +1938,10 @@ def _selection_with_refined_boundaries(
     normal_clips = refine_unlocked(selection.normal_clips)
     shorts = refine_unlocked(selection.shorts)
     replacements = {candidate.id: candidate for candidate in [*normal_clips, *shorts]}
-    return (
+    return _filter_selection_history(
         selection.model_copy(update={"normal_clips": normal_clips, "shorts": shorts}),
         _replace_scored_candidates(scored_candidates, replacements),
+        settings,
     )
 
 
@@ -1908,7 +1961,7 @@ def _codex_selection_with_diverse_refined_shorts(
             score = candidate.ai_score
         return (-(score if score is not None else 0.0), candidate.id)
 
-    candidate_pool = list(result.candidates)
+    candidate_pool = _unused_candidates(result.candidates, settings)
     normal_pool = sorted(
         (candidate for candidate in candidate_pool if candidate.type == "normal"),
         key=rank_key,
@@ -4220,6 +4273,8 @@ def run_autoclipper_job(
 
             _set_status(db, job, "generating_candidates")
             visited_statuses.append("generating_candidates")
+            settings = _settings_with_source_history(db, job, video, storage_paths)
+            metadata_files.append(job_dir / "source_clip_history_summary.json")
             candidate_generation_summary_path = job_dir / "candidate_generation_summary.json"
 
             def candidate_generation_heartbeat(summary: dict[str, Any]) -> None:
@@ -4329,7 +4384,7 @@ def run_autoclipper_job(
                     )
                     if manual_workflow or normal_manual_ranges
                     else generate_normal_candidates_with_summary(
-                        transcript_segments,
+                        unused_items(transcript_segments, settings),
                         scene_segments,
                         silence_segments,
                         settings=settings,
@@ -4362,7 +4417,7 @@ def run_autoclipper_job(
                     )
                     if manual_workflow or short_manual_ranges
                     else generate_short_candidates_with_summary(
-                        transcript_segments,
+                        unused_items(transcript_segments, settings),
                         scene_segments,
                         silence_segments,
                         settings=settings,
@@ -4405,6 +4460,8 @@ def run_autoclipper_job(
                     short_candidates,
                     settings,
                 )
+            normal_candidates = _unused_candidates(normal_candidates, settings)
+            short_candidates = _unused_candidates(short_candidates, settings)
             all_candidates = [*normal_candidates, *short_candidates]
             metadata_files.extend(
                 [
@@ -4415,8 +4472,9 @@ def run_autoclipper_job(
             )
             if not all_candidates:
                 raise PipelineExpectedError(
-                    "no_candidates_found",
-                    "No clip candidates were found for the selected settings.",
+                    "source_history_no_unused_candidates" if used_ranges(settings) else "no_candidates_found",
+                    "使用済み区間の除外後、新しい候補が見つかりませんでした。"
+                    if used_ranges(settings) else "No clip candidates were found for the selected settings.",
                 )
 
             manual_candidates = [
@@ -4829,6 +4887,7 @@ def run_autoclipper_job(
                 job_output_dir=storage_paths.job_outputs(job.id),
                 normal_renderer=deps.normal_thumbnail_renderer,
                 short_renderer=deps.short_thumbnail_renderer,
+                character_style=settings.get("normalThumbnailStyle"),
             )
             if guarded_content_auto_passed:
                 review_document = mark_review_completed(review_document)
@@ -5574,6 +5633,7 @@ def run_clip_plan_reselection(
                 job_dir / "heatmap_validation_summary.json",
                 heatmap_summary,
             )
+            settings = _settings_with_source_history(db, job, video, storage_paths)
             normal_manual_ranges = manual_ranges_for_type(settings, "normal")
             short_manual_ranges = manual_ranges_for_type(settings, "short")
             automatic_settings = automatic_selection_settings(
@@ -5714,6 +5774,8 @@ def run_clip_plan_reselection(
                     f"Could not generate clip candidates: {exc}",
                 ) from exc
 
+            normal_candidates = _unused_candidates(normal_candidates, settings)
+            short_candidates = _unused_candidates(short_candidates, settings)
             write_candidates(normal_candidates, job_dir / "normal_candidates.json")
             write_candidates(short_candidates, job_dir / "short_candidates.json")
             write_candidates(
@@ -6192,6 +6254,7 @@ def run_subtitle_review_render(
                 job_output_dir=render_paths.job_outputs(job.id),
                 normal_renderer=deps.normal_thumbnail_renderer,
                 short_renderer=deps.short_thumbnail_renderer,
+                character_style=settings.get("normalThumbnailStyle"),
             )
             if rerender_staging_paths is not None:
                 exports, _render_failures_path, rerender_promotion = _promote_subtitle_rerender(
@@ -6276,6 +6339,7 @@ def run_subtitle_review_render(
                 rerender_promotion.publish(pending_rerender_zip, zip_path)
                 pending_rerender_zip = None
                 _assign_status(job, "completed")
+                record_completed_exports(db, job, storage_paths)
                 db.commit()
                 rerender_publication_committed = True
                 rerender_promotion.finalize()

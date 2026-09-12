@@ -16,25 +16,31 @@ YOUTUBE_TITLE_MAX_LENGTH = 100
 NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX = "儒烏風亭らでん【ReGLOSS切り抜き】"
 
 
-def ensure_publication_title_suffix(title: str, *, clip_type: str) -> str:
+def ensure_publication_title_suffix(
+    title: str, *, clip_type: str, suffix: str = NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX
+) -> str:
     """Keep the fixed normal-clip suffix exactly once within YouTube's title limit."""
 
     normalized = " ".join(str(title).split()).strip()
     if clip_type != "normal":
         return normalized
 
-    while normalized.endswith(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX):
-        normalized = normalized[: -len(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)].rstrip()
-    available_length = YOUTUBE_TITLE_MAX_LENGTH - len(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)
-    base_title = normalized[:available_length].rstrip()
-    return f"{base_title}{NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX}"
+    # Remove legacy and configured suffixes before applying the chosen one once.
+    suffix = suffix.strip()
+    for ending in dict.fromkeys([NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, suffix]):
+        while ending and normalized.endswith(ending):
+            normalized = normalized[:-len(ending)].rstrip()
+    available_length = YOUTUBE_TITLE_MAX_LENGTH - len(suffix)
+    return f"{normalized[:available_length].rstrip()}{suffix}"
 
 
-def strip_normal_publication_title_suffix(title: str) -> str:
+def strip_normal_publication_title_suffix(title: str, *, suffix: str = NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX) -> str:
     normalized = " ".join(str(title).split()).strip()
-    while normalized.endswith(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX):
-        normalized = normalized[: -len(NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX)].rstrip()
+    for ending in dict.fromkeys([NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, suffix.strip()]):
+        while ending and normalized.endswith(ending):
+            normalized = normalized[:-len(ending)].rstrip()
     return normalized
+
 
 
 class YouTubePostingProfile(BaseModel):
@@ -166,8 +172,11 @@ def build_youtube_posting_copy(
         hashtags = _unique_strings(
             item if item.startswith("#") else f"#{item}" for item in topic_hashtags
         )[:12]
-    fixed_description = "\n\n".join(fixed_description_sections).strip()
     content_description = fallback_description.strip()
+    # Re-saving an already completed posting set must not duplicate credits.
+    fixed_description = "\n\n".join(
+        section for section in fixed_description_sections if section not in content_description
+    ).strip()
     if content_description and fixed_description:
         available_length = max(0, 2000 - len(fixed_description) - 2)
         content_description = content_description[:available_length].rstrip()
@@ -346,6 +355,7 @@ def write_youtube_posting_artifacts(
                     "title": ensure_publication_title_suffix(
                         candidate.title,
                         clip_type=clip_type,
+                        suffix=getattr(clip, "normal_title_suffix", NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX),
                     )
                 }
             )
@@ -358,6 +368,7 @@ def write_youtube_posting_artifacts(
                 or ""
             ),
             clip_type=clip_type,
+            suffix=getattr(clip, "normal_title_suffix", NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX),
         )
         youtube_description = str(getattr(clip, "youtube_description", "") or "").strip()
         hashtags = list(getattr(clip, "youtube_hashtags", []) or [])
@@ -399,6 +410,7 @@ def write_youtube_posting_artifacts(
             "selectedTitle": ensure_publication_title_suffix(
                 selected_title,
                 clip_type=clip_type,
+                suffix=getattr(clip, "normal_title_suffix", NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX),
             ),
             "selectedTitleId": selected_title_id,
             "recommendedTitleId": recommended_title_id,

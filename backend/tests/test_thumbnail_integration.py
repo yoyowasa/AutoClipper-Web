@@ -616,8 +616,10 @@ def test_completed_normal_thumbnail_can_be_queued_without_rerendering_video(
     assert metadata["thumbnail_request_revision"] == 1
 
 
+@pytest.mark.parametrize("custom_style", [False, True])
 def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
     tmp_path: Path,
+    custom_style: bool,
 ) -> None:
     engine = create_engine(
         f"sqlite:///{tmp_path / 'worker.db'}",
@@ -670,7 +672,7 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
             status="completed",
             progress=100,
             current_step="Completed",
-            settings_json={},
+            settings_json={"normalThumbnailStyle": {"design": "plain", "backgroundColor": "#123456"}} if custom_style else {},
         )
         export = ExportItem(
             id="exp_worker",
@@ -725,6 +727,7 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
 
     assert video_path.read_bytes() == b"completed video"
     assert thumbnail_path.read_bytes() == b"new thumbnail"
+    assert received.get("character_style") == ({"design": "plain", "backgroundColor": "#123456"} if custom_style else None)
     assert received["input_path"] == source_path
     assert received["frame_time"] == pytest.approx(3628.0)
     assert received["subject_anchor_x"] == pytest.approx(1)
@@ -736,7 +739,7 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["thumbnail_status"] == "ready"
     assert metadata["thumbnail_render_revision"] == 2
-    assert metadata["thumbnail_template_version"] == "raden_normal_v4"
+    assert metadata["thumbnail_template_version"] == ("character_normal_v1" if custom_style else "raden_normal_v4")
     assert metadata["thumbnail_frame_seconds"] == pytest.approx(28.0)
     assert metadata["thumbnail_crop_mode"] == "close"
     assert metadata["thumbnail_advance_frame"] is False

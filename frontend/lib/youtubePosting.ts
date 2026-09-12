@@ -1,3 +1,33 @@
+import type { PostTitleCandidate } from "./types";
+
+export type PostingMetadataDraft = {
+  titleCandidates: PostTitleCandidate[];
+  recommendedTitleId: string | null;
+  selectedTitleId: string | null;
+  youtubeDescription: string;
+  youtubeHashtagsText: string;
+  youtubeTagsText: string;
+  descriptionEvidenceSegmentIds: string[];
+  postMetadataSource: string | null;
+  postMetadataRevisionHash: string | null;
+};
+
+export function postMetadataApplyPayload(draft: PostingMetadataDraft) {
+  // The server compares the proposal revision with the subtitles being saved.
+  // Unsaved subtitle edits may already be the input to this very proposal.
+  return {
+    titleCandidates: draft.titleCandidates,
+    recommendedTitleId: draft.recommendedTitleId,
+    selectedTitleId: draft.selectedTitleId,
+    youtubeDescription: draft.youtubeDescription.trim(),
+    youtubeHashtags: hashtagsFromText(draft.youtubeHashtagsText),
+    youtubeTags: tagsFromText(draft.youtubeTagsText),
+    descriptionEvidenceSegmentIds: draft.descriptionEvidenceSegmentIds,
+    postMetadataSource: draft.postMetadataSource,
+    postMetadataRevisionHash: draft.postMetadataRevisionHash
+  };
+}
+
 const YOUTUBE_ID_PATTERN = /[\[(]([A-Za-z0-9_-]{11})[\])](?!.*[\[(][A-Za-z0-9_-]{11}[\])])/;
 
 export function parseYouTubeSourceFromFilename(

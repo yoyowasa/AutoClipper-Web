@@ -1,5 +1,7 @@
 "use client";
 
+import { CharacterPresetManager } from "./CharacterPresetManager";
+import { CharacterThumbnailSettings } from "./CharacterThumbnailSettings";
 import type { ClipSettings } from "../lib/types";
 import { hashtagsFromText, tagsFromText } from "../lib/youtubePosting";
 
@@ -26,14 +28,20 @@ export function YouTubePostingSettingsPanel({
   };
 
   return (
+    <>
+    <CharacterPresetManager settings={settings} disabled={disabled} onChange={onChange} />
     <details className="border-t border-[#d5d5d2] bg-white" open>
       <summary className="cursor-pointer px-3 py-3 text-xs font-bold text-[#282825]">
         YouTube投稿情報
         <span className="ml-2 text-[10px] font-normal text-[#73736e]">
-          出演者・固定タグは次回も再利用
+          上のキャラ設定でまとめて保存
         </span>
       </summary>
       <div className="grid gap-3 border-t border-[#e2e2df] p-3">
+        <label className="text-[11px] font-bold text-[#4b4b47]">投稿先チャンネル名（管理用）
+          <input className={inputClassName} disabled={disabled} maxLength={120} value={settings.channelName ?? ""}
+            onChange={(event) => onChange({ ...settings, channelName: event.target.value })} />
+        </label>
         <label className="text-[11px] font-bold text-[#4b4b47]">
           元配信タイトル
           <input
@@ -68,7 +76,7 @@ export function YouTubePostingSettingsPanel({
               className={inputClassName}
               disabled={disabled}
               maxLength={120}
-              placeholder="儒烏風亭らでん"
+              placeholder="出演者・キャラ名"
               value={profile.performerName}
               onChange={(event) => updateProfile({ performerName: event.target.value })}
             />
@@ -79,7 +87,7 @@ export function YouTubePostingSettingsPanel({
               className={inputClassName}
               disabled={disabled}
               maxLength={160}
-              placeholder="hololive DEV_IS / ReGLOSS"
+              placeholder="グループ名・所属（任意）"
               value={profile.affiliation}
               onChange={(event) => updateProfile({ affiliation: event.target.value })}
             />
@@ -90,7 +98,7 @@ export function YouTubePostingSettingsPanel({
           <input
             className={inputClassName}
             disabled={disabled}
-            placeholder="#儒烏風亭らでん #ReGLOSS #ホロライブ切り抜き"
+            placeholder="#キャラ名 #切り抜き"
             value={profile.baseHashtags.join(" ")}
             onChange={(event) =>
               updateProfile({ baseHashtags: hashtagsFromText(event.target.value) })
@@ -114,12 +122,14 @@ export function YouTubePostingSettingsPanel({
           <textarea
             className={`${inputClassName} min-h-20 resize-y`}
             disabled={disabled}
-            placeholder="儒烏風亭らでん,らでん,ReGLOSS,ホロライブ切り抜き"
+            placeholder="キャラ名,グループ名,切り抜き"
             value={profile.baseTags.join(",")}
             onChange={(event) => updateProfile({ baseTags: tagsFromText(event.target.value) })}
           />
         </label>
       </div>
     </details>
+    <CharacterThumbnailSettings settings={settings} disabled={disabled} onChange={onChange} />
+    </>
   );
 }

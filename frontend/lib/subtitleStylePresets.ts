@@ -1,9 +1,13 @@
-import type { ClipSettings } from "./types";
+import type { ClipSettings, ClipTextStyle } from "./types";
+import { UPLOAD_TEXT_STYLE_KEYS } from "./uploadTextStyles";
+
+export const SUBTITLE_STYLE_PRESET_LIMIT = 10;
 
 export const SUBTITLE_STYLE_PRESET_STORAGE_KEY =
   "autoclipper.subtitle-style-presets.v1";
 
 export const SUBTITLE_STYLE_KEYS = [
+  ...UPLOAD_TEXT_STYLE_KEYS,
   "subtitleFontName",
   "subtitleFontSize",
   "subtitleOutline",
@@ -42,11 +46,7 @@ export type SubtitleStylePreset = {
   style: SubtitleStyleSnapshot;
 };
 
-export type SubtitleStylePresetSlots = [
-  SubtitleStylePreset | null,
-  SubtitleStylePreset | null,
-  SubtitleStylePreset | null
-];
+export type SubtitleStylePresetSlots = Array<SubtitleStylePreset | null>;
 
 export type SubtitleStylePresetDocument = {
   version: 1;
@@ -54,7 +54,7 @@ export type SubtitleStylePresetDocument = {
 };
 
 export function emptySubtitleStylePresetSlots(): SubtitleStylePresetSlots {
-  return [null, null, null];
+  return Array.from({ length: SUBTITLE_STYLE_PRESET_LIMIT }, () => null);
 }
 
 export function captureSubtitleStyle(
@@ -92,7 +92,14 @@ function sanitizeStyle(value: unknown): SubtitleStyleSnapshot {
   const style: SubtitleStyleSnapshot = {};
   for (const key of SUBTITLE_STYLE_KEYS) {
     const fieldValue = source[key];
-    if (typeof fieldValue === "string" || typeof fieldValue === "number") {
+    if (UPLOAD_TEXT_STYLE_KEYS.includes(key as typeof UPLOAD_TEXT_STYLE_KEYS[number])) {
+      if (fieldValue && typeof fieldValue === "object" && !Array.isArray(fieldValue)) {
+        const candidate = fieldValue as ClipTextStyle;
+        if (Number.isFinite(candidate.fontSize) && typeof candidate.primaryColor === "string") {
+          Object.assign(style, { [key]: { ...candidate } });
+        }
+      }
+    } else if (typeof fieldValue === "string" || typeof fieldValue === "number") {
       Object.assign(style, { [key]: fieldValue });
     }
   }
@@ -128,11 +135,9 @@ export function parseSubtitleStylePresetSlots(
   if (payload.version !== 1 || !Array.isArray(payload.slots)) {
     return emptySubtitleStylePresetSlots();
   }
-  return [
-    sanitizePreset(payload.slots[0]),
-    sanitizePreset(payload.slots[1]),
-    sanitizePreset(payload.slots[2])
-  ];
+  return Array.from({ length: SUBTITLE_STYLE_PRESET_LIMIT }, (_, index) =>
+    sanitizePreset(payload.slots?.[index])
+  );
 }
 
 export function serializeSubtitleStylePresetSlots(

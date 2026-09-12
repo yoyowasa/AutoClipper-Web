@@ -761,6 +761,7 @@ def _automated_title_hook_check(
             != ensure_publication_title_suffix(
                 recommended.publication_title,
                 clip_type=clip.type,
+                suffix=clip.normal_title_suffix,
             )
             or clip.hook_text != recommended.hook_text
             or clip.hook_scene_start != expected_scene_start

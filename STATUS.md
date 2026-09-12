@@ -9543,3 +9543,105 @@ pip check: pass
 - 最小検証: backend/frontend/redis/workerの4サービスrunning、backend healthy。GET /healthとfrontend /uploadはHTTP 200。worker profile=gpu、CUDA devices=1。Codex bridge ready。コンテナ内でsubtitle_styles、outer_outline_width、framing_zoom上限3.0を確認。ローカル限定キルゴフォントのread-only mountも存在確認。
 - 変更ファイル: STATUS.mdのみ。アプリコードの追加変更なし。既存の未追跡サムネ素材・storage/qaは対象外。
 - 未確認: 再起動後の実素材での新規書き出しは未実施。やさしさゴシック原本待ちは継続。ソケットが残存した元の原因までは確定していない。
+
+## 2026-09-10 Codex更新後の投稿案生成エラー対策
+
+- 目的: 長時間起動したCodexブリッジが旧CLIパスを保持し、Desktop更新後に投稿案生成が失敗する問題を修正する。
+- 観測: ブリッジは09:12起動、現在のCLIは22:17更新。23:24以降の失敗応答はthreadIdなし。更新後CLIの直接実行は前段診断で成功。旧パスの起動失敗は従来コードで汎用`codex_failed`になる。
+- 変更ファイル: `launcher/codex_bridge.py`、`backend/tests/test_codex_host_bridge.py`、`STATUS.md`。
+- 変更内容: リクエストごとにCLIパスを検出。検出中に消えた旧ファイルは除外。起動自体に失敗して新パスを発見した場合のみ1回再試行。タイムアウト・生成中の失敗・停止要求では再試行しない。CLI不在と起動失敗を専用コードで区別する。
+- 最小検証: ブリッジ/Windowsランチャー/タイトルフック連携テスト`90 passed`。対象ruff、`git diff --check`成功。起動後・同一キュー内のCLI更新、起動直前/検出中の更新、再試行回数制限、停止/失敗時の非再試行を確認。
+- 反映: 待機/処理中リクエスト0件を確認し、LauncherControllerでブリッジを再起動。新版PIDのreadyとbuild fingerprint一致を確認。backend healthはHTTP 200。
+- 実動作: `job_edd7a387d63749adad9ac8a5db28b87b`の直近失敗clip `cand_normal_1718040_1836080_164305f38e`を既存APIから再生成し、23:57にready、投稿案3件、説明欄276文字、errorなしを確認。入力/draft hashを維持し、`subtitle_review.json`のSHA-256は再生成前後で一致。候補の自動適用はしていない。
+- 現在状態: 修正・稼働ブリッジ反映・直近失敗clipの実生成確認まで完了。他5 clipの失敗案は今回再生成していない。commit/PUSHは未実施。
+
+## 2026-09-11 保存時に投稿用セットが欠落する不具合
+
+- 目的: 通常/ショートで、字幕確認中に採用した投稿用セットが完成画面で消え、再編集が必要になる問題を修正する。
+- 原因: frontendが未保存字幕の有無だけで投稿案の候補・採用ID・revisionを消去しmanualへ変更。未保存字幕から生成した最新案まで対象になり、backendのCodex用元配信/タグ補完も実行されなかった。右側のスーラ通常clipと財布ショートは最終字幕revision=生成revision、公開タイトル/説明文=生成案であり、表示・書き出し漏れではなく保存時消去と確認。
+- 変更ファイル: `frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/lib/youtubePosting.ts`、`frontend/components/ResultVideoCard.tsx`、`frontend/tests/youtubePosting.test.ts`、`backend/app/api/jobs.py`、`backend/app/posting_metadata.py`、`backend/tests/test_title_hook_suggestions.py`、`backend/tests/test_posting_metadata.py`、`STATUS.md`。
+- 修正: 未保存だけでは投稿案を削除せずbackendで実際の保存予定字幕revisionを検証。手修正時も元字幕revisionを保持し、最新案の候補を維持。manual投稿文の元配信/出演情報と空のタグを補完し、既存の定型文は重複させない。候補がない手入力タイトルも完成画面の投稿セットに表示。
+- 仕様変更: 本当に古いCodex案は同時字幕保存でも422で止め、候補を黙って消して完成扱いにしない。手修正文は保持し、古いAI根拠のみ無効化する従来挙動を維持。
+- 検証: backend全体`1015 passed, 1 skipped`。backend ruff成功。frontendの投稿用payloadテスト、typecheck、lint、build成功。通常/ショート×Codex/手修正で未保存字幕から生成→同時保存→投稿用JSON/Markdown引継ぎと二重保存時の非重複を検証。
+- 反映: backend/frontendをDockerで再build・再作成。health 200。進行中の動画処理を保護しworker/redisは同一コンテナで継続。今回の保存API/完成画面の修正は反映済み。
+- 既存データ復元: 表示中`job_edd7a387d63749adad9ac8a5db28b87b`のスーラ通常clipと財布ショートは、現字幕revisionと生成案の一致・公開タイトル/説明文の一致を確認して候補3件と採用IDを復元。地獄蒸しプリン通常clipは字幕revision不一致のため古い候補は戻さず、現行手入力文へ出典/タグのみ補完。未採用/生成失敗の2 clipは対象外。
+- 更新成果物: 該当clipのreview、selected metadata/summary、export metadata、投稿用JSON/Markdown、download.zip。MP4/字幕ファイル全12件のSHA-256は前後一致。ZIPは全entryを維持し、差替メタデータ一致と未変更entryのCRC/size一致、testzip成功を確認。
+- 復元作業の初回はZIP内コピーでZipInfoのheader offsetが変更され停止。反映前だったため元成果物は不変。ZipInfoを複製して再試行し成功。変更前ファイル・ZIPは`.codex_tmp/posting-save-20260911/completed-backup/`に保持。実行/結果記録も同QAディレクトリに保存。
+- ブラウザ検証: ユーザーが開いていたChromeの完成画面を更新し、通常/ショート両方で3候補・採用表示・元配信URL・タグを確認。
+- 現在状態: 修正・反映・対象既存データの復元と表示確認まで完了。commit/PUSHは未実施。
+
+## 2026-09-11 同じ元動画の再アップロード時に使用済み区間を除外
+
+- 目的: 再ダウンロードで画質・形式・ファイル内容が変わっても、同じYouTube動画の過去の書き出し区間を自動選定から除外する。
+- 現在状態: 実装・隔離環境テスト・backend/GPU workerへの反映・実保存履歴を用いた動作確認まで完了。commit/PUSHは未実施。
+- 変更ファイル: `backend/app/source_clip_history.py`、`backend/app/candidates/used_ranges.py`、`backend/app/models.py`、`backend/app/db.py`、`backend/app/storage/lifecycle.py`、`backend/app/candidates/codex_initial_selection.py`、`backend/app/jobs/runner.py`、`backend/tests/test_source_clip_history.py`、`backend/tests/test_real_pipeline.py`、`STATUS.md`。
+- 仕様: 元ファイル名のYouTube動画IDを優先し、元配信URL、同一ファイルのSHA-256の順に照合。タイトル文字列だけでは一致させない。通常/ショート共通で過去の完成区間と1ms超重なる自動候補を除外。端点が接するだけなら許可。
+- 保存: `source_clip_usage`に元動画識別子・元動画時刻のstart/end・種別・job ID・元動画尺だけを記録。ジョブ/動画への外部キーを持たず、保存期限による動画/ジョブ削除後も残す。起動・選定・cleanup前に既存のcompleted成果物から補完。未完成/失敗/未採用候補は記録しない。
+- 選定: Codexと従来経路の両方で入力・候補を除外し、境界補正後も再検証。Codex再選定にも適用。本数不足を使用済み場面で埋めない。同一ジョブの再試行・既存clipの再編集・手指定区間は妨げない。
+- 時間ずれ対策: 同じ識別子で元動画尺が過去と1秒超異なる場合は`source_history_timeline_changed`で停止。時間がずれた旧区間を黙って流用しない。
+- 検証: backend全体`1035 passed, 1 skipped`、ruff成功。別エンコード相当の同一動画IDによる初期選定/再選定、通常/ショート横断除外、境界補正後の除外、完成時保存、二重登録防止、cleanup後保持、異なる動画の非除外、手動/再編集例外、元動画尺変更を検証。テストDB/storageは`.codex_tmp`に隔離。
+- 反映前保護: SQLite backupを`.codex_tmp/source-history-20260911/before-history.db`へ作成、integrity_check=ok。RQ worker idle、started/queued=0を確認。DBに残る`generating_candidates` 1件は2026-09-10更新のまま、今回変更しない。
+- 反映結果: backend/GPU workerをbuild・再作成。backend health=200、worker idle・新しい履歴コードのimport成功・CUDA devices=1。frontend/redisは再作成していない。起動時に2元動画・23件の使用履歴を既存completed成果物から取り込み。
+- 実環境確認: 保存済み朝活配信のIDを持つ別形式の仮想入力（DBへ追加せず）で履歴11件/結合後6区間を照合し、使用済み通常/ショート候補の残数0を確認。既存jobs/videos/export_items/app_preferencesは反映前backupと全行一致、SQLite integrity_check=ok。新規の実動画アップロード・AI再選定・MP4再書き出しは実行していない。
+- 制限: 導入前に成果物とDB記録が既に削除された場面は復元できない。ID/元配信URL不明の再エンコードは識別不可。同じ尺のまま元配信が編集された場合の時間ずれ検出、および未完成ジョブ同士の同時予約は対象外。今回の変更のcommit/PUSHは未実施。
+
+
+## 2026-09-12 アップロード設定の10枠保存・字幕/フック/タイトル書式
+
+- 目的: ブラウザ指摘に対応し、保存テンプレートを3→10件へ拡張。会話字幕・フック・タイトルの初期書式に内縁/外縁の幅・色を用意。上部の処理モード/動画タイプ/作成種別/通常本数/ショート本数をデスクトップで1行へ集約。APIを使う内容判定・字幕校正をアップロード導線から除去。
+- 現在状態: 実装、検証、backend/frontend/GPU workerへの反映、表示確認まで完了。branch=`codex/task-133-upload-style-settings`。既存の未コミット変更を保持。今回のcommit/PUSH/PR作成は未実施。
+- 変更ファイル: `frontend/components/SubtitleStyleEditor.tsx`、`ClipTextStyleEditor.tsx`、`SettingsPanel.tsx`、`ClipSelectionEditor.tsx`、`frontend/lib/uploadTextStyles.ts`、`subtitleStylePresets.ts`、`types.ts`、`frontend/app/upload/page.tsx`、`globals.css`、`backend/app/schemas.py`、`backend/app/render/subtitles_ass.py`、`backend/tests/test_upload_text_styles.py`、`test_api_routes.py`、`frontend/tests/uploadTextStyles.test.ts`、`STATUS.md`。
+- 実装: 既存のクリップ書式エディタを初期設定にも使用。通常/ショート×字幕/フック/タイトルを独立保存。新規の6書式はPydantic ClipTextStyleで検証し、JobSettings→SubtitleLayout→共通resolverで確認プレビューと最終ASSへ引き継ぐ。クリップ個別設定を優先。旧字幕設定は新形式を編集するまで有効。
+- 保存互換: 既存version=1・3枠の保存文書を10枠へ展開し、後ろ7枠は空欄。既存設定の値は維持。10枠を超える入力は422。フロントのブラウザ保存とbackendのSQLite保存の両方を拡張。
+- API非使用: 内容判定とOpenAI字幕校正の選択UIを除去し、アップロード送信時に`useOpenAIScoring=false`、`ensureSelectedOpenAIScored=false`、`subtitleCorrectionMode=off`を固定。Codex初期選定は維持。既存ジョブの設定・backendの従来API契約は変更しない。
+- 検証コマンド: `python -m pytest backend/tests -q`、`python -m ruff check backend`、`npm --workspace frontend run typecheck`、`npm --workspace frontend run lint`、`npm --workspace frontend run build`、`npm --workspace frontend exec -- tsx tests/uploadTextStyles.test.ts`、`git diff --check`。
+- 検証結果: backend全体`1039 passed, 1 skipped`、ruff、frontend型検査/lint/build、新規移行テスト、diff検査成功。旧3枠・10枠目の保存/再取得、6書式と二重縁取りのASS反映、クリップ個別設定優先を確認。初回の新規テストは字幕がフックと重なり仕様どおり非表示だったため、字幕時間をフック後へ修正。全体初回は既存テスト1件の一時ファイルreplaceでWinError 5が発生し、コード変更なしの単独再実行と全体再実行で成功。
+- 実描画: 新backendイメージをネットワークなしの隔離コンテナで起動し、通常1920x1080/ショート1080x1920の5秒H.264 MP4を生成。内縁3/外縁7、黄文字/黒内縁/白外縁、タイトル/字幕の描画をPNGで確認。成果物・スクリプトは`.codex_tmp/upload-style-settings/`。
+- 反映: 処理中/待機中ジョブ0件を確認。DBを`.codex_tmp/upload-style-settings/before.db`へバックアップしintegrity_check=ok。3サービスをbuild/recreate、Redisは継続。backend healthとupload画面HTTP 200、稼働workerの新書式resolverを確認。
+- ブラウザ: 指定された埋め込みブラウザで5項目の1行配置、2/10保存済み、保存枠1〜10、フック/タイトル/通常の切り替えと設定独立を確認。検証用に入力した外縁7は個別設定解除で戻した。既存保存済み2件のSQLite行は更新前と完全一致、DB integrity_check=ok。更新前に選択されていた人物アップ画角も戻した。
+- 未解決/制限: 実素材を新規アップロードして文字起こしから完成まで通すE2Eは今回未実施。初期書式の追加は今後作成するジョブに適用し、過去の完成MP4は変更しない。
+
+## 2026-09-12 外縁カラーを色欄へ移動
+
+- 目的: 外縁の色を「書体・サイズ」から「色」欄へ移し、定番色を選べるようにする。
+- 変更ファイル: `frontend/components/ClipTextStyleEditor.tsx`、`STATUS.md`。
+- 変更: 文字色・内縁色の下に外縁色を配置。任意色ピッカーと白/黄/水色/ピンク/緑/黒の6色ボタン、選択中表示を追加。共通エディタを使う初期設定・クリップ編集の両方へ適用。
+- 検証: frontend typecheck/lint/build、frontend Docker image build成功。埋め込みブラウザで移動後の配置と6色を確認し、黄を選択→color inputが#FFF200へ変化→元の白へ復帰を確認。入力中のタイトル位置Y650、人物アップ画角、保存済み2/10を維持。
+- 反映: 稼働frontendの同一ソースへ反映しFast Refreshを使用。ブラウザの再読込やコンテナ再起動を避け入力状態を保持。次回再作成用イメージも更新。backend/workerは変更なし。
+- 現在状態: 修正・画面反映・表示操作確認まで完了。今回の追加テストコードはなし。commit/PUSHは未実施。
+
+
+## 2026-09-12 名前付きショート帯の保存と確認・長さ設定の横並び
+
+- 目的: らでん専用だった上下帯を出演者・用途別に保存し、「ショート画面」「開始後の確認」「詳細な長さ設定」をデスクトップで1行に収める。
+- 現在状態: ローカル実装・稼働環境への反映・最小検証完了。ユーザーによる別出演者用画像での実運用は未確認。
+- 変更ファイル: `frontend/components/ShortBannerPresetManager.tsx`、`frontend/lib/shortBanners.ts`、`frontend/components/SettingsPanel.tsx`、`frontend/components/SubtitleStyleEditor.tsx`、`frontend/lib/types.ts`、`backend/app/short_banners.py`、`backend/app/api/short_banners.py`、`backend/app/api/jobs.py`、`backend/app/main.py`、`backend/app/schemas.py`、`backend/app/storage/paths.py`、`backend/app/render/render_short.py`、`backend/app/render/render_exact_review_preview.py`、関連テスト3ファイル、本ファイル。
+- 実装・仕様変更: 帯プリセットを名前・上下画像・上下ON/OFFの組で最大10件保存。らでん用標準帯は継続利用可能。PNG/JPEG/WebPを10MB・1600万画素まで受け付け、PNG化した内容ハッシュでstorage/banner_assetsへ保存。プリセットの上書き・削除で過去ジョブの画像は変更しない。ジョブ設定へ画像IDを保存し、最終レンダー・exact/live previewのキャッシュキーと実レンダー・字幕確認の画像配信に反映。
+- UI: ショート画面・開始後の確認・詳細な長さ設定・字幕焼き込みを同じ行へ移動。狭い幅では折り返す。帯の保存・画像編集は直下の開閉欄へ配置。初期字幕プレビューにも実際の帯画像を表示。
+- 検証: backend全体 `1042 passed, 1 skipped`。`python -m ruff check backend`、frontend typecheck/lint/build成功。合成2秒動画でカスタム上帯シアン・下帯赤を最終MP4とexact previewに出力し、1080x1920と上下の色を確認。検証記録は `.codex_tmp/short-banner-presets/`。
+- 稼働確認: Docker backend/frontend/GPU workerイメージをビルド。キュー0・実行中0を確認後backend/worker更新、frontendはFast Refreshで反映。backend healthy、4サービスrunning、帯画像配信HTTP200。画面で「らでん用」を保存・再呼び出しし、DB/APIにも1件保存を確認。既存タイトル設定88px/Y650、顔追従設定を保持。
+- 未解決事項: 別出演者用の実画像による運用確認は未実施。素材は利用者が帯の編集欄から選ぶ。
+
+## 2026-09-12 キャラ別の投稿情報・帯・タイトル末尾・サムネイル一括保存
+
+- 目的: 複数キャラ・別チャンネルのショート運用で同じ設定を毎回入力せず、保存名を選ぶだけで呼び出せるようにする。
+- 現在状態: 実装、backend/GPU workerとfrontendへの反映、保存・切替・再読込確認まで完了。既存の未コミット変更を保持。commit/PUSH/PR作成は未実施。
+- 新規ファイル: `backend/app/api/character_presets.py`、`backend/app/thumbnail_style.py`、`backend/tests/test_character_presets.py`、`frontend/components/CharacterPresetManager.tsx`、`frontend/components/CharacterThumbnailSettings.tsx`、`frontend/lib/characterPresets.ts`、`frontend/tests/characterPresets.test.ts`。
+- 変更ファイル: `backend/app/main.py`、`schemas.py`、`posting_metadata.py`、`api/jobs.py`、`jobs/subtitle_review.py`、`jobs/title_hook_suggestions.py`、`jobs/quality_gate.py`、`jobs/thumbnails.py`、`jobs/thumbnail_regeneration.py`、`jobs/runner.py`、`scoring/title_hook_suggestions.py`、`render/render_thumbnail.py`、`backend/tests/test_codex_host_bridge.py`、`test_thumbnail_integration.py`、`test_title_hook_suggestions.py`、`frontend/lib/types.ts`、`frontend/components/YouTubePostingSettingsPanel.tsx`、`SettingsPanel.tsx`、`ShortBannerPresetManager.tsx`、`frontend/app/upload/page.tsx`、本ファイル。
+- 仕様: 最大50件をSQLite AppPreferenceに保存。管理用チャンネル名・出演者/所属/ハッシュタグ/タグ・上下帯画像とON/OFF・通常タイトル末尾・通常サムネイル背景と配色・字幕/タイトル/フック書式・通常/ショート本数を一括保存。元配信タイトルとURLは保存対象外で、キャラ切替時にも維持。最後に選んだキャラを再読込時に復元。
+- 初期値/互換: 新しいキャラは通常0本/ショート3本、出演者等空欄、帯なし、末尾なし、単色サムネイル。既存らでん投稿設定を1件として取り込み、現在の字幕書式も初回保存。旧ジョブの未指定タイトル末尾・サムネイルは従来動作を維持。新規ジョブへ設定を複製するため、プリセット上書き/削除で過去ジョブの設定は変化しない。
+- サムネイル: 既存らでん背景・単色・アップロード画像を選択し、背景色/見出し2色/外縁色を保存。人物を右・見出しを左に置く既存レイアウトを使用。通常タイトル末尾は生成候補・確認編集・投稿情報・品質検査へ同じ設定を引き継ぐ。
+- 修正履歴: 色ピッカーの変更を保存した際に値が残らないケースを実画面で検出し、onInput対応を追加。設定切替時の帯表示を実際の画像/ON/OFFから判定し、別キャラの帯なしを表示。旧投稿プロファイルの独立読込を除き、キャラ復元との競合を解消。
+- 検証: backend全体 `1048 passed, 1 skipped`、`python -m ruff check backend`、frontend lint/typecheck/build、`npx tsx frontend/tests/characterPresets.test.ts`、`git diff --check`成功。保存/選択/旧データ取込/ジョブ独立、動画情報維持、末尾なしとカスタム末尾、生成入力・投稿反映、単色/画像サムネイルの実画像ピクセル、再生成への設定継承を検証。
+- テスト再試行: Windows上のstatus heartbeat JSON読込が一時PermissionErrorになる既存テストを、既存の監視期限内で再読込する形に修正し観測必須条件は維持。別の既存atomic replaceテストで一度WinError 5が発生したため単独再実行し成功、最終全体実行も成功。ランタイムのbridge処理は今回変更していない。
+- 実画面確認: 確認用別キャラを作成し、投稿情報・末尾・背景色を保存。らでんとの相互切替、別キャラの帯なし/ショートのみ、再読込後の末尾と背景色#2255aaの復元を確認。確認用キャラだけを削除し、らでん1/50・帯1/10・字幕2/10へ戻した。QA記録/バックアップは `.codex_tmp/character-presets/`。
+- 稼働確認: キュー/実行中0件確認後backend/GPU workerを更新。frontendはファイル反映とFast Refreshを使用し、最終変更を含むDocker imageもビルド。backend healthy・health HTTP200、frontend/worker/redis running。
+- 未解決/制限: 新規の実素材アップロードから文字起こし・最終MP4生成までのE2Eは未実施。サムネイルは背景/配色の保存であり自由配置エディタではない。チャンネル名は管理用でYouTubeの投稿先アカウントを自動切替する機能ではない。
+
+## 2026-09-12 キャラ設定・アップロード設定と未送信修正のPUSH
+
+- 目的: ユーザー指示「PUSH」に従い、検証済み変更を `origin` の `codex/task-133-upload-style-settings` へ送信する。
+- 対象: 本日のキャラ一括保存・帯保存・字幕書式/UI調整、および本ファイルに記録した未送信の投稿情報保存修正・使用済み区間除外・Codex更新時のブリッジ修正。変更ファイルは各作業項目に記載。
+- 除外: `storage/qa/` の検証画像、未参照の `backend/app/assets/thumbnail_templates/raden_normal_v1/base.png`、`.codex_tmp/` 内のDB/ログ/動画。ローカルファイルは保持。
+- 検証: 直前実装のbackend全体 `1048 passed, 1 skipped` とfrontend lint/typecheck/build成功を確認。PUSH前にbackend/launcher ruff、frontend overlay-fit、差分検査を実行し成功。Docker 4サービスrunning、backend healthy。
+- 制限: 今回はブランチのPUSH。mainへのマージとPR作成は実施しない。現行CIはpull_requestまたはmainへのpushで起動する設定のため、このブランチへのpush単独では起動しない。

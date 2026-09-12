@@ -5,6 +5,8 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
+from app.short_banners import BannerAssetId
+from app.thumbnail_style import NormalThumbnailStyle
 from app.posting_metadata import (
     PostMetadataSource,
     YouTubePostingProfile,
@@ -108,7 +110,16 @@ class ClipTimeRange(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
-class SubtitleStyleSnapshot(BaseModel):
+class UploadTextStyles(BaseModel):
+    short_title_style: ClipTextStyle | None = Field(default=None, alias="shortTitleStyle")
+    short_hook_style: ClipTextStyle | None = Field(default=None, alias="shortHookStyle")
+    short_subtitle_style: ClipTextStyle | None = Field(default=None, alias="shortSubtitleStyle")
+    normal_title_style: ClipTextStyle | None = Field(default=None, alias="normalTitleStyle")
+    normal_hook_style: ClipTextStyle | None = Field(default=None, alias="normalHookStyle")
+    normal_subtitle_style: ClipTextStyle | None = Field(default=None, alias="normalSubtitleStyle")
+
+
+class SubtitleStyleSnapshot(UploadTextStyles):
     subtitle_font_name: str | None = Field(default=None, min_length=1, alias="subtitleFontName")
     subtitle_font_size: int | None = Field(default=None, ge=12, le=220, alias="subtitleFontSize")
     subtitle_outline: int | None = Field(default=None, ge=0, le=20, alias="subtitleOutline")
@@ -238,16 +249,21 @@ class SubtitleStylePreset(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
-SubtitleStylePresetSlots = tuple[
-    SubtitleStylePreset | None,
-    SubtitleStylePreset | None,
-    SubtitleStylePreset | None,
-]
+SUBTITLE_STYLE_PRESET_LIMIT = 10
+SubtitleStylePresetSlots = list[SubtitleStylePreset | None]
 
 
 class SubtitleStylePresetDocument(BaseModel):
     version: Literal[1] = 1
-    slots: SubtitleStylePresetSlots = Field(default_factory=lambda: (None, None, None))
+    slots: SubtitleStylePresetSlots = Field(
+        default_factory=lambda: [None] * SUBTITLE_STYLE_PRESET_LIMIT,
+        max_length=SUBTITLE_STYLE_PRESET_LIMIT,
+    )
+
+    @field_validator("slots")
+    @classmethod
+    def expand_legacy_slots(cls, slots: SubtitleStylePresetSlots) -> SubtitleStylePresetSlots:
+        return slots + [None] * (SUBTITLE_STYLE_PRESET_LIMIT - len(slots))
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -259,7 +275,11 @@ class YouTubePostingProfileDocument(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
-class JobSettings(BaseModel):
+class JobSettings(UploadTextStyles):
+    character_preset_name: str = Field(default="", max_length=80, alias="characterPresetName")
+    channel_name: str = Field(default="", max_length=120, alias="channelName")
+    normal_title_suffix: str | None = Field(default=None, max_length=80, alias="normalTitleSuffix")
+    normal_thumbnail_style: NormalThumbnailStyle | None = Field(default=None, alias="normalThumbnailStyle")
     workflow_mode: WorkflowMode = Field(default="automatic", alias="workflowMode")
     automation_mode: AutomationMode = Field(default="manual", alias="automationMode")
     manual_edit_finalized: bool = Field(default=False, alias="manualEditFinalized")
@@ -405,6 +425,9 @@ class JobSettings(BaseModel):
     short_layout: ShortLayout = Field(default="auto", alias="shortLayout")
     short_overlay_title_mode: ShortOverlayTitleMode = Field(default="auto", alias="shortOverlayTitleMode")
     short_top_banner_enabled: bool = Field(default=True, alias="shortTopBannerEnabled")
+    short_top_banner_asset_id: BannerAssetId = Field(default="raden-top", alias="shortTopBannerAssetId")
+    short_bottom_banner_asset_id: BannerAssetId = Field(default="raden-bottom", alias="shortBottomBannerAssetId")
+    short_banner_preset_name: str = Field(default="らでん用", max_length=80, alias="shortBannerPresetName")
     short_bottom_banner_enabled: bool = Field(default=True, alias="shortBottomBannerEnabled")
     enable_transcript_post_processing: bool = Field(default=True, alias="enableTranscriptPostProcessing")
     transcript_normalize_unicode: bool = Field(default=True, alias="transcriptNormalizeUnicode")
