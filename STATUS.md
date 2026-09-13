@@ -9799,3 +9799,9 @@ pip check: pass
 - 収録内容: 帯単独UIの整理、文字起こしの全角化と同語句修正、区間結合/分割/１行表示、選定画面での通常/ショート切替、編集画面のスクロール改善、サムネ文言/書式/即時プレビュー、ショート画角の直接操作と即時プレビュー。変更ファイルは前項までの各タスクに記録。
 - 検証: 直前の全体backend `1098 passed, 1 skipped`、frontend typecheck/lint/build、Docker image buildと実画面確認を継承。今回backend全体/launcherのruff、overlay-fit goldenを追加実行して成功。Docker４サービス稼働、backend health HTTP200を再確認。
 - ローカル保持: 既存の未追跡素材 `backend/app/assets/thumbnail_templates/raden_normal_v1/base.png` と `storage/qa/` は今回の修正コードから参照されていないためコミット対象外。実ジョブの設定・出力動画は変更しない。
+
+## 2026-09-13 編集画面修正をPUSH
+
+- 実装コミット: `bcac19215ec73435f33a595670d61d1c052b50e3`（69ファイル）。`origin/codex/task-133-upload-style-settings`へ送信し、`git ls-remote`で実装コミットとの一致を確認した。
+- 送信前確認: ステージ対象の照合、差分の空白検査、既知の資格情報パターン検査が成功。修正コードの未ステージ変更なし。検証用素材は前項のとおりローカル保持。
+- CI: このコミットのGitHub Actions実行はなし。現行workflowは`pull_request`と`main`へのpushが対象。ローカル検証・実画面確認の結果は前項までに記録済み。
