@@ -9805,3 +9805,13 @@ pip check: pass
 - 実装コミット: `bcac19215ec73435f33a595670d61d1c052b50e3`（69ファイル）。`origin/codex/task-133-upload-style-settings`へ送信し、`git ls-remote`で実装コミットとの一致を確認した。
 - 送信前確認: ステージ対象の照合、差分の空白検査、既知の資格情報パターン検査が成功。修正コードの未ステージ変更なし。検証用素材は前項のとおりローカル保持。
 - CI: このコミットのGitHub Actions実行はなし。現行workflowは`pull_request`と`main`へのpushが対象。ローカル検証・実画面確認の結果は前項までに記録済み。
+
+## 2026-09-14 main統合と日本語Windows導入手順
+
+- 目的: ユーザー承認済みの編集画面修正をmainへ統合し、別のWindows PCでGitHubから導入できる日本語手順を提供する。
+- 対象: `C:\BOT\AutoClipper Web`。`origin/main`は作業HEADの祖先で、確認時点で追加70コミット。作業branchは`codex/task-134-main-japanese-setup`。
+- 変更ファイル: `README.md`、`docs/WINDOWS_SETUP_JA.md`、`docs/WINDOWS_LAUNCHER.md`、本ファイル。
+- 変更: README冒頭に日本語手順を追加。WSL 2/Docker Desktop/Python/Codexの準備、mainのZIP取得、Intel内蔵GPUでのCPU起動、短い動画による確認、終了、更新、設定移行、障害確認を記載。英語手順のCPU言語を実装どおりjaへ修正。
+- 最小検証: ローカルMarkdownリンクとコードフェンス、ランチャー実在、CPU設定とCodex検出・ログイン処理、環境設定ファイル未作成時の警告動作をコードと照合。差分の空白検査成功。Docker/Python/Codexの導入事項は公式資料と照合。
+- 引継ぎ検証: 実装コミットbcac192のbackend 1098 passed/1 skipped、ruff、frontend typecheck/lint/buildと実画面確認は前項に記録済み。今回は文書変更のみ。
+- 未確定: 新規PCでの実インストール・動画処理は未実施。この記録時点ではPRのCI・mainへの統合は未実施。既存の未追跡base.pngとstorage/qaはローカル保持する。

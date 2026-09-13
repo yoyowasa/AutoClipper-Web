@@ -1,5 +1,7 @@
 # AutoClipper Windows Launcher
 
+日本語の初回導入手順: [Windows導入・起動手順](WINDOWS_SETUP_JA.md)
+
 The Windows launcher is a GUI wrapper around the existing Docker Compose runtime.
 It does not replace the Next.js frontend, FastAPI backend, RQ worker, Redis, or FFmpeg pipeline.
 
@@ -33,7 +35,7 @@ Profiles:
 
 ```text
 GPU recommended: turbo / ja / cuda / float16
-CPU compatible:  base / auto / cpu / auto
+CPU compatible:  base / ja / cpu / auto
 ```
 
 In automatic mode, failed GPU host/runtime preflight selects CPU and displays the reason.

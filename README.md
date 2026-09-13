@@ -1,5 +1,11 @@
 # AutoClipper Web
 
+## 日本語で始める（Windows）
+
+**[Windows導入・起動手順（日本語）](docs/WINDOWS_SETUP_JA.md)** — 必要ソフト、GitHubからの取得、CPUでの初回起動、Codex連携、更新・設定移行を説明しています。
+
+Intel内蔵GPUのPCは「CPU互換設定で起動」を使います。Codexのインストールだけでは動作しません。Docker DesktopとPythonも必要です。
+
 AutoClipper Web is a video clipping web app with automatic and manual creation flows.
 
 The v1 flow is:
@@ -27,7 +33,7 @@ Full timeline editing, approve/reject workflow management, auth, billing, and so
 
 - Docker Desktop
 - Docker Compose
-- Python 3.11+ only if you want to run local tests or `scripts/smoke_runtime.py` from the host
+- Python 3.11+ for the Windows launcher, local tests, or host-side scripts
 
 ## Windows Launcher
 
