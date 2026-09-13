@@ -1,12 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ResultVideoCard } from "../../../components/ResultVideoCard";
-import { getJobResults, toApiUrl } from "../../../lib/api";
-import type { JobAuditSummary, JobResultsResponse } from "../../../lib/types";
+import { SaveFileButton } from "../../../components/SaveFileButton";
+import {
+  createClipReedit,
+  getJobResults,
+  regenerateExportThumbnail,
+  toBrowserApiUrl
+} from "../../../lib/api";
+import type { JobAuditSummary, JobResultsResponse, ResultExportItem, ThumbnailTextStyles, ThumbnailCopyText } from "../../../lib/types";
 
 const IMPORTANT_AUDIT_WARNINGS = [
   "missing_title",
@@ -76,27 +82,117 @@ function AuditSummaryPanel({ summary }: { summary: JobAuditSummary | null }) {
 
 export default function ResultsPage() {
   const params = useParams();
+  const router = useRouter();
   const jobId = useMemo(() => readJobId(params.jobId), [params.jobId]);
   const [results, setResults] = useState<JobResultsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [reopeningClipId, setReopeningClipId] = useState<string | null>(null);
+  const [regeneratingThumbnailId, setRegeneratingThumbnailId] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadResults = useCallback(async () => {
     if (!jobId) {
       return;
     }
-
-    async function loadResults() {
-      try {
-        const payload = await getJobResults(jobId);
-        setResults(payload);
-        setError(null);
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Results fetch failed");
-      }
+    try {
+      const payload = await getJobResults(jobId);
+      setResults(payload);
+      setError(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Results fetch failed");
     }
-
-    void loadResults();
   }, [jobId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadResults();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadResults]);
+
+  const thumbnailGenerationActive = Boolean(
+    results?.normalClips.some((item) => item.thumbnailStatus === "generating")
+  );
+
+  useEffect(() => {
+    if (!thumbnailGenerationActive) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadResults();
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [loadResults, thumbnailGenerationActive]);
+
+  async function reopenForEditing(item: ResultExportItem) {
+    if (!item.candidateId) {
+      setError("この動画の編集元clipを特定できません");
+      return;
+    }
+    setReopeningClipId(item.candidateId);
+    setError(null);
+    try {
+      const review = await createClipReedit(jobId, item.candidateId);
+      router.push(
+        `/jobs/${review.jobId}/subtitles?clipId=${encodeURIComponent(item.candidateId)}&source=reedit`
+      );
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "完成jobを再編集用に開けませんでした"
+      );
+      setReopeningClipId(null);
+    }
+  }
+
+  async function regenerateThumbnail(
+    item: ResultExportItem,
+    cropMode: "standard" | "close",
+    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean
+  ) {
+    const frameSeconds = Math.min(
+      item.duration,
+      Math.max(0, item.thumbnailFrameSeconds ?? item.duration * 0.38)
+    );
+    const subjectAnchorX = item.thumbnailSubjectAnchorX ?? 1;
+    setRegeneratingThumbnailId(item.id);
+    setError(null);
+    try {
+      await regenerateExportThumbnail(item.id, {
+        frameSeconds,
+        subjectAnchorX,
+        advanceFrame: advanceFrame ?? !textStyles,
+        cropMode,
+        ...(textStyles ? { textStyles } : {}),
+        ...(text ? { text } : {})
+      });
+      setResults((current) =>
+        current
+          ? {
+              ...current,
+              normalClips: current.normalClips.map((clip) =>
+                clip.id === item.id
+                  ? {
+                      ...clip,
+                      thumbnailSubjectAnchorX: subjectAnchorX,
+                      ...(textStyles ? { thumbnailTextStyles: textStyles } : {}),
+                      thumbnailStatus: "generating"
+                    }
+                  : clip
+              )
+            }
+          : current
+      );
+      setRegeneratingThumbnailId(null);
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "サムネだけの再生成を開始できませんでした"
+      );
+      setRegeneratingThumbnailId(null);
+    }
+  }
 
   return (
     <main className="min-h-screen bg-[#f7f7f4] px-6 py-8 text-neutral-950">
@@ -107,13 +203,24 @@ export default function ResultsPage() {
             <h1 className="mt-2 break-all text-3xl font-semibold">Results</h1>
           </div>
           <div className="flex flex-wrap gap-2">
-            {results ? (
-              <a
-                className="inline-flex min-h-11 items-center rounded-md bg-neutral-950 px-5 text-sm font-medium text-white"
-                href={toApiUrl(results.zipDownloadUrl)}
+            {results?.reeditSourceJobId ? (
+              <Link
+                className="inline-flex min-h-11 items-center rounded-md border border-sky-700 bg-white px-5 text-sm font-medium text-sky-800"
+                href={`/results/${results.reeditSourceJobId}`}
               >
-                Download ZIP
-              </a>
+                元の完成動画一覧へ戻る
+              </Link>
+            ) : null}
+            {results ? (
+              <SaveFileButton
+                className="inline-flex min-h-11 items-center rounded-md bg-neutral-950 px-5 text-sm font-medium text-white"
+                url={toBrowserApiUrl(results.zipDownloadUrl)}
+                suggestedName={`${jobId}.zip`}
+                mimeType="application/zip"
+                extension=".zip"
+                description="ZIP archive"
+                label="ZIPを保存"
+              />
             ) : null}
             <Link
               className="inline-flex min-h-11 items-center rounded-md border border-neutral-300 px-5 text-sm font-medium text-neutral-800"
@@ -132,6 +239,12 @@ export default function ResultsPage() {
 
         {results ? (
           <>
+            {results.canReopenForEditing ? (
+              <section className="border border-sky-300 bg-sky-50 px-5 py-4 text-sm text-sky-900">
+                各動画の「この動画だけ再編集」から1本だけ開けます。サムネイルの文言・書式はこの画面で調整できます。
+              </section>
+            ) : null}
+
             <AuditSummaryPanel summary={results.auditSummary} />
 
             <section className="flex flex-col gap-3">
@@ -140,8 +253,18 @@ export default function ResultsPage() {
                 <span className="text-sm text-neutral-500">{results.normalClips.length}</span>
               </div>
               <div className="grid gap-4 md:grid-cols-2">
-                {results.normalClips.map((item) => (
-                  <ResultVideoCard key={item.id} item={item} auditAvailable={Boolean(results.auditSummary)} />
+                {results.normalClips.map((item, index) => (
+                  <ResultVideoCard
+                    key={item.id}
+                    item={item}
+                    auditAvailable={Boolean(results.auditSummary)}
+                    isReediting={reopeningClipId === item.candidateId}
+                    isRegeneratingThumbnail={regeneratingThumbnailId === item.id}
+                    onReedit={results.canReopenForEditing ? reopenForEditing : undefined}
+                    onRegenerateThumbnail={regenerateThumbnail}
+                    suggestedFilename={`normal_${String(index + 1).padStart(2, "0")}.mp4`}
+                    thumbnailPriority={index === 0}
+                  />
                 ))}
               </div>
             </section>
@@ -152,8 +275,15 @@ export default function ResultsPage() {
                 <span className="text-sm text-neutral-500">{results.shorts.length}</span>
               </div>
               <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {results.shorts.map((item) => (
-                  <ResultVideoCard key={item.id} item={item} auditAvailable={Boolean(results.auditSummary)} />
+                {results.shorts.map((item, index) => (
+                  <ResultVideoCard
+                    key={item.id}
+                    item={item}
+                    auditAvailable={Boolean(results.auditSummary)}
+                    isReediting={reopeningClipId === item.candidateId}
+                    onReedit={results.canReopenForEditing ? reopenForEditing : undefined}
+                    suggestedFilename={`short_${String(index + 1).padStart(2, "0")}.mp4`}
+                  />
                 ))}
               </div>
             </section>

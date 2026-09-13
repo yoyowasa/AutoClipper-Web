@@ -6,6 +6,7 @@ import os
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import urllib.request
 import webbrowser
@@ -13,13 +14,25 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .codex_bridge import (
+    BRIDGE_CONTRACT_FINGERPRINT,
+    BRIDGE_PROTOCOL_VERSION,
+    atomic_write_json,
+    bridge_build_fingerprint,
+    bridge_paths,
+    process_is_running,
+)
+
 
 REQUIRED_SERVICES = ("backend", "frontend", "worker", "redis")
 BACKEND_URL = "http://localhost:8000/health"
 FRONTEND_URL = "http://localhost:3000/upload"
 DOCKER_BIN_DIR = Path(r"C:\Program Files\Docker\Docker\resources\bin")
+DOCKER_DESKTOP_EXE = Path(r"C:\Program Files\Docker\Docker\Docker Desktop.exe")
 MIN_FREE_DISK_GB = 20.0
 RUNTIME_PROFILES = {"recommended", "gpu", "cpu"}
+GPU_PREFLIGHT_SCHEMA_VERSION = 1
+GPU_RUNTIME_LIBRARIES = ["libcublas.so.12", "libcudnn.so.9"]
 
 
 @dataclass(frozen=True)
@@ -50,7 +63,7 @@ class RuntimeProfile:
         )
 
 
-CPU_PROFILE = RuntimeProfile("cpu", "CPU compatible", "base", "auto", "cpu", "auto")
+CPU_PROFILE = RuntimeProfile("cpu", "CPU compatible", "base", "ja", "cpu", "auto")
 GPU_PROFILE = RuntimeProfile("gpu", "GPU recommended", "turbo", "ja", "cuda", "float16")
 
 
@@ -157,6 +170,7 @@ class StartResult:
     gpu_override_enabled: bool
     fallback_used: bool = False
     fallback_reason: str | None = None
+    docker_desktop_started: bool = False
 
 
 class LauncherError(RuntimeError):
@@ -172,14 +186,96 @@ UrlChecker = Callable[[str, str | None, float], bool]
 PortChecker = Callable[[int], bool]
 PathOpener = Callable[[Path], None]
 GpuChecker = Callable[[], HostGpu]
+DockerDesktopFinder = Callable[[], Path | None]
+DesktopApplicationStarter = Callable[[Path], None]
+MonotonicClock = Callable[[], float]
+BackgroundProcessStarter = Callable[[Sequence[str], Path], None]
+ProcessChecker = Callable[[int], bool]
 
 
 def find_docker_executable() -> str | None:
     docker = shutil.which("docker")
     if docker:
         return docker
-    candidate = DOCKER_BIN_DIR / "docker.exe"
-    return str(candidate) if candidate.is_file() else None
+    candidates = [DOCKER_BIN_DIR / "docker.exe"]
+    program_files = os.environ.get("ProgramFiles")
+    if program_files:
+        candidates.insert(
+            0,
+            Path(program_files)
+            / "Docker"
+            / "Docker"
+            / "resources"
+            / "bin"
+            / "docker.exe",
+        )
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        local_root = Path(local_app_data)
+        candidates.extend(
+            [
+                local_root / "Docker" / "resources" / "bin" / "docker.exe",
+                local_root
+                / "Programs"
+                / "DockerDesktop"
+                / "resources"
+                / "bin"
+                / "docker.exe",
+            ]
+        )
+    for candidate in dict.fromkeys(candidates):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def find_docker_desktop_executable() -> Path | None:
+    candidates = [DOCKER_DESKTOP_EXE]
+    program_files = os.environ.get("ProgramFiles")
+    if program_files:
+        candidates.insert(
+            0, Path(program_files) / "Docker" / "Docker" / "Docker Desktop.exe"
+        )
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        local_root = Path(local_app_data)
+        candidates.extend(
+            [
+                local_root / "Docker" / "Docker Desktop.exe",
+                local_root
+                / "Programs"
+                / "DockerDesktop"
+                / "Docker Desktop.exe",
+            ]
+        )
+    for candidate in dict.fromkeys(candidates):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def start_desktop_application(executable: Path) -> None:
+    subprocess.Popen(
+        [str(executable)],
+        cwd=executable.parent,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        close_fds=True,
+    )
+
+
+def start_background_process(command: Sequence[str], cwd: Path) -> None:
+    subprocess.Popen(
+        list(command),
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        close_fds=True,
+    )
 
 
 def query_host_nvidia_gpu() -> HostGpu:
@@ -312,8 +408,13 @@ class LauncherController:
         path_opener: PathOpener = open_local_path,
         browser_opener: Callable[[str], bool] = webbrowser.open,
         docker_finder: Callable[[], str | None] = find_docker_executable,
+        docker_desktop_finder: DockerDesktopFinder = find_docker_desktop_executable,
+        desktop_application_starter: DesktopApplicationStarter = start_desktop_application,
         gpu_checker: GpuChecker = query_host_nvidia_gpu,
         sleeper: Callable[[float], None] = time.sleep,
+        monotonic_clock: MonotonicClock = time.monotonic,
+        background_process_starter: BackgroundProcessStarter = start_background_process,
+        process_checker: ProcessChecker = process_is_running,
     ) -> None:
         self.project_root = Path(project_root).resolve()
         self.command_runner = command_runner
@@ -322,11 +423,19 @@ class LauncherController:
         self.path_opener = path_opener
         self.browser_opener = browser_opener
         self.docker_finder = docker_finder
+        self.docker_desktop_finder = docker_desktop_finder
+        self.desktop_application_starter = desktop_application_starter
         self.gpu_checker = gpu_checker
         self.sleeper = sleeper
+        self.monotonic_clock = monotonic_clock
+        self.background_process_starter = background_process_starter
+        self.process_checker = process_checker
         self.compose_file = self.project_root / "docker-compose.yml"
         self.gpu_compose_file = self.project_root / "docker-compose.gpu.yml"
         self.env_file = self.project_root / ".env"
+        self.codex_bridge_module = self.project_root / "launcher" / "codex_bridge.py"
+        self.codex_bridge_paths = bridge_paths(self.project_root)
+        self.codex_bridge_error: LauncherError | None = None
         self._docker_executable: str | None = None
 
     @property
@@ -345,8 +454,13 @@ class LauncherController:
     def _sensitive_values(self) -> tuple[str, ...]:
         return self._configured_openai_keys()
 
-    def redact(self, text: str) -> str:
-        redacted = text
+    def redact(self, text: str | bytes | None) -> str:
+        if text is None:
+            redacted = ""
+        elif isinstance(text, bytes):
+            redacted = text.decode("utf-8", errors="replace")
+        else:
+            redacted = str(text)
         for value in self._sensitive_values():
             redacted = redacted.replace(value, "[REDACTED]")
         return redacted
@@ -366,6 +480,228 @@ class LauncherController:
         if not executable:
             return CommandResult(127, "", "docker executable not found")
         return self._run([executable, *args], timeout=timeout)
+
+    def _codex_bridge_status(self) -> dict[str, object]:
+        path = self.codex_bridge_paths.status
+        if not path.is_file():
+            return {}
+        try:
+            decoded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+
+    def codex_bridge_ready(self) -> bool:
+        status = self._codex_bridge_status()
+        try:
+            pid = int(status.get("pid") or 0)
+        except (TypeError, ValueError):
+            return False
+        return (
+            status.get("schemaVersion") == BRIDGE_PROTOCOL_VERSION
+            and status.get("state") == "ready"
+            and self._codex_bridge_compatibility_error(status) is None
+            and pid > 0
+            and self.process_checker(pid)
+        )
+
+    def _codex_bridge_compatibility_error(
+        self,
+        status: dict[str, object],
+    ) -> str | None:
+        expected_build = bridge_build_fingerprint(self.codex_bridge_module)
+        if not expected_build:
+            return "codex_bridge_build_unreadable"
+        if status.get("bridgeBuildFingerprint") != expected_build:
+            return "codex_bridge_build_mismatch"
+        if status.get("contractFingerprint") != BRIDGE_CONTRACT_FINGERPRINT:
+            return "codex_bridge_contract_mismatch"
+        return None
+
+    def ensure_codex_bridge_running(
+        self, *, timeout: float = 20.0, poll_interval: float = 0.25
+    ) -> bool:
+        if not self.codex_bridge_module.is_file():
+            return False
+        if self.codex_bridge_ready():
+            return False
+
+        self.codex_bridge_paths.root.mkdir(parents=True, exist_ok=True)
+        existing_status = self._codex_bridge_status()
+        try:
+            existing_pid = int(existing_status.get("pid") or 0)
+        except (TypeError, ValueError):
+            existing_pid = 0
+        if existing_pid > 0 and self.process_checker(existing_pid):
+            self.stop_codex_bridge(
+                timeout=min(max(timeout, 1.0), 10.0),
+                poll_interval=poll_interval,
+            )
+        self.codex_bridge_paths.stop_request.unlink(missing_ok=True)
+        baseline_status = self._codex_bridge_status()
+        command = [
+            sys.executable,
+            str(self.codex_bridge_module),
+            "serve",
+            "--project-root",
+            str(self.project_root),
+        ]
+        try:
+            self.background_process_starter(command, self.project_root)
+        except OSError as exc:
+            raise LauncherError(
+                "codex_bridge_start_failed",
+                "Codex bridgeを起動できませんでした。",
+                self.redact(str(exc)),
+            ) from exc
+
+        safe_interval = max(0.05, poll_interval)
+        attempts = max(1, math.ceil(max(0.0, timeout) / safe_interval))
+        for attempt in range(attempts):
+            if self.codex_bridge_ready():
+                return True
+            status = self._codex_bridge_status()
+            if status.get("state") == "error" and status != baseline_status:
+                error_code = str(status.get("errorCode") or "codex_bridge_error")
+                messages = {
+                    "codex_cli_missing": "Codex CLIが見つかりません。",
+                    "codex_login_missing": "Codex CLIへChatGPTでログインしてください。",
+                }
+                raise LauncherError(
+                    error_code,
+                    messages.get(error_code, "Codex bridgeの起動前確認に失敗しました。"),
+                )
+            if attempt < attempts - 1:
+                self.sleeper(safe_interval)
+        raise LauncherError(
+            "codex_bridge_start_timeout",
+            "Codex bridgeの起動待機がtimeoutしました。",
+        )
+
+    def stop_codex_bridge(
+        self, *, timeout: float = 10.0, poll_interval: float = 0.25
+    ) -> bool:
+        if not self.codex_bridge_module.is_file():
+            return False
+        status = self._codex_bridge_status()
+        try:
+            pid = int(status.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid <= 0 or not self.process_checker(pid):
+            self.codex_bridge_paths.stop_request.unlink(missing_ok=True)
+            return False
+
+        atomic_write_json(
+            self.codex_bridge_paths.stop_request,
+            {"requestedAt": time.time()},
+        )
+        safe_interval = max(0.05, poll_interval)
+        attempts = max(1, math.ceil(max(0.0, timeout) / safe_interval))
+        for attempt in range(attempts):
+            if not self.process_checker(pid):
+                return True
+            if attempt < attempts - 1:
+                self.sleeper(safe_interval)
+        raise LauncherError(
+            "codex_bridge_stop_timeout",
+            "Codex bridgeを停止できませんでした。",
+        )
+
+    def ensure_docker_daemon_ready(
+        self, *, timeout: float = 180.0, poll_interval: float = 2.0
+    ) -> bool:
+        if not self.docker_executable:
+            raise LauncherError(
+                "docker_cli_missing",
+                "Docker CLIが見つかりません。Docker Desktopをインストールしてください。",
+            )
+
+        timeout_budget = max(0.0, timeout)
+        deadline = self.monotonic_clock() + timeout_budget
+
+        def remaining_timeout(limit: float) -> float:
+            return min(limit, max(0.0, deadline - self.monotonic_clock()))
+
+        initial_timeout = remaining_timeout(20.0)
+        if initial_timeout <= 0:
+            raise LauncherError(
+                "docker_daemon_start_timeout",
+                "Docker daemonがtimeout内に準備完了しませんでした。",
+            )
+        initial = self._docker(["info"], timeout=initial_timeout)
+        if initial.returncode == 0:
+            return False
+
+        desktop_cli_timeout = remaining_timeout(15.0)
+        if desktop_cli_timeout <= 0:
+            raise LauncherError(
+                "docker_daemon_start_timeout",
+                "Docker daemonがtimeout内に準備完了しませんでした。",
+                initial.output,
+            )
+        desktop_cli = self._docker(
+            ["desktop", "version"], timeout=desktop_cli_timeout
+        )
+        start_result = CommandResult(1, "", "Docker Desktop CLI is unavailable")
+        if desktop_cli.returncode == 0:
+            start_timeout = remaining_timeout(45.0)
+            if start_timeout <= 0:
+                raise LauncherError(
+                    "docker_daemon_start_timeout",
+                    "Docker daemonがtimeout内に準備完了しませんでした。",
+                    initial.output,
+                )
+            start_result = self._docker(
+                ["desktop", "start", "--detach", "--timeout", "30"],
+                timeout=start_timeout,
+            )
+
+        if desktop_cli.returncode != 0:
+            desktop_executable = self.docker_desktop_finder()
+            if desktop_executable is None:
+                raise LauncherError(
+                    "docker_desktop_not_found",
+                    "Docker Desktopを自動起動できませんでした。",
+                    desktop_cli.output,
+                )
+            try:
+                self.desktop_application_starter(desktop_executable)
+            except OSError as exc:
+                raise LauncherError(
+                    "docker_desktop_start_failed",
+                    "Docker Desktopを自動起動できませんでした。",
+                    self.redact(str(exc)),
+                ) from exc
+
+        safe_poll_interval = max(0.1, poll_interval)
+        attempts = max(1, math.ceil(timeout_budget / safe_poll_interval) + 1)
+        last_result = initial
+        for attempt in range(attempts):
+            info_timeout = remaining_timeout(10.0)
+            if info_timeout <= 0:
+                break
+            last_result = self._docker(["info"], timeout=info_timeout)
+            if last_result.returncode == 0:
+                return True
+            if attempt >= attempts - 1 or self.monotonic_clock() >= deadline:
+                break
+            self.sleeper(
+                min(
+                    safe_poll_interval,
+                    max(0.0, deadline - self.monotonic_clock()),
+                )
+            )
+
+        detail = last_result.output
+        if start_result.returncode != 0 and start_result.output:
+            detail = "\n".join(part for part in (start_result.output, detail) if part)
+        raise LauncherError(
+            "docker_daemon_start_timeout",
+            "Docker daemonがtimeout内に準備完了しませんでした。",
+            detail
+            or "Docker Desktop画面で利用規約、WSL更新、再起動要求を確認してください。",
+        )
 
     def _compose(
         self, args: Sequence[str], timeout: float | None = 60.0
@@ -598,8 +934,16 @@ class LauncherController:
                 "GPU workerの確認結果を解析できません。",
                 result.output,
             ) from exc
+        if not isinstance(payload, dict):
+            raise LauncherError(
+                "gpu_worker_preflight_invalid",
+                "GPU workerの確認結果がJSON objectではありません。",
+                result.output,
+            )
         if not (
             payload.get("ok") is True
+            and payload.get("preflight_schema_version") == GPU_PREFLIGHT_SCHEMA_VERSION
+            and payload.get("cuda_runtime_libraries") == GPU_RUNTIME_LIBRARIES
             and payload.get("actual_device") == "cuda"
             and payload.get("actual_compute_type") == "float16"
             and payload.get("fallback_used") is False
@@ -636,6 +980,7 @@ class LauncherController:
         timeout: float = 180.0,
         open_browser: bool = True,
     ) -> StartResult:
+        docker_desktop_started = self.ensure_docker_daemon_ready(timeout=timeout)
         report = self.preflight()
         if not report.ok:
             raise LauncherError(
@@ -647,6 +992,11 @@ class LauncherController:
         selected_profile, fallback_reason = self._select_profile(
             requested_profile, report
         )
+        self.codex_bridge_error = None
+        try:
+            self.ensure_codex_bridge_running(timeout=min(max(timeout, 1.0), 30.0))
+        except LauncherError as exc:
+            self.codex_bridge_error = exc
         compatible_running_profile = report.runtime_status.worker_profile
         already_compatible = report.already_running and (
             compatible_running_profile == selected_profile.key
@@ -655,7 +1005,14 @@ class LauncherController:
                 and compatible_running_profile is None
             )
         )
-        if already_compatible:
+        gpu_runtime_repair_needed = False
+        if already_compatible and selected_profile.key == "gpu":
+            try:
+                self._verify_gpu_worker()
+            except LauncherError:
+                already_compatible = False
+                gpu_runtime_repair_needed = True
+        if already_compatible and not rebuild:
             if open_browser:
                 self.open_app(selected_profile.key)
             return StartResult(
@@ -667,20 +1024,45 @@ class LauncherController:
                 gpu_override_enabled=selected_profile.key == "gpu",
                 fallback_used=fallback_reason is not None,
                 fallback_reason=fallback_reason,
+                docker_desktop_started=docker_desktop_started,
             )
 
+        profile_changed = (
+            compatible_running_profile in {"cpu", "gpu"}
+            and compatible_running_profile != selected_profile.key
+        )
+        rebuild_worker_for_profile = (
+            profile_changed
+            or gpu_runtime_repair_needed
+        )
+        worker_running = report.runtime_status.services.get(
+            "worker", ServiceState("worker")
+        ).running
+        if worker_running and rebuild_worker_for_profile:
+            running_profile = (
+                GPU_PROFILE if compatible_running_profile == "gpu" else CPU_PROFILE
+            )
+            stop_result = self._compose_for_profile(
+                running_profile, ["stop", "worker"], timeout=120.0
+            )
+            if stop_result.returncode != 0:
+                raise LauncherError(
+                    "worker_stop_failed",
+                    "workerを安全に停止できませんでした。",
+                    stop_result.output,
+                )
         args = ["up", "-d"]
-        if rebuild:
+        if rebuild or rebuild_worker_for_profile:
             args.append("--build")
         if (
             report.runtime_status.all_services_running
-            and compatible_running_profile != selected_profile.key
+            and rebuild_worker_for_profile
         ):
             args.extend(["--force-recreate", "worker"])
         result = self._compose_for_profile(
             selected_profile,
             args,
-            timeout=None if rebuild else 180.0,
+            timeout=None if rebuild or rebuild_worker_for_profile else 180.0,
         )
         if result.returncode != 0:
             raise LauncherError(
@@ -723,10 +1105,15 @@ class LauncherController:
             gpu_override_enabled=selected_profile.key == "gpu",
             fallback_used=fallback_reason is not None,
             fallback_reason=fallback_reason,
+            docker_desktop_started=docker_desktop_started,
         )
 
     def stop(self) -> CommandResult:
         result = self._compose(["stop"], timeout=120.0)
+        try:
+            self.stop_codex_bridge()
+        except LauncherError as exc:
+            self.codex_bridge_error = exc
         if result.returncode != 0:
             raise LauncherError(
                 "compose_stop_failed",

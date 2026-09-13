@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -189,12 +190,12 @@ def _silence_touching_after(time_seconds: float, silence_segments: Sequence[Sile
 
 
 def _starts_with_weak_marker(text: str) -> bool:
-    clean = text.strip().lstrip("、。，．.!！?？ ")
+    clean = unicodedata.normalize("NFKC", text).strip().lstrip("、。，．.!！?？ ")
     return any(clean.startswith(prefix) for prefix in WEAK_CONTINUATION_PREFIXES)
 
 
 def _ends_incomplete(text: str) -> bool:
-    clean = text.strip().rstrip("、。，．.!！?？ ")
+    clean = unicodedata.normalize("NFKC", text).strip().rstrip("、。，．.!！?？ ")
     lowered = clean.lower()
     return any(lowered.endswith(suffix) for suffix in INCOMPLETE_END_SUFFIXES)
 

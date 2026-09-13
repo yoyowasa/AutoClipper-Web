@@ -1,5 +1,7 @@
 # AutoClipper Windows Launcher
 
+日本語の初回導入手順: [Windows導入・起動手順](WINDOWS_SETUP_JA.md)
+
 The Windows launcher is a GUI wrapper around the existing Docker Compose runtime.
 It does not replace the Next.js frontend, FastAPI backend, RQ worker, Redis, or FFmpeg pipeline.
 
@@ -19,19 +21,21 @@ Double-click:
 Start AutoClipper.cmd
 ```
 
-Then select `推奨設定で起動`. The launcher:
+The desktop entrypoint automatically uses the recommended profile. The launcher:
 
-1. Checks Docker CLI, Docker daemon, Docker Compose, `.env`, ports, disk space, and NVIDIA GPU support.
-2. Selects the GPU profile when the host GPU, Docker NVIDIA runtime, and GPU Compose override are available.
-3. Starts the selected Compose profile and verifies the actual worker runtime.
-4. Waits for backend `/health`, frontend `/upload`, worker, and Redis.
-5. Opens `http://localhost:3000/upload` with the matching transcription settings selected.
+1. Checks the Docker CLI and current daemon state.
+2. Starts an installed Docker Desktop when needed and waits up to 180 seconds for `docker info`.
+3. Checks Docker Compose, `.env`, ports, disk space, and NVIDIA GPU support.
+4. Selects the GPU profile when the host GPU, Docker NVIDIA runtime, and GPU Compose override are available.
+5. Starts the selected Compose profile and verifies the actual worker runtime.
+6. Waits for backend `/health`, frontend `/upload`, worker, and Redis.
+7. Opens `http://localhost:3000/upload` with the matching transcription settings selected.
 
 Profiles:
 
 ```text
 GPU recommended: turbo / ja / cuda / float16
-CPU compatible:  base / auto / cpu / auto
+CPU compatible:  base / ja / cpu / auto
 ```
 
 In automatic mode, failed GPU host/runtime preflight selects CPU and displays the reason.
@@ -45,7 +49,7 @@ docker compose up -d --build
 
 ## Buttons
 
-- `推奨設定で起動`: auto-select the verified GPU profile, or use CPU with a visible reason.
+- `推奨設定で起動`: retry automatic startup and select the verified GPU profile, or use CPU with a visible reason.
 - `CPU互換設定で起動`: start the CPU-compatible profile explicitly.
 - `GPU必須で起動`: require the GPU profile and stop when CUDA verification fails.
 - `再ビルドして起動`: rebuild images, then start the recommended profile.
@@ -69,7 +73,8 @@ When the key is missing, low-cost mode remains available. Configure the key in
 ## Errors
 
 - `Docker CLIが見つかりません`: install Docker Desktop and restart Windows Terminal.
-- `Docker daemonへ接続できません`: start Docker Desktop and wait until it reports that the engine is running.
+- `Docker Desktopを自動起動できませんでした`: verify that Docker Desktop is installed. The launcher never installs or resets Docker Desktop.
+- `Docker daemonの準備がtimeout`: check Docker Desktop for an agreement prompt, WSL update, or Windows restart request.
 - `GPU必須profileの起動前確認に失敗`: verify the NVIDIA driver, WSL2 GPU support, Docker NVIDIA runtime, and `docker-compose.gpu.yml`; use CPU-compatible start if GPU is not required.
 - `GPU workerのCUDA確認に失敗`: inspect Docker logs. Automatic recommended start may use CPU and shows the fallback reason; explicit GPU start remains stopped.
 - `port 3000/6379/8000`: stop the conflicting process, then refresh.
@@ -100,8 +105,8 @@ The development Windows 11 system separately passed the NVIDIA runtime path with
 
 A first-run test combining a clean Windows installation and NVIDIA GPU was not performed.
 The release accepts this as a documented limitation because the clean distribution/CPU path and
-the actual NVIDIA runtime path passed independently. Docker Desktop must be started manually after
-Windows restart; the launcher detects and explains a stopped Docker daemon.
+the actual NVIDIA runtime path passed independently. The desktop entrypoint now starts Docker
+Desktop automatically after Windows restart when the daemon is stopped.
 
 Installer packaging, bundled Python, Docker Desktop installation, and automatic updates remain out
-of scope for v1.2.0.
+of scope. Docker Desktop must already be installed.

@@ -44,5 +44,8 @@ jobs:
       - name: Typecheck frontend
         run: npm --workspace frontend run typecheck
 
+      - name: Test overlay fit contract
+        run: npm --workspace frontend run test:overlay-fit
+
       - name: Build frontend
         run: npm --workspace frontend run build

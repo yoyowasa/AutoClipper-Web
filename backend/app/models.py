@@ -51,6 +51,19 @@ class Job(Base):
     exports: Mapped[list["ExportItem"]] = relationship(back_populates="job")
 
 
+class AppPreference(Base):
+    __tablename__ = "app_preferences"
+
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=utc_now,
+        onupdate=utc_now,
+        nullable=False,
+    )
+
+
 class ExportItem(Base):
     __tablename__ = "export_items"
 
@@ -69,3 +82,18 @@ class ExportItem(Base):
 
     job: Mapped[Job] = relationship(back_populates="exports")
     video: Mapped[Video] = relationship(back_populates="exports")
+
+
+class SourceClipUsage(Base):
+    """Small, permanent source-time ledger; deliberately independent of job cleanup."""
+
+    __tablename__ = "source_clip_usage"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    job_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    clip_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    start: Mapped[float] = mapped_column(Float, nullable=False)
+    end: Mapped[float] = mapped_column(Float, nullable=False)
+    source_duration: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

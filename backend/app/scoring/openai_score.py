@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from app.audio.volume_features import AudioFeatures
 from app.candidates.merge_boundaries import Candidate
+from app.scoring.clip_preferences import CandidateClipPreference
 from app.scoring.score_schema import ClipCandidateScore, response_format_json_schema
 from app.video.black_screen import VisualQuality
 
@@ -24,7 +25,15 @@ TRANSIENT_ERROR_NAMES = {
 
 SYSTEM_PROMPT = (
     "Score clip candidates for a fully automated clipping app. "
-    "Return only the requested structured JSON. Do not ask for video files."
+    "Judge whether each candidate matches the supplied content preference and works as a standalone clip. "
+    "Normal clips should cover a major stream topic as a self-contained question, explanation, concrete example, "
+    "and conclusion when those elements exist; penalize ranges dominated by name reading, repeated thanks, or "
+    "superchat reading without substantive explanation. Shorts should contain a strong opening reaction, surprise, "
+    "punchline, or concise complete point; a comment or superchat may be the trigger for a good Short. "
+    "Reject generic greetings, endings, and promotional filler when the "
+    "preference asks for their exclusion. When heatmap_features are present, their value is a relative 0-to-1 "
+    "popularity signal within this video, not a view count. Use it only as supporting evidence and never as the "
+    "sole reason to select a clip. Return only the requested structured JSON. Do not ask for video files."
 )
 
 
@@ -150,6 +159,7 @@ def build_score_input_payload(
     candidate: Candidate,
     audio_features: AudioFeatures | dict[str, Any] | None = None,
     visual_features: VisualQuality | dict[str, Any] | None = None,
+    selection_preference: CandidateClipPreference | dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "candidate": {
@@ -164,6 +174,18 @@ def build_score_input_payload(
         "audio_features": _model_dump_or_none(audio_features),
         "visual_features": _model_dump_or_none(visual_features),
     }
+    if candidate.heatmap_value is not None:
+        payload["heatmap_features"] = {
+            "value": candidate.heatmap_value,
+            "overlap_seconds": candidate.heatmap_overlap_seconds,
+            "score_bonus": candidate.heatmap_score,
+            "value_semantics": "relative_in_video_0_to_1_not_view_count",
+            "supporting_signal_only": True,
+        }
+    if isinstance(selection_preference, CandidateClipPreference):
+        payload["selection_preference"] = selection_preference.to_payload()
+    elif isinstance(selection_preference, dict):
+        payload["selection_preference"] = selection_preference
     return payload
 
 
@@ -171,9 +193,24 @@ def candidate_score_cache_key(
     candidate: Candidate,
     audio_features: AudioFeatures | dict[str, Any] | None = None,
     visual_features: VisualQuality | dict[str, Any] | None = None,
+    selection_preference: CandidateClipPreference | dict[str, Any] | None = None,
 ) -> str:
-    payload = build_score_input_payload(candidate, audio_features, visual_features)
-    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload = build_score_input_payload(
+        candidate,
+        audio_features,
+        visual_features,
+        selection_preference,
+    )
+    cache_payload = {
+        "system_prompt": SYSTEM_PROMPT,
+        "input": payload,
+    }
+    encoded = json.dumps(
+        cache_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return sha256(encoded.encode("utf-8")).hexdigest()
 
 
@@ -234,6 +271,7 @@ class OpenAICandidateScorer:
         max_retries: int = 3,
         retry_backoff_seconds: float = 0.25,
         sleep_func: Callable[[float], None] = time.sleep,
+        selection_preferences: dict[str, CandidateClipPreference] | None = None,
     ) -> None:
         self._client = client
         self.model = model
@@ -241,6 +279,7 @@ class OpenAICandidateScorer:
         self.max_retries = max_retries
         self.retry_backoff_seconds = retry_backoff_seconds
         self.sleep_func = sleep_func
+        self.selection_preferences = selection_preferences or {}
         self.stats = OpenAIScoringStats(model=model)
 
     @property
@@ -255,13 +294,24 @@ class OpenAICandidateScorer:
         audio_features: AudioFeatures | dict[str, Any] | None = None,
         visual_features: VisualQuality | dict[str, Any] | None = None,
     ) -> ClipCandidateScore:
-        cache_key = candidate_score_cache_key(candidate, audio_features, visual_features)
+        preference = self.selection_preferences.get(candidate.type)
+        cache_key = candidate_score_cache_key(
+            candidate,
+            audio_features,
+            visual_features,
+            preference,
+        )
         cached = self.cache.get(cache_key)
         if cached is not None:
             self.stats.cache_hits += 1
             return cached
 
-        payload = build_score_input_payload(candidate, audio_features, visual_features)
+        payload = build_score_input_payload(
+            candidate,
+            audio_features,
+            visual_features,
+            preference,
+        )
         self.stats.candidates_sent_to_openai += 1
         try:
             score = self._score_with_retries(payload)

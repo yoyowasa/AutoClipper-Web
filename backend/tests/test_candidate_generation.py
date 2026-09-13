@@ -130,6 +130,24 @@ def test_generate_normal_candidates_can_use_shorter_configured_duration() -> Non
     assert all(candidate.type == "normal" for candidate in configured_candidates)
 
 
+def test_exact_duration_constraint_has_last_resort_candidates() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=0.0, end=30.0, text="first continuous sentence"),
+        TranscriptSegment(start=35.0, end=80.0, text="second continuous sentence"),
+    ]
+
+    result = generate_short_candidates_with_summary(
+        transcript_segments=transcript_segments,
+        scene_segments=[SceneSegment(start=0.0, end=100.0)],
+        silence_segments=[],
+        settings={"shortMinDuration": 20, "shortMaxDuration": 20},
+    )
+
+    assert result.candidates
+    assert all(candidate.duration == 20.0 for candidate in result.candidates)
+    assert result.summary["exact_duration_fallback_candidates_considered"] > 0
+
+
 def test_candidate_generation_summary_records_configured_duration_range() -> None:
     transcript_segments = [
         TranscriptSegment(
@@ -155,6 +173,7 @@ def test_candidate_generation_summary_records_configured_duration_range() -> Non
         "min_duration": 20.0,
         "max_duration": 60.0,
         "step_seconds": 10.0,
+        "target_step_applied": False,
         "speech_boundary_tolerance": 6.0,
     }
     merged = merge_candidate_generation_summaries(
@@ -163,6 +182,8 @@ def test_candidate_generation_summary_records_configured_duration_range() -> Non
         transcript_segment_count=1,
     )
     assert merged["configured_duration_ranges"]["normal"]["min_duration"] == 20.0
+    assert merged["duration_band_counts_by_type"]["normal"] == {"20-60": 1}
+    assert merged["duration_bands_by_type"]["normal"][0]["considered"] == 1
 
 
 def test_candidate_limit_is_spread_across_timeline() -> None:
@@ -190,6 +211,113 @@ def test_candidate_limit_is_spread_across_timeline() -> None:
     assert len(candidates) == 30
     assert max(candidate.start for candidate in candidates) > 1200
     assert min(candidate.start for candidate in candidates) == 0.0
+
+
+def test_bounded_normal_generation_preserves_each_duration_band() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=float(start), end=float(start + 20), text=f"topic {start}")
+        for start in range(0, 600, 30)
+    ]
+    silence_segments = [
+        SilenceSegment(start=float(start + 20), end=float(start + 30), duration=10.0)
+        for start in range(0, 570, 30)
+    ]
+
+    result = generate_normal_candidates_with_summary(
+        transcript_segments=transcript_segments,
+        scene_segments=[SceneSegment(start=0.0, end=600.0)],
+        silence_segments=silence_segments,
+        settings={
+            "normalMinDuration": 90,
+            "normalMaxDuration": 600,
+            "maxCandidates": 20,
+            "maxCandidatesPerTimeBucket": 20,
+            "candidateTimeBucketSeconds": 600,
+        },
+    )
+
+    candidates = result.candidates
+    assert candidates
+    assert any(90 <= candidate.duration < 180 for candidate in candidates)
+    assert any(180 <= candidate.duration < 300 for candidate in candidates)
+    assert any(300 <= candidate.duration <= 600 for candidate in candidates)
+    assert result.summary["duration_band_counts"] == {
+        "90-180": 7,
+        "180-300": 7,
+        "300-600": 6,
+    }
+    assert all(item["considered"] > 0 for item in result.summary["duration_bands"])
+    assert all(item["kept"] > 0 for item in result.summary["duration_bands"])
+
+
+def test_candidate_generation_uses_semantic_boundaries_not_duration_steps() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=0.0, end=37.0, text="導入です。"),
+        TranscriptSegment(start=41.0, end=96.0, text="なぜこの作品は美しいのでしょうか？"),
+        TranscriptSegment(start=98.0, end=173.0, text="理由を具体例から説明します。"),
+        TranscriptSegment(start=177.0, end=264.0, text="ここまでが一つ目の結論です。"),
+        TranscriptSegment(start=270.0, end=389.0, text="次に別の観点を説明します。"),
+        TranscriptSegment(start=394.0, end=521.0, text="最後に全体の結論をまとめます。"),
+    ]
+    silence_segments = [
+        SilenceSegment(start=37.0, end=41.0, duration=4.0),
+        SilenceSegment(start=173.0, end=177.0, duration=4.0),
+        SilenceSegment(start=264.0, end=270.0, duration=6.0),
+        SilenceSegment(start=389.0, end=394.0, duration=5.0),
+    ]
+    base_settings = {
+        "normalMinDuration": 90,
+        "normalMaxDuration": 600,
+        "maxCandidates": 100,
+    }
+
+    step_30 = generate_normal_candidates(
+        transcript_segments,
+        [SceneSegment(start=0.0, end=521.0)],
+        silence_segments,
+        settings={**base_settings, "normalStepSeconds": 30},
+    )
+    step_47 = generate_normal_candidates(
+        transcript_segments,
+        [SceneSegment(start=0.0, end=521.0)],
+        silence_segments,
+        settings={**base_settings, "normalStepSeconds": 47},
+    )
+
+    assert [(item.start, item.end) for item in step_30] == [
+        (item.start, item.end) for item in step_47
+    ]
+    semantic_endpoints = {37.0, 96.0, 173.0, 264.0, 389.0, 521.0}
+    assert step_30
+    assert all(candidate.end in semantic_endpoints for candidate in step_30)
+
+
+def test_local_candidates_receive_stable_semantic_topic_keys() -> None:
+    transcript_segments = [
+        TranscriptSegment(start=0.0, end=20.0, text="前置きです。"),
+        TranscriptSegment(start=25.0, end=40.0, text="この作品はなぜ美しいのですか？"),
+        TranscriptSegment(start=40.0, end=90.0, text="理由を具体例から説明します"),
+        TranscriptSegment(start=90.0, end=130.0, text="これが最初の結論です。"),
+        TranscriptSegment(start=140.0, end=160.0, text="次に作者について話します。"),
+        TranscriptSegment(start=160.0, end=210.0, text="背景を順に説明します"),
+        TranscriptSegment(start=210.0, end=250.0, text="これが二つ目の結論です。"),
+    ]
+    silence_segments = [
+        SilenceSegment(start=20.0, end=25.0, duration=5.0),
+        SilenceSegment(start=130.0, end=140.0, duration=10.0),
+    ]
+
+    candidates = generate_normal_candidates(
+        transcript_segments,
+        [SceneSegment(start=0.0, end=250.0)],
+        silence_segments,
+        settings={"normalMinDuration": 90, "normalMaxDuration": 180},
+    )
+
+    assert candidates
+    assert all(candidate.topic_key for candidate in candidates)
+    assert any(candidate.start == 25.0 and candidate.topic_key == "topic_25000" for candidate in candidates)
+    assert any(candidate.start == 140.0 and candidate.topic_key == "topic_140000" for candidate in candidates)
 
 
 def test_bounded_generation_handles_2000_segments_without_unbounded_output() -> None:
@@ -232,6 +360,9 @@ def test_bounded_generation_handles_2000_segments_without_unbounded_output() -> 
     assert all(candidate.transcript_char_count is not None for candidate in result.candidates)
     assert all(candidate.speech_seconds is not None for candidate in result.candidates)
     assert all(candidate.silence_ratio is not None for candidate in result.candidates)
+    assert set(result.summary["duration_band_counts"]) == {"20-35", "35-50", "50-75"}
+    assert all(count > 0 for count in result.summary["duration_band_counts"].values())
+    assert all(item["considered"] > 0 for item in result.summary["duration_bands"])
 
 
 def test_bounded_generation_respects_raw_candidate_cap() -> None:
@@ -263,6 +394,8 @@ def test_bounded_generation_respects_raw_candidate_cap() -> None:
     assert result.summary["stopped_due_to_raw_candidate_cap"] is False
     assert result.summary["candidates_dropped_due_to_cap"] >= 1
     assert len(result.candidates) <= 100
+    assert any(400 <= candidate.start < 600 for candidate in result.candidates)
+    assert any(candidate.start >= 800 for candidate in result.candidates)
 
 
 def test_bounded_generation_memory_guard_raises_clear_error() -> None:

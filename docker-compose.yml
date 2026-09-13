@@ -4,17 +4,27 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      BACKEND_CORS_ORIGINS: http://localhost:3000
+      BACKEND_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
       DATABASE_URL: sqlite:////app/storage/autoclipper.db
       REDIS_URL: redis://redis:6379/0
       RQ_QUEUE_NAME: autoclipper
       STORAGE_ROOT: /app/storage
+      SOURCE_LIBRARY_ROOT: /app/youtube
+      ASS_FONTS_DIR: /app/fonts
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-8589934592}
+      MAX_HEATMAP_SIDECAR_SIZE_BYTES: ${MAX_HEATMAP_SIDECAR_SIZE_BYTES:-5242880}
+      STORAGE_LIMIT_BYTES: ${STORAGE_LIMIT_BYTES:-53687091200}
+      STORAGE_MIN_FREE_PERCENT: ${STORAGE_MIN_FREE_PERCENT:-20}
+      STORAGE_TERMINAL_RETENTION_DAYS: ${STORAGE_TERMINAL_RETENTION_DAYS:-7}
+      STORAGE_ORPHAN_RETENTION_HOURS: ${STORAGE_ORPHAN_RETENTION_HOURS:-24}
+      STORAGE_CLEANUP_ON_UPLOAD: ${STORAGE_CLEANUP_ON_UPLOAD:-true}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./storage:/app/storage
+      - ./youtube:/app/youtube:ro
+      - ./frontend/public/fonts:/app/fonts:ro
     depends_on:
       - redis
     healthcheck:
@@ -24,6 +34,7 @@ services:
       retries: 5
 
   worker:
+    image: ${COMPOSE_PROJECT_NAME:-autoclipperweb}-worker-cpu
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -33,11 +44,14 @@ services:
       REDIS_URL: redis://redis:6379/0
       RQ_QUEUE_NAME: autoclipper
       STORAGE_ROOT: /app/storage
+      ASS_FONTS_DIR: /app/fonts
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-8589934592}
+      MAX_HEATMAP_SIDECAR_SIZE_BYTES: ${MAX_HEATMAP_SIDECAR_SIZE_BYTES:-5242880}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       AUTOCLIPPER_RUNTIME_PROFILE: cpu
     volumes:
       - ./storage:/app/storage
+      - ./frontend/public/fonts:/app/fonts:ro
     depends_on:
       - redis
 
@@ -46,17 +60,20 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     environment:
+      BACKEND_INTERNAL_URL: http://backend:8000
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./frontend/public/fonts:/app/frontend/public/fonts:ro
     depends_on:
       - backend
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis_data:/data

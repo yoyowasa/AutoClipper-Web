@@ -1,4 +1,5 @@
 import json
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from app.scoring.openai_score import (
     score_candidate_batch,
     score_candidate_with_openai,
 )
+from app.scoring.clip_preferences import CandidateClipPreference
 from app.scoring.score_schema import (
     ClipCandidateScore,
     clip_candidate_score_json_schema,
@@ -138,6 +140,76 @@ def test_build_score_input_payload_sends_transcript_and_features_only() -> None:
     assert "video_path" not in encoded
     assert "stored_path" not in encoded
     assert "mp4" not in encoded.lower()
+
+
+def test_score_payload_includes_type_specific_selection_preference() -> None:
+    preference = CandidateClipPreference(
+        preset="important",
+        guidance="休んだ理由と復帰後の予定",
+        exclude_intro_outro=True,
+        exclude_promotional_content=True,
+    )
+    payload = build_score_input_payload(
+        make_candidate(),
+        selection_preference=preference,
+    )
+
+    assert payload["selection_preference"] == {
+        "preset": "important",
+        "guidance": "休んだ理由と復帰後の予定",
+        "exclude_intro_outro": True,
+        "exclude_promotional_content": True,
+    }
+
+
+def test_score_payload_labels_heatmap_as_relative_supporting_signal() -> None:
+    candidate = make_candidate().model_copy(
+        update={
+            "heatmap_value": 0.82,
+            "heatmap_overlap_seconds": 25.0,
+            "heatmap_score": 8.2,
+        }
+    )
+
+    payload = build_score_input_payload(candidate)
+
+    assert payload["heatmap_features"] == {
+        "value": 0.82,
+        "overlap_seconds": 25.0,
+        "score_bonus": 8.2,
+        "value_semantics": "relative_in_video_0_to_1_not_view_count",
+        "supporting_signal_only": True,
+    }
+    assert candidate_score_cache_key(candidate) != candidate_score_cache_key(make_candidate())
+
+
+def test_score_cache_key_includes_system_prompt_context() -> None:
+    candidate = make_candidate()
+    legacy_payload = build_score_input_payload(candidate)
+    legacy_encoded = json.dumps(
+        legacy_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    legacy_key = sha256(legacy_encoded.encode("utf-8")).hexdigest()
+
+    assert candidate_score_cache_key(candidate) != legacy_key
+
+
+def test_score_cache_key_changes_with_selection_preference() -> None:
+    candidate = make_candidate()
+
+    automatic = candidate_score_cache_key(candidate)
+    guided = candidate_score_cache_key(
+        candidate,
+        selection_preference=CandidateClipPreference(
+            preset="funny",
+            guidance="笑えるリアクション",
+        ),
+    )
+
+    assert automatic != guided
 
 
 def test_mocked_openai_score_updates_candidate() -> None:

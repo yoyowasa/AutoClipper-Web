@@ -1,5 +1,6 @@
 import difflib
 import re
+import unicodedata
 from typing import Sequence
 
 from app.candidates.merge_boundaries import Candidate
@@ -18,7 +19,8 @@ def time_overlap_ratio(left: Candidate, right: Candidate) -> float:
 
 
 def normalize_transcript(text: str) -> str:
-    tokens = re.findall(r"[A-Za-z0-9']+", text.lower())
+    text = unicodedata.normalize("NFKC", text)
+    tokens = re.findall(r"[A-Za-z0-9']+", unicodedata.normalize("NFKC", text).lower())
     if tokens:
         return " ".join(tokens)
     return re.sub(r"\s+", "", text).lower()

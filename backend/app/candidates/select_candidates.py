@@ -20,6 +20,7 @@ from app.scoring.quality_gate import (
 
 SELECTED_CLIPS_FILENAME = "selected_clips.json"
 SelectionPolicy = Literal["fill_requested", "strict_quality"]
+NORMAL_TOPIC_MAX_OVERLAP_RATIO = 0.5
 
 
 class CandidateRejection(BaseModel):
@@ -35,7 +36,7 @@ class CandidateSelection(BaseModel):
     normal_clips: list[Candidate] = Field(default_factory=list, alias="normalClips")
     shorts: list[Candidate] = Field(default_factory=list)
     rejected_candidates: list[CandidateRejection] = Field(default_factory=list, alias="rejectedCandidates")
-    selection_policy: SelectionPolicy = Field(default="fill_requested", alias="selectionPolicy")
+    selection_policy: SelectionPolicy = Field(default="strict_quality", alias="selectionPolicy")
     requested_normal_count: int = Field(default=0, alias="requestedNormalCount")
     requested_short_count: int = Field(default=0, alias="requestedShortCount")
     hard_gate_passed_count: int = Field(default=0, alias="hardGatePassedCount")
@@ -61,7 +62,7 @@ class CandidateSelectionSettings(BaseModel):
     short_count: int = Field(default=3, ge=0)
     max_overlap_ratio: float = Field(default=0.8, ge=0, le=1)
     cross_type_overlap_dedupe: bool = False
-    selection_policy: SelectionPolicy = "fill_requested"
+    selection_policy: SelectionPolicy = "strict_quality"
     quality_gate: QualityGateSettings = Field(default_factory=QualityGateSettings)
 
 
@@ -124,11 +125,13 @@ def parse_selection_settings(
     return CandidateSelectionSettings(**normalized)
 
 
-def _rank_key(candidate: Candidate) -> tuple[float, int, float, int, float]:
+def _rank_key(candidate: Candidate) -> tuple[float, float, int, float, float, int, float]:
     return (
+        candidate.heatmap_direct_score if candidate.heatmap_direct_score is not None else -1.0,
         effective_final_score(candidate),
         1 if candidate.should_use is True else 0,
         candidate.rule_score if candidate.rule_score is not None else 0.0,
+        -candidate.duration,
         len(candidate.transcript_text),
         -candidate.start,
     )
@@ -192,6 +195,42 @@ def _overlap_rejection(
     return None
 
 
+def _same_type_overlap_threshold(
+    candidate_type: CandidateType,
+    configured_threshold: float,
+) -> float:
+    """Keep normal clips from representing the same explanatory passage."""
+
+    if candidate_type == "normal":
+        return min(configured_threshold, NORMAL_TOPIC_MAX_OVERLAP_RATIO)
+    return configured_threshold
+
+
+def _normal_topic_rejection(
+    candidate: Candidate,
+    selected: Sequence[Candidate],
+) -> CandidateRejection | None:
+    if candidate.type != "normal" or not candidate.topic_key:
+        return None
+    topic_key = candidate.topic_key.casefold()
+    for selected_candidate in selected:
+        if (
+            selected_candidate.type == "normal"
+            and selected_candidate.topic_key
+            and selected_candidate.topic_key.casefold() == topic_key
+        ):
+            return CandidateRejection(
+                candidate_id=candidate.id,
+                type=candidate.type,
+                reasons=["duplicate_topic"],
+                details={
+                    "topicKey": candidate.topic_key,
+                    "duplicateOf": selected_candidate.id,
+                },
+            )
+    return None
+
+
 def _max_overlap_ratio(candidate: Candidate, selected: Sequence[Candidate]) -> float:
     if not selected:
         return 0.0
@@ -232,7 +271,11 @@ def _cluster_diverse_order(candidates: Sequence[Candidate], cluster_ids: dict[st
 
     cluster_order = sorted(
         grouped,
-        key=lambda cluster: _rank_key(grouped[cluster][0]) if grouped[cluster] else (0.0, 0, 0.0, 0, 0.0),
+        key=lambda cluster: (
+            _rank_key(grouped[cluster][0])
+            if grouped[cluster]
+            else (0.0, 0, 0.0, 0.0, 0, 0.0)
+        ),
         reverse=True,
     )
     ordered: list[Candidate] = []
@@ -257,16 +300,29 @@ def _append_selected_from_pool(
     overlap_threshold: float | None = None,
     overlap_relaxed: bool = False,
 ) -> None:
-    threshold = settings.max_overlap_ratio if overlap_threshold is None else overlap_threshold
+    configured_threshold = (
+        settings.max_overlap_ratio if overlap_threshold is None else overlap_threshold
+    )
     for candidate in pool:
         if len(selected) >= requested_count:
             return
         if candidate.id in selected_ids:
             continue
+        topic_rejection = _normal_topic_rejection(candidate, selected)
+        if topic_rejection is not None:
+            overlap_rejections_by_id[candidate.id] = topic_rejection
+            continue
         overlap_rejection = _overlap_rejection(
             candidate,
             selected=selected,
-            max_overlap_ratio=threshold,
+            max_overlap_ratio=(
+                configured_threshold
+                if overlap_relaxed
+                else _same_type_overlap_threshold(
+                    candidate.type,
+                    configured_threshold,
+                )
+            ),
         )
         if overlap_rejection is not None:
             overlap_rejections_by_id[candidate.id] = overlap_rejection
@@ -308,10 +364,17 @@ def _record_final_overlap_rejections(
     for candidate in candidates:
         if candidate.id in selected_ids:
             continue
+        topic_rejection = _normal_topic_rejection(candidate, selected)
+        if topic_rejection is not None:
+            overlap_rejections_by_id.setdefault(candidate.id, topic_rejection)
+            continue
         overlap_rejection = _overlap_rejection(
             candidate,
             selected=selected,
-            max_overlap_ratio=settings.max_overlap_ratio,
+            max_overlap_ratio=_same_type_overlap_threshold(
+                candidate.type,
+                settings.max_overlap_ratio,
+            ),
         )
         if overlap_rejection is not None:
             overlap_rejections_by_id.setdefault(candidate.id, overlap_rejection)
@@ -366,10 +429,18 @@ def _select_strict_for_type(
             continue
         hard_gate_passed_count += 1
 
+        topic_rejection = _normal_topic_rejection(candidate, selected)
+        if topic_rejection is not None:
+            overlap_rejections_by_id[candidate.id] = topic_rejection
+            continue
+
         overlap_rejection = _overlap_rejection(
             candidate,
             selected=selected,
-            max_overlap_ratio=settings.max_overlap_ratio,
+            max_overlap_ratio=_same_type_overlap_threshold(
+                candidate.type,
+                settings.max_overlap_ratio,
+            ),
         )
         if overlap_rejection is not None:
             overlap_rejections_by_id[candidate.id] = overlap_rejection
@@ -688,6 +759,77 @@ def select_candidates(
 
 def selected_clips_to_jsonable(selection: CandidateSelection) -> dict[str, Any]:
     return selection.model_dump(by_alias=True, mode="json")
+
+
+def convert_selected_clip_to_normal(
+    selection: CandidateSelection,
+    clip_id: str,
+) -> CandidateSelection:
+    matching_candidates = [
+        candidate
+        for candidate in [*selection.normal_clips, *selection.shorts]
+        if candidate.id == clip_id
+    ]
+    if len(matching_candidates) != 1:
+        raise ValueError("selected clip data must contain exactly one matching candidate")
+
+    source = matching_candidates[0]
+    converted = source.model_copy(
+        update={
+            "type": "normal",
+            "hook_text": None,
+            "hook_duration_seconds": None,
+            "hook_scene_start": None,
+            "hook_scene_end": None,
+        }
+    )
+    if source.type == "normal":
+        normal_clips = [
+            converted if candidate.id == clip_id else candidate
+            for candidate in selection.normal_clips
+        ]
+    else:
+        normal_clips = [*selection.normal_clips, converted]
+    shorts = [candidate for candidate in selection.shorts if candidate.id != clip_id]
+    unfilled_requested_counts = dict(selection.unfilled_requested_counts)
+    unfilled_requested_counts.update({"normal": 0, "short": 0})
+
+    return selection.model_copy(
+        update={
+            "normal_clips": normal_clips,
+            "shorts": shorts,
+            "requested_normal_count": len(normal_clips),
+            "requested_short_count": len(shorts),
+            "unfilled_requested_counts": unfilled_requested_counts,
+        }
+    )
+
+
+def convert_selected_clip_to_short(
+    selection: CandidateSelection,
+    clip_id: str,
+) -> CandidateSelection:
+    matching = [c for c in [*selection.normal_clips, *selection.shorts] if c.id == clip_id]
+    if len(matching) != 1:
+        raise ValueError("selected clip data must contain exactly one matching candidate")
+    if matching[0].type == "short":
+        return selection
+    converted = matching[0].model_copy(update={
+        "type": "short",
+        "hook_text": None,
+        "hook_duration_seconds": None,
+        "hook_scene_start": None,
+        "hook_scene_end": None,
+    })
+    normal_clips = [c for c in selection.normal_clips if c.id != clip_id]
+    shorts = [*selection.shorts, converted]
+    return selection.model_copy(update={
+        "normal_clips": normal_clips,
+        "shorts": shorts,
+        "requested_normal_count": len(normal_clips),
+        "requested_short_count": len(shorts),
+        "unfilled_requested_counts": {**selection.unfilled_requested_counts, "normal": 0, "short": 0},
+    })
 
 
 def write_selected_clips(selection: CandidateSelection, output_path: str | Path) -> Path:

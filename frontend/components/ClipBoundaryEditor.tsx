@@ -1,0 +1,318 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+import {
+  clampEndBoundary,
+  clampStartBoundary,
+  combineBoundaryTime,
+  splitBoundaryTime,
+  type BoundaryTimeParts
+} from "../lib/clipBoundaryTime";
+import type { ClipPlanClip } from "../lib/types";
+
+type ClipBoundaryEditorProps = {
+  clip: ClipPlanClip;
+  sourceDuration: number | null;
+  disabled?: boolean;
+  saving?: boolean;
+  onDraftChange?: (draft: ClipBoundaryDraft | null) => void;
+  onSave: (start: number, end: number) => void;
+};
+
+export type ClipBoundaryDraft = {
+  clipId: string;
+  start: number;
+  end: number;
+};
+
+const QUICK_ADJUSTMENTS = [1, 5, 15, 30] as const;
+
+function formatTime(value: number): string {
+  const safe = Math.max(0, value);
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const seconds = safe % 60;
+  const secondText = seconds.toFixed(1).padStart(4, "0");
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${secondText}`
+    : `${minutes}:${secondText}`;
+}
+
+function BoundaryTimeInput({
+  disabled,
+  label,
+  parts,
+  onChange
+}: {
+  disabled: boolean;
+  label: string;
+  parts: BoundaryTimeParts;
+  onChange: (parts: BoundaryTimeParts) => void;
+}) {
+  return (
+    <div>
+      <p className="text-xs font-semibold text-neutral-700">{label}</p>
+      <div className="mt-1 grid grid-cols-[minmax(0,0.75fr)_auto_minmax(0,0.75fr)_auto_minmax(0,1fr)_auto] items-center gap-1.5">
+        <input
+          aria-label={`${label} 時`}
+          className="min-h-9 min-w-0 border border-neutral-300 px-2 text-sm tabular-nums"
+          disabled={disabled}
+          min={0}
+          step={1}
+          type="number"
+          value={parts.hours}
+          onChange={(event) =>
+            onChange({ ...parts, hours: event.target.value })
+          }
+        />
+        <span className="text-xs text-neutral-500">時</span>
+        <input
+          aria-label={`${label} 分`}
+          className="min-h-9 min-w-0 border border-neutral-300 px-2 text-sm tabular-nums"
+          disabled={disabled}
+          min={0}
+          step={1}
+          type="number"
+          value={parts.minutes}
+          onChange={(event) =>
+            onChange({ ...parts, minutes: event.target.value })
+          }
+        />
+        <span className="text-xs text-neutral-500">分</span>
+        <input
+          aria-label={`${label} 秒`}
+          className="min-h-9 min-w-0 border border-neutral-300 px-2 text-sm tabular-nums"
+          disabled={disabled}
+          max={59.999}
+          min={0}
+          step={0.001}
+          type="number"
+          value={parts.seconds}
+          onChange={(event) =>
+            onChange({ ...parts, seconds: event.target.value })
+          }
+        />
+        <span className="text-xs text-neutral-500">秒</span>
+      </div>
+    </div>
+  );
+}
+
+export function ClipBoundaryEditor({
+  clip,
+  sourceDuration,
+  disabled = false,
+  saving = false,
+  onDraftChange,
+  onSave
+}: ClipBoundaryEditorProps) {
+  const recommendedStart = clip.recommendedStart ?? clip.start;
+  const recommendedEnd = clip.recommendedEnd ?? clip.end;
+  const [startParts, setStartParts] = useState(() => splitBoundaryTime(clip.start));
+  const [endParts, setEndParts] = useState(() => splitBoundaryTime(clip.end));
+  const start = combineBoundaryTime(startParts);
+  const end = combineBoundaryTime(endParts);
+
+  const validation = useMemo(() => {
+    if (start === null || end === null) {
+      return "時・分・秒を正しく入力してください";
+    }
+    if (end <= start) {
+      return "終了は開始より後にしてください";
+    }
+    if (end - start < 1) {
+      return "切り抜き範囲は1秒以上にしてください";
+    }
+    if (sourceDuration !== null && end > sourceDuration + 0.001) {
+      return `元動画の長さ ${formatTime(sourceDuration)} を超えています`;
+    }
+    return null;
+  }, [end, sourceDuration, start]);
+  const changed =
+    start !== null &&
+    end !== null &&
+    (Math.abs(start - clip.start) >= 0.0005 ||
+      Math.abs(end - clip.end) >= 0.0005);
+  const draftDuration =
+    start !== null && end !== null && end > start ? end - start : null;
+
+  useEffect(() => {
+    if (!onDraftChange) {
+      return;
+    }
+    if (start === null || end === null || validation !== null) {
+      onDraftChange(null);
+      return;
+    }
+    onDraftChange({
+      clipId: clip.id,
+      start,
+      end
+    });
+  }, [clip.id, end, onDraftChange, start, validation]);
+
+  function replaceStart(value: number) {
+    setStartParts(splitBoundaryTime(clampStartBoundary(value, end)));
+  }
+
+  function replaceEnd(value: number) {
+    setEndParts(
+      splitBoundaryTime(clampEndBoundary(value, start, sourceDuration))
+    );
+  }
+
+  function resetRecommended() {
+    replaceStart(recommendedStart);
+    replaceEnd(recommendedEnd);
+  }
+
+  return (
+    <section className="border-b border-neutral-300 bg-blue-50 px-5 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2 gap-y-1">
+          <h3 className="shrink-0 text-sm font-semibold text-neutral-950">
+            このclipの開始・終了を調整
+          </h3>
+          <p className="min-w-[260px] flex-1 text-xs leading-4 text-neutral-600">
+            時・分・秒を直接変更するか、開始・終了を前後へ動かします。選ばれた場面は維持され、字幕生成も行いません。
+          </p>
+        </div>
+        {clip.manuallyAdjusted ? (
+          <span className="border border-blue-300 bg-white px-2 py-1 text-xs font-semibold text-blue-800">
+            手動調整済み
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div>
+          <BoundaryTimeInput
+            disabled={disabled}
+            label="開始時刻"
+            parts={startParts}
+            onChange={setStartParts}
+          />
+          <div className="mt-1 flex flex-wrap gap-1">
+            {QUICK_ADJUSTMENTS.map((seconds) => (
+              <div className="flex" key={`start-${seconds}`}>
+                <button
+                  aria-label={`開始を${seconds}秒前へ`}
+                  className="min-h-8 border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
+                  disabled={disabled || start === null || start <= 0}
+                  type="button"
+                  onClick={() => replaceStart((start ?? clip.start) - seconds)}
+                >
+                  ←{seconds}秒
+                </button>
+                <button
+                  aria-label={`開始を${seconds}秒後ろへ`}
+                  className="min-h-8 border-y border-r border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
+                  disabled={
+                    disabled ||
+                    start === null ||
+                    end === null ||
+                    start >= end - 1
+                  }
+                  type="button"
+                  onClick={() => replaceStart((start ?? clip.start) + seconds)}
+                >
+                  {seconds}秒→
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <BoundaryTimeInput
+            disabled={disabled}
+            label="終了時刻"
+            parts={endParts}
+            onChange={setEndParts}
+          />
+          <div className="mt-1 flex flex-wrap gap-1">
+            {QUICK_ADJUSTMENTS.map((seconds) => (
+              <div className="flex" key={`end-${seconds}`}>
+                <button
+                  aria-label={`終了を${seconds}秒前へ`}
+                  className="min-h-8 border border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
+                  disabled={
+                    disabled ||
+                    end === null ||
+                    start === null ||
+                    end <= start + 1
+                  }
+                  type="button"
+                  onClick={() => replaceEnd((end ?? clip.end) - seconds)}
+                >
+                  ←{seconds}秒
+                </button>
+                <button
+                  aria-label={`終了を${seconds}秒後ろへ`}
+                  className="min-h-8 border-y border-r border-neutral-300 bg-white px-2 text-xs font-medium text-neutral-800 disabled:opacity-50"
+                  disabled={
+                    disabled ||
+                    end === null ||
+                    (sourceDuration !== null && end >= sourceDuration)
+                  }
+                  type="button"
+                  onClick={() => replaceEnd((end ?? clip.end) + seconds)}
+                >
+                  {seconds}秒→
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 border-t border-blue-200 pt-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs leading-4 text-neutral-700">
+            <p>
+              自動選定: {formatTime(recommendedStart)} -{" "}
+              {formatTime(recommendedEnd)}
+            </p>
+            <p className="font-semibold text-neutral-950">
+              変更後: {start === null ? "--" : formatTime(start)} -{" "}
+              {end === null ? "--" : formatTime(end)}
+              {draftDuration === null
+                ? ""
+                : `（長さ ${formatTime(draftDuration)}）`}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className="min-h-9 border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-50"
+              disabled={disabled}
+              type="button"
+              onClick={resetRecommended}
+            >
+              自動選定の範囲へ戻す
+            </button>
+            <button
+              className="min-h-9 bg-blue-700 px-4 text-xs font-semibold text-white disabled:bg-neutral-300"
+              disabled={disabled || !changed || validation !== null}
+              type="button"
+              onClick={() => {
+                if (start !== null && end !== null && !validation) {
+                  onSave(start, end);
+                }
+              }}
+            >
+              {saving ? "プレビュー更新中" : "この範囲でプレビュー更新"}
+            </button>
+          </div>
+        </div>
+        {validation ? (
+          <p className="mt-1 text-xs font-medium leading-4 text-red-700">{validation}</p>
+        ) : (
+          <p className="mt-1 text-xs leading-4 text-neutral-500">
+            対象clip 1本の軽量動画だけを作り直します。OpenAI API料金は発生しません。
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}

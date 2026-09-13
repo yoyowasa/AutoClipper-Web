@@ -26,6 +26,7 @@ from app.render.crop_strategy import (
 )
 from app.render.render_short import (
     ShortRenderResult,
+    build_render_short_command,
     render_selected_short_candidates,
     render_short_clip,
 )
@@ -206,6 +207,154 @@ def reliable_person_detection() -> PersonDetection:
     )
 
 
+def test_short_render_command_prepends_hook_scene_before_body() -> None:
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=60.0,
+        end=75.0,
+        layout="center_crop",
+        hook_scene_start=68.0,
+        hook_scene_end=70.0,
+    )
+
+    seek_values = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "-ss"
+    ]
+    duration_values = [
+        command[index + 1]
+        for index, value in enumerate(command)
+        if value == "-t"
+    ]
+    filter_graph = command[command.index("-filter_complex") + 1]
+
+    assert seek_values == ["68.000", "60.000"]
+    assert duration_values == ["2.000", "15.000"]
+    assert "[hook_v][hook_a][main_v][main_a]concat=n=2:v=1:a=1" in filter_graph
+    assert command.count("-i") == 2
+
+
+def test_short_render_command_overlays_top_and_bottom_banners_before_ass(tmp_path: Path) -> None:
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=10.0,
+        end=25.0,
+        subtitle_path="subtitles.ass",
+        layout="center_crop",
+        top_banner_path=top_banner,
+        bottom_banner_path=bottom_banner,
+    )
+
+    input_paths = [command[index + 1] for index, value in enumerate(command) if value == "-i"]
+    filter_graph = command[command.index("-filter_complex") + 1]
+
+    assert input_paths == ["source.mp4", str(top_banner), str(bottom_banner)]
+    assert command.count("-loop") == 2
+    assert command.count("-vf") == 0
+    assert "scale=1080:1200:force_original_aspect_ratio=increase" in filter_graph
+    assert "crop=1080:1200" in filter_graph
+    assert "pad=1080:1920:0:360:color=black" in filter_graph
+    assert "[1:v:0]scale=1080:-2" in filter_graph
+    assert "[2:v:0]scale=1080:-2" in filter_graph
+    assert "overlay=0:0" in filter_graph
+    assert "overlay=0:H-h" in filter_graph
+    assert filter_graph.index("overlay=0:0") < filter_graph.index("overlay=0:H-h")
+    assert filter_graph.index("overlay=0:H-h") < filter_graph.index("ass=")
+
+
+@pytest.mark.parametrize(
+    ("top_enabled", "bottom_enabled", "expected_height", "expected_y"),
+    [
+        (True, False, 1560, 360),
+        (False, True, 1560, 0),
+        (True, True, 1200, 360),
+    ],
+)
+def test_short_render_command_reserves_banner_safe_content_viewport(
+    tmp_path: Path,
+    top_enabled: bool,
+    bottom_enabled: bool,
+    expected_height: int,
+    expected_y: int,
+) -> None:
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=10.0,
+        end=25.0,
+        layout="blur_background",
+        source_width=1920,
+        source_height=1080,
+        top_banner_path=top_banner if top_enabled else None,
+        bottom_banner_path=bottom_banner if bottom_enabled else None,
+    )
+
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert f"scale=1080:{expected_height}:force_original_aspect_ratio=increase" in filter_graph
+    assert f"scale=1080:{expected_height}:force_original_aspect_ratio=decrease" in filter_graph
+    assert f"pad=1080:1920:0:{expected_y}:color=black" in filter_graph
+
+
+def test_short_render_command_without_banners_keeps_full_frame_crop() -> None:
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=10.0,
+        end=25.0,
+        layout="center_crop",
+    )
+
+    video_filter = command[command.index("-vf") + 1]
+    assert "scale=1080:1920:force_original_aspect_ratio=increase" in video_filter
+    assert "crop=1080:1920" in video_filter
+    assert "pad=" not in video_filter
+
+
+def test_short_render_command_overlays_banners_after_hook_concat(tmp_path: Path) -> None:
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+
+    command = build_render_short_command(
+        "source.mp4",
+        "short.mp4",
+        start=60.0,
+        end=75.0,
+        subtitle_path="subtitles.ass",
+        layout="center_crop",
+        hook_scene_start=68.0,
+        hook_scene_end=70.0,
+        top_banner_path=top_banner,
+        bottom_banner_path=bottom_banner,
+    )
+
+    input_paths = [command[index + 1] for index, value in enumerate(command) if value == "-i"]
+    filter_graph = command[command.index("-filter_complex") + 1]
+
+    assert input_paths == ["source.mp4", "source.mp4", str(top_banner), str(bottom_banner)]
+    assert command.count("-loop") == 2
+    assert filter_graph.count("scale=1080:1200:force_original_aspect_ratio=increase") == 2
+    assert filter_graph.count("pad=1080:1920:0:360:color=black") == 2
+    assert "[2:v:0]scale=1080:-2" in filter_graph
+    assert "[3:v:0]scale=1080:-2" in filter_graph
+    assert filter_graph.index("concat=n=2:v=1:a=1") < filter_graph.index("overlay=0:0")
+    assert filter_graph.index("overlay=0:H-h") < filter_graph.index("ass=")
+
+
 def reliable_speaker_detection() -> SpeakerDetection:
     return SpeakerDetection(
         center_x=0.72,
@@ -241,6 +390,50 @@ def test_short_crop_plan_wide_face_group_reliable_speaker_uses_speaker_tracking_
     assert plan.speaker_window_count == 3
     assert plan.speaker_region_confidence == 0.86
     assert plan.speaker_region_box == (0.65, 0.32, 0.79, 0.52)
+
+
+def test_short_crop_plan_wide_face_group_reliable_person_uses_person_tracking_crop() -> None:
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.25, center_y=0.38, width=0.18, height=0.22),
+        FaceDetection(start=0, end=0, center_x=0.75, center_y=0.38, width=0.18, height=0.22),
+    ]
+
+    plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1920,
+        source_height=1080,
+        person_signal=reliable_person_detection(),
+    )
+
+    assert plan.strategy_order[0] == "person_tracking_crop"
+    assert plan.signal_source == "person_detection"
+    assert plan.fallback_reason == "wide_face_group_person_signal"
+
+
+def test_short_crop_plan_wide_face_group_reliable_subject_uses_subject_tracking_crop() -> None:
+    detections = [
+        FaceDetection(start=0, end=0, center_x=0.25, center_y=0.38, width=0.18, height=0.22),
+        FaceDetection(start=0, end=0, center_x=0.75, center_y=0.38, width=0.18, height=0.22),
+    ]
+    subject = SubjectDetection(
+        center_x=0.72,
+        confidence=0.84,
+        stability_score=0.88,
+        sampled_frames=5,
+    )
+
+    plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1920,
+        source_height=1080,
+        subject_signal=subject,
+    )
+
+    assert plan.strategy_order[0] == "subject_tracking_crop"
+    assert plan.signal_source == "motion_edge_saliency"
+    assert plan.fallback_reason == "wide_face_group_subject_signal"
 
 
 def test_short_crop_plan_ambiguous_speaker_signal_uses_blur_background() -> None:
@@ -422,6 +615,21 @@ def test_short_crop_plan_no_face_portrait_keeps_center_crop_fallback() -> None:
     assert plan.fallback_reason == "no_face_detections"
 
 
+def test_short_crop_plan_no_face_banded_portrait_uses_blur_background() -> None:
+    plan = plan_short_crop(
+        "auto",
+        detections=[],
+        source_width=1080,
+        source_height=1920,
+        target_width=1080,
+        target_height=1200,
+    )
+
+    assert plan.strategy_order == ("blur_background", "center_crop")
+    assert plan.signal_source == "full_frame_fallback"
+    assert plan.fallback_reason == "no_face_detections"
+
+
 def test_short_crop_plan_forced_center_crop_keeps_center_first() -> None:
     plan = plan_short_crop("center_crop", detections=[], source_width=1920, source_height=1080)
 
@@ -458,6 +666,195 @@ def test_short_crop_plan_moves_low_face_out_of_subtitle_area_when_possible() -> 
 
     video_filter = build_face_tracking_crop_filter(1080, 2400, plan.face_center)
     assert f"crop=1080:1920:{plan.crop_x}:{plan.crop_y}" in video_filter
+
+
+def test_short_crop_plan_uses_banner_safe_height_for_top_aligned_face() -> None:
+    detections = [
+        FaceDetection(
+            start=0,
+            end=0,
+            center_x=0.5,
+            center_y=0.18,
+            width=0.18,
+            height=0.18,
+        )
+    ]
+
+    plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1080,
+        source_height=1920,
+        target_width=1080,
+        target_height=1200,
+    )
+
+    assert plan.strategy_order[0] == "face_tracking_crop"
+    assert plan.face_center is not None
+    assert plan.crop_y == 0
+    video_filter = build_face_tracking_crop_filter(
+        1080,
+        1920,
+        plan.face_center,
+        target_width=1080,
+        target_height=1200,
+    )
+    assert "crop=1080:1200:0:0" in video_filter
+
+
+def test_render_short_clip_uses_banner_safe_height_for_top_aligned_face(
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "short.mp4"
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+    commands: list[list[str]] = []
+
+    def fake_face_detector(
+        _input_path: str | Path,
+        _start: float,
+        _end: float,
+    ) -> list[FaceDetection]:
+        return [
+            FaceDetection(
+                start=0,
+                end=0,
+                center_x=0.5,
+                center_y=0.18,
+                width=0.18,
+                height=0.18,
+            )
+        ]
+
+    def fake_metadata_probe(_input_path: str | Path) -> VideoMetadata:
+        return VideoMetadata(
+            duration=60.0,
+            width=1080,
+            height=1920,
+            fps=30.0,
+            has_audio=True,
+        )
+
+    def fake_runner(command: list[str]) -> None:
+        commands.append(command)
+        output_path.write_bytes(b"short mp4")
+
+    result = render_short_clip(
+        "input.mp4",
+        output_path,
+        start=0.0,
+        end=30.0,
+        layout="auto",
+        top_banner_path=top_banner,
+        bottom_banner_path=bottom_banner,
+        face_detector=fake_face_detector,
+        metadata_probe=fake_metadata_probe,
+        command_runner=fake_runner,
+    )
+
+    assert result.strategy == "face_tracking_crop"
+    assert len(commands) == 1
+    filter_graph = commands[0][commands[0].index("-filter_complex") + 1]
+    assert "crop=1080:1200:0:0" in filter_graph
+    assert "pad=1080:1920:0:360:color=black" in filter_graph
+
+
+def test_render_short_clip_reports_effective_crop_after_framing(tmp_path: Path) -> None:
+    output_path = tmp_path / "short.mp4"
+    top_banner = tmp_path / "top.png"
+    bottom_banner = tmp_path / "bottom.png"
+    top_banner.write_bytes(b"top banner")
+    bottom_banner.write_bytes(b"bottom banner")
+    commands: list[list[str]] = []
+    detections = [
+        FaceDetection(
+            start=0,
+            end=0,
+            center_x=0.5,
+            center_y=0.18,
+            width=0.18,
+            height=0.18,
+        ),
+        FaceDetection(
+            start=15,
+            end=15,
+            center_x=0.5,
+            center_y=0.18,
+            width=0.18,
+            height=0.18,
+        ),
+        FaceDetection(
+            start=30,
+            end=30,
+            center_x=0.5,
+            center_y=0.18,
+            width=0.18,
+            height=0.18,
+        ),
+    ]
+
+    def fake_face_detector(
+        _input_path: str | Path,
+        _start: float,
+        _end: float,
+    ) -> list[FaceDetection]:
+        return detections
+
+    def fake_metadata_probe(_input_path: str | Path) -> VideoMetadata:
+        return VideoMetadata(
+            duration=60.0,
+            width=1080,
+            height=1920,
+            fps=30.0,
+            has_audio=True,
+        )
+
+    def fake_runner(command: list[str]) -> None:
+        commands.append(command)
+        output_path.write_bytes(b"short mp4")
+
+    result = render_short_clip(
+        "input.mp4",
+        output_path,
+        start=0.0,
+        end=30.0,
+        layout="auto",
+        top_banner_path=top_banner,
+        bottom_banner_path=bottom_banner,
+        framing_offset_x=10.0,
+        framing_offset_y=20.0,
+        framing_zoom=1.2,
+        face_detector=fake_face_detector,
+        metadata_probe=fake_metadata_probe,
+        command_runner=fake_runner,
+    )
+
+    base_plan = plan_short_crop(
+        "auto",
+        detections=detections,
+        source_width=1080,
+        source_height=1920,
+        target_width=1080,
+        target_height=1200,
+    )
+    assert result.strategy == "face_tracking_crop"
+    assert result.crop_x is not None
+    assert result.crop_y is not None
+    assert (result.crop_x, result.crop_y) != (base_plan.crop_x, base_plan.crop_y)
+    assert result.face_box == pytest.approx((0.41, 0.09, 0.59, 0.27))
+    assert result.tracking_evidence is not None
+    assert result.tracking_evidence["strategy"] == "face_tracking_crop"
+    assert result.tracking_evidence["crop"] == {
+        "x": result.crop_x,
+        "y": result.crop_y,
+        "width": 1080,
+        "height": 1200,
+    }
+    assert len(result.tracking_evidence["samples"]) == 3
+    filter_graph = commands[0][commands[0].index("-filter_complex") + 1]
+    assert f"crop=1080:1200:{result.crop_x}:{result.crop_y}" in filter_graph
 
 
 def test_render_short_clip_auto_falls_back_to_center_crop(tmp_path: Path) -> None:
@@ -816,7 +1213,8 @@ def test_subject_estimation_uses_off_center_motion_signal() -> None:
     assert signal.sampled_frames == 4
 
 
-def test_render_selected_short_candidates_creates_exports_visible_in_results(client: TestClient) -> None:
+@pytest.mark.parametrize("custom_banner", [False, True])
+def test_render_selected_short_candidates_creates_exports_visible_in_results(client: TestClient, custom_banner: bool) -> None:
     upload = client.post(
         "/api/videos/upload",
         files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
@@ -837,10 +1235,27 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
         if Path(output_path).name == "short_02.mp4":
             raise RuntimeError("short render failed")
         Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
-        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+        return ShortRenderResult(
+            path=Path(output_path),
+            strategy="face_tracking_crop",
+            face_box=(0.41, 0.09, 0.59, 0.27),
+            tracking_evidence={
+                "schema_version": 1,
+                "strategy": "face_tracking_crop",
+                "samples": [{"start": 0.0, "end": 0.0, "box": [0.41, 0.09, 0.59, 0.27]}],
+            },
+        )
 
     candidates = [
-        make_short("cand_short_1", 0.0, 45.0, "First short", 93.0),
+        make_short("cand_short_1", 0.0, 45.0, "First short", 93.0).model_copy(
+            update={
+                "hook_scene_start": 5.0,
+                "hook_scene_end": 7.0,
+                "framing_offset_x": 15.0,
+                "framing_offset_y": -10.0,
+                "framing_zoom": 1.2,
+            }
+        ),
         make_short("cand_short_fail", 50.0, 95.0, "Broken short", 90.0),
         make_short("cand_short_2", 100.0, 145.0, "Second short", 84.0),
         Candidate(
@@ -861,6 +1276,16 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, created["jobId"])
         assert job is not None
+        expected_top = "short_top_banner.png"
+        if custom_banner:
+            import io
+            from PIL import Image
+            from app.short_banners import store_banner_image
+            image = io.BytesIO()
+            Image.new("RGB", (90, 30), "cyan").save(image, format="PNG")
+            asset_id = store_banner_image(image.getvalue(), storage)
+            job.settings_json = {**job.settings_json, "shortTopBannerAssetId": asset_id}
+            expected_top = f"{asset_id}.png"
 
         result = render_selected_short_candidates(
             db=db,
@@ -875,6 +1300,8 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
             renderer=fake_renderer,
             source_width=1920,
             source_height=1080,
+            short_top_banner_enabled=True,
+            short_bottom_banner_enabled=True,
         )
 
         exports = db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all()
@@ -886,6 +1313,13 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert all(call["subtitle_path"] is not None for call in renderer_calls)
     assert all(call["layout"] == "auto" for call in renderer_calls)
     assert all(call["source_width"] == 1920 for call in renderer_calls)
+    assert renderer_calls[0]["hook_scene_start"] == 5.0
+    assert renderer_calls[0]["hook_scene_end"] == 7.0
+    assert renderer_calls[0]["framing_offset_x"] == 15.0
+    assert renderer_calls[0]["framing_offset_y"] == -10.0
+    assert renderer_calls[0]["framing_zoom"] == 1.2
+    assert all(Path(call["top_banner_path"]).name == expected_top for call in renderer_calls)
+    assert all(Path(call["bottom_banner_path"]).name == "short_bottom_banner.png" for call in renderer_calls)
 
     shorts_dir = storage.outputs / created["jobId"] / "shorts"
     subtitle_dir = storage.outputs / created["jobId"] / "subtitles" / "shorts"
@@ -898,24 +1332,38 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert short_metadata["title"] == "First short"
     assert short_metadata["overlay_title"] == "First short overlay"
     assert short_metadata["title_source"] == "existing"
+    assert short_metadata["duration"] == 47.0
+    assert short_metadata["body_duration"] == 45.0
+    assert short_metadata["hook_scene_start"] == 5.0
+    assert short_metadata["hook_scene_end"] == 7.0
+    assert short_metadata["hook_scene_duration"] == 2.0
+    assert short_metadata["hook_scene_rendered"] is True
+    assert short_metadata["top_banner_rendered"] is True
+    assert short_metadata["bottom_banner_rendered"] is True
     assert "original_start" in short_metadata
     assert "refined_start" in short_metadata
     assert "boundary_refined" in short_metadata
     assert short_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/shorts/short_01.ass")
-    assert short_metadata["crop_strategy"] == "center_crop"
+    assert short_metadata["crop_strategy"] == "face_tracking_crop"
     assert "crop_signal_source" in short_metadata
     assert "crop_fallback_reason" in short_metadata
     assert "crop_sampled_frames" in short_metadata
     assert "crop_subject_x" in short_metadata
     assert "crop_stability_score" in short_metadata
+    assert short_metadata["framing_offset_x"] == 15.0
+    assert short_metadata["framing_offset_y"] == -10.0
+    assert short_metadata["framing_zoom"] == 1.2
     assert "person_detection_count" in short_metadata
     assert "person_detection_confidence" in short_metadata
     assert "person_box" in short_metadata
+    assert short_metadata["face_box"] == pytest.approx([0.41, 0.09, 0.59, 0.27])
+    assert short_metadata["tracking_evidence"]["strategy"] == "face_tracking_crop"
     assert "speaker_window_count" in short_metadata
     assert "speaker_region_confidence" in short_metadata
     assert "speaker_region_box" in short_metadata
     assert renderer_calls[0]["dialogue_windows"]
     assert isinstance(renderer_calls[0]["dialogue_windows"][0], DialogueWindow)
+    assert result.exports[0].duration == 47.0
 
     results_response = client.get(f"/api/jobs/{created['jobId']}/results")
     assert results_response.status_code == 200
@@ -988,18 +1436,86 @@ def test_render_selected_short_candidates_writes_fallback_title_metadata(client:
     assert ",Title,," not in ass_text
 
 
+def test_render_selected_short_candidates_preserves_curated_publication_and_overlay_titles(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+
+    def fake_renderer(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **_kwargs: Any,
+    ) -> ShortRenderResult:
+        Path(output_path).write_bytes(b"rendered short")
+        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+
+    publication_title = "箸が止まらない！バジルソースで食べるブロッコリー"
+    overlay_title = "箸が止まらない！\nめちゃうまブロッコリー"
+    candidate = Candidate(
+        id="cand_short_curated_title",
+        type="short",
+        start=0.0,
+        end=45.0,
+        duration=45.0,
+        transcript_text="ブロッコリーにバジルソースをかけます。",
+        title=publication_title,
+        overlay_title=overlay_title,
+        title_source="manual_review",
+        final_score=90.0,
+    )
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        result = render_selected_short_candidates(
+            db=db,
+            job=job,
+            input_path=Path(storage.uploads) / "sample.mp4",
+            selected_candidates=[candidate],
+            burn_subtitles=True,
+            paths=storage,
+            renderer=fake_renderer,
+            mode="high_quality",
+            short_top_banner_enabled=True,
+        )
+
+    assert result.exports[0].title == publication_title
+    metadata = json.loads(
+        (
+            storage.outputs
+            / created["jobId"]
+            / "shorts"
+            / "short_01.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert metadata["title"] == publication_title
+    assert metadata["overlay_title"] == overlay_title
+    assert metadata["title_source"] == "manual_review"
+
+
 @pytest.mark.parametrize(
-    ("mode", "overlay_mode", "expect_title_event"),
+    ("mode", "overlay_mode", "title_source", "expect_title_event"),
     [
-        ("high_quality", "auto", True),
-        ("low_cost", "always", True),
-        ("high_quality", "never", False),
+        ("high_quality", "auto", None, True),
+        ("low_cost", "always", None, True),
+        ("high_quality", "never", None, False),
+        ("low_cost", "auto", "manual_review", True),
+        ("low_cost", "never", "manual_review", False),
     ],
 )
 def test_render_selected_short_candidates_applies_overlay_title_policy(
     client: TestClient,
     mode: str,
     overlay_mode: str,
+    title_source: str | None,
     expect_title_event: bool,
 ) -> None:
     upload = client.post(
@@ -1028,7 +1544,10 @@ def test_render_selected_short_candidates_applies_overlay_title_policy(
         duration=45.0,
         transcript_text="投資判断が変わる場面です。",
         title="投資判断の転換点",
-        overlay_title="投資判断の転換点",
+        overlay_title="投資判断の\n転換点",
+        title_source=title_source,
+        hook_text="冒頭フックの\n二行目",
+        hook_duration_seconds=3.0,
         final_score=82.0,
     )
 
@@ -1056,3 +1575,146 @@ def test_render_selected_short_candidates_applies_overlay_title_policy(
     assert short_metadata["overlay_title_rendered"] is expect_title_event
     assert short_metadata["overlay_title_mode"] == overlay_mode
     assert (",Title,," in ass_text) is expect_title_event
+    assert "冒頭フックの\\N二行目" in ass_text
+    if expect_title_event:
+        assert "投資判断の\\N転換点" in ass_text
+
+
+def test_top_banner_renders_title_when_conversation_subtitles_are_disabled(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    renderer_calls: list[dict[str, Any]] = []
+
+    def fake_renderer(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **kwargs: Any,
+    ) -> ShortRenderResult:
+        renderer_calls.append(kwargs)
+        Path(output_path).write_bytes(b"rendered short")
+        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+
+    candidate = Candidate(
+        id="cand_short_top_banner",
+        type="short",
+        start=0.0,
+        end=45.0,
+        duration=45.0,
+        transcript_text="会話字幕には使わない本文です。",
+        title="上部帯のタイトル",
+        overlay_title="上部帯のタイトル",
+        hook_text="字幕OFF時には表示しないフックです。",
+        final_score=82.0,
+    )
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        result = render_selected_short_candidates(
+            db=db,
+            job=job,
+            input_path=Path(storage.uploads) / "sample.mp4",
+            selected_candidates=[candidate],
+            burn_subtitles=False,
+            paths=storage,
+            renderer=fake_renderer,
+            short_overlay_title_mode="never",
+            short_top_banner_enabled=True,
+            short_bottom_banner_enabled=False,
+        )
+
+    assert len(result.exports) == 1
+    assert len(renderer_calls) == 1
+    assert Path(renderer_calls[0]["top_banner_path"]).name == "short_top_banner.png"
+    assert renderer_calls[0].get("bottom_banner_path") is None
+    subtitle_path = Path(renderer_calls[0]["subtitle_path"])
+    ass_text = subtitle_path.read_text(encoding="utf-8")
+    assert ",Title,," in ass_text
+    assert ",Hook,Hook," not in ass_text
+    assert ",Subtitle,," not in ass_text
+    metadata = json.loads(
+        (storage.outputs / created["jobId"] / "shorts" / "short_01.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert metadata["overlay_title_expected"] is True
+    assert metadata["overlay_title_rendered"] is True
+    assert metadata["top_banner_rendered"] is True
+    assert metadata["bottom_banner_rendered"] is False
+
+
+def test_short_title_remains_when_top_banner_is_disabled(client: TestClient) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    storage = app.dependency_overrides[get_storage_paths]()
+    renderer_calls: list[dict[str, Any]] = []
+
+    def fake_renderer(
+        _input_path: str | Path,
+        output_path: str | Path,
+        **kwargs: Any,
+    ) -> ShortRenderResult:
+        renderer_calls.append(kwargs)
+        Path(output_path).write_bytes(b"rendered short")
+        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+
+    candidate = Candidate(
+        id="cand_short_title_only",
+        type="short",
+        start=0.0,
+        end=45.0,
+        duration=45.0,
+        transcript_text="タイトルだけを表示する場面です。",
+        title="帯なしで残るタイトル",
+        overlay_title="帯なしで残るタイトル",
+        final_score=82.0,
+    )
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        result = render_selected_short_candidates(
+            db=db,
+            job=job,
+            input_path=Path(storage.uploads) / "sample.mp4",
+            selected_candidates=[candidate],
+            burn_subtitles=False,
+            paths=storage,
+            renderer=fake_renderer,
+            short_overlay_title_mode="always",
+            short_top_banner_enabled=False,
+            short_bottom_banner_enabled=False,
+        )
+
+    assert len(result.exports) == 1
+    assert len(renderer_calls) == 1
+    assert renderer_calls[0].get("top_banner_path") is None
+    assert renderer_calls[0].get("bottom_banner_path") is None
+    subtitle_path = Path(renderer_calls[0]["subtitle_path"])
+    ass_text = subtitle_path.read_text(encoding="utf-8")
+    assert ",Title,," in ass_text
+    assert ",Hook,Hook," not in ass_text
+    assert ",Subtitle,," not in ass_text
+    metadata = json.loads(
+        (storage.outputs / created["jobId"] / "shorts" / "short_01.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert metadata["overlay_title_expected"] is True
+    assert metadata["overlay_title_rendered"] is True
+    assert metadata["overlay_title_mode"] == "always"
+    assert metadata["top_banner_rendered"] is False
+    assert metadata["bottom_banner_rendered"] is False

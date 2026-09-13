@@ -42,6 +42,7 @@ class CropPlan:
     person_detection_count: int = 0
     person_detection_confidence: float | None = None
     person_box: tuple[float, float, float, float] | None = None
+    face_box: tuple[float, float, float, float] | None = None
     speaker_window_count: int = 0
     speaker_region_confidence: float | None = None
     speaker_region_box: tuple[float, float, float, float] | None = None
@@ -70,10 +71,23 @@ SPEAKER_MIN_STABILITY = 0.68
 SPEAKER_MIN_HEIGHT = 0.11
 
 
-def _destructive_center_crop_risk(source_width: int | None, source_height: int | None) -> bool:
+def _destructive_center_crop_risk(
+    source_width: int | None,
+    source_height: int | None,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+) -> bool:
     if source_width is None or source_height is None or source_width <= 0 or source_height <= 0:
         return True
-    return (source_width / source_height) > (SHORT_WIDTH / SHORT_HEIGHT)
+    if target_width <= 0 or target_height <= 0:
+        return True
+
+    source_aspect_product = source_width * target_height
+    target_aspect_product = target_width * source_height
+    if (target_width, target_height) == (SHORT_WIDTH, SHORT_HEIGHT):
+        return source_aspect_product > target_aspect_product
+    return source_aspect_product != target_aspect_product
 
 
 def _no_subject_signal_plan(
@@ -91,8 +105,15 @@ def _no_subject_signal_plan(
     speaker_window_count: int = 0,
     speaker_region_confidence: float | None = None,
     speaker_region_box: tuple[float, float, float, float] | None = None,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
 ) -> CropPlan:
-    if _destructive_center_crop_risk(source_width, source_height):
+    if _destructive_center_crop_risk(
+        source_width,
+        source_height,
+        target_width=target_width,
+        target_height=target_height,
+    ):
         return CropPlan(
             strategy_order=("blur_background", "center_crop"),
             signal_source="full_frame_fallback",
@@ -133,22 +154,146 @@ def _append_subtitles(video_filter: str, subtitle_path: str | Path | None) -> st
     return f"{video_filter},{ass_filter(subtitle_path)}"
 
 
-def build_center_crop_filter(subtitle_path: str | Path | None = None) -> str:
+def _framing_scale(value: int, zoom: float) -> int:
+    if not 1.0 <= zoom <= 3.0:
+        raise ValueError("framing zoom must be between 1.0 and 3.0")
+    scaled = max(2, round(value * zoom))
+    return scaled if scaled % 2 == 0 else scaled + 1
+
+
+def _framing_center(value: float, offset: float) -> float:
+    if not -100 <= offset <= 100:
+        raise ValueError("framing offset must be between -100 and 100")
+    return min(max(value + offset / 200, 0.0), 1.0)
+
+
+def build_center_crop_filter(
+    subtitle_path: str | Path | None = None,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
+) -> str:
+    scale_width = _framing_scale(target_width, framing_zoom)
+    scale_height = _framing_scale(target_height, framing_zoom)
+    if framing_offset_x == 0 and framing_offset_y == 0:
+        crop = f"crop={target_width}:{target_height}"
+    else:
+        x_ratio = 0.5 + framing_offset_x / 200
+        y_ratio = 0.5 + framing_offset_y / 200
+        crop = (
+            f"crop={target_width}:{target_height}:"
+            f"(iw-ow)*{x_ratio:.4f}:(ih-oh)*{y_ratio:.4f}"
+        )
     return _append_subtitles(
         (
-            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT}"
+            f"scale={scale_width}:{scale_height}:force_original_aspect_ratio=increase,"
+            f"{crop}"
         ),
         subtitle_path,
     )
 
 
-def _scaled_dimensions(source_width: int, source_height: int) -> tuple[int, int]:
+def _scaled_dimensions(
+    source_width: int,
+    source_height: int,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+) -> tuple[int, int]:
     source_aspect = source_width / source_height
-    target_aspect = SHORT_WIDTH / SHORT_HEIGHT
+    target_aspect = target_width / target_height
     if source_aspect > target_aspect:
-        return round(source_width * (SHORT_HEIGHT / source_height)), SHORT_HEIGHT
-    return SHORT_WIDTH, round(source_height * (SHORT_WIDTH / source_width))
+        return round(source_width * (target_height / source_height)), target_height
+    return target_width, round(source_height * (target_width / source_width))
+
+
+def resolve_tracking_crop_geometry(
+    source_width: int,
+    source_height: int,
+    center: tuple[float, float],
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
+) -> tuple[int, int, int, int]:
+    if source_width <= 0 or source_height <= 0:
+        raise ValueError("source dimensions must be positive")
+
+    scale_width = _framing_scale(target_width, framing_zoom)
+    scale_height = _framing_scale(target_height, framing_zoom)
+    scaled_width, scaled_height = _scaled_dimensions(
+        source_width,
+        source_height,
+        target_width=scale_width,
+        target_height=scale_height,
+    )
+    center_x, center_y = center
+    center_x = _framing_center(center_x, framing_offset_x)
+    center_y = _framing_center(center_y, framing_offset_y)
+    crop_x = round(scaled_width * center_x - target_width / 2)
+    crop_y = round(scaled_height * center_y - target_height / 2)
+    crop_x = min(max(crop_x, 0), max(0, scaled_width - target_width))
+    crop_y = min(max(crop_y, 0), max(0, scaled_height - target_height))
+    return scale_width, scale_height, crop_x, crop_y
+
+
+def resolve_tracking_crop_evidence_geometry(
+    source_width: int,
+    source_height: int,
+    center: tuple[float, float],
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
+) -> tuple[int, int, int, int]:
+    scale_width = _framing_scale(target_width, framing_zoom)
+    scale_height = _framing_scale(target_height, framing_zoom)
+    scaled_width, scaled_height = _scaled_dimensions(
+        source_width,
+        source_height,
+        target_width=scale_width,
+        target_height=scale_height,
+    )
+    _, _, crop_x, crop_y = resolve_tracking_crop_geometry(
+        source_width,
+        source_height,
+        center,
+        target_width=target_width,
+        target_height=target_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
+    )
+    return scaled_width, scaled_height, crop_x, crop_y
+
+
+def tracking_safe_margins(
+    strategy: CropStrategy,
+) -> tuple[int, int, int, int] | None:
+    if strategy == "face_tracking_crop":
+        return FACE_SAFE_MARGIN_X, FACE_SAFE_MARGIN_TOP, FACE_SAFE_MARGIN_X, FACE_SAFE_MARGIN_BOTTOM
+    if strategy == "speaker_tracking_crop":
+        return (
+            SPEAKER_SAFE_MARGIN_X,
+            SPEAKER_SAFE_MARGIN_TOP,
+            SPEAKER_SAFE_MARGIN_X,
+            SPEAKER_SAFE_MARGIN_BOTTOM,
+        )
+    if strategy == "person_tracking_crop":
+        return (
+            PERSON_SAFE_MARGIN_X,
+            PERSON_SAFE_MARGIN_TOP,
+            PERSON_SAFE_MARGIN_X,
+            PERSON_SAFE_MARGIN_BOTTOM,
+        )
+    return None
 
 
 def _clamp_int(value: float | int, minimum: int, maximum: int) -> int:
@@ -171,19 +316,30 @@ def _face_group_fits_short_crop(
     bounds: tuple[float, ...],
     scaled_width: int,
     scaled_height: int,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
 ) -> bool:
     left, right, top, bottom = bounds
     group_width = right - left + FACE_SAFE_MARGIN_X * 2
     group_height = bottom - top + FACE_SAFE_MARGIN_TOP + FACE_SAFE_MARGIN_BOTTOM
-    return group_width <= min(SHORT_WIDTH, scaled_width) and group_height <= min(SHORT_HEIGHT, scaled_height)
+    return group_width <= min(target_width, scaled_width) and group_height <= min(target_height, scaled_height)
 
 
 def _plan_face_tracking_crop(
     detections: Sequence[FaceDetection],
     source_width: int,
     source_height: int,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
 ) -> CropPlan:
-    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
+    scaled_width, scaled_height = _scaled_dimensions(
+        source_width,
+        source_height,
+        target_width=target_width,
+        target_height=target_height,
+    )
     weighted_center = best_face_center(detections)
     if weighted_center is None:
         return _no_subject_signal_plan(
@@ -191,6 +347,8 @@ def _plan_face_tracking_crop(
             source_width,
             source_height,
             detection_count=len(detections),
+            target_width=target_width,
+            target_height=target_height,
         )
 
     dominant_area = _dominant_face_area(detections)
@@ -201,10 +359,18 @@ def _plan_face_tracking_crop(
             source_height,
             confidence=dominant_area / MIN_FACE_AREA,
             detection_count=len(detections),
+            target_width=target_width,
+            target_height=target_height,
         )
 
     bounds = _face_bounds_scaled(detections, scaled_width, scaled_height)
-    if not _face_group_fits_short_crop(bounds, scaled_width, scaled_height):
+    if not _face_group_fits_short_crop(
+        bounds,
+        scaled_width,
+        scaled_height,
+        target_width=target_width,
+        target_height=target_height,
+    ):
         return CropPlan(
             strategy_order=("blur_background", "center_crop"),
             signal_source="face_detection",
@@ -214,26 +380,26 @@ def _plan_face_tracking_crop(
         )
 
     left, right, top, bottom = bounds
-    max_crop_x = max(0, scaled_width - SHORT_WIDTH)
-    max_crop_y = max(0, scaled_height - SHORT_HEIGHT)
+    max_crop_x = max(0, scaled_width - target_width)
+    max_crop_y = max(0, scaled_height - target_height)
     center_x, center_y = weighted_center
-    crop_x = round(scaled_width * min(max(center_x, 0.0), 1.0) - SHORT_WIDTH / 2)
-    crop_y = round(scaled_height * min(max(center_y, 0.0), 1.0) - SHORT_HEIGHT * FACE_TARGET_Y)
+    crop_x = round(scaled_width * min(max(center_x, 0.0), 1.0) - target_width / 2)
+    crop_y = round(scaled_height * min(max(center_y, 0.0), 1.0) - target_height * FACE_TARGET_Y)
 
     if left - FACE_SAFE_MARGIN_X < crop_x:
         crop_x = round(left - FACE_SAFE_MARGIN_X)
-    if right + FACE_SAFE_MARGIN_X > crop_x + SHORT_WIDTH:
-        crop_x = round(right + FACE_SAFE_MARGIN_X - SHORT_WIDTH)
+    if right + FACE_SAFE_MARGIN_X > crop_x + target_width:
+        crop_x = round(right + FACE_SAFE_MARGIN_X - target_width)
     if top - FACE_SAFE_MARGIN_TOP < crop_y:
         crop_y = round(top - FACE_SAFE_MARGIN_TOP)
-    if bottom + FACE_SAFE_MARGIN_BOTTOM > crop_y + SHORT_HEIGHT:
-        crop_y = round(bottom + FACE_SAFE_MARGIN_BOTTOM - SHORT_HEIGHT)
+    if bottom + FACE_SAFE_MARGIN_BOTTOM > crop_y + target_height:
+        crop_y = round(bottom + FACE_SAFE_MARGIN_BOTTOM - target_height)
 
     crop_x = _clamp_int(crop_x, 0, max_crop_x)
     crop_y = _clamp_int(crop_y, 0, max_crop_y)
     planned_center = (
-        min(max((crop_x + SHORT_WIDTH / 2) / scaled_width, 0.0), 1.0),
-        min(max((crop_y + SHORT_HEIGHT / 2) / scaled_height, 0.0), 1.0),
+        min(max((crop_x + target_width / 2) / scaled_width, 0.0), 1.0),
+        min(max((crop_y + target_height / 2) / scaled_height, 0.0), 1.0),
     )
     face_span = max(right - left, bottom - top)
     confidence = min(
@@ -252,6 +418,12 @@ def _plan_face_tracking_crop(
         crop_x=crop_x,
         crop_y=crop_y,
         detection_count=len(detections),
+        face_box=(
+            left / scaled_width,
+            top / scaled_height,
+            right / scaled_width,
+            bottom / scaled_height,
+        ),
     )
 
 
@@ -260,6 +432,9 @@ def _plan_subject_tracking_crop(
     source_width: int,
     source_height: int,
     fallback_reason: str,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
 ) -> CropPlan | None:
     if subject_signal is None:
         return None
@@ -273,18 +448,23 @@ def _plan_subject_tracking_crop(
     ):
         return None
 
-    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
-    max_crop_x = max(0, scaled_width - SHORT_WIDTH)
-    max_crop_y = max(0, scaled_height - SHORT_HEIGHT)
+    scaled_width, scaled_height = _scaled_dimensions(
+        source_width,
+        source_height,
+        target_width=target_width,
+        target_height=target_height,
+    )
+    max_crop_x = max(0, scaled_width - target_width)
+    max_crop_y = max(0, scaled_height - target_height)
     if max_crop_x <= 0 and max_crop_y <= 0:
         return None
 
     center_x = min(max(subject_signal.center_x, 0.0), 1.0)
-    crop_x = _clamp_int(scaled_width * center_x - SHORT_WIDTH / 2, 0, max_crop_x)
-    crop_y = _clamp_int((scaled_height - SHORT_HEIGHT) / 2, 0, max_crop_y)
+    crop_x = _clamp_int(scaled_width * center_x - target_width / 2, 0, max_crop_x)
+    crop_y = _clamp_int((scaled_height - target_height) / 2, 0, max_crop_y)
     planned_center = (
-        min(max((crop_x + SHORT_WIDTH / 2) / scaled_width, 0.0), 1.0),
-        min(max((crop_y + SHORT_HEIGHT / 2) / scaled_height, 0.0), 1.0),
+        min(max((crop_x + target_width / 2) / scaled_width, 0.0), 1.0),
+        min(max((crop_y + target_height / 2) / scaled_height, 0.0), 1.0),
     )
     return CropPlan(
         strategy_order=("subject_tracking_crop", "blur_background", "center_crop"),
@@ -305,6 +485,9 @@ def _plan_speaker_tracking_crop(
     source_width: int,
     source_height: int,
     fallback_reason: str,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
 ) -> CropPlan | None:
     if speaker_signal is None:
         return None
@@ -317,9 +500,14 @@ def _plan_speaker_tracking_crop(
     if speaker_signal.height < SPEAKER_MIN_HEIGHT:
         return None
 
-    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
-    max_crop_x = max(0, scaled_width - SHORT_WIDTH)
-    max_crop_y = max(0, scaled_height - SHORT_HEIGHT)
+    scaled_width, scaled_height = _scaled_dimensions(
+        source_width,
+        source_height,
+        target_width=target_width,
+        target_height=target_height,
+    )
+    max_crop_x = max(0, scaled_width - target_width)
+    max_crop_y = max(0, scaled_height - target_height)
     if max_crop_x <= 0 and max_crop_y <= 0:
         return None
 
@@ -330,25 +518,25 @@ def _plan_speaker_tracking_crop(
     bottom *= scaled_height
     region_width = right - left + SPEAKER_SAFE_MARGIN_X * 2
     region_height = bottom - top + SPEAKER_SAFE_MARGIN_TOP + SPEAKER_SAFE_MARGIN_BOTTOM
-    if region_width > min(SHORT_WIDTH, scaled_width) or region_height > min(SHORT_HEIGHT, scaled_height):
+    if region_width > min(target_width, scaled_width) or region_height > min(target_height, scaled_height):
         return None
 
-    crop_x = round(scaled_width * speaker_signal.center_x - SHORT_WIDTH / 2)
-    crop_y = round(scaled_height * speaker_signal.center_y - SHORT_HEIGHT * FACE_TARGET_Y)
+    crop_x = round(scaled_width * speaker_signal.center_x - target_width / 2)
+    crop_y = round(scaled_height * speaker_signal.center_y - target_height * FACE_TARGET_Y)
     if left - SPEAKER_SAFE_MARGIN_X < crop_x:
         crop_x = round(left - SPEAKER_SAFE_MARGIN_X)
-    if right + SPEAKER_SAFE_MARGIN_X > crop_x + SHORT_WIDTH:
-        crop_x = round(right + SPEAKER_SAFE_MARGIN_X - SHORT_WIDTH)
+    if right + SPEAKER_SAFE_MARGIN_X > crop_x + target_width:
+        crop_x = round(right + SPEAKER_SAFE_MARGIN_X - target_width)
     if top - SPEAKER_SAFE_MARGIN_TOP < crop_y:
         crop_y = round(top - SPEAKER_SAFE_MARGIN_TOP)
-    if bottom + SPEAKER_SAFE_MARGIN_BOTTOM > crop_y + SHORT_HEIGHT:
-        crop_y = round(bottom + SPEAKER_SAFE_MARGIN_BOTTOM - SHORT_HEIGHT)
+    if bottom + SPEAKER_SAFE_MARGIN_BOTTOM > crop_y + target_height:
+        crop_y = round(bottom + SPEAKER_SAFE_MARGIN_BOTTOM - target_height)
 
     crop_x = _clamp_int(crop_x, 0, max_crop_x)
     crop_y = _clamp_int(crop_y, 0, max_crop_y)
     planned_center = (
-        min(max((crop_x + SHORT_WIDTH / 2) / scaled_width, 0.0), 1.0),
-        min(max((crop_y + SHORT_HEIGHT / 2) / scaled_height, 0.0), 1.0),
+        min(max((crop_x + target_width / 2) / scaled_width, 0.0), 1.0),
+        min(max((crop_y + target_height / 2) / scaled_height, 0.0), 1.0),
     )
     return CropPlan(
         strategy_order=("speaker_tracking_crop", "blur_background", "center_crop"),
@@ -378,6 +566,9 @@ def _plan_person_tracking_crop(
     source_width: int,
     source_height: int,
     fallback_reason: str,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
 ) -> CropPlan | None:
     if person_signal is None:
         return None
@@ -390,9 +581,14 @@ def _plan_person_tracking_crop(
     if person_signal.height < PERSON_MIN_HEIGHT:
         return None
 
-    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
-    max_crop_x = max(0, scaled_width - SHORT_WIDTH)
-    max_crop_y = max(0, scaled_height - SHORT_HEIGHT)
+    scaled_width, scaled_height = _scaled_dimensions(
+        source_width,
+        source_height,
+        target_width=target_width,
+        target_height=target_height,
+    )
+    max_crop_x = max(0, scaled_width - target_width)
+    max_crop_y = max(0, scaled_height - target_height)
     if max_crop_x <= 0 and max_crop_y <= 0:
         return None
 
@@ -403,25 +599,25 @@ def _plan_person_tracking_crop(
     bottom *= scaled_height
     person_width = right - left + PERSON_SAFE_MARGIN_X * 2
     person_height = bottom - top + PERSON_SAFE_MARGIN_TOP + PERSON_SAFE_MARGIN_BOTTOM
-    if person_width > min(SHORT_WIDTH, scaled_width) or person_height > min(SHORT_HEIGHT, scaled_height):
+    if person_width > min(target_width, scaled_width) or person_height > min(target_height, scaled_height):
         return None
 
-    crop_x = round(scaled_width * person_signal.center_x - SHORT_WIDTH / 2)
-    crop_y = round(scaled_height * person_signal.center_y - SHORT_HEIGHT / 2)
+    crop_x = round(scaled_width * person_signal.center_x - target_width / 2)
+    crop_y = round(scaled_height * person_signal.center_y - target_height / 2)
     if left - PERSON_SAFE_MARGIN_X < crop_x:
         crop_x = round(left - PERSON_SAFE_MARGIN_X)
-    if right + PERSON_SAFE_MARGIN_X > crop_x + SHORT_WIDTH:
-        crop_x = round(right + PERSON_SAFE_MARGIN_X - SHORT_WIDTH)
+    if right + PERSON_SAFE_MARGIN_X > crop_x + target_width:
+        crop_x = round(right + PERSON_SAFE_MARGIN_X - target_width)
     if top - PERSON_SAFE_MARGIN_TOP < crop_y:
         crop_y = round(top - PERSON_SAFE_MARGIN_TOP)
-    if bottom + PERSON_SAFE_MARGIN_BOTTOM > crop_y + SHORT_HEIGHT:
-        crop_y = round(bottom + PERSON_SAFE_MARGIN_BOTTOM - SHORT_HEIGHT)
+    if bottom + PERSON_SAFE_MARGIN_BOTTOM > crop_y + target_height:
+        crop_y = round(bottom + PERSON_SAFE_MARGIN_BOTTOM - target_height)
 
     crop_x = _clamp_int(crop_x, 0, max_crop_x)
     crop_y = _clamp_int(crop_y, 0, max_crop_y)
     planned_center = (
-        min(max((crop_x + SHORT_WIDTH / 2) / scaled_width, 0.0), 1.0),
-        min(max((crop_y + SHORT_HEIGHT / 2) / scaled_height, 0.0), 1.0),
+        min(max((crop_x + target_width / 2) / scaled_width, 0.0), 1.0),
+        min(max((crop_y + target_height / 2) / scaled_height, 0.0), 1.0),
     )
     return CropPlan(
         strategy_order=("person_tracking_crop", "blur_background", "center_crop"),
@@ -462,6 +658,8 @@ def plan_short_crop(
     speaker_signal: SpeakerDetection | None = None,
     person_signal: PersonDetection | None = None,
     subject_signal: SubjectDetection | None = None,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
 ) -> CropPlan:
     if layout == "blur_background":
         return CropPlan(strategy_order=("blur_background",), signal_source="forced_layout", confidence=1.0)
@@ -473,6 +671,8 @@ def plan_short_crop(
             source_width,
             source_height,
             detection_count=len(detections or []),
+            target_width=target_width,
+            target_height=target_height,
         )
     if not detections:
         if layout == "auto":
@@ -481,6 +681,8 @@ def plan_short_crop(
                 source_width,
                 source_height,
                 fallback_reason="no_face_speaker_signal",
+                target_width=target_width,
+                target_height=target_height,
             )
             if speaker_plan is not None:
                 return speaker_plan
@@ -489,6 +691,8 @@ def plan_short_crop(
                 source_width,
                 source_height,
                 fallback_reason="no_face_person_signal",
+                target_width=target_width,
+                target_height=target_height,
             )
             if person_plan is not None:
                 return person_plan
@@ -497,6 +701,8 @@ def plan_short_crop(
                 source_width,
                 source_height,
                 fallback_reason="no_face_subject_signal",
+                target_width=target_width,
+                target_height=target_height,
             )
             if subject_plan is not None:
                 return subject_plan
@@ -511,6 +717,8 @@ def plan_short_crop(
                     person_detection_count=person_signal.detection_count,
                     person_detection_confidence=person_signal.confidence,
                     person_box=person_signal.box,
+                    target_width=target_width,
+                    target_height=target_height,
                 )
             if speaker_signal is not None:
                 return _no_subject_signal_plan(
@@ -524,6 +732,8 @@ def plan_short_crop(
                     speaker_window_count=speaker_signal.window_count,
                     speaker_region_confidence=speaker_signal.confidence,
                     speaker_region_box=speaker_signal.box,
+                    target_width=target_width,
+                    target_height=target_height,
                 )
             if subject_signal is not None:
                 return _no_subject_signal_plan(
@@ -534,38 +744,32 @@ def plan_short_crop(
                     sampled_frame_count=subject_signal.sampled_frames,
                     subject_x=subject_signal.center_x,
                     stability_score=subject_signal.stability_score,
+                    target_width=target_width,
+                    target_height=target_height,
                 )
-        return _no_subject_signal_plan("no_face_detections", source_width, source_height)
+        return _no_subject_signal_plan(
+            "no_face_detections",
+            source_width,
+            source_height,
+            target_width=target_width,
+            target_height=target_height,
+        )
 
-    face_plan = _plan_face_tracking_crop(detections, source_width, source_height)
+    face_plan = _plan_face_tracking_crop(
+        detections,
+        source_width,
+        source_height,
+        target_width=target_width,
+        target_height=target_height,
+    )
     if layout == "auto" and face_plan.fallback_reason == "face_group_too_wide_for_9x16_crop":
         speaker_plan = _plan_speaker_tracking_crop(
             speaker_signal,
             source_width,
             source_height,
             fallback_reason="wide_face_group_speaker_signal",
-        )
-        if speaker_plan is not None:
-            return speaker_plan
-        if speaker_signal is not None:
-            return _no_subject_signal_plan(
-                _speaker_fallback_reason(speaker_signal),
-                source_width,
-                source_height,
-                confidence=speaker_signal.confidence,
-                detection_count=len(detections),
-                sampled_frame_count=speaker_signal.window_count,
-                stability_score=speaker_signal.stability_score,
-                speaker_window_count=speaker_signal.window_count,
-                speaker_region_confidence=speaker_signal.confidence,
-                speaker_region_box=speaker_signal.box,
-            )
-    if layout == "auto" and face_plan.fallback_reason == "weak_face_signal":
-        speaker_plan = _plan_speaker_tracking_crop(
-            speaker_signal,
-            source_width,
-            source_height,
-            fallback_reason="weak_face_speaker_signal",
+            target_width=target_width,
+            target_height=target_height,
         )
         if speaker_plan is not None:
             return speaker_plan
@@ -573,7 +777,9 @@ def plan_short_crop(
             person_signal,
             source_width,
             source_height,
-            fallback_reason="weak_face_person_signal",
+            fallback_reason="wide_face_group_person_signal",
+            target_width=target_width,
+            target_height=target_height,
         )
         if person_plan is not None:
             return person_plan
@@ -581,7 +787,9 @@ def plan_short_crop(
             subject_signal,
             source_width,
             source_height,
-            fallback_reason="weak_face_subject_signal",
+            fallback_reason="wide_face_group_subject_signal",
+            target_width=target_width,
+            target_height=target_height,
         )
         if subject_plan is not None:
             return subject_plan
@@ -597,6 +805,8 @@ def plan_short_crop(
                 person_detection_count=person_signal.detection_count,
                 person_detection_confidence=person_signal.confidence,
                 person_box=person_signal.box,
+                target_width=target_width,
+                target_height=target_height,
             )
         if speaker_signal is not None:
             return _no_subject_signal_plan(
@@ -610,6 +820,8 @@ def plan_short_crop(
                 speaker_window_count=speaker_signal.window_count,
                 speaker_region_confidence=speaker_signal.confidence,
                 speaker_region_box=speaker_signal.box,
+                target_width=target_width,
+                target_height=target_height,
             )
         if subject_signal is not None:
             return _no_subject_signal_plan(
@@ -621,6 +833,82 @@ def plan_short_crop(
                 sampled_frame_count=subject_signal.sampled_frames,
                 subject_x=subject_signal.center_x,
                 stability_score=subject_signal.stability_score,
+                target_width=target_width,
+                target_height=target_height,
+            )
+    if layout == "auto" and face_plan.fallback_reason == "weak_face_signal":
+        speaker_plan = _plan_speaker_tracking_crop(
+            speaker_signal,
+            source_width,
+            source_height,
+            fallback_reason="weak_face_speaker_signal",
+            target_width=target_width,
+            target_height=target_height,
+        )
+        if speaker_plan is not None:
+            return speaker_plan
+        person_plan = _plan_person_tracking_crop(
+            person_signal,
+            source_width,
+            source_height,
+            fallback_reason="weak_face_person_signal",
+            target_width=target_width,
+            target_height=target_height,
+        )
+        if person_plan is not None:
+            return person_plan
+        subject_plan = _plan_subject_tracking_crop(
+            subject_signal,
+            source_width,
+            source_height,
+            fallback_reason="weak_face_subject_signal",
+            target_width=target_width,
+            target_height=target_height,
+        )
+        if subject_plan is not None:
+            return subject_plan
+        if person_signal is not None:
+            return _no_subject_signal_plan(
+                _person_fallback_reason(person_signal),
+                source_width,
+                source_height,
+                confidence=person_signal.confidence,
+                detection_count=len(detections),
+                sampled_frame_count=person_signal.sampled_frames,
+                stability_score=person_signal.stability_score,
+                person_detection_count=person_signal.detection_count,
+                person_detection_confidence=person_signal.confidence,
+                person_box=person_signal.box,
+                target_width=target_width,
+                target_height=target_height,
+            )
+        if speaker_signal is not None:
+            return _no_subject_signal_plan(
+                _speaker_fallback_reason(speaker_signal),
+                source_width,
+                source_height,
+                confidence=speaker_signal.confidence,
+                detection_count=len(detections),
+                sampled_frame_count=speaker_signal.window_count,
+                stability_score=speaker_signal.stability_score,
+                speaker_window_count=speaker_signal.window_count,
+                speaker_region_confidence=speaker_signal.confidence,
+                speaker_region_box=speaker_signal.box,
+                target_width=target_width,
+                target_height=target_height,
+            )
+        if subject_signal is not None:
+            return _no_subject_signal_plan(
+                _subject_fallback_reason(subject_signal),
+                source_width,
+                source_height,
+                confidence=subject_signal.confidence,
+                detection_count=len(detections),
+                sampled_frame_count=subject_signal.sampled_frames,
+                subject_x=subject_signal.center_x,
+                stability_score=subject_signal.stability_score,
+                target_width=target_width,
+                target_height=target_height,
             )
     if (
         layout == "face_tracking_crop"
@@ -634,6 +922,12 @@ def plan_short_crop(
             confidence=face_plan.confidence,
             fallback_reason="forced_face_tracking_despite_wide_face_group",
             detection_count=len(detections),
+            face_box=(
+                min(face.center_x - face.width / 2 for face in detections),
+                min(face.center_y - face.height / 2 for face in detections),
+                max(face.center_x + face.width / 2 for face in detections),
+                max(face.center_y + face.height / 2 for face in detections),
+            ),
         )
     return face_plan
 
@@ -643,21 +937,28 @@ def build_face_tracking_crop_filter(
     source_height: int,
     face_center: tuple[float, float],
     subtitle_path: str | Path | None = None,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
 ) -> str:
-    if source_width <= 0 or source_height <= 0:
-        raise ValueError("source dimensions must be positive")
-
-    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
-    center_x, center_y = face_center
-    crop_x = round(scaled_width * min(max(center_x, 0.0), 1.0) - SHORT_WIDTH / 2)
-    crop_y = round(scaled_height * min(max(center_y, 0.0), 1.0) - SHORT_HEIGHT / 2)
-    crop_x = min(max(crop_x, 0), max(0, scaled_width - SHORT_WIDTH))
-    crop_y = min(max(crop_y, 0), max(0, scaled_height - SHORT_HEIGHT))
+    scale_width, scale_height, crop_x, crop_y = resolve_tracking_crop_geometry(
+        source_width,
+        source_height,
+        face_center,
+        target_width=target_width,
+        target_height=target_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
+    )
 
     return _append_subtitles(
         (
-            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT}:{crop_x}:{crop_y}"
+            f"scale={scale_width}:{scale_height}:force_original_aspect_ratio=increase,"
+            f"crop={target_width}:{target_height}:{crop_x}:{crop_y}"
         ),
         subtitle_path,
     )
@@ -668,21 +969,28 @@ def build_subject_tracking_crop_filter(
     source_height: int,
     subject_center: tuple[float, float],
     subtitle_path: str | Path | None = None,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
 ) -> str:
-    if source_width <= 0 or source_height <= 0:
-        raise ValueError("source dimensions must be positive")
-
-    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
-    center_x, center_y = subject_center
-    crop_x = round(scaled_width * min(max(center_x, 0.0), 1.0) - SHORT_WIDTH / 2)
-    crop_y = round(scaled_height * min(max(center_y, 0.0), 1.0) - SHORT_HEIGHT / 2)
-    crop_x = min(max(crop_x, 0), max(0, scaled_width - SHORT_WIDTH))
-    crop_y = min(max(crop_y, 0), max(0, scaled_height - SHORT_HEIGHT))
+    scale_width, scale_height, crop_x, crop_y = resolve_tracking_crop_geometry(
+        source_width,
+        source_height,
+        subject_center,
+        target_width=target_width,
+        target_height=target_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
+    )
 
     return _append_subtitles(
         (
-            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT}:{crop_x}:{crop_y}"
+            f"scale={scale_width}:{scale_height}:force_original_aspect_ratio=increase,"
+            f"crop={target_width}:{target_height}:{crop_x}:{crop_y}"
         ),
         subtitle_path,
     )
@@ -693,21 +1001,28 @@ def build_person_tracking_crop_filter(
     source_height: int,
     person_center: tuple[float, float],
     subtitle_path: str | Path | None = None,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
 ) -> str:
-    if source_width <= 0 or source_height <= 0:
-        raise ValueError("source dimensions must be positive")
-
-    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
-    center_x, center_y = person_center
-    crop_x = round(scaled_width * min(max(center_x, 0.0), 1.0) - SHORT_WIDTH / 2)
-    crop_y = round(scaled_height * min(max(center_y, 0.0), 1.0) - SHORT_HEIGHT / 2)
-    crop_x = min(max(crop_x, 0), max(0, scaled_width - SHORT_WIDTH))
-    crop_y = min(max(crop_y, 0), max(0, scaled_height - SHORT_HEIGHT))
+    scale_width, scale_height, crop_x, crop_y = resolve_tracking_crop_geometry(
+        source_width,
+        source_height,
+        person_center,
+        target_width=target_width,
+        target_height=target_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
+    )
 
     return _append_subtitles(
         (
-            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT}:{crop_x}:{crop_y}"
+            f"scale={scale_width}:{scale_height}:force_original_aspect_ratio=increase,"
+            f"crop={target_width}:{target_height}:{crop_x}:{crop_y}"
         ),
         subtitle_path,
     )
@@ -718,34 +1033,53 @@ def build_speaker_tracking_crop_filter(
     source_height: int,
     speaker_center: tuple[float, float],
     subtitle_path: str | Path | None = None,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
 ) -> str:
-    if source_width <= 0 or source_height <= 0:
-        raise ValueError("source dimensions must be positive")
-
-    scaled_width, scaled_height = _scaled_dimensions(source_width, source_height)
-    center_x, center_y = speaker_center
-    crop_x = round(scaled_width * min(max(center_x, 0.0), 1.0) - SHORT_WIDTH / 2)
-    crop_y = round(scaled_height * min(max(center_y, 0.0), 1.0) - SHORT_HEIGHT / 2)
-    crop_x = min(max(crop_x, 0), max(0, scaled_width - SHORT_WIDTH))
-    crop_y = min(max(crop_y, 0), max(0, scaled_height - SHORT_HEIGHT))
+    scale_width, scale_height, crop_x, crop_y = resolve_tracking_crop_geometry(
+        source_width,
+        source_height,
+        speaker_center,
+        target_width=target_width,
+        target_height=target_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
+    )
 
     return _append_subtitles(
         (
-            f"scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT}:{crop_x}:{crop_y}"
+            f"scale={scale_width}:{scale_height}:force_original_aspect_ratio=increase,"
+            f"crop={target_width}:{target_height}:{crop_x}:{crop_y}"
         ),
         subtitle_path,
     )
 
 
-def build_blur_background_filter(subtitle_path: str | Path | None = None) -> str:
+def build_blur_background_filter(
+    subtitle_path: str | Path | None = None,
+    *,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
+) -> str:
+    foreground_width = _framing_scale(target_width, framing_zoom)
+    foreground_height = _framing_scale(target_height, framing_zoom)
+    overlay_x = f"(W-w)/2-(w-W)*{framing_offset_x / 200:.4f}"
+    overlay_y = f"(H-h)/2-(h-H)*{framing_offset_y / 200:.4f}"
     return _append_subtitles(
         (
             "split=2[bgsrc][fgsrc];"
-            f"[bgsrc]scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=increase,"
-            f"crop={SHORT_WIDTH}:{SHORT_HEIGHT},gblur=sigma=24[bg];"
-            f"[fgsrc]scale={SHORT_WIDTH}:{SHORT_HEIGHT}:force_original_aspect_ratio=decrease[fg];"
-            "[bg][fg]overlay=(W-w)/2:(H-h)/2"
+            f"[bgsrc]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
+            f"crop={target_width}:{target_height},gblur=sigma=24[bg];"
+            f"[fgsrc]scale={foreground_width}:{foreground_height}:force_original_aspect_ratio=decrease[fg];"
+            f"[bg][fg]overlay={overlay_x}:{overlay_y}"
         ),
         subtitle_path,
     )
@@ -786,11 +1120,30 @@ def build_crop_filter(
     speaker_center: tuple[float, float] | None = None,
     person_center: tuple[float, float] | None = None,
     subject_center: tuple[float, float] | None = None,
+    target_width: int = SHORT_WIDTH,
+    target_height: int = SHORT_HEIGHT,
+    framing_offset_x: float = 0.0,
+    framing_offset_y: float = 0.0,
+    framing_zoom: float = 1.0,
 ) -> str:
     if strategy == "center_crop":
-        return build_center_crop_filter(subtitle_path)
+        return build_center_crop_filter(
+            subtitle_path,
+            target_width=target_width,
+            target_height=target_height,
+            framing_offset_x=framing_offset_x,
+            framing_offset_y=framing_offset_y,
+            framing_zoom=framing_zoom,
+        )
     if strategy == "blur_background":
-        return build_blur_background_filter(subtitle_path)
+        return build_blur_background_filter(
+            subtitle_path,
+            target_width=target_width,
+            target_height=target_height,
+            framing_offset_x=framing_offset_x,
+            framing_offset_y=framing_offset_y,
+            framing_zoom=framing_zoom,
+        )
     if strategy == "speaker_tracking_crop":
         if source_width is None or source_height is None or speaker_center is None:
             raise ValueError("speaker_tracking_crop requires source dimensions and speaker center")
@@ -799,6 +1152,11 @@ def build_crop_filter(
             source_height,
             speaker_center,
             subtitle_path=subtitle_path,
+            target_width=target_width,
+            target_height=target_height,
+            framing_offset_x=framing_offset_x,
+            framing_offset_y=framing_offset_y,
+            framing_zoom=framing_zoom,
         )
     if strategy == "person_tracking_crop":
         if source_width is None or source_height is None or person_center is None:
@@ -808,6 +1166,11 @@ def build_crop_filter(
             source_height,
             person_center,
             subtitle_path=subtitle_path,
+            target_width=target_width,
+            target_height=target_height,
+            framing_offset_x=framing_offset_x,
+            framing_offset_y=framing_offset_y,
+            framing_zoom=framing_zoom,
         )
     if strategy == "subject_tracking_crop":
         if source_width is None or source_height is None or subject_center is None:
@@ -817,6 +1180,11 @@ def build_crop_filter(
             source_height,
             subject_center,
             subtitle_path=subtitle_path,
+            target_width=target_width,
+            target_height=target_height,
+            framing_offset_x=framing_offset_x,
+            framing_offset_y=framing_offset_y,
+            framing_zoom=framing_zoom,
         )
     if source_width is None or source_height is None or face_center is None:
         raise ValueError("face_tracking_crop requires source dimensions and face center")
@@ -825,4 +1193,9 @@ def build_crop_filter(
         source_height,
         face_center,
         subtitle_path=subtitle_path,
+        target_width=target_width,
+        target_height=target_height,
+        framing_offset_x=framing_offset_x,
+        framing_offset_y=framing_offset_y,
+        framing_zoom=framing_zoom,
     )

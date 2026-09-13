@@ -1,5 +1,6 @@
 services:
   worker:
+    image: ${COMPOSE_PROJECT_NAME:-autoclipperweb}-worker-gpu
     build:
       context: ./backend
       dockerfile: Dockerfile.gpu

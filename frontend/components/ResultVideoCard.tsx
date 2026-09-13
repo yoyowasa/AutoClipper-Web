@@ -1,6 +1,39 @@
+"use client";
+
+import Image from "next/image";
+import { useState } from "react";
+
+import { SaveFileButton } from "./SaveFileButton";
+import { ResultThumbnailWorkspace } from "./ResultThumbnailWorkspace";
 import { formatDuration, formatScore } from "../lib/format";
-import { toApiUrl } from "../lib/api";
-import type { ResultExportItem } from "../lib/types";
+import { toBrowserApiUrl } from "../lib/api";
+import type { PostTitleIntent, ResultExportItem, ThumbnailTextStyles, ThumbnailCopyText } from "../lib/types";
+import { descriptionWithHashtags, youtubeTagsText } from "../lib/youtubePosting";
+
+const INTENT_LABELS: Record<PostTitleIntent, string> = {
+  factual: "事実重視",
+  engagement: "興味喚起",
+  concise: "短く強い"
+};
+
+function normalizedHashtags(values: string[]): string[] {
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => (value.startsWith("#") ? value : `#${value}`));
+}
+
+function postCopyText(item: ResultExportItem): string {
+  return [
+    item.title.trim(),
+    descriptionWithHashtags(
+      item.youtubeDescription ?? "",
+      normalizedHashtags(item.youtubeHashtags ?? [])
+    )
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 function formatNumber(value: number | null | undefined): string {
   return value === null || value === undefined ? "n/a" : formatScore(value);
@@ -33,16 +66,138 @@ function scoreSourceLabel(item: ResultExportItem): string {
   return "rule";
 }
 
+function thumbnailStatusLabel(
+  status: ResultExportItem["thumbnailStatus"],
+  hasPublishedUrl: boolean
+): string {
+  if (status === "failed") {
+    return "サムネ生成失敗";
+  }
+  if (status === "generating") {
+    return "サムネだけ再生成中";
+  }
+  if (status === "ready") {
+    return hasPublishedUrl ? "サムネ完成" : "サムネ情報不整合";
+  }
+  if (status === "not_generated" || status === null) {
+    return "サムネ未生成";
+  }
+  return "サムネ状態不明";
+}
+
 export function ResultVideoCard({
   item,
-  auditAvailable = false
+  auditAvailable = false,
+  onReedit,
+  onRegenerateThumbnail,
+  isReediting = false,
+  isRegeneratingThumbnail = false,
+  thumbnailPriority = false,
+  suggestedFilename
 }: {
   item: ResultExportItem;
   auditAvailable?: boolean;
+  onReedit?: (item: ResultExportItem) => void;
+  onRegenerateThumbnail?: (
+    item: ResultExportItem,
+    cropMode: "standard" | "close",
+    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean
+  ) => void;
+  isReediting?: boolean;
+  isRegeneratingThumbnail?: boolean;
+  thumbnailPriority?: boolean;
+  suggestedFilename: string;
 }) {
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [failedThumbnailUrl, setFailedThumbnailUrl] = useState<string | null>(null);
   const warnings = item.auditWarnings ?? [];
+  const titleCandidates = item.titleCandidates ?? [];
+  const youtubeDescription = item.youtubeDescription ?? "";
+  const youtubeHashtags = normalizedHashtags(item.youtubeHashtags ?? []);
+  const youtubeTags = item.youtubeTags ?? [];
+  const hasPostMetadata = Boolean(
+    item.title.trim() ||
+      titleCandidates.length > 0 ||
+      youtubeDescription ||
+      youtubeHashtags.length > 0 ||
+      youtubeTags.length > 0
+  );
   const scoreSource = scoreSourceLabel(item);
-  const showOverlayStatus = item.type === "short";
+  const showOverlayStatus =
+    item.overlayTitleExpected !== null || item.overlayTitleRendered !== null;
+  const thumbnailUrl = item.thumbnailUrl
+    ? toBrowserApiUrl(item.thumbnailUrl)
+    : null;
+  const thumbnailIsDisplayable = Boolean(
+    thumbnailUrl && failedThumbnailUrl !== thumbnailUrl
+  );
+  const thumbnailFilename =
+    item.thumbnailFilename ?? suggestedFilename.replace(/\.mp4$/iu, ".jpg");
+  const thumbnailIsPng = thumbnailFilename.toLowerCase().endsWith(".png");
+  const thumbnailLabel = thumbnailStatusLabel(
+    item.thumbnailStatus,
+    thumbnailIsDisplayable
+  );
+  const thumbnailHasError =
+    item.thumbnailStatus === "failed" ||
+    (item.thumbnailStatus === "ready" && !thumbnailIsDisplayable);
+
+  async function copyField(field: string, value: string) {
+    if (!value.trim()) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopyStatus(field);
+    } catch {
+      setCopyStatus("error");
+    }
+  }
+
+  const thumbnailPreview = (
+thumbnailIsDisplayable && thumbnailUrl ? (
+            <section aria-label="保存済みサムネイル" className="overflow-hidden rounded-md border border-neutral-200 bg-neutral-50">
+              <Image
+                alt={`${item.title} のサムネイル`}
+                className={`h-auto w-full bg-neutral-950 object-contain ${
+                  item.type === "short" ? "aspect-[9/16] max-h-[34rem]" : "aspect-video"
+                }`}
+                height={item.type === "short" ? 1920 : 720}
+                priority={thumbnailPriority}
+                src={thumbnailUrl}
+                unoptimized
+                width={item.type === "short" ? 1080 : 1280}
+                onError={() => setFailedThumbnailUrl(thumbnailUrl)}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-neutral-200 px-3 py-2">
+                <span className="text-xs font-semibold text-neutral-600">
+                  {thumbnailLabel}
+                </span>
+                {item.thumbnailDownloadUrl ? (
+                  <SaveFileButton
+                    className="inline-flex min-h-9 items-center rounded-md border border-neutral-400 bg-white px-3 text-xs font-semibold text-neutral-900"
+                    description="YouTube thumbnail"
+                    extension={thumbnailIsPng ? ".png" : ".jpg"}
+                    label="サムネを保存"
+                    mimeType={thumbnailIsPng ? "image/png" : "image/jpeg"}
+                    suggestedName={thumbnailFilename}
+                    url={toBrowserApiUrl(item.thumbnailDownloadUrl)}
+                  />
+                ) : null}
+              </div>
+            </section>
+          ) : item.thumbnailStatus ? (
+            <div
+              className={`rounded-md border px-3 py-2 text-xs font-semibold ${
+                thumbnailHasError
+                  ? "border-red-200 bg-red-50 text-red-700"
+                  : "border-neutral-200 bg-neutral-50 text-neutral-600"
+              }`}
+            >
+              {thumbnailLabel}
+            </div>
+          ) : null
+  );
 
   return (
     <article className="rounded-md border border-neutral-300 bg-white p-5 shadow-sm shadow-neutral-200/60">
@@ -66,6 +221,11 @@ export function ResultVideoCard({
             ) : null}
           </div>
           <h2 className="break-words text-lg font-semibold leading-snug text-neutral-950">{item.title}</h2>
+          {thumbnailPreview}
+          {item.type === "normal" && onRegenerateThumbnail ? (
+            <ResultThumbnailWorkspace item={item} busy={isRegeneratingThumbnail}
+              onRender={(crop, styles, text, advance) => onRegenerateThumbnail(item, crop, styles, text, advance)} />
+          ) : null}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
             <span>title: {readableToken(item.titleSource)}</span>
             <span>score source: {scoreSource}</span>
@@ -126,16 +286,137 @@ export function ResultVideoCard({
           </dl>
         </details>
 
+        {hasPostMetadata ? (
+          <details className="rounded-md border border-sky-200 bg-sky-50/50 p-3 text-xs text-neutral-700">
+            <summary className="cursor-pointer font-semibold text-sky-950">
+              YouTube投稿用セット
+            </summary>
+            {item.postMetadataSource ? (
+              <p className="mt-2 text-[11px] text-neutral-500">
+                生成元: {item.postMetadataSource}
+              </p>
+            ) : null}
+            {titleCandidates.length > 0 ? (
+              <div className="mt-3 grid gap-2">
+                {titleCandidates.map((candidate) => (
+                  <div
+                    className={`border bg-white p-2 ${
+                      item.selectedTitleId === candidate.id
+                        ? "border-sky-700"
+                        : "border-neutral-200"
+                    }`}
+                    key={candidate.id}
+                  >
+                    <div className="flex flex-wrap items-center gap-1 text-[10px] font-semibold">
+                      <span className="bg-neutral-100 px-1.5 py-0.5 text-neutral-700">
+                        {INTENT_LABELS[candidate.intent]}
+                      </span>
+                      {item.recommendedTitleId === candidate.id ? (
+                        <span className="bg-emerald-100 px-1.5 py-0.5 text-emerald-800">
+                          推奨
+                        </span>
+                      ) : null}
+                      {item.selectedTitleId === candidate.id ? (
+                        <span className="bg-sky-100 px-1.5 py-0.5 text-sky-800">
+                          採用
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 break-words font-medium text-neutral-950">
+                      {candidate.title}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-3 border bg-white p-2">
+                <p className="text-[10px] font-semibold text-neutral-600">公開用タイトル</p>
+                <p className="mt-1 break-words font-medium text-neutral-950">{item.title}</p>
+              </div>
+            )}
+            {youtubeDescription ? (
+              <p className="mt-3 whitespace-pre-wrap leading-5 text-neutral-700">
+                {youtubeDescription}
+              </p>
+            ) : null}
+            {youtubeHashtags.length > 0 ? (
+              <p className="mt-2 break-words font-medium text-sky-800">
+                {youtubeHashtags.join(" ")}
+              </p>
+            ) : null}
+            {youtubeTags.length > 0 ? (
+              <p className="mt-2 break-words text-neutral-600">
+                タグ: {youtubeTagsText(youtubeTags)}
+              </p>
+            ) : null}
+            <div className="mt-3 grid grid-cols-2 gap-1 sm:grid-cols-4">
+              <button
+                className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold"
+                type="button"
+                onClick={() => void copyField("title", item.title)}
+              >
+                {copyStatus === "title" ? "コピー済み" : "タイトル"}
+              </button>
+              <button
+                className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
+                disabled={!youtubeDescription.trim() && youtubeHashtags.length === 0}
+                type="button"
+                onClick={() =>
+                  void copyField(
+                    "description",
+                    descriptionWithHashtags(youtubeDescription, youtubeHashtags)
+                  )
+                }
+              >
+                {copyStatus === "description" ? "コピー済み" : "説明欄"}
+              </button>
+              <button
+                className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
+                disabled={youtubeTags.length === 0}
+                type="button"
+                onClick={() => void copyField("tags", youtubeTagsText(youtubeTags))}
+              >
+                {copyStatus === "tags" ? "コピー済み" : "タグ"}
+              </button>
+              <button
+                className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold"
+                type="button"
+                onClick={() => void copyField("all", postCopyText(item))}
+              >
+                {copyStatus === "all" ? "コピー済み" : "全部"}
+              </button>
+            </div>
+            {copyStatus === "error" ? (
+              <p className="mt-2 font-semibold text-red-700" role="status">
+                コピーできませんでした
+              </p>
+            ) : null}
+          </details>
+        ) : null}
+
         <div className="flex flex-wrap gap-2">
-          <a
+          {onReedit && item.candidateId ? (
+            <button
+              className="inline-flex min-h-10 items-center bg-sky-700 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
+              disabled={isReediting}
+              type="button"
+              onClick={() => onReedit(item)}
+            >
+              {isReediting ? "再編集画面を準備中" : "この動画だけ再編集"}
+            </button>
+          ) : null}
+          <SaveFileButton
             className="inline-flex min-h-10 items-center rounded-md bg-neutral-950 px-4 text-sm font-medium text-white"
-            href={toApiUrl(item.downloadUrl)}
-          >
-            Download MP4
-          </a>
+            url={toBrowserApiUrl(item.downloadUrl)}
+            suggestedName={suggestedFilename}
+            mimeType="video/mp4"
+            extension=".mp4"
+            description="MP4 video"
+            label="MP4を保存"
+          />
           <a
             className="inline-flex min-h-10 items-center rounded-md border border-neutral-300 px-4 text-sm font-medium text-neutral-800"
-            href={toApiUrl(item.videoUrl)}
+            href={toBrowserApiUrl(item.videoUrl)}
             target="_blank"
           >
             Open
@@ -143,7 +424,7 @@ export function ResultVideoCard({
           {item.metadataUrl ? (
             <a
               className="inline-flex min-h-10 items-center rounded-md border border-neutral-300 px-4 text-sm font-medium text-neutral-800"
-              href={toApiUrl(item.metadataUrl)}
+              href={toBrowserApiUrl(item.metadataUrl)}
               target="_blank"
             >
               Metadata
@@ -152,7 +433,7 @@ export function ResultVideoCard({
           {item.subtitleUrl ? (
             <a
               className="inline-flex min-h-10 items-center rounded-md border border-neutral-300 px-4 text-sm font-medium text-neutral-800"
-              href={toApiUrl(item.subtitleUrl)}
+              href={toBrowserApiUrl(item.subtitleUrl)}
               target="_blank"
             >
               Subtitle

@@ -62,7 +62,11 @@ class LauncherApp:
         self.action_buttons: list[ttk.Button] = []
         self._build_ui()
         self.root.after(100, self._drain_events)
-        self._run_async("起動前確認", self.controller.preflight, self._apply_preflight)
+        self._run_async(
+            "Docker Desktop・AutoClipper自動起動",
+            lambda: self.controller.start(profile="recommended"),
+            self._apply_start_result,
+        )
 
     def _build_ui(self) -> None:
         self.root.title("AutoClipper Launcher")
@@ -207,7 +211,7 @@ class LauncherApp:
         )
         self.console.pack(fill=tk.BOTH, expand=True)
         self._append(
-            "Launcherを起動しました。通常は「推奨設定で起動」を押してください。"
+            "Launcherを起動しました。Docker DesktopとAutoClipperを自動起動します。"
         )
 
     def _button(
@@ -287,6 +291,7 @@ class LauncherApp:
             message = str(exc)
             detail = None
         combined = message if not detail else f"{message}\n{detail}"
+        combined = self.controller.redact(combined)
         self._append(f"ERROR: {combined}")
         messagebox.showerror("AutoClipper Launcher", combined)
 
@@ -337,35 +342,37 @@ class LauncherApp:
     def _refresh(self) -> None:
         self._run_async("状態更新", self.controller.preflight, self._apply_preflight)
 
+    def _apply_start_result(self, result: StartResult) -> None:
+        if result.docker_desktop_started:
+            self._append("Docker Desktopを自動起動しました。")
+        self._append(
+            "既に起動済みです。"
+            if result.already_running
+            else "4 servicesが起動しました。"
+        )
+        self._refresh_after_operation()
+        self.runtime_profile_var.set(result.runtime_profile.label)
+        self.transcription_var.set(result.runtime_profile.transcription_label)
+        self.gpu_var.set(result.gpu_name or "not detected")
+        self.worker_runtime_var.set(
+            "GPU override enabled"
+            if result.gpu_override_enabled
+            else "CPU compose"
+        )
+        self.fallback_var.set(result.fallback_reason or "false")
+        self._append(
+            f"Runtime profile: {result.runtime_profile.label}; "
+            f"Transcription: {result.runtime_profile.transcription_label}; "
+            f"Fallback: {result.fallback_reason or 'false'}"
+        )
+
     def _start(self, rebuild: bool, profile: str) -> None:
         label = "再ビルドして起動" if rebuild else "AutoClipper起動"
-
-        def success(result: StartResult) -> None:
-            self._append(
-                "既に起動済みです。"
-                if result.already_running
-                else "4 servicesが起動しました。"
-            )
-            self._refresh_after_operation()
-            self.runtime_profile_var.set(result.runtime_profile.label)
-            self.transcription_var.set(result.runtime_profile.transcription_label)
-            self.gpu_var.set(result.gpu_name or "not detected")
-            self.worker_runtime_var.set(
-                "GPU override enabled"
-                if result.gpu_override_enabled
-                else "CPU compose"
-            )
-            self.fallback_var.set(result.fallback_reason or "false")
-            self._append(
-                f"Runtime profile: {result.runtime_profile.label}; "
-                f"Transcription: {result.runtime_profile.transcription_label}; "
-                f"Fallback: {result.fallback_reason or 'false'}"
-            )
 
         self._run_async(
             label,
             lambda: self.controller.start(profile=profile, rebuild=rebuild),
-            success,
+            self._apply_start_result,
         )
 
     def _stop(self) -> None:

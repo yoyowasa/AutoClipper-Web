@@ -170,7 +170,7 @@ def check_generated_video(env: dict[str, str], *, keep_test_video: bool) -> None
     compose_exec("backend", ["sh", "-lc", generate], env=env)
     compose_exec("worker", ["sh", "-lc", probe_from_worker], env=env)
     if keep_test_video:
-        print(f"kept generated video at storage/temp/smoke_runtime/smoke.mp4")
+        print("kept generated video at storage/temp/smoke_runtime/smoke.mp4")
     else:
         compose_exec("backend", ["sh", "-lc", "rm -rf /app/storage/temp/smoke_runtime"], env=env)
         print("removed generated smoke video")

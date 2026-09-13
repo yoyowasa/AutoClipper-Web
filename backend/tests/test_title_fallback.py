@@ -58,6 +58,56 @@ def test_clip_without_candidate_text_uses_overlapping_transcript_segments() -> N
     assert titled.title_source == "transcript_fallback"
 
 
+def test_title_skips_generic_intro_segments() -> None:
+    candidate = make_candidate(
+        transcript_text=(
+            "ご視聴ありがとうございました こんばんは 声は聞こえていますか "
+            "一週間休んだ理由と運動会を欠席した経緯を話します"
+        )
+    )
+    segments = [
+        TranscriptSegment(start=12.0, end=14.0, text="ご視聴ありがとうございました"),
+        TranscriptSegment(start=14.0, end=16.0, text="こんばんは"),
+        TranscriptSegment(start=16.0, end=20.0, text="一週間休んだ理由を話します"),
+    ]
+
+    titled = candidate_with_title(candidate, index=1, transcript_segments=segments)
+
+    assert titled.title == "一週間休んだ理由を話します"
+
+
+def test_known_multilingual_asr_title_is_postprocessed() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="その農منにしとったっちゃん",
+        title="その農منにしとったっちゃん",
+    )
+
+    titled = candidate_with_title(candidate, index=1)
+
+    assert titled.title == "その能面にしとったっちゃん"
+    assert titled.overlay_title == "その能面にしとったっちゃん"
+
+
+def test_unknown_mixed_script_title_uses_deterministic_fallback() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="その農غにしとったっちゃん そしたら なんか知らんけど",
+        title="その農غにしとったっちゃん",
+    )
+    segments = [
+        TranscriptSegment(start=12.0, end=14.0, text="その農غにしとったっちゃん"),
+        TranscriptSegment(start=14.0, end=15.0, text="そしたら"),
+        TranscriptSegment(start=15.0, end=16.0, text="なんか知らんけど"),
+    ]
+
+    titled = candidate_with_title(candidate, index=1, transcript_segments=segments)
+
+    assert titled.title == "Short 01"
+    assert titled.overlay_title == "Short 01"
+    assert titled.title_source == "deterministic_fallback"
+
+
 def test_clip_without_transcript_gets_deterministic_fallback_title() -> None:
     candidate = make_candidate(candidate_type="short", transcript_text="")
 
@@ -81,3 +131,48 @@ def test_openai_title_is_preserved() -> None:
     assert titled.title == "OpenAI title"
     assert titled.overlay_title == "OpenAI overlay"
     assert titled.title_source == "openai"
+
+
+def test_manual_short_overlay_title_keeps_two_line_break() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="fallback text",
+        title="公開用タイトル",
+        overlay_title="表示タイトル前半\n表示タイトル後半",
+    ).model_copy(update={"title_source": "manual_review"})
+
+    titled = candidate_with_title(candidate, index=1)
+
+    assert titled.title == "公開用タイトル"
+    assert titled.overlay_title == "表示タイトル前半\n表示タイトル後半"
+    assert titled.title_source == "manual_review"
+
+
+def test_manual_short_empty_overlay_title_stays_empty() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="fallback text",
+        title="公開用タイトル",
+        overlay_title="",
+    ).model_copy(update={"title_source": "manual_review"})
+
+    titled = candidate_with_title(candidate, index=1)
+
+    assert titled.title == "公開用タイトル"
+    assert titled.overlay_title == ""
+    assert titled.title_source == "manual_review"
+
+
+def test_curated_title_keeps_trailing_prolonged_sound_mark() -> None:
+    candidate = make_candidate(
+        candidate_type="short",
+        transcript_text="fallback text",
+        title="箸が止まらない！バジルソースで食べるブロッコリー",
+        overlay_title="箸が止まらない！\nめちゃうまブロッコリー",
+    ).model_copy(update={"title_source": "manual_review"})
+
+    titled = candidate_with_title(candidate, index=1)
+
+    assert titled.title == "箸が止まらない！バジルソースで食べるブロッコリー"
+    assert titled.overlay_title == "箸が止まらない！\nめちゃうまブロッコリー"
+    assert titled.title_source == "manual_review"

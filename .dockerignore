@@ -7,4 +7,13 @@ frontend/.next/
 storage/uploads/*
 storage/temp/*
 storage/outputs/*
+storage/heatmaps/*
+storage/codex_bridge/*
+storage/*.db
+storage/*.db-*
+storage/.storage-lifecycle.lock
+youtube/
 *.log
+frontend/public/fonts/GN-KillGothic-U-KanaNB.ttf
+frontend/public/fonts/local/
+.codex_tmp/

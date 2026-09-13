@@ -21,13 +21,18 @@ build/
 storage/uploads/*
 storage/temp/*
 storage/outputs/*
+storage/heatmaps/*
+storage/codex_bridge/*
 storage/fonts/*
 storage/transcripts/*
 storage/*.db
 storage/*.db-*
+storage/.storage-lifecycle.lock
+youtube/
 !storage/uploads/.gitkeep
 !storage/temp/.gitkeep
 !storage/outputs/.gitkeep
+!storage/heatmaps/.gitkeep
 !storage/fonts/.gitkeep
 !storage/transcripts/.gitkeep
 
@@ -45,3 +50,7 @@ ID146_*/
 Thumbs.db
 .idea/
 .vscode/
+# User-installed fonts with redistribution restrictions (never commit/deploy).
+frontend/public/fonts/GN-KillGothic-U-KanaNB.ttf
+frontend/public/fonts/local/*
+!frontend/public/fonts/local/.gitkeep
