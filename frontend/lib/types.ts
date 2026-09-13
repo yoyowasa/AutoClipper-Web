@@ -159,6 +159,7 @@ export type ClipSettings = {
   transcriptNormalizeUnicode?: boolean;
   transcriptNormalizeWhitespace?: boolean;
   transcriptNormalizePunctuation?: boolean;
+  transcriptNormalizeFullwidth?: boolean;
   useDefaultTranscriptDictionary?: boolean;
   transcriptReplacements?: Record<string, string>;
   whisperModelSize: "base" | "small" | "medium" | "large-v3" | "turbo";
@@ -273,6 +274,11 @@ export type JobStatusResponse = {
 };
 
 export type ResultExportItem = {
+  thumbnailTextStyles?: ThumbnailTextStyles | null;
+  thumbnailKicker?: string;
+  thumbnailLine1?: string;
+  thumbnailLine2?: string;
+  thumbnailCropMode?: "standard" | "close";
   id: string;
   type: ExportType;
   candidateId: string | null;
@@ -351,6 +357,9 @@ export type JobResultsResponse = {
 };
 
 export type SubtitleReviewSegment = {
+  sourceIndices?: number[];
+  preserveSegmentation?: boolean;
+  singleLine?: boolean;
   id: string;
   index: number;
   start: number;
@@ -360,6 +369,23 @@ export type SubtitleReviewSegment = {
   confidence: number | null;
   edited: boolean;
   affectedClipIds: string[];
+};
+
+export type ThumbnailCopyText = { heading: string; upper: string; lower: string };
+export type ThumbnailCopySuggestion = ThumbnailCopyText & {
+  id: string; reason: string; evidence: { segmentId: string; quote: string }[];
+};
+export type ThumbnailCopyState = {
+  state: "idle" | "queued" | "generating" | "ready" | "failed";
+  requestId?: string | null; suggestions: ThumbnailCopySuggestion[]; recommendedId?: string | null; error?: string | null;
+};
+
+export type SubtitleStructureRequest = {
+  action: "merge" | "split" | "line";
+  segments: Array<{ segmentId: string; before: string; text: string }>;
+  splitOffset?: number;
+  splitTime?: number;
+  singleLine?: boolean;
 };
 
 export type ClipTextFontPreset =
@@ -611,7 +637,7 @@ export type ClipPlanBoundaryUpdateRequest = {
 };
 
 export type ClipPlanTypeUpdateRequest = {
-  type: "normal";
+  type: ExportType;
 };
 
 export type ClipPlanClipCreateRequest = ClipPlanBoundaryUpdateRequest & {
@@ -637,4 +663,11 @@ export type NormalThumbnailStyle = {
   titleColor: string;
   secondTitleColor: string;
   outlineColor: string;
+  textStyles?: ThumbnailTextStyles | null;
 };
+
+export type ThumbnailFontPreset = Extract<ClipTextFontPreset,
+  "noto_black" | "heavy" | "mplus_extrabold" | "mplus_rounded_extrabold" | "chikara" |
+  "chikara_yowaku" | "keifont" | "mushin" | "ankoku_zonji" | "tanuki_magic" | "dela_gothic" | "corporate_logo">;
+export type ThumbnailTextStyle = { fontPreset: ThumbnailFontPreset; fontSize: number; color: string; autoFit?: boolean };
+export type ThumbnailTextStyles = { heading: ThumbnailTextStyle; upper: ThumbnailTextStyle; lower: ThumbnailTextStyle };

@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from app.thumbnail_style import resolve_thumbnail_text_styles
 from typing import Any
 
 from app.candidates.merge_boundaries import Candidate
@@ -138,6 +139,8 @@ def _ready_metadata(
             if result.kind == "normal" else "short_hook_frame_v1"
         ),
         "thumbnail_error_code": None,
+        **({"thumbnail_text_styles": resolve_thumbnail_text_styles(character_style).model_dump(mode="json", by_alias=True)}
+           if result.kind == "normal" else {}),
     }
 
 

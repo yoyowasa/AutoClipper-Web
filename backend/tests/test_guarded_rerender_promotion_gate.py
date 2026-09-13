@@ -322,7 +322,7 @@ def test_rerender_lease_busy_is_noop_before_marker_or_render(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_factory, storage, job_id = rerender_noop_runtime
-    review = SimpleNamespace(render_revision=2, state="render_queued")
+    review = SimpleNamespace(render_revision=2, state="render_queued", created_at="2026-09-13T00:00:00Z")
     monkeypatch.setattr(runner_module, "load_subtitle_review", lambda _path: review)
     lease_calls: list[tuple[str, int]] = []
 
@@ -453,7 +453,7 @@ def test_guarded_rerender_failure_leaves_post_render_gate_missing(
         decision_path,
     )
 
-    review = SimpleNamespace(render_revision=2, state="render_queued")
+    review = SimpleNamespace(render_revision=2, state="render_queued", created_at="2026-09-13T00:00:00Z")
     monkeypatch.setattr(runner_module, "load_subtitle_review", lambda _path: review)
     monkeypatch.setattr(runner_module, "mark_review_rendering", lambda document: document)
     monkeypatch.setattr(runner_module, "write_subtitle_review", lambda *_args: None)
@@ -652,7 +652,7 @@ def test_guarded_rerender_hashes_projected_canonical_exports_before_promotion(
         decision_path,
     )
 
-    review = SimpleNamespace(render_revision=2, state="render_queued")
+    review = SimpleNamespace(render_revision=2, state="render_queued", created_at="2026-09-13T00:00:00Z")
     monkeypatch.setattr(runner_module, "load_subtitle_review", lambda _path: review)
     monkeypatch.setattr(runner_module, "mark_review_rendering", lambda document: document)
     monkeypatch.setattr(runner_module, "write_subtitle_review", lambda *_args: None)

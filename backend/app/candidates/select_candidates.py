@@ -805,6 +805,33 @@ def convert_selected_clip_to_normal(
     )
 
 
+def convert_selected_clip_to_short(
+    selection: CandidateSelection,
+    clip_id: str,
+) -> CandidateSelection:
+    matching = [c for c in [*selection.normal_clips, *selection.shorts] if c.id == clip_id]
+    if len(matching) != 1:
+        raise ValueError("selected clip data must contain exactly one matching candidate")
+    if matching[0].type == "short":
+        return selection
+    converted = matching[0].model_copy(update={
+        "type": "short",
+        "hook_text": None,
+        "hook_duration_seconds": None,
+        "hook_scene_start": None,
+        "hook_scene_end": None,
+    })
+    normal_clips = [c for c in selection.normal_clips if c.id != clip_id]
+    shorts = [*selection.shorts, converted]
+    return selection.model_copy(update={
+        "normal_clips": normal_clips,
+        "shorts": shorts,
+        "requested_normal_count": len(normal_clips),
+        "requested_short_count": len(shorts),
+        "unfilled_requested_counts": {**selection.unfilled_requested_counts, "normal": 0, "short": 0},
+    })
+
+
 def write_selected_clips(selection: CandidateSelection, output_path: str | Path) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)

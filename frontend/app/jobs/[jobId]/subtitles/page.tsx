@@ -1,6 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { ShortFramingWorkspace } from "../../../../components/ShortFramingWorkspace";
+import { SubtitleSegmentActions } from "../../../../components/SubtitleSegmentActions";
+import { editSubtitleStructure } from "../../../../lib/api";
+import type { SubtitleStructureRequest } from "../../../../lib/types";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -9,11 +13,11 @@ import {
   ClipTextOverlay,
   ClipTextStyleEditor
 } from "../../../../components/ClipTextStyleEditor";
-import { ShortConversionEditor } from "../../../../components/ShortConversionEditor";
 import { TitleHookSuggestionPanel } from "../../../../components/TitleHookSuggestionPanel";
+import { SubtitleBulkCorrection } from "../../../../components/SubtitleBulkCorrection";
+import type { CorrectionSelection, SubtitleBatchUpdate } from "../../../../lib/subtitleBulkCorrection";
 import {
   applySubtitleReviewClip,
-  convertSubtitleReviewClipToShort,
   finalizeSubtitleReview,
   getJobStatus,
   getSubtitleReview,
@@ -23,7 +27,8 @@ import {
   toApiUrl,
   updateSubtitleReviewClipFraming,
   updateSubtitleReviewHookScene,
-  updateSubtitleReviewShortBannerSettings
+  updateSubtitleReviewShortBannerSettings,
+  updateSubtitleReviewSegments
 } from "../../../../lib/api";
 import { type ClipTextTarget } from "../../../../lib/clipTextStyle";
 import { subtitlePreviewEvents } from "../../../../lib/subtitlePreview";
@@ -33,7 +38,6 @@ import type {
   PostTitleCandidate,
   SubtitleReviewClip,
   SubtitleReviewClipFramingUpdateRequest,
-  SubtitleReviewConvertToShortRequest,
   SubtitleReviewDocument,
   SubtitleReviewSegment,
   TitleHookSuggestion,
@@ -232,218 +236,6 @@ function shortFramingEquals(
   return shortFramingSignature(left) === shortFramingSignature(right);
 }
 
-type ShortFramingRangeProps = {
-  presets?: ReadonlyArray<{ label: string; value: number }>;
-  ariaLabel: string;
-  disabled: boolean;
-  endLabel: string;
-  label: string;
-  max: number;
-  min: number;
-  startLabel: string;
-  step: number;
-  value: number;
-  valueLabel: string;
-  onChange: (value: number) => void;
-  onCommit: (value: number) => void;
-};
-
-function ShortFramingRange({
-  presets,
-  ariaLabel,
-  disabled,
-  endLabel,
-  label,
-  max,
-  min,
-  startLabel,
-  step,
-  value,
-  valueLabel,
-  onChange,
-  onCommit
-}: ShortFramingRangeProps) {
-  return (
-    <div className="min-w-0 border border-neutral-300 bg-white px-3 py-2">
-      <span className="flex items-center justify-between gap-2 text-xs font-semibold text-neutral-700">
-        <span>{label}</span>
-        <span>{valueLabel}</span>
-      </span>
-      <input
-        aria-label={ariaLabel}
-        className="mt-2 block h-2 w-full cursor-pointer accent-sky-600 disabled:cursor-default"
-        disabled={disabled}
-        max={max}
-        min={min}
-        step={step}
-        type="range"
-        value={value}
-        onBlur={(event) => onCommit(Number(event.currentTarget.value))}
-        onChange={(event) => onChange(Number(event.currentTarget.value))}
-        onKeyUp={(event) => onCommit(Number(event.currentTarget.value))}
-        onPointerCancel={(event) => onCommit(Number(event.currentTarget.value))}
-        onPointerUp={(event) => onCommit(Number(event.currentTarget.value))}
-      />
-      <span className="mt-1 flex justify-between text-[10px] text-neutral-500">
-        <span>{startLabel}</span>
-        <span>{endLabel}</span>
-      </span>
-      {presets ? <div className="mt-2 flex flex-wrap gap-1">
-        {presets.map((preset) => <button key={preset.value} type="button" disabled={disabled}
-          aria-pressed={Math.abs(value - preset.value) < 0.01}
-          className="border px-2 py-1 text-xs aria-pressed:bg-sky-100"
-          onClick={() => { onChange(preset.value); onCommit(preset.value); }}>{preset.label}</button>)}
-      </div> : null}
-    </div>
-  );
-}
-
-function NormalThumbnailDraftPreview({
-  clipId,
-  frameSeconds,
-  kicker,
-  line1,
-  line2,
-  maxFrameSeconds,
-  sourceStartSeconds,
-  videoSrc,
-  videoVersion
-}: {
-  clipId: string;
-  frameSeconds: number | null;
-  kicker: string;
-  line1: string;
-  line2: string;
-  maxFrameSeconds: number;
-  sourceStartSeconds: number;
-  videoSrc: string | null;
-  videoVersion: string;
-}) {
-  const thumbnailVideoRef = useRef<HTMLVideoElement>(null);
-  const selectedFrameSeconds = clamp(
-    frameSeconds ?? maxFrameSeconds * 0.38,
-    0,
-    maxFrameSeconds
-  );
-  const previewSource = videoSrc ? previewVideoSrc(videoSrc, videoVersion) : null;
-  const previewTextStyle = (text: string, maximumSizeCqw: number, minimumSizeCqw: number) => {
-    const characterCount = Math.max(1, Array.from(text.trim()).length);
-    const availableWidthCqw = 42;
-    const fontSizeCqw = Math.max(
-      minimumSizeCqw,
-      Math.min(maximumSizeCqw, availableWidthCqw / characterCount)
-    );
-    return {
-      fontSize: `${fontSizeCqw}cqw`,
-      fontFamily: '"Noto Sans JP", "Noto Sans CJK JP", sans-serif',
-      transform: `scaleX(${Math.min(
-        1,
-        availableWidthCqw / (fontSizeCqw * characterCount)
-      )})`,
-      transformOrigin: "left center",
-      whiteSpace: "nowrap" as const
-    };
-  };
-
-  useEffect(() => {
-    const video = thumbnailVideoRef.current;
-    if (!video || !previewSource) {
-      return;
-    }
-    const seekToFrame = () => {
-      const target = Math.min(
-        Math.max(0, sourceStartSeconds + selectedFrameSeconds),
-        Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.05) : 0
-      );
-      video.pause();
-      video.currentTime = target;
-    };
-    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      seekToFrame();
-      return;
-    }
-    video.addEventListener("loadedmetadata", seekToFrame, { once: true });
-    return () => video.removeEventListener("loadedmetadata", seekToFrame);
-  }, [previewSource, selectedFrameSeconds, sourceStartSeconds]);
-
-  return (
-    <div
-      aria-label="通常サムネ即時プレビュー"
-      className="relative mt-3 aspect-video w-full overflow-hidden border border-[#9a7737] bg-[#071b18]"
-      style={{ containerType: "inline-size" }}
-    >
-      {previewSource ? (
-        <video
-          className="absolute left-[50.8%] top-[4.4%] h-[91.2%] w-[46.7%] object-cover object-[64%_50%]"
-          key={`${clipId}:${previewSource}`}
-          muted
-          playsInline
-          preload="auto"
-          ref={thumbnailVideoRef}
-          src={previewSource}
-          onLoadedMetadata={(event) => {
-            event.currentTarget.currentTime = Math.min(
-              sourceStartSeconds + selectedFrameSeconds,
-              Math.max(0, event.currentTarget.duration - 0.05)
-            );
-          }}
-        />
-      ) : null}
-      <div className="absolute inset-0 bg-gradient-to-r from-[#061b18] via-[#061b18dd] to-transparent" />
-      <div
-        className="absolute inset-0 opacity-35"
-        style={{
-          backgroundImage:
-            "radial-gradient(circle at 12px 12px, rgba(184,147,67,.55) 0 1px, transparent 1.5px), repeating-linear-gradient(45deg, transparent 0 14px, rgba(23,71,63,.55) 14px 15px)"
-        }}
-      />
-      <div className="absolute inset-[2.5%] border border-[#b89343]/90" />
-      <div className="absolute -left-[7%] top-[18%] h-[13%] w-[61%] -rotate-6 bg-[#d24a27]/75" />
-      <div className="absolute left-[4.4%] top-[20.2%] w-[44.8%] -rotate-3">
-        {kicker.trim() ? (
-          <p
-            className="inline-block border-l-4 border-[#d24a27] bg-black/70 px-[3%] py-[1%] font-black tracking-[0.08em] text-[#f2e5bd]"
-            style={previewTextStyle(kicker, 2.3, 1.4)}
-          >
-            {kicker.trim()}
-          </p>
-        ) : null}
-      </div>
-      <div className="absolute left-[3.4%] top-[34.2%] w-[44.8%] -rotate-3">
-        {line1.trim() ? (
-          <p
-            className="font-black leading-[1.02] text-white"
-            style={{
-              ...previewTextStyle(line1, 6.4, 1.875),
-              textShadow:
-                "-2px -2px 0 #03110e, 2px -2px 0 #03110e, -2px 2px 0 #03110e, 2px 2px 0 #03110e, 4px 4px 0 #176b5b"
-            }}
-          >
-            {line1.trim()}
-          </p>
-        ) : null}
-        {line2.trim() ? (
-          <p
-            className={`${line1.trim() ? "mt-[2%]" : ""} font-black leading-[1.02] text-[#f4d84b]`}
-            style={{
-              ...previewTextStyle(line2, 6.8, 1.875),
-              textShadow:
-                "-2px -2px 0 #03110e, 2px -2px 0 #03110e, -2px 2px 0 #03110e, 2px 2px 0 #03110e, 4px 4px 0 #176b5b"
-            }}
-          >
-            {line2.trim()}
-          </p>
-        ) : null}
-      </div>
-      {!kicker.trim() && !line1.trim() && !line2.trim() ? (
-        <p className="absolute bottom-[5%] left-[5%] bg-black/70 px-2 py-1 text-[10px] font-semibold text-white">
-          文字なし
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
 function contentDraftForClip(clip: SubtitleReviewClip): ClipContentDraft {
   return {
     publicationTitle: clip.publicationTitle ?? clip.title,
@@ -572,7 +364,6 @@ export default function SubtitleReviewPage() {
   const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
   const [confirmingClipId, setConfirmingClipId] = useState<string | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
-  const [isConvertingToShort, setIsConvertingToShort] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
@@ -609,6 +400,11 @@ export default function SubtitleReviewPage() {
     string | null
   >(null);
   const [copiedPostField, setCopiedPostField] = useState<string | null>(null);
+  const [bulkCorrectionSelection, setBulkCorrectionSelection] = useState<CorrectionSelection | null>(null);
+  const [isSavingBulkCorrection, setIsSavingBulkCorrection] = useState(false);
+  const [isSavingStructure, setIsSavingStructure] = useState(false);
+  const [segmentCursor, setSegmentCursor] = useState<{ id: string; offset: number } | null>(null);
+  const [workspaceTab, setWorkspaceTab] = useState<"content" | "style">("content");
   const [suggestionHydrationRetryVersion, setSuggestionHydrationRetryVersion] =
     useState(0);
 
@@ -807,12 +603,13 @@ export default function SubtitleReviewPage() {
   }, [hasPendingPreviews, isUpdatingHookScene, jobId]);
 
   const hasReviewMutationInFlight =
+    isSavingBulkCorrection ||
+    isSavingStructure ||
     retryingPreviewClipId !== null ||
     isUpdatingHookScene ||
     confirmingClipId !== null ||
     isSavingShortBannerSettings ||
     savingShortFramingClipId !== null ||
-    isConvertingToShort ||
     isFinalizing;
   const isEditable =
     review?.state === "awaiting_review" &&
@@ -1276,6 +1073,8 @@ export default function SubtitleReviewPage() {
         start: segment.start,
         end: segment.end,
         text: drafts[segment.id] ?? segment.text,
+        preserveSegmentation: segment.preserveSegmentation,
+        singleLine: segment.singleLine,
         style: selectedClipContentDraft?.subtitleStyles.find(
           (item) => item.start === segment.start && item.end === segment.end
         )?.style
@@ -1339,7 +1138,7 @@ export default function SubtitleReviewPage() {
 
   useEffect(() => {
     const video = videoRef.current;
-    subtitleListRef.current?.scrollTo({ top: 0 });
+
     if (!video || !selectedPlayerReady) {
       return;
     }
@@ -1427,6 +1226,8 @@ export default function SubtitleReviewPage() {
   function isCurrentReviewMutation(generation: number): boolean {
     return generation === reviewRequestGenerationRef.current;
   }
+
+  useEffect(() => { subtitleListRef.current?.scrollTo({ top: 0 }); }, [selectedClipId]);
 
   function selectClip(clip: SubtitleReviewClip) {
     setStyledSegmentId(null);
@@ -1643,6 +1444,28 @@ export default function SubtitleReviewPage() {
     setDirtySegmentIds((current) => new Set(current).add(segmentId));
   }
 
+  async function saveBulkCorrection(updates: SubtitleBatchUpdate[]) {
+    const generation = beginReviewMutation();
+    setIsSavingBulkCorrection(true);
+    setShowSavedPreview(false);
+    try {
+      const updated = await updateSubtitleReviewSegments(jobId, updates);
+      if (isCurrentReviewMutation(generation)) {
+        const ids = new Set(updates.map((item) => item.segmentId));
+        setReview(updated);
+        setDrafts((current) => {
+          const next = { ...current };
+          for (const segment of updated.segments) if (ids.has(segment.id)) next[segment.id] = segment.text;
+          return next;
+        });
+        setDirtySegmentIds((current) => new Set([...current].filter((id) => !ids.has(id))));
+      }
+    } finally {
+      endReviewMutation();
+      setIsSavingBulkCorrection(false);
+    }
+  }
+
   function updateClipContentDraft(
     clipId: string,
     update: Partial<ClipContentDraft>
@@ -1725,7 +1548,7 @@ export default function SubtitleReviewPage() {
       !isEditable ||
       shortFramingSaveInFlightRef.current.has(clipId)
     ) {
-      return;
+      return false;
     }
     const nextFraming = {
       framingOffsetX: clamp(framing.framingOffsetX, -100, 100),
@@ -1744,7 +1567,7 @@ export default function SubtitleReviewPage() {
         delete next[clipId];
         return next;
       });
-      return;
+      return true;
     }
     if (lastSavedShortFramingSignatureRef.current[clipId] === signature) {
       setShortFramingDrafts((drafts) => {
@@ -1752,7 +1575,7 @@ export default function SubtitleReviewPage() {
         delete next[clipId];
         return next;
       });
-      return;
+      return true;
     }
 
     shortFramingSaveInFlightRef.current.add(clipId);
@@ -1781,6 +1604,7 @@ export default function SubtitleReviewPage() {
         delete next[clipId];
         return next;
       });
+      return true;
     } catch (caught) {
       delete lastSavedShortFramingSignatureRef.current[clipId];
       setError(
@@ -1788,6 +1612,7 @@ export default function SubtitleReviewPage() {
           ? caught.message
           : "ショート画角を保存できませんでした"
       );
+      return false;
     } finally {
       endReviewMutation();
       shortFramingSaveInFlightRef.current.delete(clipId);
@@ -2175,6 +2000,51 @@ export default function SubtitleReviewPage() {
     }
   }
 
+  async function saveSubtitleStructure(request: SubtitleStructureRequest) {
+    if (!review || !isEditable) return;
+    const oldDocument = review;
+    const targets = new Set(request.segments.map(item => item.segmentId));
+    const sourceSegments = oldDocument.segments.filter(segment => targets.has(segment.id));
+    const affected = new Set(sourceSegments.flatMap(segment => segment.affectedClipIds));
+    const first = sourceSegments[0];
+    const oldIds = new Set(oldDocument.segments.map(segment => segment.id));
+    const scrollTop = subtitleListRef.current?.scrollTop ?? 0;
+    const generation = beginReviewMutation();
+    setIsSavingStructure(true);
+    videoRef.current?.pause();
+    setError(null);
+    try {
+      const updated = await editSubtitleStructure(jobId, request);
+      if (!isCurrentReviewMutation(generation)) return;
+      setReview(updated);
+      setDrafts(current => Object.fromEntries(updated.segments.map(segment => [segment.id,
+        targets.has(segment.id) || !oldIds.has(segment.id) ? segment.text : current[segment.id] ?? segment.text])));
+      setDirtySegmentIds(current => new Set([...current].filter(id => !targets.has(id))));
+      setClipContentDrafts(current => {
+        const next = { ...current };
+        const replacementSegments = updated.segments.filter(segment => targets.has(segment.id) || !oldIds.has(segment.id));
+        for (const clip of updated.clips) {
+          if (!affected.has(clip.id) || !next[clip.id]) continue;
+          const draft = next[clip.id];
+          const firstStyle = draft.subtitleStyles.find(item => item.start === first.start && item.end === first.end)?.style;
+          const keptStyles = draft.subtitleStyles.filter(item => !sourceSegments.some(segment => segment.start === item.start && segment.end === item.end));
+          next[clip.id] = { ...draft, subtitleStyles: [...keptStyles, ...(firstStyle ? replacementSegments.map(segment =>
+            ({ start: segment.start, end: segment.end, style: firstStyle })) : [])] };
+        }
+        return next;
+      });
+      setStyledSegmentId(null);
+      setSegmentCursor(null);
+      setBulkCorrectionSelection(null);
+      requestAnimationFrame(() => subtitleListRef.current?.scrollTo({ top: scrollTop }));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "字幕区間を変更できませんでした");
+    } finally {
+      setIsSavingStructure(false);
+      endReviewMutation();
+    }
+  }
+
   async function confirmSelectedClip() {
     if (isSavingShortBannerSettings) {
       setError("ショート帯設定の保存完了後に確認してください。");
@@ -2253,146 +2123,12 @@ export default function SubtitleReviewPage() {
           return next;
         });
       }
-      const nextClip =
-        updated.clips.find(
-          (clip) => clip.type === selectedClip.type && !clip.confirmed
-        ) ?? updated.clips.find((clip) => !clip.confirmed);
-      if (nextClip) {
-        selectClip(nextClip);
-      }
+
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "clipの内容を保存できませんでした");
     } finally {
       endReviewMutation();
       setConfirmingClipId(null);
-    }
-  }
-
-  async function convertSelectedNormalClipToShort(
-    request: SubtitleReviewConvertToShortRequest
-  ) {
-    if (
-      !selectedClip ||
-      selectedClip.type !== "normal" ||
-      !selectedClipContentDraft
-    ) {
-      return;
-    }
-    if (isSavingShortBannerSettings) {
-      setError("ショート画面設定の保存完了後に変換してください。");
-      return;
-    }
-    const title = selectedClipContentDraft.title.trim();
-    const publicationTitle = selectedClipContentDraft.publicationTitle.trim();
-    if (!publicationTitle) {
-      setError("公開用タイトルを入力してください。");
-      return;
-    }
-    if (!selectedHookDurationIsValid) {
-      setError("冒頭フックの表示秒数は1〜8秒で入力してください。");
-      return;
-    }
-    const segmentUpdates = selectedSegments
-      .filter((segment) => dirtySegmentIds.has(segment.id))
-      .map((segment) => ({
-        segmentId: segment.id,
-        text: drafts[segment.id] ?? segment.text
-      }));
-    const savedSegmentIds = new Set(
-      segmentUpdates.map((segment) => segment.segmentId)
-    );
-    const postMetadata = postMetadataApplyPayload(selectedClipContentDraft);
-    const mutationGeneration = beginReviewMutation();
-    setIsConvertingToShort(true);
-    setError(null);
-    try {
-      if (selectedClipHasDirtySegments || selectedClipHasDirtyContent) {
-          const saved = await applySubtitleReviewClip(jobId, selectedClip.id, {
-            title,
-            publicationTitle,
-            ...postMetadata,
-            hookText: selectedClipContentDraft.hookText.trim(),
-          hookDurationSeconds: selectedClipContentDraft.hookDurationSeconds,
-          hookSceneStart: selectedClipContentDraft.hookSceneStart,
-          hookSceneEnd: selectedClipContentDraft.hookSceneEnd,
-          thumbnailKicker: selectedClipContentDraft.thumbnailKicker.trim(),
-          thumbnailLine1: selectedClipContentDraft.thumbnailLine1.trim(),
-          thumbnailLine2: selectedClipContentDraft.thumbnailLine2.trim(),
-          thumbnailFrameSeconds: selectedClipContentDraft.thumbnailFrameSeconds,
-          titleStyle: selectedClipContentDraft.titleStyle,
-          hookStyle: selectedClipContentDraft.hookStyle,
-          subtitleStyle: selectedClipContentDraft.subtitleStyle,
-          subtitleStyles: selectedClipContentDraft.subtitleStyles,
-          segments: segmentUpdates
-        });
-        if (isCurrentReviewMutation(mutationGeneration)) {
-          setReview(saved);
-          setDrafts(
-            Object.fromEntries(
-              saved.segments.map((segment) => [segment.id, segment.text])
-            )
-          );
-          setDirtySegmentIds((current) => {
-            const next = new Set(current);
-            for (const segmentId of savedSegmentIds) {
-              next.delete(segmentId);
-            }
-            return next;
-          });
-          const savedClip = saved.clips.find(
-            (clip) => clip.id === selectedClip.id
-          );
-          if (savedClip) {
-            setClipContentDrafts((current) => ({
-              ...current,
-              [savedClip.id]: contentDraftForClip(savedClip)
-            }));
-          }
-        }
-      }
-      const updated = await convertSubtitleReviewClipToShort(
-        jobId,
-        selectedClip.id,
-        request
-      );
-      const converted = updated.clips.find((clip) => clip.id === selectedClip.id);
-      if (isCurrentReviewMutation(mutationGeneration)) {
-        setReview(updated);
-        setActiveClipType("short");
-        setSelectedClipId(converted?.id ?? selectedClip.id);
-        setLastSelectedClipIds({
-          normal: "",
-          short: converted?.id ?? selectedClip.id
-        });
-        setClipContentDrafts(
-          Object.fromEntries(
-            updated.clips.map((clip) => [clip.id, contentDraftForClip(clip)])
-          )
-        );
-        setDrafts(
-          Object.fromEntries(
-            updated.segments.map((segment) => [segment.id, segment.text])
-          )
-        );
-        setDirtySegmentIds(new Set());
-        setTitleHookSuggestionRecords({});
-      }
-      setSelectedTextStyleTarget("title");
-      setShowSavedPreview(false);
-      setPreviewLoadFailedClipIds(new Set());
-      setClipTime(0);
-      setIsPlaying(false);
-      setIsPlayerReady(false);
-      setIsBuffering(true);
-    } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "通常動画をショートへ変更できませんでした"
-      );
-    } finally {
-      setIsConvertingToShort(false);
-      endReviewMutation();
     }
   }
 
@@ -2439,39 +2175,10 @@ export default function SubtitleReviewPage() {
 
   const allConfirmed =
     review.totalClipCount > 0 && review.confirmedClipCount === review.totalClipCount;
-  const shortConversionHookStartSeconds =
-    selectedClip && selectedClipContentDraft?.hookSceneStart != null
-      ? clamp(
-          (selectedClipContentDraft?.hookSceneStart ?? selectedClip.start) -
-            selectedClip.start,
-          0,
-          bodyDuration
-        )
-      : null;
-  const shortConversionHookEndSeconds =
-    selectedClip && selectedClipContentDraft?.hookSceneEnd != null
-      ? clamp(
-          (selectedClipContentDraft?.hookSceneEnd ?? selectedClip.start) -
-            selectedClip.start,
-          0,
-          bodyDuration
-        )
-      : null;
-  const shortConversionHookDuration =
-    shortConversionHookStartSeconds !== null &&
-    shortConversionHookEndSeconds !== null
-      ? Math.max(
-          0,
-          shortConversionHookEndSeconds - shortConversionHookStartSeconds
-        )
-      : 0;
-  const shortConversionCurrentPosition = selectedClip
-    ? clamp(absolutePlaybackTime - selectedClip.start, 0, bodyDuration)
-    : 0;
 
   return (
-    <main className="min-h-screen bg-[#f7f7f4] px-3 py-2 text-neutral-950 sm:px-5">
-      <section className="mx-auto flex w-full flex-col gap-2">
+    <main className="subtitle-review-screen min-h-screen bg-[#f7f7f4] px-3 py-2 text-neutral-950 sm:px-5">
+      <section className="subtitle-review-shell mx-auto flex w-full flex-col gap-2">
         <header className="flex min-h-11 flex-wrap items-center gap-x-3 gap-y-2 border-b border-neutral-300 py-1">
           <h1 className="text-lg font-semibold sm:text-xl">clip別 字幕確認</h1>
           <p className="text-xs text-neutral-600">
@@ -2482,15 +2189,15 @@ export default function SubtitleReviewPage() {
             className={`px-2 py-1 text-[11px] font-semibold ${
               review.state === "completed"
                 ? "bg-emerald-100 text-emerald-800"
-                : isEditable
+                : review.state === "awaiting_review"
                   ? "bg-sky-100 text-sky-800"
                   : "bg-amber-100 text-amber-800"
             }`}
           >
             {review.state === "completed"
               ? "完了"
-              : isEditable
-                ? "字幕確認中"
+              : review.state === "awaiting_review"
+                ? hasReviewMutationInFlight ? "保存中" : "字幕確認中"
                 : "書き出し中"}
           </span>
           <Link
@@ -2501,7 +2208,7 @@ export default function SubtitleReviewPage() {
           </Link>
         </header>
 
-        {!isEditable ? (
+        {review.state !== "awaiting_review" ? (
           <div className="border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
             {review.state === "completed"
               ? "字幕確認と書き出しは完了しています。この画面は確認履歴として表示しています。"
@@ -2550,28 +2257,10 @@ export default function SubtitleReviewPage() {
           </button>
         </div>
 
-        {review.reeditSourceJobId && selectedClip?.type === "normal" ? (
-          <ShortConversionEditor
-            busy={isConvertingToShort}
-            clipDurationSeconds={bodyDuration}
-            currentPositionSeconds={shortConversionCurrentPosition}
-            disabled={!isEditable}
-            hasUnsavedChanges={
-              selectedClipHasDirtySegments || selectedClipHasDirtyContent
-            }
-            hookDurationSeconds={shortConversionHookDuration}
-            hookRangeEndSeconds={shortConversionHookEndSeconds}
-            hookRangeStartSeconds={shortConversionHookStartSeconds}
-            key={selectedClip.id}
-            shortMaxDurationSeconds={review.shortMaxDuration}
-            onConvert={(request) =>
-              void convertSelectedNormalClipToShort(request)
-            }
-          />
-        ) : null}
 
-        <div className="grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
-          <aside className="relative min-h-[420px] border-b border-neutral-300 lg:min-h-0 lg:border-r">
+
+        <div className="subtitle-review-grid grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
+          <aside className="subtitle-review-clips relative min-h-[420px] border-b border-neutral-300 lg:min-h-0 lg:border-r">
             <div className="flex min-h-[420px] flex-col lg:absolute lg:inset-0 lg:min-h-0">
             <div className="border-b border-neutral-200 px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2719,7 +2408,7 @@ export default function SubtitleReviewPage() {
             </div>
           </aside>
 
-          <section className="flex min-w-0 flex-col border-b border-neutral-300 lg:border-r 2xl:min-h-0 2xl:overflow-hidden">
+          <section className="subtitle-review-player flex min-w-0 flex-col border-b border-neutral-300 lg:border-r 2xl:min-h-0 2xl:overflow-hidden">
             {selectedClip ? (
               <>
                 <div
@@ -2761,144 +2450,35 @@ export default function SubtitleReviewPage() {
                       </label>
                     </div>
                     {selectedShortFramingDraft ? (
-                      <div className="border-b border-neutral-300 bg-neutral-50 px-4 py-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <p className="text-sm font-semibold text-neutral-900">
-                              このショートのみ微調整
-                            </p>
-                            <p className="text-xs text-neutral-500">
-                              スライダーを離すと保存し、このclipだけプレビューを再生成します
-                            </p>
-                          </div>
-                          <div className="flex flex-wrap items-center justify-end gap-2">
-                            <span
-                              aria-live="polite"
-                              className={`text-xs font-semibold ${
-                                selectedShortPreviewRegenerating
-                                  ? "text-sky-700"
-                                  : selectedShortFramingDirty
-                                    ? "text-amber-700"
-                                    : "text-emerald-700"
-                              }`}
-                            >
-                              {savingShortFramingClipId === selectedClip.id
-                                ? "画角を保存中"
-                                : selectedShortPreviewRegenerating
-                                  ? "このclipのプレビューを再生成中"
-                                  : selectedShortFramingDirty
-                                    ? "未反映"
-                                    : "反映済み"}
-                            </span>
-                            <button
-                              className="min-h-9 border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-700 disabled:bg-neutral-200 disabled:text-neutral-400"
-                              disabled={
-                                !isEditable ||
-                                savingShortFramingClipId !== null ||
-                                (selectedShortFramingDraft.framingOffsetX === 0 &&
-                                  selectedShortFramingDraft.framingOffsetY === 0 &&
-                                  selectedShortFramingDraft.framingZoom === 1)
-                              }
-                              type="button"
-                              onClick={() => {
-                                const next = changeSelectedShortFraming({
-                                  framingOffsetX: 0,
-                                  framingOffsetY: 0,
-                                  framingZoom: 1
-                                });
-                                if (next) {
-                                  void saveSelectedShortFraming(selectedClip.id, next);
-                                }
-                              }}
-                            >
-                              自動値へ戻す
-                            </button>
-                          </div>
-                        </div>
-                        <div className="mt-3 grid gap-3 md:grid-cols-3 2xl:grid-cols-1">
-                          <ShortFramingRange
-                            ariaLabel="このショートの左右画角"
-                            disabled={!isEditable || savingShortFramingClipId !== null}
-                            endLabel="右側を表示"
-                            label="左右"
-                            max={100}
-                            min={-100}
-                            startLabel="左側を表示"
-                            step={5}
-                            value={selectedShortFramingDraft.framingOffsetX}
-                            valueLabel={`${Math.round(selectedShortFramingDraft.framingOffsetX)}`}
-                            onChange={(value) =>
-                              changeSelectedShortFraming({ framingOffsetX: value })
-                            }
-                            onCommit={(value) => {
-                              const next = changeSelectedShortFraming({
-                                framingOffsetX: value
-                              });
-                              if (next) {
-                                void saveSelectedShortFraming(selectedClip.id, next);
-                              }
-                            }}
-                          />
-                          <ShortFramingRange
-                            ariaLabel="このショートの上下画角"
-                            disabled={!isEditable || savingShortFramingClipId !== null}
-                            endLabel="下側を表示"
-                            label="上下"
-                            max={100}
-                            min={-100}
-                            startLabel="上側を表示"
-                            step={5}
-                            value={selectedShortFramingDraft.framingOffsetY}
-                            valueLabel={`${Math.round(selectedShortFramingDraft.framingOffsetY)}`}
-                            onChange={(value) =>
-                              changeSelectedShortFraming({ framingOffsetY: value })
-                            }
-                            onCommit={(value) => {
-                              const next = changeSelectedShortFraming({
-                                framingOffsetY: value
-                              });
-                              if (next) {
-                                void saveSelectedShortFraming(selectedClip.id, next);
-                              }
-                            }}
-                          />
-                          <ShortFramingRange
-                            ariaLabel="このショートの拡大率"
-                            presets={[{ value: 1, label: "標準" }, { value: 1.8, label: "顔アップ" }, { value: 2.4, label: "顔アップ強" }]}
-                            disabled={!isEditable || savingShortFramingClipId !== null}
-                            endLabel="300%"
-                            label="拡大"
-                            max={3}
-                            min={1}
-                            startLabel="標準"
-                            step={0.05}
-                            value={selectedShortFramingDraft.framingZoom}
-                            valueLabel={`${Math.round(
-                              selectedShortFramingDraft.framingZoom * 100
-                            )}%`}
-                            onChange={(value) =>
-                              changeSelectedShortFraming({ framingZoom: value })
-                            }
-                            onCommit={(value) => {
-                              const next = changeSelectedShortFraming({
-                                framingZoom: value
-                              });
-                              if (next) {
-                                void saveSelectedShortFraming(selectedClip.id, next);
-                              }
-                            }}
-                          />
-                        </div>
+                      <div className="space-y-3 border-b border-neutral-300 bg-neutral-50 px-4 py-3">
+                        <p className="text-sm font-semibold">このショートのみ微調整</p>
+                        <p className="text-xs text-neutral-600">元映像の枠を動かして確認。位置・倍率は待たずに反映します。</p>
+                        <ShortFramingWorkspace
+                          key={`${selectedClip.id}:${review.shortLayout}:${review.shortTopBannerEnabled}:${review.shortBottomBannerEnabled}`}
+                          jobId={jobId} clipId={selectedClip.id} sourceUrl={review.sourceVideoUrl}
+                          start={selectedClip.start} end={selectedClip.end}
+                          value={selectedShortFramingDraft} editable={isEditable}
+                          onSave={async (next) => {
+                            changeSelectedShortFraming(next);
+                            return saveSelectedShortFraming(selectedClip.id, next);
+                          }}
+                        />
+                        <p className="text-xs text-neutral-600">
+                          左右 {selectedShortFramingDraft.framingOffsetX} ・ 上下 {selectedShortFramingDraft.framingOffsetY} ・ 拡大 {Math.round(selectedShortFramingDraft.framingZoom * 100)}%
+                        </p>
+                        <p className="text-xs font-semibold text-sky-700" aria-live="polite">
+                          {selectedShortPreviewRegenerating ? "保存した画角で動画を再生成中" : selectedShortFramingDirty ? "未保存の変更あり" : "保存済み"}
+                        </p>
                       </div>
                     ) : null}
                   </div>
                 ) : null}
-                <div className="flex items-start justify-center bg-neutral-100 p-3 sm:p-4 2xl:h-full 2xl:min-h-0 2xl:flex-1 2xl:items-stretch 2xl:overflow-hidden">
+                <div className="subtitle-video-area flex items-start justify-center bg-neutral-100 p-3 sm:p-4 2xl:h-full 2xl:min-h-0 2xl:flex-1 2xl:items-stretch 2xl:overflow-hidden">
                   <div
-                    className="w-full max-w-5xl overflow-hidden bg-neutral-950 text-white 2xl:flex 2xl:min-h-0 2xl:flex-col"
+                    className="subtitle-video-chrome w-full max-w-5xl overflow-hidden bg-neutral-950 text-white 2xl:flex 2xl:min-h-0 2xl:flex-col"
                     ref={playerShellRef}
                   >
-                    <div className="flex items-center justify-center bg-black 2xl:min-h-0 2xl:flex-1 2xl:overflow-hidden">
+                    <div className="subtitle-video-fit flex items-center justify-center bg-black 2xl:min-h-0 2xl:flex-1 2xl:overflow-hidden">
                       <div
                         className={`relative overflow-hidden bg-black ${
                           selectedClip.type === "short"
@@ -3000,7 +2580,7 @@ export default function SubtitleReviewPage() {
                               subtitleMaxCharsPerLine={
                                 selectedClip.subtitleMaxCharsPerLine
                               }
-                              subtitleMaxLines={selectedClip.subtitleMaxLines}
+                              subtitleMaxLines={activePreviewSubtitleEvent?.singleLine ? 1 : selectedClip.subtitleMaxLines}
                               target="subtitle"
                               text={activePreviewSubtitleEvent?.text ?? ""}
                             />
@@ -3186,8 +2766,13 @@ export default function SubtitleReviewPage() {
           <section className="contents">
             {selectedClip ? (
               <div className="contents">
-                <div className="grid min-w-0 bg-white lg:col-span-3 lg:row-start-2 2xl:col-span-3 2xl:col-start-1 2xl:row-start-2 2xl:h-full 2xl:min-h-0 2xl:grid-cols-4 2xl:overflow-hidden">
-                  <div className="min-w-0 border-b border-neutral-300 bg-neutral-50 p-3 2xl:h-full 2xl:min-h-0 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r">
+                <div data-tab={workspaceTab} className="subtitle-review-editors grid min-w-0 bg-white lg:col-span-3 lg:row-start-2 2xl:col-span-3 2xl:col-start-1 2xl:row-start-2 2xl:h-full 2xl:min-h-0 2xl:grid-cols-4 2xl:overflow-hidden">
+                  <div role="tablist" aria-label="編集項目" className="subtitle-editor-tabs flex border-b bg-neutral-50">
+                    <button type="button" role="tab" aria-selected={workspaceTab === "content"} onClick={() => setWorkspaceTab("content")} className="px-4 py-2 text-sm font-semibold aria-selected:bg-neutral-950 aria-selected:text-white">タイトル・フック</button>
+                    <button type="button" role="tab" aria-selected={workspaceTab === "style"} onClick={() => setWorkspaceTab("style")} className="px-4 py-2 text-sm font-semibold aria-selected:bg-neutral-950 aria-selected:text-white">書式・位置・色</button>
+                  </div>
+                  <div key={`content-${selectedClip.id}`} className="subtitle-content-editor min-w-0 border-b border-neutral-300 bg-neutral-50 p-3 2xl:h-full 2xl:min-h-0 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r">
+                    <div className="subtitle-content-fields">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="text-sm font-semibold">タイトル・フック</h3>
                       {selectedClipHasDirtyContent ? (
@@ -3346,110 +2931,9 @@ export default function SubtitleReviewPage() {
                       </p>
                     ) : null}
 
-                    {selectedClip.type === "normal" ? (
-                      <section className="mt-3 border-t border-[#b89343] pt-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <h4 className="text-xs font-semibold text-neutral-800">
-                            通常サムネ
-                          </h4>
-                          <span className="text-[10px] text-neutral-500">
-                            完成時に1280×720で生成
-                          </span>
-                        </div>
-                        <label className="mt-2 block text-xs font-semibold text-neutral-700">
-                          小見出し
-                          <input
-                            className="mt-1 min-h-9 w-full border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-sky-600"
-                            disabled={!isEditable}
-                            maxLength={40}
-                            placeholder="空欄なら表示しません"
-                            type="text"
-                            value={selectedClipContentDraft?.thumbnailKicker ?? ""}
-                            onChange={(event) =>
-                              updateClipContentDraft(selectedClip.id, {
-                                thumbnailKicker: event.target.value
-                              })
-                            }
-                          />
-                        </label>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                          <label className="block text-xs font-semibold text-neutral-700">
-                            主見出し 1
-                            <input
-                              className="mt-1 min-h-9 w-full border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-sky-600"
-                              disabled={!isEditable}
-                              maxLength={60}
-                              placeholder="白文字"
-                              type="text"
-                              value={selectedClipContentDraft?.thumbnailLine1 ?? ""}
-                              onChange={(event) =>
-                                updateClipContentDraft(selectedClip.id, {
-                                  thumbnailLine1: event.target.value
-                                })
-                              }
-                            />
-                          </label>
-                          <label className="block text-xs font-semibold text-neutral-700">
-                            主見出し 2
-                            <input
-                              className="mt-1 min-h-9 w-full border border-neutral-300 bg-white px-2 text-sm outline-none focus:border-sky-600"
-                              disabled={!isEditable}
-                              maxLength={60}
-                              placeholder="黄文字"
-                              type="text"
-                              value={selectedClipContentDraft?.thumbnailLine2 ?? ""}
-                              onChange={(event) =>
-                                updateClipContentDraft(selectedClip.id, {
-                                  thumbnailLine2: event.target.value
-                                })
-                              }
-                            />
-                          </label>
-                        </div>
-                        <label className="mt-2 block text-xs font-semibold text-neutral-700">
-                          場面（clip先頭からの秒数）
-                          <input
-                            className="mt-1 h-9 w-28 border border-neutral-300 bg-white px-2 text-sm tabular-nums outline-none focus:border-sky-600"
-                            disabled={!isEditable}
-                            max={bodyDuration}
-                            min={0}
-                            placeholder="自動"
-                            step={0.1}
-                            type="number"
-                            value={selectedClipContentDraft?.thumbnailFrameSeconds ?? ""}
-                            onChange={(event) => {
-                              const rawValue = event.target.value;
-                              updateClipContentDraft(selectedClip.id, {
-                                thumbnailFrameSeconds:
-                                  rawValue === ""
-                                    ? null
-                                    : clamp(Number(rawValue), 0, bodyDuration)
-                              });
-                            }}
-                          />
-                        </label>
-                        <p className="mt-1 text-[10px] leading-4 text-neutral-500">
-                          文字欄は空欄なら非表示。場面秒は空欄ならclip長の38%（
-                          {(bodyDuration * 0.38).toFixed(1)}秒）を使います。
-                        </p>
-                        <NormalThumbnailDraftPreview
-                          clipId={selectedClip.id}
-                          frameSeconds={
-                            selectedClipContentDraft?.thumbnailFrameSeconds ?? null
-                          }
-                          kicker={selectedClipContentDraft?.thumbnailKicker ?? ""}
-                          line1={selectedClipContentDraft?.thumbnailLine1 ?? ""}
-                          line2={selectedClipContentDraft?.thumbnailLine2 ?? ""}
-                          maxFrameSeconds={bodyDuration}
-                          sourceStartSeconds={selectedClip.start}
-                          videoSrc={review.sourceVideoUrl}
-                          videoVersion={review.updatedAt}
-                        />
-                        <p className="mt-1 text-[10px] leading-4 text-neutral-500">
-                          即時プレビューは配置確認用です。保存後の書き出しでは字幕焼込み前の元動画フレームを使います。
-                        </p>
-                      </section>
-                    ) : null}
+                    {selectedClip.type === "normal" && <p className="mt-3 border-t border-neutral-300 pt-3 text-xs text-neutral-600">
+                      サムネの文言・書式・場面は、書き出し後の結果画面でまとめて調整できます。
+                    </p>}
 
                     <section className="mt-3 border-t border-neutral-300 pt-3">
                       <div className="flex items-center justify-between gap-2">
@@ -3600,6 +3084,8 @@ export default function SubtitleReviewPage() {
                       </div>
                     </section>
 
+                    </div>
+                    <div className="subtitle-content-suggestions">
                     <TitleHookSuggestionPanel
                       busy={
                         requestingSuggestionClipId === selectedClip.id ||
@@ -3660,6 +3146,7 @@ export default function SubtitleReviewPage() {
                           </div>
                         </details>
                     </>
+                    </div>
                   </div>
 
                   <ClipTextStyleEditor
@@ -3703,7 +3190,7 @@ export default function SubtitleReviewPage() {
                     }}
                   />
                 </div>
-                <div className="flex min-h-[640px] min-w-0 flex-col bg-white lg:col-span-1 lg:col-start-3 lg:row-start-1 2xl:col-span-1 2xl:col-start-3 2xl:row-start-1 2xl:min-h-0">
+                <div className="subtitle-review-captions flex min-h-[640px] min-w-0 flex-col bg-white lg:col-span-1 lg:col-start-3 lg:row-start-1 2xl:col-span-1 2xl:col-start-3 2xl:row-start-1 2xl:min-h-0">
                 <div className="border-b border-neutral-300 bg-white px-4 py-3">
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -3720,12 +3207,18 @@ export default function SubtitleReviewPage() {
                   </div>
                 </div>
 
+                <SubtitleBulkCorrection
+                  selection={bulkCorrectionSelection} onSelection={setBulkCorrectionSelection}
+                  segments={review.segments} drafts={drafts} disabled={!isEditable}
+                  onSave={saveBulkCorrection}
+                />
                 <div
-                  className="relative min-h-0 flex-1 overflow-y-auto"
+                  aria-label="字幕一覧"
+                  className="relative min-h-0 flex-1 overflow-y-auto overscroll-y-contain"
                   ref={subtitleListRef}
                 >
                   {selectedSegments.length > 0 ? (
-                    selectedSegments.map((segment) => {
+                    selectedSegments.map((segment, segmentIndex) => {
                       const isDirty = dirtySegmentIds.has(segment.id);
                       const isActive = activeSegmentId === segment.id;
                       const relativeStart = clamp(
@@ -3790,20 +3283,38 @@ export default function SubtitleReviewPage() {
                             disabled={!isEditable}
                             value={drafts[segment.id] ?? segment.text}
                             onChange={(event) => updateDraft(segment.id, event.target.value)}
+                            aria-label={`字幕 ${formatTime(segment.start)}`}
+                            onSelect={(event) => {
+                              const field = event.currentTarget;
+                              setSegmentCursor({ id: segment.id, offset: Array.from(field.value.slice(0, field.selectionStart)).length });
+                              const source = field.value.slice(field.selectionStart, field.selectionEnd).trim();
+                              if (source && source.length <= 200) {
+                                setBulkCorrectionSelection((current) =>
+                                  current?.segmentId === segment.id && current.source === source ? current
+                                    : { segmentId: segment.id, source, replacement: "" });
+                              }
+                            }}
                           />
+                          <SubtitleSegmentActions segment={segment} next={selectedSegments[segmentIndex + 1]}
+                            text={drafts[segment.id] ?? segment.text}
+                            nextText={selectedSegments[segmentIndex + 1] ? drafts[selectedSegments[segmentIndex + 1].id] ?? selectedSegments[segmentIndex + 1].text : ""}
+                            cursor={segmentCursor?.id === segment.id ? segmentCursor.offset : null}
+                            origin={selectedClip.start - hookSceneDuration} playhead={absolutePlaybackTime}
+                            disabled={!isEditable} onEdit={saveSubtitleStructure} />
                           <div className="mt-2 flex items-center justify-between gap-3">
                             <span className="text-[11px] text-neutral-400">
                               元動画 {formatTime(segment.start)}
                             </span>
                             {isDirty ? (
                               <span className="text-[11px] font-semibold text-amber-700">
-                                下のOKでまとめて保存
+                                下の保存でまとめて反映
                               </span>
                             ) : null}
                             <button type="button" disabled={!isEditable}
                               className="border border-sky-600 px-2 py-1 text-xs text-sky-800"
                               aria-pressed={styledSegmentId === segment.id}
                               onClick={() => {
+                                setWorkspaceTab("style");
                                 setStyledSegmentId(segment.id);
                                 setSelectedTextStyleTarget("subtitle");
                                 seekToSubtitle(segment.start);
@@ -3858,8 +3369,14 @@ export default function SubtitleReviewPage() {
                           !selectedClipHasDirtySegments &&
                           !selectedClipHasDirtyContent
                         ? "このclipはOK済み"
-                        : "この内容でOK（保存して次へ）"}
+                        : "この内容を保存してOK"}
                   </button>
+                  <button type="button" className="mt-2 min-h-9 w-full border border-neutral-400 bg-white text-sm disabled:opacity-40"
+                    disabled={hasReviewMutationInFlight || review.clips.length < 2}
+                    onClick={() => {
+                      const index = review.clips.findIndex(clip => clip.id === selectedClip.id);
+                      selectClip(review.clips[(index + 1) % review.clips.length]);
+                    }}>次のclipへ</button>
                 </div>
                 </div>
               </div>

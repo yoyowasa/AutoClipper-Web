@@ -83,6 +83,10 @@ class LivePreviewPaths:
 
 
 def _normalize_for_spec(value: Any) -> Any:
+    if isinstance(value, TranscriptSegment):
+        return _normalize_for_spec(value.model_dump(mode="json", exclude={
+            key for key in ("preserve_segmentation", "single_line") if not getattr(value, key)
+        }))
     if isinstance(value, BaseModel):
         return _normalize_for_spec(
             value.model_dump(mode="json", by_alias=False, exclude_none=False)

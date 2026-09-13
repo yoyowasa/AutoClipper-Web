@@ -780,6 +780,70 @@ def _needs_secondary_crop_signals(layout: CropLayout, crop_plan: Any) -> bool:
     }
 
 
+def resolve_short_crop_plan(
+    input_path: str | Path, start: float, end: float, *,
+    layout: CropLayout, width: int, height: int, target_height: int,
+    dialogue_windows: Sequence[DialogueWindow] | None = None,
+    face_detector: FaceDetector = detect_faces_for_clip,
+    speaker_detector: SpeakerDetector = detect_speaker_for_clip,
+    person_detector: PersonDetector = detect_person_for_clip,
+    subject_detector: SubjectDetector = detect_subject_for_clip,
+) -> tuple[CropPlan, Sequence[FaceDetection]]:
+    """Resolve the same composition for rendering and the interactive crop guide."""
+    detections = _detect_faces_for_layout(
+        layout,
+        input_path=input_path,
+        start=start,
+        end=end,
+        face_detector=face_detector,
+    )
+    crop_plan = plan_short_crop(
+        layout,
+        detections=detections,
+        source_width=width,
+        source_height=height,
+        target_width=SHORT_WIDTH,
+        target_height=target_height,
+    )
+    if _needs_secondary_crop_signals(layout, crop_plan):
+        speaker_signal = _detect_speaker_for_layout(
+            layout,
+            input_path=input_path,
+            start=start,
+            end=end,
+            dialogue_windows=dialogue_windows,
+            speaker_detector=speaker_detector,
+            face_detector=face_detector,
+            person_detector=person_detector,
+        )
+        person_signal = _detect_person_for_layout(
+            layout,
+            input_path=input_path,
+            start=start,
+            end=end,
+            person_detector=person_detector,
+        )
+        subject_signal = _detect_subject_for_layout(
+            layout,
+            input_path=input_path,
+            start=start,
+            end=end,
+            subject_detector=subject_detector,
+        )
+        crop_plan = plan_short_crop(
+            layout,
+            detections=detections,
+            source_width=width,
+            source_height=height,
+            speaker_signal=speaker_signal,
+            person_signal=person_signal,
+            subject_signal=subject_signal,
+            target_width=SHORT_WIDTH,
+            target_height=target_height,
+        )
+    return crop_plan, detections
+
+
 def render_short_clip(
     input_path: str | Path,
     output_path: str | Path,
@@ -823,57 +887,12 @@ def render_short_clip(
         top_banner_enabled=top_banner_path is not None,
         bottom_banner_enabled=bottom_banner_path is not None,
     )
-    detections = _detect_faces_for_layout(
-        layout,
-        input_path=input_path,
-        start=start,
-        end=end,
-        face_detector=face_detector,
+    crop_plan, detections = resolve_short_crop_plan(
+        input_path, start, end, layout=layout, width=width, height=height,
+        target_height=content_height, dialogue_windows=dialogue_windows,
+        face_detector=face_detector, speaker_detector=speaker_detector,
+        person_detector=person_detector, subject_detector=subject_detector,
     )
-    crop_plan = plan_short_crop(
-        layout,
-        detections=detections,
-        source_width=width,
-        source_height=height,
-        target_width=SHORT_WIDTH,
-        target_height=content_height,
-    )
-    if _needs_secondary_crop_signals(layout, crop_plan):
-        speaker_signal = _detect_speaker_for_layout(
-            layout,
-            input_path=input_path,
-            start=start,
-            end=end,
-            dialogue_windows=dialogue_windows,
-            speaker_detector=speaker_detector,
-            face_detector=face_detector,
-            person_detector=person_detector,
-        )
-        person_signal = _detect_person_for_layout(
-            layout,
-            input_path=input_path,
-            start=start,
-            end=end,
-            person_detector=person_detector,
-        )
-        subject_signal = _detect_subject_for_layout(
-            layout,
-            input_path=input_path,
-            start=start,
-            end=end,
-            subject_detector=subject_detector,
-        )
-        crop_plan = plan_short_crop(
-            layout,
-            detections=detections,
-            source_width=width,
-            source_height=height,
-            speaker_signal=speaker_signal,
-            person_signal=person_signal,
-            subject_signal=subject_signal,
-            target_width=SHORT_WIDTH,
-            target_height=content_height,
-        )
     face_center = crop_plan.face_center or best_face_center(detections)
     speaker_center = crop_plan.speaker_center
     person_center = crop_plan.person_center

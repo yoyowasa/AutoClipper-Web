@@ -40,7 +40,7 @@ class CodexTitleHookSuggestionError(RuntimeError):
 
 class _BridgeEnvelope(BaseModel):
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
-    task: Literal["title_hook_suggestions"] = "title_hook_suggestions"
+    task: Literal["title_hook_suggestions", "thumbnail_copy_suggestions"] = "title_hook_suggestions"
     request_id: str = Field(pattern=r"^[0-9a-f]{32}$", alias="requestId")
     prompt: str = Field(min_length=1)
     response_schema: dict[str, Any] = Field(alias="responseSchema")
@@ -120,6 +120,13 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
 
 
 class CodexTitleHookSuggestionGenerator:
+    task = "title_hook_suggestions"
+    system_prompt = SYSTEM_PROMPT
+    response_schema = TITLE_HOOK_GENERATION_SCHEMA
+
+    def parse_output(self, output: dict[str, Any]) -> Any:
+        return GeneratedTitleHookSuggestionResult.model_validate(output).to_compatible()
+
     def __init__(
         self,
         *,
@@ -258,9 +265,7 @@ class CodexTitleHookSuggestionGenerator:
             )
         self.last_thread_id = host_response.thread_id or self.thread_id
         try:
-            return GeneratedTitleHookSuggestionResult.model_validate(
-                host_response.output
-            ).to_compatible()
+            return self.parse_output(host_response.output)
         except ValidationError as exc:
             raise CodexTitleHookSuggestionError(
                 "codex_title_hook_output_invalid",
@@ -281,9 +286,10 @@ class CodexTitleHookSuggestionGenerator:
             allow_nan=False,
         )
         envelope = _BridgeEnvelope(
+            task=self.task,
             requestId=request_id,
-            prompt=f"{SYSTEM_PROMPT}\n\n入力JSON:\n{prompt_payload}",
-            responseSchema=TITLE_HOOK_GENERATION_SCHEMA,
+            prompt=f"{self.system_prompt}\n\n入力JSON:\n{prompt_payload}",
+            responseSchema=self.response_schema,
             images=self._relative_image_paths(frame_paths),
             model=self.model,
             threadId=self.thread_id,

@@ -6,7 +6,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
 from app.short_banners import BannerAssetId
-from app.thumbnail_style import NormalThumbnailStyle
+from app.thumbnail_style import NormalThumbnailStyle, ThumbnailTextStyles
+from app.scoring.thumbnail_copy import ThumbnailCopyText
 from app.posting_metadata import (
     PostMetadataSource,
     YouTubePostingProfile,
@@ -433,6 +434,7 @@ class JobSettings(UploadTextStyles):
     transcript_normalize_unicode: bool = Field(default=True, alias="transcriptNormalizeUnicode")
     transcript_normalize_whitespace: bool = Field(default=True, alias="transcriptNormalizeWhitespace")
     transcript_normalize_punctuation: bool = Field(default=True, alias="transcriptNormalizePunctuation")
+    transcript_normalize_fullwidth: bool = Field(default=True, alias="transcriptNormalizeFullwidth")
     use_default_transcript_dictionary: bool = Field(default=True, alias="useDefaultTranscriptDictionary")
     transcript_replacements: dict[str, str] = Field(default_factory=dict, alias="transcriptReplacements")
     whisper_model_size: WhisperModelSize = Field(default="base", alias="whisperModelSize")
@@ -607,6 +609,25 @@ class JobCreateResponse(BaseModel):
 
 class SubtitleReviewSegmentUpdateRequest(BaseModel):
     text: str = Field(max_length=4000)
+
+
+class SubtitleReviewBatchSegmentUpdate(SubtitleReviewSegmentUpdateRequest):
+    segment_id: str = Field(alias="segmentId", min_length=1, max_length=200)
+    before: str = Field(max_length=4000)
+
+
+class SubtitleReviewBatchUpdateRequest(BaseModel):
+    segments: list[SubtitleReviewBatchSegmentUpdate] = Field(min_length=1, max_length=10000)
+
+
+class SubtitleStructureRequest(BaseModel):
+    action: Literal["merge", "split", "line"]
+    segments: list[SubtitleReviewBatchSegmentUpdate] = Field(min_length=1, max_length=2)
+    split_offset: int | None = Field(default=None, ge=1, alias="splitOffset")
+    split_time: float | None = Field(default=None, ge=0, alias="splitTime")
+    single_line: bool = Field(default=True, alias="singleLine")
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
 class SubtitleReviewClipContentUpdateRequest(BaseModel):
@@ -805,7 +826,7 @@ class ClipPlanBoundaryUpdateRequest(BaseModel):
 
 
 class ClipPlanTypeUpdateRequest(BaseModel):
-    type: Literal["normal"]
+    type: Literal["normal", "short"]
 
     model_config = ConfigDict(extra="forbid")
 
@@ -905,6 +926,11 @@ class ExportItemRead(BaseModel):
 
 
 class ResultExportItem(BaseModel):
+    thumbnail_text_styles: ThumbnailTextStyles | None = Field(default=None, alias="thumbnailTextStyles")
+    thumbnail_kicker: str = Field(default="", alias="thumbnailKicker")
+    thumbnail_line1: str = Field(default="", alias="thumbnailLine1")
+    thumbnail_line2: str = Field(default="", alias="thumbnailLine2")
+    thumbnail_crop_mode: Literal["standard", "close"] = Field(default="standard", alias="thumbnailCropMode")
     id: str
     type: ExportType
     candidate_id: str | None = Field(default=None, alias="candidateId")
@@ -960,6 +986,8 @@ class ResultExportItem(BaseModel):
 
 
 class ThumbnailRegenerationRequest(BaseModel):
+    text: "ThumbnailCopyText | None" = None
+    text_styles: ThumbnailTextStyles | None = Field(default=None, alias="textStyles")
     frame_seconds: float = Field(alias="frameSeconds", ge=0)
     subject_anchor_x: float = Field(default=1.0, alias="subjectAnchorX", ge=0, le=1)
     advance_frame: bool = Field(default=False, alias="advanceFrame")

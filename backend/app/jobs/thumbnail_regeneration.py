@@ -15,6 +15,7 @@ from app.jobs.thumbnails import (
 from app.jobs.thumbnail_frame_selection import select_thumbnail_frame_seconds
 from app.models import ExportItem, Video
 from app.render.render_thumbnail import ThumbnailRenderResult, render_normal_thumbnail
+from app.thumbnail_style import resolve_thumbnail_text_styles
 from app.storage.paths import StoragePaths, get_storage_paths
 
 
@@ -137,6 +138,7 @@ def run_export_thumbnail_regeneration(
                 source_path,
                 temp_output,
                 **({"character_style": character_style} if character_style is not None else {}),
+                **({"text_styles": payload["thumbnail_text_styles"]} if payload.get("thumbnail_text_styles") is not None else {}),
                 frame_time=source_timestamp,
                 eyebrow=str(payload.get("thumbnail_kicker") or "").strip(),
                 title_first_line=str(payload.get("thumbnail_line1") or "").strip(),
@@ -173,6 +175,9 @@ def run_export_thumbnail_regeneration(
                     "thumbnail_advance_frame": False,
                     "thumbnail_render_revision": revision,
                     "thumbnail_error_code": None,
+                    "thumbnail_text_styles": resolve_thumbnail_text_styles(
+                        character_style, payload.get("thumbnail_text_styles")
+                    ).model_dump(mode="json", by_alias=True),
                 },
             )
         except Exception as exc:

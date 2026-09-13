@@ -25,6 +25,8 @@ class TranscriptSegment(BaseModel):
     text: str
     confidence: float | None = Field(default=None, ge=0, le=1)
     clip_id: str | None = Field(default=None, alias="clipId")
+    preserve_segmentation: bool = Field(default=False, alias="preserveSegmentation")
+    single_line: bool = Field(default=False, alias="singleLine")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -382,7 +384,9 @@ def transcript_output_path(output_dir: str | Path) -> Path:
 
 
 def segments_to_jsonable(segments: Sequence[TranscriptSegment]) -> list[dict[str, Any]]:
-    return [segment.model_dump(exclude_none=True) for segment in segments]
+    return [segment.model_dump(exclude_none=True, exclude={
+        key for key in ("preserve_segmentation", "single_line") if not getattr(segment, key)
+    }) for segment in segments]
 
 
 def write_transcript_segments(

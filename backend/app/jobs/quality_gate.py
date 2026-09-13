@@ -979,6 +979,8 @@ def _subtitle_events_for_review_clip(
             text=segment.text,
             confidence=segment.confidence,
             clipId=clip.id,
+            preserveSegmentation=segment.preserve_segmentation,
+            singleLine=segment.single_line,
         )
         for segment in segments
     ]
@@ -1019,6 +1021,7 @@ def _automated_overlay_layout_check(
             else 0
         )
         role_items: list[tuple[str, str, Any, int, int]] = []
+        single_line_roles: set[str] = set()
         if clip.overlay_title_expected and clip.title:
             role_items.append(
                 (
@@ -1051,7 +1054,9 @@ def _automated_overlay_layout_check(
             height=height,
         )
         for event_index, event in enumerate(subtitle_events, start=1):
-            max_lines = min(2, subtitle_layout.max_lines)
+            max_lines = 1 if event.single_line else min(2, subtitle_layout.max_lines)
+            if event.single_line:
+                single_line_roles.add(f"subtitle:event_{event_index:05d}")
             role_items.append(
                 (
                     f"subtitle:event_{event_index:05d}",
@@ -1082,7 +1087,7 @@ def _automated_overlay_layout_check(
                 shadow=style.shadow,
                 alignment=style.alignment,
                 x_percent=style.x_percent,
-                max_lines=2,
+                max_lines=1 if role in single_line_roles else 2,
             )
             vertical_top, vertical_bottom = _text_vertical_bounds(
                 y_percent=style.y_percent,

@@ -9645,3 +9645,157 @@ pip check: pass
 - 除外: `storage/qa/` の検証画像、未参照の `backend/app/assets/thumbnail_templates/raden_normal_v1/base.png`、`.codex_tmp/` 内のDB/ログ/動画。ローカルファイルは保持。
 - 検証: 直前実装のbackend全体 `1048 passed, 1 skipped` とfrontend lint/typecheck/build成功を確認。PUSH前にbackend/launcher ruff、frontend overlay-fit、差分検査を実行し成功。Docker 4サービスrunning、backend healthy。
 - 制限: 今回はブランチのPUSH。mainへのマージとPR作成は実施しない。現行CIはpull_requestまたはmainへのpushで起動する設定のため、このブランチへのpush単独では起動しない。
+
+## 2026-09-12 帯単独の呼び出し・保存UIを削除
+
+- 目的: キャラ別一括保存に集約し、不要になった帯単独の呼び出し導線を外す。
+- 変更ファイル: `frontend/components/ShortBannerPresetManager.tsx`、`STATUS.md`。
+- 変更: 「帯だけ呼び出す」の選択欄、帯単独の保存名/保存/削除/件数表示、単独プリセット取得・更新処理をUIから削除。「帯画像を編集」に上下プレビューと画像選択を残し、キャラ一括保存へ案内。上下ON/OFFも維持。既存の保存データとbackend APIは変更しない。
+- 検証: frontend lint/typecheck/build、Docker frontend image build成功。稼働frontendへFast Refreshで反映し、実画面で選択欄の消失、画像編集欄とキャラ一括保存ボタンの維持を確認。
+- 現在状態: ローカル修正・画面反映済み。この追加変更は未コミット/未PUSH。
+
+## 2026-09-13 字幕修正画面で選択語句を一括修正
+
+- 目的: 字幕中で選んだ誤字を、同じジョブの通常/ショートの字幕へまとめて修正する。ユーザーの訂正により、選定画面は閲覧・範囲調整のまま維持し、字幕確認画面に実装。
+- 変更ファイル: `frontend/components/SubtitleBulkCorrection.tsx`、`frontend/lib/subtitleBulkCorrection.ts`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/lib/api.ts`、`backend/app/schemas.py`、`backend/app/api/jobs.py`、`backend/tests/test_subtitle_bulk_correction.py`、`frontend/tests/subtitleBulkCorrection.test.ts`、本ファイル。
+- UI: 字幕の入力欄で語句を選択→正しい表記を入力→一致数/字幕数/影響clip数と修正前後を確認→一括修正・保存。固有名詞に限定せず、完全一致の文字列を対象とする。複数clipで共有する字幕は一度だけ数える。正規表現/類似語の推測変換は行わない。対象字幕内の未保存文は一緒に保存し、他の未保存字幕・タイトル・書式は保持。
+- 保存: `PATCH /api/jobs/{job_id}/subtitle-review/segments`を追加。既存の文書ロック下で全対象のID/更新前本文/重複/編集状態を先に検証し、競合時は全件を拒否。対象字幕を一括保存し、影響clipだけ確認済みを解除・プレビュー更新。文字時刻と元本文は保持。新しい字幕は既存の確認/最終レンダー経路で反映。
+- 取り消し: 直前の一括修正を保存付きで戻せる。操作後に対象字幕を再編集した場合は取り消しを無効化し、別の修正を巻き戻さない。取り消し履歴は現在の画面内だけ保持。
+- 検証: backend API既存/新規テスト `109 passed`、backend/launcher ruff、frontend lint/typecheck/build、文字列置換テスト、diff検査成功。新規テストは共有字幕への反映・他clip不変・取り消し・競合/存在しないID/重複/完了ジョブの全件拒否を確認。初回テストではpreview入力ファイル不足のfixtureを修正し、実際のpreview spec生成経路で再検証。
+- 実画面検証: `.codex_tmp/bulk-ui/` の隔離DB/storageとlocalhost:18000/3001を用意し、仮のアカネ3か所をキーボード選択からあかねへ一括保存、取り消しで原文復帰を確認。実ジョブの字幕は変更していない。仮の動画バイトは再生不可のためMP4表示は検証対象外。検証用サーバー2本とタブは停止/閉鎖。next devが自動生成したAGENTS/CLAUDEとnext-env差分も元に戻した。
+- 反映: キュー/処理中0件を確認後backendを再作成、frontendはFast Refreshで反映。両Docker imageをビルド。4サービスrunning、backend healthy/health200。既存完了ジョブの字幕確認画面に一括修正欄が表示されることを確認し、その画面を開いている。
+- 制限: 今開いている完了ジョブは確認履歴なので編集不可。実素材の最終MP4再生成は未実施。一括修正の対象は字幕確認文書に含まれる字幕で、選定外の元動画全文や別ジョブには適用しない。今回の変更は未コミット/未PUSH。
+
+## 2026-09-13 文字起こしを既定で全角へ統一
+
+- 目的: キャラに関係なく、新しく作成する文字起こしの英数字・記号・半角カナを全角へそろえる。
+- 変更ファイル: `backend/app/audio/transcript_postprocess.py`、`backend/app/schemas.py`、`backend/app/jobs/runner.py`、`backend/app/scoring/rule_score.py`、`backend/app/candidates/deduplicate.py`、`backend/app/candidates/boundary_refinement.py`、`backend/tests/test_transcript_postprocess.py`、`backend/tests/test_real_pipeline.py`、`frontend/lib/types.ts`、本ファイル。
+- 実装: 共通設定 `transcriptNormalizeFullwidth=true` を既定値へ追加。従来のNFKC正規化・辞書補正後にASCII英数字/印字記号を全角化し、半角カナと濁点を合成。任意の追加校正後も幅変換だけを再適用して辞書の二重適用を防止。空白は通常の区切りを維持し、内部改行を潰さない。時刻・confidence・clipIdを維持。raw transcriptは元のまま保存。
+- 例: `ABC 123!?` → `ＡＢＣ １２３！？`、`ｶﾞｯﾂﾎﾟｰｽﾞ` → `ガッツポーズ`。半角へ戻す必要があるAPI利用では新設定falseで従来幅へ切替可能。後処理全体を無効にした場合は従来どおり無加工。
+- 回帰対応: 全角英字で既存の単語判定が外れないよう、反復異常検出・ルール得点・重複判定・境界の英文判定をNFKC化した比較用文字列で実行。保存字幕の全角表記は保持。
+- 検証: 関連52テスト成功後、backend全体 `1056 passed, 1 skipped`。backend/launcher ruff、frontend typecheck、diff検査成功。全角/半角で同じ内容判定・字幕時刻維持・冪等性・辞書順序・改行保持・設定無効化を検証。API校正を含む注入依存pipelineの出力も全角を確認。
+- 再試行: 最初は旧半角を期待するテストと、英字判定の回帰を検出して修正。境界判定へのimport漏れも修正して再検証。全体テスト初回の2件は既定SQLite参照先がworkspace外を指して開けなかったため、DATABASE_URL/STORAGE_ROOT/SOURCE_LIBRARY_ROOTを`.codex_tmp`へ明示して再実行し全件成功。workspace外へファイルを作成していない。
+- 稼働反映: `autoclipper`キュー/started=0を確認し、backend/GPU workerをbuild・再作成。稼働workerで既定trueとサンプル全角化を確認。frontend/redisは再作成しない。backend health HTTP200。
+- 制限: 新しい文字起こしから適用。既存ジョブの字幕や完成MP4は変換していない。新規実素材の文字起こしから最終MP4までのE2Eは未実施。今回の変更は未コミット/未PUSH。
+
+## 2026-09-13 選定画面の文字起こしスクロールを維持
+
+- 目的: 開始・終了調整のたびに文字起こし欄が先頭へ戻る問題と、欄の端でページ全体へスクロールが移る問題を修正。再選定欄は初期表示を折りたたむ。
+- 変更ファイル: `frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/components/ClipTranscriptList.tsx`、本ファイル。
+- 原因: 時刻入力の更新ごとに取得済み一覧をnullへ戻し、一覧DOMを再作成していた。内側スクロールの伝播抑止もなく、固定計算の欄高さが上部見出し分だけ画面下へはみ出していた。
+- 変更: 同一clipの取得中は一覧を保持し、表示中データの時刻と更新中表示を維持。更新後は末尾付近なら末尾へ追従し、途中なら表示中の発話時刻と位置を復元。別clipは先頭から表示。「先頭へ」「末尾へ」を追加。overscroll-y-containで伝播を抑止し、実際の上端とviewportから欄の高さを調整。
+- 再選定: 設定フォームを閉じたdetailsへ格納。「字幕確認へ」の説明・ボタンは折りたたみ外に維持。
+- 検証: frontend lint/typecheck/build、Docker frontend image build、diff検査成功。隔離DB/storageのQAジョブで終了+15秒/-30秒後の末尾追従、開始-15秒後の同一発話位置維持、別clip切替時の先頭表示、末尾の追加スクロールでpageY不変を確認。実画面でも最終行下端1191px、viewport1272px内に収まること、再選定の折りたたみ、次画面ボタン維持を確認。
+- QA再試行: 最初の仮データでboundaryRefinedと共通設定の項目不足を検出し、fixtureに既定値を補完して再確認。実ジョブは変更していない。
+- 反映: 稼働frontendへFast Refreshで反映。TOPの設定入力は再読込せず保持。検証用サーバー2本とタブは停止/閉鎖。
+- 制限: 実ジョブは完了状態で時刻編集不可のため、時刻変更操作は隔離QAジョブで検証。実動画の再生成は行っていない。未コミット/未PUSH。
+
+## 2026-09-13 動画種別の切替を選定画面へ集約
+
+- 目的: 選定画面で通常/ショートを双方向に変更し、字幕確認画面の変換操作を外す。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/app/schemas.py`、`backend/app/jobs/clip_plan.py`、`backend/app/candidates/select_candidates.py`、`backend/tests/test_clip_plan_type_conversion.py`、`frontend/lib/types.ts`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、本ファイル。
+- 変更: 既存type更新APIにshortを追加。対象1本だけを通常/ショートの候補配列へ移し、plan・候補・job設定の本数を同期。ID/タイトル/範囲を維持し、新たなショート化時の複製フック映像は未指定。通常化時は従来どおり複製フックを解除。次の字幕確認には変更後の種別が渡る。
+- 制約: ショート化は保存設定shortMaxDuration以内、通常最大12本/ショート最大24本。範囲入力が未反映ならプレビュー更新を案内し、入力を捨てない。選定確認待ちだけ編集可で、完了ジョブは変更しない。手動作成の独立フローは今回対象外。
+- 字幕画面: 再編集ジョブ向けのShortConversionEditor表示と変換ハンドラー/状態を削除。通常編集/ショート編集タブは対象の表示切替として維持。既存API利用者の互換性維持のため、旧字幕変換APIとサーバー処理は削除していない。
+- 検証: backend全体 `1061 passed, 1 skipped`、backend ruff、frontend lint/typecheck/build成功。新規5テストで双方向・同方向再実行・他clip不変・字幕確認への引継ぎ・長さ/本数超過の無変更拒否・完了状態の拒否を確認。初回APIテストは無関係の既存帯設定テストがWindowsのatomic replaceでWinError 5となり、全体再実行で成功。
+- 画面検証: 隔離QAジョブで通常→ショート→通常、未保存範囲変更の保護、再ショート化後に字幕確認へ進み通常1本/ショート2本と変換ボタン0件を確認。QAサーバー2本/タブを停止・閉鎖。仮動画のため映像再生成は検証外。
+- 稼働反映: backend/frontend/GPU worker image build成功。autoclipperキュー/started=0確認後backend/worker再作成、frontendはFast Refreshで反映。利用中の選定画面で「ショートに変更」の表示を確認。TOP入力は再読込しない。
+- 制限: 今開いている完了ジョブは種別変更ボタン無効のまま。実素材の最終MP4生成は未実施。未コミット/未PUSH。
+
+## 2026-09-13 字幕確認の作業配置と区間編集
+
+- 目的: 字幕保存後も同じclipでタイトル・フックを調整し、字幕の結合/分割と１行表示を指定する。デスクトップではページ全体をスクロールさせず、各作業欄で操作する。
+- 変更ファイル: `frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/app/globals.css`、`frontend/components/SubtitleSegmentActions.tsx`、`frontend/lib/{api,types,subtitlePreview}.ts`、`frontend/tests/subtitleStructure.test.ts`、`backend/app/api/jobs.py`、`backend/app/schemas.py`、`backend/app/audio/transcribe_faster_whisper.py`、`backend/app/jobs/{subtitle_structure,subtitle_review,subtitle_review_preview,runner,quality_gate}.py`、`backend/app/render/{subtitles_ass,render_exact_review_preview}.py`、`backend/tests/{test_subtitle_structure,test_guarded_rerender_promotion_gate}.py`、本ファイル。
+- 保存導線: 「この内容を保存してOK」で同じclipに残り、「次のclipへ」で明示的に移動。タイトル・フックは入力と候補を左右に配置し、書式・位置・色を別タブにした。clip切替で入力欄を先頭へ戻す。保存中を「書き出し中」と誤表示していた判定も修正。
+- 表示: 1280px以上でviewport内の３列/２段に収め、動画・タイトル編集・字幕一覧・clip一覧の高さを可変化。字幕一覧/各編集欄のスクロール伝播を抑止。プレビュー更新時に字幕一覧を先頭へ戻す処理を外し、clip選択時だけ初期化する。
+- 区間操作: 各字幕の「区間の結合・分割」から次区間との結合、文字カーソル位置での分割、１行表示/自動改行を保存可能。分割時刻は文字数比の仮値を入力し、秒数または再生位置で調整する。対象の未保存文も同時に保存。共有字幕は対象clipへ反映し、共有範囲が異なる２区間の結合は拒否。編集競合・空の分割・範囲外時刻・完了状態は変更せず拒否する。
+- 書き出し: 手動の区切り/１行指定を字幕document、プレビュー、ASS、品質検査へ引継ぎ、自動の再結合/再分割/表示時間延長を抑止。元のindexに依存する処理はreview作成日時別のsource snapshotを使い、書き出し後の再プレビュー/再試行でもずれない。未指定フラグを旧JSON/specへ追加せず、既存保存値とプレビューhashの互換性を維持。
+- 検証: backend全体 `1069 passed, 1 skipped`。その後のspec互換性追加を含む関連テスト `26 passed`。backend ruff、frontend lint/typecheck/build、字幕イベント回帰、overlay golden成功。結合/分割後のASS区切り、共有clipの確認解除、通常修正との併用、source snapshotの再利用、１行指定のhash変更を検証。
+- 画面検証: 実画面2085x1272と1922x960でdocument寸法=viewport、字幕欄を末尾まで大量スクロールしてpageY=0、通常/ショート/書式タブ切替を確認。隔離DB/storageの仮動画で保存後の同一clip維持、結合→カーソル指定分割→保存→再読込、１行指定解除、「次のclipへ」を確認。仮動画のプレビュー生成と投稿案生成は検証対象外。
+- 修正過程: 旧JSON期待値に追加falseフラグが混ざる問題、再レンダリングのテスト用reviewにcreatedAtがない問題、React keyの重複を修正。最終読み直し後のclip/タブ切替で新たなブラウザエラーなし。テスト用サーバーはloopbackに限定して起動し、終了後サーバー２本とタブを閉じた。
+- 稼働反映: backend/frontend/GPU worker image build成功。キュー/started=0でbackend/workerを再作成、health HTTP200。稼働backendの区間編集API、workerの手動区切り/１行指定を確認。frontendはFast Refreshで反映し、完了済みの字幕確認タブだけ再読込。TOP入力は再読込していない。viewport指定を解除し、元の確認画面を表示。
+- 制限: 現在開いているジョブは完了済みのため閲覧のみ。実ジョブの字幕/完成MP4は変更せず、実素材での最終MP4生成は未実施。未コミット/未PUSH。
+
+## 2026-09-13 通常サムネイルの３段書式設定
+
+- 目的: 通常サムネイルの見出し・上行・下行で、書体・文字サイズ・文字色を個別に設定する。
+- 変更ファイル: `backend/app/thumbnail_style.py`、`backend/app/render/{thumbnail_fonts,render_thumbnail}.py`、`backend/app/api/{exports,jobs}.py`、`backend/app/jobs/{thumbnails,thumbnail_regeneration}.py`、`backend/app/schemas.py`、`backend/tests/test_thumbnail_text_styles.py`、`frontend/components/{ThumbnailTextStyleEditor,CharacterThumbnailSettings,ResultVideoCard}.tsx`、`frontend/lib/{thumbnailStyle,types,api}.ts`、`frontend/app/results/[jobId]/page.tsx`、`frontend/tests/thumbnailTextStyles.test.ts`、本ファイル。
+- 変更: 結果画面の「サムネイルの調整」に３段別の書体12種・サイズ・色選択を追加。「文字設定でサムネを更新」で現在のフレーム/寄り方を保ち、JPEGだけ再生成する。設定は対象サムネのmetadataに保存し、後の別場面への変更でも維持する。TOPの「通常動画のタイトル末尾・サムネイル」でも設定でき、キャラ設定の保存・呼び出しに含む。
+- 描画: 見出し12〜96px、上行/下行12〜180px（1280×720基準）。長文は横幅へ自動縮小し、最大文字サイズで２行が縦にはみ出す場合も枠内へ縮小。許可済みの同梱フォントのみ選択可能。未設定の既存デザイン・文字色・書体を維持。
+- 検証: backend全体 `1077 passed, 1 skipped`。最後の高さ調整を含む関連35テスト成功。backend ruff、frontend lint/typecheck/build、キャラ設定roundtripテスト成功。３段の異なる書体ファイル/サイズとJPEGの３色、API→worker→結果への保存、別フレーム再生成後の設定保持、完成動画の不変、不正設定の無変更拒否を検証。生成した検証JPEGを目視確認。
+- 検証制限: 隔離QA用frontendの起動が自動承認レビューで拒否（詳細理由なし）。ブラウザからの保存操作は未検証。隔離backendは停止済み。実ジョブのサムネ/完成動画は再生成していない。未コミット/未PUSH。
+- 画面検証: 実際の結果画面で見出し・上行・下行を異なる書体/サイズへ変更し、上行のみ色を変えて独立した入力を確認。保存ボタンは押さず、確認用入力を元の設定へ戻した。３段と更新ボタンが読める配置をスクリーンショットで確認。ブラウザエラーなし。
+- 稼働反映: backend/frontend/GPU worker image build成功。キュー/started=0確認後backend/worker再作成、health HTTP200。稼働workerで12書体の存在、既存３本の結果APIで３段の文字/設定/寄り方の取得を確認。frontendは変更ファイルをFast Refreshで反映し、結果タブだけ再読込して設定欄を開いた。TOPタブへの再読込操作なし。
+
+## 2026-09-13 サムネ文言の生成・選択・手動編集を結果画面へ集約
+
+- 目的: 完成した通常動画を根拠にサムネ文言３案を生成・再生成し、結果画面で選択・手動編集・書式変更・JPEG更新を完結させる。生成案をそのまま使う操作を標準とする。
+- 変更ファイル: `backend/app/{api/exports,schemas,jobs/queue,jobs/thumbnail_copy,scoring/thumbnail_copy,scoring/codex_title_hook_suggestions}.py`、`launcher/codex_bridge.py`、`backend/tests/test_thumbnail_copy.py`、`frontend/components/{ResultThumbnailEditor,ResultVideoCard}.tsx`、`frontend/lib/{api,types}.ts`、`frontend/app/results/[jobId]/page.tsx`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、本ファイル。
+- 生成: 完了済み通常exportの公開タイトル、切り抜き範囲に一致するcompleted字幕reviewの保存済み本文だけを入力。reviewがない旧exportは保存済みtranscriptから当該範囲/clipを抽出する。元の誤字本文や動画内タイトル・フックは入力しない。確定範囲の不一致、字幕欠落、未完了、通常以外は生成しない。
+- Codex: サムネ文言専用task/schemaを既存bridgeへ追加し、schema指紋を固定登録。OpenAI APIへのフォールバックなし。３案それぞれに見出し/上行/下行・理由・根拠字幕の引用を要求し、ID、引用の実在、根拠にない数値を検証。生成の前後で完成MP4の更新時刻/サイズ・範囲・字幕・公開タイトルのhashを比較し、変更後の古い結果を破棄する。候補は専用ファイルへ保存し、字幕review・export metadataを変更しない。
+- UI: 「文言３案を生成」「文言を３案作り直す」、３案比較と「この案を使う」、見出し/上行/下行の手動入力、書体/サイズ/色を同じサムネ欄へまとめた。新規生成後はおすすめ案を自動入力する。候補選択だけではJPEGを変えず、「サムネを保存・更新」で文言と書式を保存してJPEGだけ再生成。別場面への変更でも現在の入力を使用する。字幕確認の通常サムネ入力/仮プレビューを外し、結果画面で調整する案内を表示。初期生成の既存文言は維持する。
+- 検証: backend全体 `1085 passed, 1 skipped`。関連55テスト、backend/launcher ruff、frontend lint/typecheck/build成功。修正字幕の使用・範囲外除外・空の動画内タイトル/フック、３案生成/キャッシュ/再生成、手動修正→JPEG更新、MP4/review不変、架空引用・数値・別segment・生成中の動画変更の拒否を確認。初回の新規テストはbridge validatorの関数名を誤記し、修正後に全件成功。
+- 稼働反映: backend/frontend/GPU worker image build成功。キュー/started=0、Codex bridge idleを確認し、bridgeを既存controllerで更新、backend/worker再作成。health HTTP200。frontendはFast Refreshで反映。TOP再読込操作なし。
+- 実機: 現在の最初の通常動画について修正済み82区間を入力し、実Codex bridgeで３案生成成功。ブラウザでおすすめの自動入力、案２の選択、下行の手直し、案１への復帰を確認。入力中だった見出し書体851チカラヅヨクを維持。実ジョブのサムネ/MP4/reviewは更新せず、文言候補と入力案だけを準備した。
+- 制限: 候補の意味の妥当性すべてを機械的に保証するものではなく、根拠字幕を画面で確認可能。実ジョブのJPEG更新は未実施（保存処理は隔離テストで確認）。既存ZIPの再構成処理は今回未変更で、更新後のサムネは個別保存が必要。未コミット/未PUSH。
+
+## 2026-09-13 サムネのプレビュー・文言・書式を横並びに変更
+
+- 目的: 文言候補を開いたまま、保存済みサムネと見出し・上行・下行のフォント/サイズ/色を同時に確認する。
+- 変更ファイル: `frontend/app/results/[jobId]/page.tsx`、`frontend/components/{ResultVideoCard,ResultThumbnailEditor}.tsx`、本ファイル。
+- 変更: 通常動画を１行１本の横長カードにし、デスクトップでは左に追従するサムネ、右に文言と常時展開した書式設定を配置。文言候補は開閉可能な高さ256pxまでの独立スクロール欄に変更し、スクロール伝播を抑止。画像への反映は既存の「サムネを保存・更新」で行うことを明示。小さい幅では列数を減らす。
+- 検証: frontend typecheck/lint/build、Docker frontend image build、差分の空白検査成功。稼働frontendへFast Refreshで反映。2085x1272の実画面でプレビュー・３候補欄・文言入力・３段の書式・更新ボタンを同時表示。候補欄の末尾までスクロール後、さらにスクロールしてもpageY=330を維持。ブラウザエラーなし。
+- 入力保持: レイアウト切替前に画面の入力を読み取り、再マウントで戻った最初の通常動画の上行「絶賛した句の背景は」と見出し書体851チカラヅヨクを復元。他の設定は変更なし。実ジョブの保存/再生成は行っていない。
+- 制限: 今回はフロントエンドの配置変更のみ。サムネ画像の即時描画は追加していない。未コミット/未PUSH。
+
+## 2026-09-13 サムネ編集中の画像と画面全体を固定
+
+- 目的: 編集欄をスクロールしてもサムネ画像が動かないようにする。
+- 原因: 前回のsticky表示はページ内カードの範囲だけで追従し、文言・書式欄の多くはページ全体のスクロールを使っていた。カードの範囲を越えると画像も移動する構造だった。
+- 変更ファイル: `frontend/components/{ResultThumbnailWorkspace,ResultThumbnailEditor,ResultVideoCard}.tsx`、`frontend/app/results/[jobId]/page.tsx`、本ファイル。
+- 変更: 結果一覧の「サムネを編集」からviewport全体を使う編集dialogを開く。編集中は背景ページのスクロールを停止し、プレビューを独立した固定領域に配置。文言・書式はそれぞれ独立してスクロールし、狭い画面では設定側を共通スクロールにする。「結果一覧へ戻る」で通常表示へ戻す。編集UIは閉じてもマウントを保ち、同じ結果ページ内で入力案を維持する。
+- 検証: frontend typecheck/lint/build成功。稼働frontendへFast Refreshで反映。1366x768で書式欄を末尾（scrollTop=39.33）へ、候補欄を末尾（188.67）へ進め、画像上も含めて複数回スクロールしても画像top=77.33、left=12.67、pageY=190.67、dialog scrollTop=0を維持。2085x1272でも全体配置を確認。
+- 入力保持: 更新前の３本の全入力を照合。最初の通常動画で選択中だった案２の文言と851チカラヅヨクを復元し、dialogを閉じて再度開いても全入力が一致。終了時に背景スクロール制限が解除されることを確認。検証用viewport指定は解除。
+- 制限: 文言・書式の保存APIとサムネ画像生成は今回未変更。実ジョブの保存/再生成は行っていない。未コミット/未PUSH。
+
+## 2026-09-13 サムネの文言・書式を保存前に自動プレビュー
+
+- 目的: 更新ボタンを押さなくても、文言・書体・サイズ・色の変更結果を固定プレビューで確認できるようにする。
+- 原因: 編集欄の変更が画像描画につながっておらず、保存済みJPEGを表示するだけだった。
+- 変更ファイル: `backend/app/api/exports.py`、`backend/app/jobs/{queue,thumbnail_preview}.py`、`backend/app/render/render_thumbnail.py`、`backend/tests/test_thumbnail_preview.py`、`frontend/components/{LiveThumbnailPreview,ResultThumbnailWorkspace,ResultThumbnailEditor,ResultVideoCard,ThumbnailTextStyleEditor}.tsx`、`frontend/lib/api.ts`、本ファイル。
+- 変更: 編集画面を開いたときにworkerで対象場面の静止画を準備し、一時領域にキャッシュする。以後は入力変更から180ms後に、保存時と同じ描画処理でJPEGプレビューを返す。数値欄は有効な入力中にも反映し、連続変更で古い応答を表示しない。保存は既存の「サムネを保存・更新」で確定するときだけ行う。プレビュー処理は完成動画・保存済みサムネ・metadataを書き換えない。
+- 検証: backend全体 `1089 passed, 1 skipped`、関連42テスト、backend ruff、frontend typecheck/lint/build、backend/frontend/GPU worker image build成功。保存時のJPEGとのバイト一致、文言/書体/サイズ/色の反映、動画抽出をHTTPで実行しないこと、場面キャッシュの失効、失敗後の再試行、不正入力の拒否を検証。
+- 稼働反映: キュー/started=0でbackend/workerを再作成し、health HTTP200。frontendをFast Refreshで反映。転送途中にAPI関数未反映の一時コンパイルエラーが出たが、全ファイル転送後は解消し実画面を表示。TOPの再読込操作なし。
+- 実画面: 案２と見出し851チカラヅヨク、手動文言、上行の水色、サイズ140→100→80を保存ボタンなしで描画。サイズ欄にフォーカスしたまま80の画像へ変わることを確認。検証後に元の入力へ戻し、閉じて再度開いた後も３本の全入力が作業前と一致。保存済みJPEG/metadataのSHA256と完成MP4のサイズ/更新時刻は作業前と一致。
+- 制限: 初回の場面準備はworkerの空きを待つ。実ジョブでの確定保存は行っていない（保存との描画一致は隔離テストで確認）。未コミット/未PUSH。
+
+## 2026-09-13 サムネの手動サイズが自動縮小で変化しない問題を修正
+
+- 目的: 見出し・上行・下行のサイズ入力が、指定した大きさとしてプレビューと保存画像に反映されるようにする。
+- 原因: サイズが自動縮小の上限として使われていた。今回の下行では112/114/140を指定しても実描画がすべて96となり、入力だけが変わって見た目が変わらなかった。
+- 変更ファイル: `backend/app/thumbnail_style.py`、`backend/app/render/render_thumbnail.py`、`backend/tests/test_thumbnail_text_styles.py`、`frontend/components/ThumbnailTextStyleEditor.tsx`、`frontend/lib/types.ts`、`frontend/tests/thumbnailTextStyles.test.ts`、本ファイル。
+- 変更: 各行に後方互換の`autoFit`設定（未設定はtrue）を追加。手動サイズ変更ではその行の自動縮小を解除し、実際の文字サイズを入力値に一致させる。固定サイズの行を含む文字レイヤーの後段の横圧縮・一括縮小も停止する。「枠に収める（自動縮小）」を各行で切り替え可能とし、枠を越えた場合の戻し方を表示。設定はキャラ保存・サムネ保存にも保持する。
+- 検証: backend全体 `1092 passed, 1 skipped`、関連25テスト、変更backendのruff、frontend typecheck/lint/build、キャラ設定roundtripテスト成功。３行それぞれで、自動縮小なら同一JPEGになる長文・サイズの組み合わせが、固定サイズでは指定した実フォントサイズと異なるJPEGになることを確認。
+- 稼働反映: backend/frontend/GPU worker image build成功。キュー/started=0でbackend/worker再作成、health HTTP200。frontendの型と書式欄をFast Refreshで反映し、TOPは再読込していない。
+- 実画面: 下行を140→112→114へ変更し、すべて保存操作なしでプレビューが変化。140の拡大を目視し、112→114でも新しい画像への変更を確認。新たなブラウザエラーなし。元の文言・書体・色・サイズを保持し、下行だけ指定サイズ114を優先する状態で表示している。
+- 制限: 固定サイズは枠内への収まりを強制しないため、大きくしすぎた場合は画像内で見切れる。実ジョブの確定保存は未実施。未コミット/未PUSH。
+
+## 2026-09-13 ショート画角を枠の直接操作と即時プレビューで調整
+
+- 目的: 画角の数値がどの位置に対応するかを見えるようにし、位置・倍率を試すたびの動画再生成待ちをなくす。
+- 原因: 左右・上下・倍率スライダーのpointerup/keyup/blurごとに保存APIを呼び、対象clipの字幕入り・字幕なしプレビュー動画を再生成していた。
+- 変更ファイル: `frontend/components/ShortFramingWorkspace.tsx`、`frontend/lib/{shortFraming,shortFramingApi}.ts`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/tests/shortFraming.test.ts`、`backend/app/{main.py,api/framing_guide.py,jobs/short_framing_guide.py,render/render_short.py}`、`backend/tests/test_short_framing_guide.py`、本ファイル。
+- 変更: 「画角を見ながら調整」で画面全体のdialogを表示。元映像に青い表示範囲と三分割線を重ね、クリック・ドラッグ・左右/上下/倍率スライダーで縦型の構図を即時描画する。別の時刻の静止画も確認可能。位置変更ではサーバー通信・動画生成を行わず、「この画角を保存」で既存の保存APIを一度呼ぶ。閉じる操作は試した値を破棄する。完了済みレビューでも試し表示できるが保存不可。
+- 画角解析: レンダラーの画角選択処理を共通関数へ切り出し、workerで一度解析して一時領域にキャッシュ。位置・倍率ではキャッシュを失効させず、元動画・区間・配置・帯の表示範囲が変わったら再解析する。古いworkerの結果が新しい要求を上書きしない。完成動画・字幕確認データ・選定データは解析処理で変更しない。
+- 検証: backend全体 `1098 passed, 1 skipped`（独立したDATABASE_URL/STORAGE_ROOTを指定）、変更backendのruff、frontend typecheck/lint/build、画角計算テスト成功。中心/人物追従/ぼかし背景・倍率・端への移動・クリックから数値への変換、キャッシュ再利用と失効、競合結果の破棄、完了済みレビューの不変を確認。最初の全体テストは起動時の相対DBパスで２件失敗し、隔離DBを明示した再実行で全件通過。
+- 稼働反映: backend/frontend/GPU worker image build成功。キュー/started=0を確認してbackend/workerを再作成しhealth HTTP200。frontendは変更した画角関連ファイルだけFast Refreshで反映し、TOPとサムネ編集中のタブは再読み込みしていない。
+- 実画面: 対象ジョブのショート１で元映像と縦型構図を同時表示。初回のworker解析は約1.06秒。倍率100→180→210%と元映像のクリック・ドラッグで範囲枠と縦型画像が即座に変わることを目視確認。調整中の保存PATCHなし、動画生成キュー/started=0、レビューJSONのSHA256は操作前後一致。React開発時のeffect再実行でdialogが閉じる問題を検出して修正し、再度開けることを確認。
+- 制限: 表示は静止画による画角確認用で、字幕・帯の絵柄は省略。初回の解析と元映像の読み込み、別時刻への移動には待ち時間がある。保存後の動画再生成速度自体は未変更。実ジョブは完了済みのため確定保存・最終書き出しは今回未実施。未コミット/未PUSH。
+
+## 2026-09-13 編集画面修正のコミット準備
+
+- 目的: ユーザーが確認した字幕編集・サムネ編集・ショート画角調整の一連の修正をGitへまとめる。
+- 対象: `C:\BOT\AutoClipper Web`、branch `codex/task-133-upload-style-settings`、remote `origin`（`yoyowasa/AutoClipper-Web`）。fetch後のHEAD/upstreamは一致し、リモート側の追加コミットなし。
+- 収録内容: 帯単独UIの整理、文字起こしの全角化と同語句修正、区間結合/分割/１行表示、選定画面での通常/ショート切替、編集画面のスクロール改善、サムネ文言/書式/即時プレビュー、ショート画角の直接操作と即時プレビュー。変更ファイルは前項までの各タスクに記録。
+- 検証: 直前の全体backend `1098 passed, 1 skipped`、frontend typecheck/lint/build、Docker image buildと実画面確認を継承。今回backend全体/launcherのruff、overlay-fit goldenを追加実行して成功。Docker４サービス稼働、backend health HTTP200を再確認。
+- ローカル保持: 既存の未追跡素材 `backend/app/assets/thumbnail_templates/raden_normal_v1/base.png` と `storage/qa/` は今回の修正コードから参照されていないためコミット対象外。実ジョブの設定・出力動画は変更しない。

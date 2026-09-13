@@ -1,7 +1,8 @@
 from pathlib import Path
+from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -9,7 +10,13 @@ from app.jobs.publication_state import rerender_publication_is_unresolved
 from app.jobs.queue import (
     ThumbnailRegenerationEnqueue,
     get_enqueue_thumbnail_regeneration,
+    get_enqueue_thumbnail_copy,
+    get_enqueue_thumbnail_preview,
 )
+from app.jobs.thumbnail_preview import (
+    ThumbnailPreviewRequest, ThumbnailPreviewState, prepare_thumbnail_preview, render_thumbnail_preview,
+)
+from app.jobs.thumbnail_copy import ThumbnailCopyState, copy_state_path, read_copy_state, queue_copy_generation
 from app.jobs.thumbnails import read_export_metadata, write_export_metadata
 from app.models import ExportItem, Job
 from app.schemas import ThumbnailRegenerationRequest, ThumbnailRegenerationResponse
@@ -113,6 +120,29 @@ def download_export(
     return FileResponse(video_path, media_type="video/mp4", filename=video_path.name)
 
 
+@router.get("/{export_id}/thumbnail/copy", response_model=ThumbnailCopyState)
+def get_thumbnail_copy(export_id: str, db: Session = Depends(get_db), paths: StoragePaths = Depends(get_storage_paths)):
+    export = _get_export_or_404(db, export_id, paths)
+    if export.type != "normal":
+        raise HTTPException(422, "通常動画のサムネイルだけが対象です。")
+    return ThumbnailCopyState.model_validate(read_copy_state(copy_state_path(paths, export)))
+
+
+@router.post("/{export_id}/thumbnail/copy", response_model=ThumbnailCopyState, status_code=202)
+def generate_thumbnail_copy(export_id: str, force: bool = False, db: Session = Depends(get_db),
+                            paths: StoragePaths = Depends(get_storage_paths),
+                            enqueue: Callable[[str, str], None] = Depends(get_enqueue_thumbnail_copy)):
+    export = _get_export_or_404(db, export_id, paths)
+    try:
+        return queue_copy_generation(db, paths, export, enqueue, force=force)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except (KeyError, FileNotFoundError):
+        raise HTTPException(409, "完成動画の確定字幕・切り抜き範囲を確認できません。") from None
+    except Exception:
+        raise HTTPException(503, "文言生成を開始できませんでした。") from None
+
+
 @router.get("/{export_id}/metadata")
 def download_export_metadata(
     export_id: str,
@@ -141,6 +171,30 @@ def download_export_subtitle(
         detail="subtitle file not found",
         media_type="text/plain",
     )
+
+
+@router.post("/{export_id}/thumbnail/preview/prepare", response_model=ThumbnailPreviewState)
+def prepare_export_thumbnail_preview(export_id: str, force: bool = False, db: Session = Depends(get_db),
+                                     paths: StoragePaths = Depends(get_storage_paths),
+                                     enqueue: Callable[[str, str], None] = Depends(get_enqueue_thumbnail_preview)):
+    export = _get_export_or_404(db, export_id, paths)
+    try:
+        return prepare_thumbnail_preview(db, paths, export, enqueue, force=force)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(409, "プレビューの元動画・サムネ設定を確認できません。") from exc
+    except Exception as exc:
+        raise HTTPException(503, "プレビューを準備できませんでした。") from exc
+
+
+@router.post("/{export_id}/thumbnail/preview")
+def preview_export_thumbnail(export_id: str, request: ThumbnailPreviewRequest, db: Session = Depends(get_db),
+                             paths: StoragePaths = Depends(get_storage_paths)):
+    export = _get_export_or_404(db, export_id, paths)
+    try:
+        data = render_thumbnail_preview(db, paths, export, request)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(409, "プレビューを読み込み直してください。") from exc
+    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/{export_id}/thumbnail")
@@ -239,6 +293,11 @@ def regenerate_export_thumbnail(
         "thumbnail_request_revision": revision,
         "thumbnail_error_code": None,
     }
+    if request.text is not None:
+        pending.update({"thumbnail_kicker": request.text.heading.strip(),
+                        "thumbnail_line1": request.text.upper.strip(), "thumbnail_line2": request.text.lower.strip()})
+    if request.text_styles is not None:
+        pending["thumbnail_text_styles"] = request.text_styles.model_dump(mode="json", by_alias=True)
     write_export_metadata(metadata_path, pending)
     try:
         enqueue_thumbnail(export.id, revision)

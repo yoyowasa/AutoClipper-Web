@@ -4,9 +4,10 @@ import Image from "next/image";
 import { useState } from "react";
 
 import { SaveFileButton } from "./SaveFileButton";
+import { ResultThumbnailWorkspace } from "./ResultThumbnailWorkspace";
 import { formatDuration, formatScore } from "../lib/format";
 import { toBrowserApiUrl } from "../lib/api";
-import type { PostTitleIntent, ResultExportItem } from "../lib/types";
+import type { PostTitleIntent, ResultExportItem, ThumbnailTextStyles, ThumbnailCopyText } from "../lib/types";
 import { descriptionWithHashtags, youtubeTagsText } from "../lib/youtubePosting";
 
 const INTENT_LABELS: Record<PostTitleIntent, string> = {
@@ -99,7 +100,8 @@ export function ResultVideoCard({
   onReedit?: (item: ResultExportItem) => void;
   onRegenerateThumbnail?: (
     item: ResultExportItem,
-    cropMode: "standard" | "close"
+    cropMode: "standard" | "close",
+    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean
   ) => void;
   isReediting?: boolean;
   isRegeneratingThumbnail?: boolean;
@@ -152,30 +154,9 @@ export function ResultVideoCard({
     }
   }
 
-  return (
-    <article className="rounded-md border border-neutral-300 bg-white p-5 shadow-sm shadow-neutral-200/60">
-      <div className="flex min-h-40 flex-col justify-between gap-5">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-md border border-neutral-300 bg-neutral-50 px-2 py-1 text-xs font-medium uppercase text-neutral-600">
-              {item.type}
-            </span>
-            <span className="text-sm text-neutral-500">{formatDuration(item.duration)}</span>
-            <span className="text-sm text-neutral-500">score {formatNumber(item.finalScore ?? item.score)}</span>
-            {item.belowQualityThreshold ? (
-              <span className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900">
-                below threshold
-              </span>
-            ) : null}
-            {item.boundaryRefined ? (
-              <span className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-900">
-                boundary refined
-              </span>
-            ) : null}
-          </div>
-          <h2 className="break-words text-lg font-semibold leading-snug text-neutral-950">{item.title}</h2>
-          {thumbnailIsDisplayable && thumbnailUrl ? (
-            <section className="overflow-hidden rounded-md border border-neutral-200 bg-neutral-50">
+  const thumbnailPreview = (
+thumbnailIsDisplayable && thumbnailUrl ? (
+            <section aria-label="保存済みサムネイル" className="overflow-hidden rounded-md border border-neutral-200 bg-neutral-50">
               <Image
                 alt={`${item.title} のサムネイル`}
                 className={`h-auto w-full bg-neutral-950 object-contain ${
@@ -215,47 +196,35 @@ export function ResultVideoCard({
             >
               {thumbnailLabel}
             </div>
-          ) : null}
+          ) : null
+  );
+
+  return (
+    <article className="rounded-md border border-neutral-300 bg-white p-5 shadow-sm shadow-neutral-200/60">
+      <div className="flex min-h-40 flex-col justify-between gap-5">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-md border border-neutral-300 bg-neutral-50 px-2 py-1 text-xs font-medium uppercase text-neutral-600">
+              {item.type}
+            </span>
+            <span className="text-sm text-neutral-500">{formatDuration(item.duration)}</span>
+            <span className="text-sm text-neutral-500">score {formatNumber(item.finalScore ?? item.score)}</span>
+            {item.belowQualityThreshold ? (
+              <span className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900">
+                below threshold
+              </span>
+            ) : null}
+            {item.boundaryRefined ? (
+              <span className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-900">
+                boundary refined
+              </span>
+            ) : null}
+          </div>
+          <h2 className="break-words text-lg font-semibold leading-snug text-neutral-950">{item.title}</h2>
+          {thumbnailPreview}
           {item.type === "normal" && onRegenerateThumbnail ? (
-            <section className="border border-amber-300 bg-amber-50 p-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-neutral-950">
-                    サムネだけ再生成
-                  </h3>
-                  <p className="mt-1 text-xs text-neutral-600">
-                    承認済みの文字とデザインは維持し、人物の場面と寄り方を切り替えます。完成動画は変更しません。
-                  </p>
-                </div>
-                {item.thumbnailStatus === "generating" ? (
-                  <span className="text-xs font-semibold text-amber-800" role="status">
-                    生成中
-                  </span>
-                ) : null}
-              </div>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <button
-                  className="min-h-11 bg-amber-600 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
-                  disabled={isRegeneratingThumbnail || item.thumbnailStatus === "generating"}
-                  type="button"
-                  onClick={() => onRegenerateThumbnail(item, "standard")}
-                >
-                  {item.thumbnailStatus === "generating"
-                    ? "再生成中"
-                    : "別場面（上半身）"}
-                </button>
-                <button
-                  className="min-h-11 bg-neutral-950 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
-                  disabled={isRegeneratingThumbnail || item.thumbnailStatus === "generating"}
-                  type="button"
-                  onClick={() => onRegenerateThumbnail(item, "close")}
-                >
-                  {item.thumbnailStatus === "generating"
-                    ? "再生成中"
-                    : "別場面（顔寄り）"}
-                </button>
-              </div>
-            </section>
+            <ResultThumbnailWorkspace item={item} busy={isRegeneratingThumbnail}
+              onRender={(crop, styles, text, advance) => onRegenerateThumbnail(item, crop, styles, text, advance)} />
           ) : null}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
             <span>title: {readableToken(item.titleSource)}</span>

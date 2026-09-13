@@ -15,6 +15,7 @@ from app.jobs.subtitle_review import (
     SubtitleReviewDocument,
     apply_reviewed_clip_content,
     apply_reviewed_text,
+    subtitle_review_source_path,
 )
 from app.models import Job, Video
 from app.render.render_exact_review_preview import (
@@ -329,7 +330,10 @@ def load_subtitle_review_preview_inputs(
     if review_clip is None:
         raise KeyError(clip_id)
 
-    transcript_payload = _read_json(transcript_output_path(output_dir))
+    source_snapshot = subtitle_review_source_path(output_dir, document)
+    transcript_payload = _read_json(
+        source_snapshot if source_snapshot.exists() else transcript_output_path(output_dir)
+    )
     if not isinstance(transcript_payload, list):
         raise ValueError("transcript_segments.json must contain a list")
     transcript_segments = [

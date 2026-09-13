@@ -10,7 +10,8 @@ from typing import Any, Literal
 
 from PIL import Image, ImageDraw, ImageFont
 
-from app.thumbnail_style import NormalThumbnailStyle
+from app.thumbnail_style import NormalThumbnailStyle, ThumbnailTextStyles
+from app.render.thumbnail_fonts import thumbnail_font_path
 from app.short_banners import banner_asset_path
 
 
@@ -421,6 +422,10 @@ def _title_layer(
     line_gap: int,
     colors: dict[str, str],
     rotation_degrees: float,
+    upper_font_path: Path | None = None,
+    lower_font_path: Path | None = None,
+    upper_auto_fit: bool = True,
+    lower_auto_fit: bool = True,
 ) -> Image.Image:
     lines = [
         (
@@ -428,12 +433,16 @@ def _title_layer(
             colors["title_first"],
             first_max_size,
             first_min_size,
+            upper_font_path or font_path,
+            upper_auto_fit,
         ),
         (
             second_line.strip(),
             colors["title_second"],
             second_max_size,
             second_min_size,
+            lower_font_path or font_path,
+            lower_auto_fit,
         ),
     ]
     visible_lines = [line for line in lines if line[0]]
@@ -445,13 +454,13 @@ def _title_layer(
             color,
             _fit_text(
                 text,
-                font_path,
+                selected_font,
                 max_width=max_width,
                 max_size=max_size,
-                min_size=min_size,
+                min_size=min_size if auto_fit else max_size,
             ),
         )
-        for text, color, max_size, min_size in visible_lines
+        for text, color, max_size, min_size, selected_font, auto_fit in visible_lines
     ]
     padding = 24
     line_height = max(fit.height for _, _, fit in fitted_lines)
@@ -479,7 +488,7 @@ def _title_layer(
             inner_stroke=inner,
             outer_stroke=outer,
         )
-    if natural_width > max_width:
+    if natural_width > max_width and upper_auto_fit and lower_auto_fit:
         layer = layer.resize(
             (max_width + padding * 2, layer.height),
             Image.Resampling.LANCZOS,
@@ -498,6 +507,7 @@ def _compose_normal_thumbnail(
     subject_anchor_x: float | None,
     face_height_ratio: float | None = None,
     background_image: Image.Image | None = None,
+    text_styles: ThumbnailTextStyles | None = None,
 ) -> Image.Image:
     canvas_config = template["canvas"]
     frame_config = template["frame"]
@@ -558,10 +568,14 @@ def _compose_normal_thumbnail(
         )
         eyebrow_fit = _fit_text(
             eyebrow,
-            font_path,
+            thumbnail_font_path(text_styles.heading.font_preset, font_path) if text_styles else font_path,
             max_width=int(text_config["eyebrow_max_width"]),
             max_size=int(text_config["eyebrow_max_size"]),
-            min_size=18,
+            min_size=(
+                int(text_config["eyebrow_max_size"])
+                if text_styles and not text_styles.heading.auto_fit
+                else min(18, int(text_config["eyebrow_max_size"]))
+            ),
         )
         eyebrow_y = box_y + max(0, (box_height - eyebrow_fit.height) // 2 - 5)
         draw.text(
@@ -594,7 +608,16 @@ def _compose_normal_thumbnail(
             line_gap=int(text_config["line_gap"]),
             colors=colors,
             rotation_degrees=float(text_config["rotation_degrees"]),
+            upper_font_path=thumbnail_font_path(text_styles.upper.font_preset, font_path) if text_styles else None,
+            lower_font_path=thumbnail_font_path(text_styles.lower.font_preset, font_path) if text_styles else None,
+            upper_auto_fit=text_styles.upper.auto_fit if text_styles else True,
+            lower_auto_fit=text_styles.lower.auto_fit if text_styles else True,
         )
+        available_height = height - int(text_config["title_y"])
+        auto_fit_height = text_styles is None or (text_styles.upper.auto_fit and text_styles.lower.auto_fit)
+        if auto_fit_height and title.height > available_height > 0:
+            ratio = available_height / title.height
+            title = title.resize((max(1, round(title.width * ratio)), available_height), Image.Resampling.LANCZOS)
         canvas.alpha_composite(
             title,
             (int(text_config["title_x"]), int(text_config["title_y"])),
@@ -628,6 +651,8 @@ def render_normal_thumbnail(
     subject_anchor_x: float | None = None,
     face_height_ratio: float | None = None,
     character_style: dict[str, Any] | None = None,
+    text_styles: dict[str, Any] | None = None,
+    source_frame_path: str | Path | None = None,
 ) -> ThumbnailRenderResult:
     """Render a 1280x720 normal thumbnail.
 
@@ -647,8 +672,10 @@ def render_normal_thumbnail(
             f"normal thumbnail background image not found: {background_image_path}"
         )
     plain_background = None
+    resolved_text_styles = ThumbnailTextStyles.model_validate(text_styles) if text_styles is not None else None
     if character_style is not None:
         style = NormalThumbnailStyle.model_validate(character_style)
+        resolved_text_styles = resolved_text_styles or style.text_styles
         template["colors"].update({
             "title_first": style.title_color,
             "title_second": style.second_title_color,
@@ -659,19 +686,33 @@ def render_normal_thumbnail(
         elif style.design == "plain":
             background_image_path = None
             plain_background = Image.new("RGBA", (1280, 720), style.background_color)
+    if resolved_text_styles:
+        template["colors"].update({
+            "eyebrow": resolved_text_styles.heading.color,
+            "title_first": resolved_text_styles.upper.color,
+            "title_second": resolved_text_styles.lower.color,
+        })
+        template["text"]["eyebrow_max_size"] = resolved_text_styles.heading.font_size
+        for name, text_style in [("first", resolved_text_styles.upper), ("second", resolved_text_styles.lower)]:
+            template["text"][f"title_{name}_max_size"] = text_style.font_size
+            template["text"][f"title_{name}_min_size"] = min(template["text"][f"title_{name}_min_size"], text_style.font_size)
     selected_font = Path(font_path) if font_path is not None else Path(template_path).parent / template["font"]
     if not selected_font.is_file():
         raise FileNotFoundError(f"normal thumbnail font not found: {selected_font}")
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="autoclipper-thumbnail-") as temp_dir:
         frame_path = Path(temp_dir) / "frame.jpg"
-        extract_thumbnail_frame(
-            input_path,
-            frame_path,
-            timestamp,
-            ffmpeg_bin=ffmpeg_bin,
-            command_runner=command_runner,
-        )
+        if source_frame_path is not None:
+            # Live previews reuse a worker-extracted frame; no video work here.
+            frame_path = Path(source_frame_path)
+        else:
+            extract_thumbnail_frame(
+                input_path,
+                frame_path,
+                timestamp,
+                ffmpeg_bin=ffmpeg_bin,
+                command_runner=command_runner,
+            )
         with Image.open(frame_path) as source_frame:
             if background_image_path is not None:
                 with Image.open(background_image_path) as source_background:
@@ -685,6 +726,7 @@ def render_normal_thumbnail(
                         subject_anchor_x=subject_anchor_x,
                         face_height_ratio=face_height_ratio,
                         background_image=source_background,
+                        text_styles=resolved_text_styles,
                     )
             else:
                 composed = _compose_normal_thumbnail(
@@ -697,6 +739,7 @@ def render_normal_thumbnail(
                     subject_anchor_x=subject_anchor_x,
                     face_height_ratio=face_height_ratio,
                     background_image=plain_background,
+                    text_styles=resolved_text_styles,
                 )
     composed.save(output, format="JPEG", quality=94, optimize=True, subsampling=0)
     return ThumbnailRenderResult(

@@ -54,6 +54,9 @@ class SubtitleReviewSegment(BaseModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     edited: bool = False
     affected_clip_ids: list[str] = Field(default_factory=list, alias="affectedClipIds")
+    source_indices: list[int] = Field(default_factory=list, alias="sourceIndices")
+    preserve_segmentation: bool = Field(default=False, alias="preserveSegmentation")
+    single_line: bool = Field(default=False, alias="singleLine")
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -303,6 +306,12 @@ def subtitle_review_summary_path(output_dir: str | Path) -> Path:
 
 def reviewed_transcript_output_path(output_dir: str | Path) -> Path:
     return Path(output_dir) / REVIEWED_TRANSCRIPT_FILENAME
+
+
+def subtitle_review_source_path(output_dir: str | Path, document: SubtitleReviewDocument) -> Path:
+    # Keep the original index space when a render replaces transcript_segments.json.
+    digest = sha256(document.created_at.encode("utf-8")).hexdigest()[:16]
+    return Path(output_dir) / f"subtitle_review_source_{digest}.json"
 
 
 def subtitle_review_preview_path(output_dir: str | Path, clip_id: str) -> Path:
@@ -584,6 +593,8 @@ def build_subtitle_review(
             text=segment.text,
             confidence=segment.confidence,
             affectedClipIds=affected_clips[index],
+            preserveSegmentation=segment.preserve_segmentation,
+            singleLine=segment.single_line,
         )
         for index, segment in enumerate(transcript_segments)
         if index in affected_clips
@@ -1174,6 +1185,18 @@ def apply_reviewed_text(
     transcript_segments: Sequence[TranscriptSegment],
     document: SubtitleReviewDocument,
 ) -> list[TranscriptSegment]:
+    if any(s.preserve_segmentation or s.source_indices or s.single_line for s in document.segments):
+        replaced = {i for s in document.segments for i in (s.source_indices or [s.index])}
+        output = [s for i, s in enumerate(transcript_segments) if i not in replaced]
+        for segment in document.segments:
+            source_index = (segment.source_indices or [segment.index])[0]
+            source = transcript_segments[source_index]
+            output.append(source.model_copy(update={
+                "start": segment.start, "end": segment.end, "text": segment.text,
+                "preserve_segmentation": segment.preserve_segmentation,
+                "single_line": segment.single_line,
+            }))
+        return sorted(output, key=lambda s: (s.start, s.end))
     reviewed_text = {segment.index: segment.text for segment in document.segments}
     return [
         segment.model_copy(update={"text": reviewed_text.get(index, segment.text)})
@@ -1282,7 +1305,7 @@ def write_subtitle_review_summary(
             for clip in document.clips
             if clip.hook_scene_start is not None and clip.hook_scene_end is not None
         ],
-        "timestamps_changed": False,
+        "timestamps_changed": any(segment.source_indices for segment in document.segments),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return path

@@ -12,7 +12,7 @@ import {
   regenerateExportThumbnail,
   toBrowserApiUrl
 } from "../../../lib/api";
-import type { JobAuditSummary, JobResultsResponse, ResultExportItem } from "../../../lib/types";
+import type { JobAuditSummary, JobResultsResponse, ResultExportItem, ThumbnailTextStyles, ThumbnailCopyText } from "../../../lib/types";
 
 const IMPORTANT_AUDIT_WARNINGS = [
   "missing_title",
@@ -147,7 +147,8 @@ export default function ResultsPage() {
 
   async function regenerateThumbnail(
     item: ResultExportItem,
-    cropMode: "standard" | "close"
+    cropMode: "standard" | "close",
+    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean
   ) {
     const frameSeconds = Math.min(
       item.duration,
@@ -160,8 +161,10 @@ export default function ResultsPage() {
       await regenerateExportThumbnail(item.id, {
         frameSeconds,
         subjectAnchorX,
-        advanceFrame: true,
-        cropMode
+        advanceFrame: advanceFrame ?? !textStyles,
+        cropMode,
+        ...(textStyles ? { textStyles } : {}),
+        ...(text ? { text } : {})
       });
       setResults((current) =>
         current
@@ -172,6 +175,7 @@ export default function ResultsPage() {
                   ? {
                       ...clip,
                       thumbnailSubjectAnchorX: subjectAnchorX,
+                      ...(textStyles ? { thumbnailTextStyles: textStyles } : {}),
                       thumbnailStatus: "generating"
                     }
                   : clip
@@ -237,7 +241,7 @@ export default function ResultsPage() {
           <>
             {results.canReopenForEditing ? (
               <section className="border border-sky-300 bg-sky-50 px-5 py-4 text-sm text-sky-900">
-                各動画の「この動画だけ再編集」から1本だけ開けます。通常動画は再編集画面でショートへ変更できます。
+                各動画の「この動画だけ再編集」から1本だけ開けます。サムネイルの文言・書式はこの画面で調整できます。
               </section>
             ) : null}
 

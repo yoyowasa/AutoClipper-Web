@@ -35,6 +35,45 @@ import type {
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
+export async function thumbnailCopyRequest(exportId: string, generate = false): Promise<import("./types").ThumbnailCopyState> {
+  return parseJsonResponse(await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/copy${generate ? "?force=true" : ""}`,
+    { method: generate ? "POST" : "GET", cache: "no-store" }));
+}
+
+export async function prepareThumbnailPreview(exportId: string, signal: AbortSignal, force = false): Promise<{
+  state: "queued" | "ready" | "failed"; frameKey: string; error?: string;
+}> {
+  return parseJsonResponse(await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/preview/prepare?force=${force}`, {
+    method: "POST", signal, cache: "no-store",
+  }));
+}
+
+export async function renderThumbnailPreview(exportId: string, draft: {
+  frameKey: string; text: import("./types").ThumbnailCopyText; textStyles: import("./types").ThumbnailTextStyles;
+}, signal: AbortSignal): Promise<Blob> {
+  const response = await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/preview`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft), signal, cache: "no-store",
+  });
+  if (!response.ok) await parseJsonResponse(response);
+  return response.blob();
+}
+
+export async function editSubtitleStructure(
+  jobId: string, request: import("./types").SubtitleStructureRequest,
+): Promise<SubtitleReviewDocument> {
+  return parseJsonResponse<SubtitleReviewDocument>(await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/segment-structure`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request),
+  }));
+}
+
+export async function updateSubtitleReviewSegments(
+  jobId: string, segments: Array<{ segmentId: string; before: string; text: string }>,
+): Promise<SubtitleReviewDocument> {
+  return parseJsonResponse<SubtitleReviewDocument>(await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/segments`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ segments }),
+  }));
+}
+
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
@@ -598,6 +637,8 @@ export async function regenerateExportThumbnail(
     subjectAnchorX: number;
     advanceFrame?: boolean;
     cropMode?: "standard" | "close";
+    textStyles?: import("./types").ThumbnailTextStyles;
+    text?: import("./types").ThumbnailCopyText;
   }
 ): Promise<ThumbnailRegenerationResponse> {
   const response = await fetch(

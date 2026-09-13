@@ -17,6 +17,7 @@ from app.jobs.runner import (
 )
 from app.jobs.title_hook_suggestions import run_title_hook_suggestion_generation
 from app.jobs.thumbnail_regeneration import run_export_thumbnail_regeneration
+from app.jobs.thumbnail_copy import run_thumbnail_copy_generation
 
 JobEnqueue = Callable[[str], None]
 TerminalRetryAllowed = Callable[[], bool]
@@ -340,3 +341,20 @@ def get_enqueue_render_job() -> RenderEnqueue:
 
 def get_enqueue_thumbnail_regeneration() -> ThumbnailRegenerationEnqueue:
     return enqueue_export_thumbnail_regeneration
+
+
+def enqueue_thumbnail_copy(export_id: str, request_id: str) -> None:
+    get_queue().enqueue(run_thumbnail_copy_generation, export_id, request_id, job_timeout=360, job_id=f"thumbnail-copy-{request_id}")
+
+
+def get_enqueue_thumbnail_copy() -> Callable[[str, str], None]:
+    return enqueue_thumbnail_copy
+
+
+def enqueue_thumbnail_preview(export_id: str, request_id: str) -> None:
+    from app.jobs.thumbnail_preview import run_thumbnail_preview_prepare
+    get_queue().enqueue(run_thumbnail_preview_prepare, export_id, request_id, job_timeout=60, job_id=f"thumbnail-preview-{request_id}")
+
+
+def get_enqueue_thumbnail_preview() -> Callable[[str, str], None]:
+    return enqueue_thumbnail_preview

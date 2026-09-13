@@ -1,5 +1,6 @@
 import json
 import hashlib
+import unicodedata
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -634,7 +635,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     raw_transcript = json.loads((job_dir / "raw_transcript_segments.json").read_text(encoding="utf-8"))
     processed_transcript = json.loads((job_dir / "transcript_segments.json").read_text(encoding="utf-8"))
     assert raw_transcript[0]["text"] == "why automation mistakes matter before launch"
-    assert processed_transcript[0]["text"] == "why AutoClipper mistakes matter before launch"
+    assert processed_transcript[0]["text"] == "ｗｈｙ ＡｕｔｏＣｌｉｐｐｅｒ ｍｉｓｔａｋｅｓ ｍａｔｔｅｒ ｂｅｆｏｒｅ ｌａｕｎｃｈ"
     transcript_summary = json.loads((job_dir / "transcript_summary.json").read_text(encoding="utf-8"))
     assert transcript_summary["segment_count"] == 4
     assert transcript_summary["total_text_length"] > 20
@@ -671,7 +672,8 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     transcript_postprocess_summary = json.loads((job_dir / "transcript_postprocess_summary.json").read_text(encoding="utf-8"))
     assert transcript_postprocess_summary["enabled"] is True
     assert transcript_postprocess_summary["segment_count"] == 4
-    assert transcript_postprocess_summary["changed_segment_count"] == 1
+    assert transcript_postprocess_summary["changed_segment_count"] == 4
+    assert transcript_postprocess_summary["normalization"]["fullwidth"] is True
     assert transcript_postprocess_summary["replacement_counts"] == {"automation": 1}
 
     audio_summary = json.loads((job_dir / "audio_feature_summary.json").read_text(encoding="utf-8"))
@@ -1429,7 +1431,8 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         params={"start": 2, "end": 58},
     )
     assert transcript_preview.status_code == 200
-    assert [(segment["start"], segment["end"], segment["text"]) for segment in transcript_preview.json()] == [
+    assert [(segment["start"], segment["end"], unicodedata.normalize("NFKC", segment["text"]))
+            for segment in transcript_preview.json()] == [
         (0.0, 30.0, "why automation mistakes matter before launch"),
         (
             35.0,
@@ -2344,7 +2347,7 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
     assert client.get(results["shorts"][0]["downloadUrl"]).content.startswith(b"rendered short_")
 
     transcript_payload = json.loads((storage.outputs / created["jobId"] / "transcript_segments.json").read_text(encoding="utf-8"))
-    assert transcript_payload[0]["text"].startswith("Why automation mistakes matter before launch.")
+    assert transcript_payload[0]["text"].startswith("Ｗｈｙ ａｕｔｏｍａｔｉｏｎ ｍｉｓｔａｋｅｓ ｍａｔｔｅｒ ｂｅｆｏｒｅ ｌａｕｎｃｈ．")
     transcript_summary = json.loads((storage.outputs / created["jobId"] / "transcript_summary.json").read_text(encoding="utf-8"))
     assert transcript_summary["transcription_engine"] == "e2e_fixture"
     assert transcript_summary["transcription_model"] == "fixture"

@@ -120,6 +120,8 @@ class SubtitleEvent:
     end: float
     text: str
     style: ClipTextStyle | None = None
+    preserve_segmentation: bool = False
+    single_line: bool = False
 
 
 @dataclass(frozen=True)
@@ -734,6 +736,8 @@ def _clip_segment_to_candidate(segment: TranscriptSegment, candidate: Candidate)
         text=text,
         confidence=segment.confidence,
         clipId=segment.clip_id,
+        preserveSegmentation=segment.preserve_segmentation,
+        singleLine=segment.single_line,
     )
 
 
@@ -753,6 +757,9 @@ def _segment_events(segment: TranscriptSegment, layout: SubtitleLayout) -> list[
     text = _normalize_text(segment.text)
     if not text:
         return []
+    if segment.preserve_segmentation or segment.single_line:
+        return [SubtitleEvent(start=segment.start, end=segment.end, text=text,
+                              preserve_segmentation=True, single_line=segment.single_line)]
 
     duration = max(0.01, segment.end - segment.start)
     max_chars_per_event = max(1, layout.max_chars_per_line * layout.max_lines)
@@ -785,6 +792,8 @@ def _segment_events(segment: TranscriptSegment, layout: SubtitleLayout) -> list[
 
 
 def _can_merge_events(previous: SubtitleEvent, current: SubtitleEvent, layout: SubtitleLayout) -> bool:
+    if previous.preserve_segmentation or current.preserve_segmentation:
+        return False
     if previous.style != current.style:
         return False
     gap = current.start - previous.end
@@ -829,6 +838,9 @@ def _apply_minimum_display_duration(
 ) -> list[SubtitleEvent]:
     adjusted: list[SubtitleEvent] = []
     for index, event in enumerate(events):
+        if event.preserve_segmentation:
+            adjusted.append(event)
+            continue
         next_start = events[index + 1].start if index + 1 < len(events) else None
         max_allowed_end = (
             next_start - layout.min_gap_between_subtitles if next_start is not None else candidate_duration
@@ -915,6 +927,8 @@ def _subtitle_events_with_hook_scene(
                 end=shifted_end,
                 text=event.text,
                 style=event.style,
+                preserve_segmentation=event.preserve_segmentation,
+                single_line=event.single_line,
             )
         )
     return shifted_body_events, output_duration
@@ -1342,7 +1356,7 @@ def build_ass_document(
         split_text = split_subtitle_lines(
             event.text,
             max_chars_per_line=active_layout.max_chars_per_line,
-            max_lines=min(DEFAULT_SUBTITLE_MAX_LINES, active_layout.max_lines),
+            max_lines=1 if event.single_line else min(DEFAULT_SUBTITLE_MAX_LINES, active_layout.max_lines),
         )
         subtitle_fit = fit_overlay_text(
             split_text,
@@ -1354,7 +1368,7 @@ def build_ass_document(
             shadow=resolved_subtitle_style.shadow,
             alignment=resolved_subtitle_style.alignment,
             x_percent=resolved_subtitle_style.x_percent,
-            max_lines=min(DEFAULT_SUBTITLE_MAX_LINES, active_layout.max_lines),
+            max_lines=1 if event.single_line else min(DEFAULT_SUBTITLE_MAX_LINES, active_layout.max_lines),
         )
         text = _escape_ass_text(subtitle_fit.ass_text)
         lines.extend(_outlined_dialogues(

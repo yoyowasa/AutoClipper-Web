@@ -1,6 +1,7 @@
 import hashlib
 import json
 import mimetypes
+from app.thumbnail_style import resolve_thumbnail_text_styles
 from app.short_banners import banner_asset_path, resolve_banner_path
 import shutil
 from datetime import timedelta
@@ -24,6 +25,7 @@ from app.candidates.merge_boundaries import Candidate, write_candidates
 from app.candidates.select_candidates import (
     CandidateSelection,
     convert_selected_clip_to_normal,
+    convert_selected_clip_to_short,
     write_selected_clips,
 )
 from app.config import Settings, get_settings
@@ -51,6 +53,7 @@ from app.jobs.clip_plan import (
     ClipPlanDocument,
     clip_plan_output_path,
     convert_clip_plan_clip_to_normal,
+    convert_clip_plan_clip_to_short,
     load_clip_plan,
     mark_clip_plan_approved,
     update_clip_plan_boundary,
@@ -58,6 +61,8 @@ from app.jobs.clip_plan import (
     write_clip_plan,
 )
 from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
+from app.jobs.subtitle_structure import edit_subtitle_structure
+from app.schemas import SubtitleStructureRequest
 from app.jobs.manual_workflow import (
     is_manual_workflow,
     manual_plan_settings,
@@ -93,6 +98,7 @@ from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP
 from app.jobs.subtitle_review import (
     SubtitleReviewDocument,
     apply_reviewed_clip_content,
+    subtitle_review_source_path,
     build_subtitle_review,
     confirm_review_clip,
     convert_review_clip_to_short,
@@ -174,6 +180,7 @@ from app.schemas import (
     SubtitleReviewConvertToShortRequest,
     SubtitleReviewSettingsUpdateRequest,
     SubtitleReviewSegmentUpdateRequest,
+    SubtitleReviewBatchUpdateRequest,
     TitleHookSuggestionRequest,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
@@ -664,6 +671,7 @@ def _result_item(
     selected: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
     audit_clip: dict[str, Any] | None = None,
+    thumbnail_style: dict[str, Any] | None = None,
 ) -> ResultExportItem:
     selected = selected or {}
     metadata = metadata or {}
@@ -716,6 +724,12 @@ def _result_item(
     if resolution is None and (metadata.get("width") is not None or metadata.get("height") is not None):
         resolution = {"width": metadata.get("width"), "height": metadata.get("height")}
     return ResultExportItem(
+        thumbnailTextStyles=resolve_thumbnail_text_styles(thumbnail_style, metadata.get("thumbnail_text_styles"))
+        if export.type == "normal" else None,
+        thumbnailKicker=str(_first_value(metadata.get("thumbnail_kicker"), selected.get("thumbnail_kicker"), "")),
+        thumbnailLine1=str(_first_value(metadata.get("thumbnail_line1"), selected.get("thumbnail_line1"), "")),
+        thumbnailLine2=str(_first_value(metadata.get("thumbnail_line2"), selected.get("thumbnail_line2"), "")),
+        thumbnailCropMode="close" if metadata.get("thumbnail_crop_mode") == "close" else "standard",
         id=export.id,
         type=export.type,
         candidateId=export.candidate_id,
@@ -2383,12 +2397,6 @@ def update_clip_plan_clip_type(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="clip plan item not found",
         )
-    if request.type != "normal":
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="only conversion to a normal clip is supported",
-        )
-
     output_dir = paths.job_outputs(job_id)
     selected_path = output_dir / "selected_clips.json"
     selected_payload = _read_json_if_exists(selected_path)
@@ -2404,14 +2412,27 @@ def update_clip_plan_clip_type(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="selected clip data is invalid",
         ) from exc
-    if planned_clip.type == "short" and len(selection.normal_clips) >= 12:
+    if request.type == "normal" and planned_clip.type == "short" and len(selection.normal_clips) >= 12:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="normal clip count cannot exceed 12",
         )
+    if request.type == "short" and planned_clip.type == "normal":
+        if len(selection.shorts) >= 24:
+            raise HTTPException(status_code=422, detail="short clip count cannot exceed 24")
+        limit = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
+        if planned_clip.duration > limit + 0.001:
+            raise HTTPException(
+                status_code=422,
+                detail=f"ショートの上限は{limit:g}秒です。開始・終了を調整し、プレビュー更新後に変更してください。",
+            )
     try:
-        converted_selection = convert_selected_clip_to_normal(selection, clip_id)
-        convert_clip_plan_clip_to_normal(document, clip_id)
+        if request.type == "normal":
+            converted_selection = convert_selected_clip_to_normal(selection, clip_id)
+            convert_clip_plan_clip_to_normal(document, clip_id)
+        else:
+            converted_selection = convert_selected_clip_to_short(selection, clip_id)
+            convert_clip_plan_clip_to_short(document, clip_id)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -4476,6 +4497,86 @@ def apply_subtitle_review_clip(
     return document
 
 
+@router.post("/{job_id}/subtitle-review/segment-structure", response_model=SubtitleReviewDocument)
+def change_subtitle_structure(
+    job_id: str,
+    request: SubtitleStructureRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(409, "source video record is unavailable")
+    with subtitle_review_document_lock(paths.job_outputs(job_id)):
+        db.refresh(job)
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if job.status != "awaiting_subtitle_review" or document.state != "awaiting_review":
+            raise HTTPException(409, "字幕を編集できる状態ではありません。")
+        try:
+            affected = edit_subtitle_structure(document, request)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        source_snapshot = subtitle_review_source_path(paths.job_outputs(job_id), document)
+        if not source_snapshot.exists():
+            shutil.copyfile(transcript_output_path(paths.job_outputs(job_id)), source_snapshot)
+        document, queued = _refresh_subtitle_review_previews_unlocked(
+            job=job, video=video, document=document, paths=paths, clip_ids=affected,
+        )
+        _write_subtitle_review_unlocked(document, paths)
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id, document=document, queued=queued, paths=paths, enqueue_preview=enqueue_preview,
+    )
+
+
+@router.patch("/{job_id}/subtitle-review/segments", response_model=SubtitleReviewDocument)
+def update_subtitle_review_segments(
+    job_id: str,
+    request: SubtitleReviewBatchUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(409, "source video record is unavailable")
+    with subtitle_review_document_lock(paths.job_outputs(job_id)):
+        db.refresh(job)
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if job.status != "awaiting_subtitle_review" or document.state != "awaiting_review":
+            raise HTTPException(409, "字幕を編集できる状態ではありません。")
+        by_id = {segment.id: segment for segment in document.segments}
+        ids = [item.segment_id for item in request.segments]
+        if len(set(ids)) != len(ids):
+            raise HTTPException(422, "字幕の指定が重複しています。")
+        # Validate the entire batch before changing any segment or preview.
+        for item in request.segments:
+            if item.segment_id not in by_id:
+                raise HTTPException(404, "字幕が見つかりません。")
+            if by_id[item.segment_id].text != item.before:
+                raise HTTPException(409, "字幕が別の操作で更新されています。画面を読み直してください。")
+        affected_clip_ids: set[str] = set()
+        for item in request.segments:
+            if item.text != item.before:
+                affected_clip_ids.update(by_id[item.segment_id].affected_clip_ids)
+                document = update_review_segment(document, item.segment_id, item.text)
+        if not affected_clip_ids:
+            return document
+        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+            job=job, video=video, document=document, paths=paths, clip_ids=affected_clip_ids,
+        )
+        _write_subtitle_review_unlocked(document, paths)
+    return _enqueue_subtitle_review_previews(
+        job_id=job.id, document=document, queued=queued_previews, paths=paths, enqueue_preview=enqueue_preview,
+    )
+
+
 @router.patch(
     "/{job_id}/subtitle-review/segments/{segment_id}",
     response_model=SubtitleReviewDocument,
@@ -4771,6 +4872,7 @@ def get_job_results(
             selected=selected_by_candidate.get(export.candidate_id or ""),
             metadata=_read_export_metadata(export, paths),
             audit_clip=audit_by_candidate.get(export.candidate_id or ""),
+            thumbnail_style=(job.settings_json or {}).get("normalThumbnailStyle"),
         )
         for export in exports
     ]

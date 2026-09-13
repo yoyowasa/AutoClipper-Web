@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from typing import Sequence
 
 from pydantic import BaseModel, Field
@@ -102,7 +103,7 @@ def _clamp(value: float, minimum: float = 0.0, maximum: float = 100.0) -> float:
 
 
 def _words(text: str) -> list[str]:
-    return re.findall(r"[A-Za-z0-9']+", text.lower())
+    return re.findall(r"[A-Za-z0-9']+", unicodedata.normalize("NFKC", text).lower())
 
 
 def _text_units(text: str) -> int:
@@ -121,7 +122,7 @@ def hook_keyword_score(transcript_text: str, hook_keywords: set[str] | None = No
     ascii_keywords = {keyword for keyword in keywords if keyword.isascii()}
     substring_keywords = keywords - ascii_keywords
     hits = len(words & ascii_keywords)
-    normalized = transcript_text.lower()
+    normalized = unicodedata.normalize("NFKC", transcript_text).lower()
     hits += sum(1 for keyword in substring_keywords if keyword.lower() in normalized)
     return _clamp(hits * 5.0, maximum=15.0)
 
@@ -207,7 +208,7 @@ def heatmap_popularity_score(value: float | None) -> float:
 
 
 def incomplete_boundary_penalty(transcript_text: str) -> float:
-    text = transcript_text.strip()
+    text = unicodedata.normalize("NFKC", transcript_text).strip()
     if not text:
         return 25.0
 

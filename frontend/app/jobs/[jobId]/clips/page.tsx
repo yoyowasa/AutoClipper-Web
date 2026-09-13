@@ -10,6 +10,7 @@ import {
 } from "../../../../components/ClipBoundaryEditor";
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
 import { ClipSelectionEditor } from "../../../../components/ClipSelectionEditor";
+import { ClipTranscriptList, ClipTranscriptPanel } from "../../../../components/ClipTranscriptList";
 import { InitialSelectionStatusBanner } from "../../../../components/InitialSelectionStatusBanner";
 import { ManualClipPlanEditor } from "../../../../components/ManualClipPlanEditor";
 import {
@@ -283,11 +284,9 @@ export default function ClipPlanReviewPage() {
   const handleBoundaryDraftChange = useCallback(
     (draft: ClipBoundaryDraft | null) => {
       setBoundaryDraft(draft);
-      setTranscriptPreview(null);
+      // Keep the same clip's list mounted while its new time range is fetched.
       setTranscriptPreviewError(null);
-      if (!draft) {
-        setIsTranscriptPreviewLoading(false);
-      }
+      setIsTranscriptPreviewLoading(draft !== null);
     },
     []
   );
@@ -523,15 +522,21 @@ export default function ClipPlanReviewPage() {
     }
   }
 
-  async function handleConvertToNormal() {
-    if (!selectedClip || selectedClip.type !== "short") {
+  async function handleConvertType(type: ExportType) {
+    if (!selectedClip || selectedClip.type === type || controlsDisabled) {
+      return;
+    }
+    if (!selectedBoundaryDraft ||
+        Math.abs(selectedBoundaryDraft.start - selectedClip.start) >= 0.0005 ||
+        Math.abs(selectedBoundaryDraft.end - selectedClip.end) >= 0.0005) {
+      setError("開始・終了の変更を「この範囲でプレビュー更新」で反映してから種別を変更してください。");
       return;
     }
     setError(null);
     setIsUpdatingClipType(true);
     try {
       const document = await updateClipPlanType(jobId, selectedClip.id, {
-        type: "normal"
+        type
       });
       setPlan(document);
       setDraftSettings(document.settings);
@@ -542,7 +547,7 @@ export default function ClipPlanReviewPage() {
       setError(
         caught instanceof Error
           ? caught.message
-          : "通常切り抜きへ変更できませんでした"
+          : "動画の種別を変更できませんでした"
       );
     }
   }
@@ -799,17 +804,17 @@ export default function ClipPlanReviewPage() {
                       <p className="mt-1 text-xs text-neutral-600">
                         {selectedClip.type === "short"
                           ? "範囲とタイトルを維持したまま、通常切り抜きへ変更できます。"
-                          : "通常切り抜きはショート用の複製フックを使用しません。"}
+                          : `ショートへ変更できます。上限${plan.settings.shortMaxDuration ?? 75}秒を超える場合は範囲を調整してください。`}
                       </p>
                     </div>
-                    {selectedClip.type === "short" && !isManualWorkflow ? (
+                    {!isManualWorkflow ? (
                       <button
                         className="min-h-9 border border-neutral-900 bg-white px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={controlsDisabled}
                         type="button"
-                        onClick={() => void handleConvertToNormal()}
+                        onClick={() => void handleConvertType(selectedClip.type === "short" ? "normal" : "short")}
                       >
-                        {isUpdatingClipType ? "変更中…" : "通常切り抜きに変更"}
+                        {isUpdatingClipType ? "変更中…" : selectedClip.type === "short" ? "通常切り抜きに変更" : "ショートに変更"}
                       </button>
                     ) : null}
                   </div>
@@ -862,7 +867,7 @@ export default function ClipPlanReviewPage() {
           )}
         </section>
 
-        <aside className="border-b border-neutral-300 bg-white px-5 py-5 lg:sticky lg:top-0 lg:col-start-3 lg:row-span-2 lg:row-start-1 lg:flex lg:h-[calc(100vh-145px)] lg:min-h-0 lg:flex-col lg:border-b-0">
+        <ClipTranscriptPanel>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-xs font-semibold text-blue-700">選択clip</p>
@@ -871,7 +876,7 @@ export default function ClipPlanReviewPage() {
               </h2>
               <p className="mt-1 text-xs tabular-nums text-neutral-500">
                 {selectedBoundaryDraft
-                  ? `${formatTime(selectedBoundaryDraft.start)} - ${formatTime(selectedBoundaryDraft.end)}`
+                  ? `${formatTime(selectedTranscriptPreview?.start ?? selectedBoundaryDraft.start)} - ${formatTime(selectedTranscriptPreview?.end ?? selectedBoundaryDraft.end)}`
                   : "開始・終了を正しく入力してください"}
               </p>
             </div>
@@ -888,23 +893,12 @@ export default function ClipPlanReviewPage() {
             </p>
           ) : null}
 
-          {selectedTranscriptPreview &&
-          selectedTranscriptPreview.segments.length > 0 ? (
-            <div className="mt-3 max-h-80 overflow-y-auto border border-neutral-200 bg-neutral-50 lg:min-h-0 lg:max-h-none lg:flex-1">
-              {selectedTranscriptPreview.segments.map((segment, index) => (
-                <div
-                  className="border-b border-neutral-200 px-3 py-2 last:border-b-0"
-                  key={`${segment.start}-${segment.end}-${index}`}
-                >
-                  <span className="text-xs tabular-nums text-neutral-500">
-                    {formatTime(segment.start)} - {formatTime(segment.end)}
-                  </span>
-                  <p className="mt-1 break-words text-sm leading-6 text-neutral-900">
-                    {segment.text}
-                  </p>
-                </div>
-              ))}
-            </div>
+          {selectedTranscriptPreview ? (
+            <ClipTranscriptList
+              key={selectedClipId}
+              segments={selectedTranscriptPreview.segments}
+              formatTime={formatTime}
+            />
           ) : isTranscriptPreviewLoading ? (
             <p className="mt-3 text-sm text-neutral-600">
               変更した時間範囲から文字起こしを読み込んでいます
@@ -918,96 +912,100 @@ export default function ClipPlanReviewPage() {
           <p className="mt-2 text-xs leading-5 text-neutral-500">
             分秒入力と前後追加に合わせて自動更新します。字幕の修正は次の工程で行います。
           </p>
-        </aside>
+        </ClipTranscriptPanel>
 
         <section className="border-b border-neutral-300 bg-[#f7f7f4] px-5 py-5 lg:col-start-2 lg:row-start-2 lg:border-r">
-          <div>
-            <p className="text-xs font-semibold text-neutral-500">再選定</p>
-            <h2 className="mt-1 text-lg font-semibold">狙う場面を調整</h2>
-            <p className="mt-2 text-sm leading-6 text-neutral-600">
-              保存済みの文字起こし・音声・映像解析を使うため、動画の再アップロードや再文字起こしは行いません。
-            </p>
-          </div>
-
-          <div className="mt-4 flex flex-col gap-3 border border-neutral-300 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-neutral-900">候補基準</p>
-              <p className="mt-1 text-xs leading-5 text-neutral-600">
-                {draftSettings.heatmapIntervalMode
-                  ? "字幕・会話内容から場面を選び、人気度JSONは優先度の参考にだけ使います。開始・終了はJSON区間へ合わせません。"
-                  : "字幕・会話内容だけで場面と開始・終了を選びます。"}
+          <details>
+            <summary className="cursor-pointer text-sm font-semibold text-neutral-700">
+              再選定（別の場面を選び直す）
+            </summary>
+            <div className="mt-3">
+              <h2 className="mt-1 text-lg font-semibold">狙う場面を調整</h2>
+              <p className="mt-2 text-sm leading-6 text-neutral-600">
+                保存済みの文字起こし・音声・映像解析を使うため、動画の再アップロードや再文字起こしは行いません。
               </p>
             </div>
-            <div
-              aria-label="再選定の候補基準"
-              className="grid shrink-0 grid-cols-2 border border-neutral-300"
-              role="group"
-            >
-              <button
-                aria-pressed={!draftSettings.heatmapIntervalMode}
-                className={`min-h-9 px-3 text-xs font-semibold ${
-                  !draftSettings.heatmapIntervalMode
-                    ? "bg-neutral-950 text-white"
-                    : "bg-white text-neutral-600 hover:bg-neutral-50"
-                } disabled:cursor-not-allowed disabled:opacity-50`}
-                disabled={controlsDisabled}
-                type="button"
-                onClick={() =>
-                  setDraftSettings((current) =>
-                    current ? { ...current, heatmapIntervalMode: false } : current
-                  )
-                }
+
+            <div className="mt-4 flex flex-col gap-3 border border-neutral-300 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-neutral-900">候補基準</p>
+                <p className="mt-1 text-xs leading-5 text-neutral-600">
+                  {draftSettings.heatmapIntervalMode
+                    ? "字幕・会話内容から場面を選び、人気度JSONは優先度の参考にだけ使います。開始・終了はJSON区間へ合わせません。"
+                    : "字幕・会話内容だけで場面と開始・終了を選びます。"}
+                </p>
+              </div>
+              <div
+                aria-label="再選定の候補基準"
+                className="grid shrink-0 grid-cols-2 border border-neutral-300"
+                role="group"
               >
-                内容のみ
-              </button>
-              <button
-                aria-pressed={draftSettings.heatmapIntervalMode}
-                className={`min-h-9 px-3 text-xs font-semibold ${
-                  draftSettings.heatmapIntervalMode
-                    ? "bg-emerald-700 text-white"
-                    : "bg-white text-neutral-600 hover:bg-neutral-50"
-                } disabled:cursor-not-allowed disabled:opacity-50`}
-                disabled={controlsDisabled}
-                type="button"
-                onClick={() =>
-                  setDraftSettings((current) =>
-                    current ? { ...current, heatmapIntervalMode: true } : current
-                  )
-                }
-              >
-                JSONを参考
-              </button>
+                <button
+                  aria-pressed={!draftSettings.heatmapIntervalMode}
+                  className={`min-h-9 px-3 text-xs font-semibold ${
+                    !draftSettings.heatmapIntervalMode
+                      ? "bg-neutral-950 text-white"
+                      : "bg-white text-neutral-600 hover:bg-neutral-50"
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                  disabled={controlsDisabled}
+                  type="button"
+                  onClick={() =>
+                    setDraftSettings((current) =>
+                      current ? { ...current, heatmapIntervalMode: false } : current
+                    )
+                  }
+                >
+                  内容のみ
+                </button>
+                <button
+                  aria-pressed={draftSettings.heatmapIntervalMode}
+                  className={`min-h-9 px-3 text-xs font-semibold ${
+                    draftSettings.heatmapIntervalMode
+                      ? "bg-emerald-700 text-white"
+                      : "bg-white text-neutral-600 hover:bg-neutral-50"
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                  disabled={controlsDisabled}
+                  type="button"
+                  onClick={() =>
+                    setDraftSettings((current) =>
+                      current ? { ...current, heatmapIntervalMode: true } : current
+                    )
+                  }
+                >
+                  JSONを参考
+                </button>
+              </div>
             </div>
-          </div>
 
-          <div className="mt-3">
-            <ClipSelectionEditor
+            <div className="mt-3">
+              <ClipSelectionEditor
+                disabled={controlsDisabled}
+                settings={draftSettings}
+                onChange={setDraftSettings}
+              />
+            </div>
+
+            {draftSettings.useOpenAIScoring ? (
+              <p className="mt-3 border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                AI文脈判定を有効にすると、再選定でもOpenAI APIを使用します。
+              </p>
+            ) : (
+              <p className="mt-3 text-xs text-neutral-600">
+                現在はローカル判定です。再選定によるAPI料金は発生しません。
+              </p>
+            )}
+
+            <button
+              className="mt-4 min-h-11 w-full border border-neutral-950 bg-white px-4 text-sm font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={controlsDisabled}
-              settings={draftSettings}
-              onChange={setDraftSettings}
-            />
-          </div>
-
-          {draftSettings.useOpenAIScoring ? (
-            <p className="mt-3 border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              AI文脈判定を有効にすると、再選定でもOpenAI APIを使用します。
-            </p>
-          ) : (
-            <p className="mt-3 text-xs text-neutral-600">
-              現在はローカル判定です。再選定によるAPI料金は発生しません。
-            </p>
-          )}
-
-          <button
-            className="mt-4 min-h-11 w-full border border-neutral-950 bg-white px-4 text-sm font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={controlsDisabled}
-            type="button"
-            onClick={() => void handleReselect()}
-          >
-            {isReselecting
-              ? job?.currentStep || "再選定中"
-              : "この条件でもう一度選ぶ"}
-          </button>
+              type="button"
+              onClick={() => void handleReselect()}
+            >
+              {isReselecting
+                ? job?.currentStep || "再選定中"
+                : "この条件でもう一度選ぶ"}
+            </button>
+          </details>
 
           <div className="my-5 border-t border-neutral-300" />
 

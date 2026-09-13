@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import unicodedata
 import shutil
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
@@ -30,6 +31,7 @@ from app.audio.openai_transcript_correction import (
 from app.audio.silence_detect import SilenceSegment, detect_silence, silence_output_path, write_silence_segments
 from app.audio.transcript_postprocess import (
     DEFAULT_TRANSCRIPT_REPLACEMENTS,
+    finalize_transcript_width,
     postprocess_transcript_segments,
     raw_transcript_output_path,
     transcript_postprocess_summary_path,
@@ -163,6 +165,7 @@ from app.jobs.subtitle_review import (
     queue_review_render,
     refresh_review_overlay_title_expectations,
     reviewed_transcript_output_path,
+    subtitle_review_source_path,
     restore_review_after_render_failure,
     subtitle_review_output_path,
     subtitle_review_preview_path,
@@ -1051,7 +1054,7 @@ def _average_transcript_confidence(segments: Sequence[TranscriptSegment]) -> flo
 
 
 def _transcript_has_repeated_low_information_text(text: str) -> bool:
-    words = re.findall(r"[A-Za-z0-9']+", text.lower())
+    words = re.findall(r"[A-Za-z0-9']+", unicodedata.normalize("NFKC", text).lower())
     if len(words) < 5:
         return False
     counts = Counter(words)
@@ -1060,7 +1063,7 @@ def _transcript_has_repeated_low_information_text(text: str) -> bool:
 
 
 def _normalized_segment_text(text: str) -> str:
-    return re.sub(r"[\W_]+", "", text.casefold(), flags=re.UNICODE)
+    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", text).casefold(), flags=re.UNICODE)
 
 
 def _repeated_segment_diagnostics(segments: Sequence[TranscriptSegment]) -> dict[str, Any]:
@@ -4242,7 +4245,7 @@ def run_autoclipper_job(
                 if correction_mode == "openai":
                     metadata_files.append(write_corrected_transcript(correction_result, job_dir))
 
-                transcript_segments = correction_result.segments
+                transcript_segments = finalize_transcript_width(correction_result.segments, settings)
                 transcript_path = write_transcript_segments(transcript_segments, transcript_output_path(job_dir))
                 metadata_files.append(transcript_path)
                 _raise_if_transcript_unusable(
@@ -6115,7 +6118,10 @@ def run_subtitle_review_render(
                 subtitle_review_summary_path(job_dir),
             )
 
-            transcript_segments = _read_transcript_segments(transcript_output_path(job_dir))
+            source_snapshot = subtitle_review_source_path(job_dir, review_document)
+            transcript_segments = _read_transcript_segments(
+                source_snapshot if source_snapshot.exists() else transcript_output_path(job_dir)
+            )
             transcript_segments = apply_reviewed_text(transcript_segments, review_document)
             write_transcript_segments(
                 transcript_segments,

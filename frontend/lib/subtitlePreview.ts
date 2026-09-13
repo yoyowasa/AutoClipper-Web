@@ -1,6 +1,8 @@
 import type { ClipTextStyle } from "./types";
 
 type SubtitlePreviewSegment = {
+  preserveSegmentation?: boolean;
+  singleLine?: boolean;
   style?: ClipTextStyle;
   start: number;
   end: number;
@@ -8,6 +10,8 @@ type SubtitlePreviewSegment = {
 };
 
 export type SubtitlePreviewEvent = {
+  preserveSegmentation?: boolean;
+  singleLine?: boolean;
   style?: ClipTextStyle;
   start: number;
   end: number;
@@ -367,6 +371,9 @@ function eventsForSegment(
   if (!text) {
     return [];
   }
+  if (segment.preserveSegmentation || segment.singleLine) {
+    return [{ ...segment, text, preserveSegmentation: true }];
+  }
 
   const duration = Math.max(0.01, segment.end - segment.start);
   const maxCharactersPerEvent = Math.max(
@@ -434,6 +441,7 @@ function canMergeEvents(
   current: SubtitlePreviewEvent,
   options: SubtitlePreviewEventOptions
 ): boolean {
+  if (previous.preserveSegmentation || current.preserveSegmentation) return false;
   const gap = current.start - previous.end;
   if (JSON.stringify(previous.style ?? null) !== JSON.stringify(current.style ?? null)) {
     return false;
@@ -484,6 +492,7 @@ function applyMinimumDisplayDuration(
   options: SubtitlePreviewEventOptions
 ): SubtitlePreviewEvent[] {
   return events.map((event, index) => {
+    if (event.preserveSegmentation) return event;
     const nextStart = events[index + 1]?.start;
     const maxAllowedEnd =
       nextStart === undefined
@@ -523,6 +532,8 @@ export function subtitlePreviewEvents(
     rawEvents.push(
       ...eventsForSegment(
         {
+          ...(segment.preserveSegmentation ? { preserveSegmentation: true } : {}),
+          ...(segment.singleLine ? { singleLine: true } : {}),
           start: roundMilliseconds(start - options.candidateStart),
           ...(segment.style ? { style: segment.style } : {}),
           end: roundMilliseconds(end - options.candidateStart),
@@ -566,6 +577,8 @@ export function subtitlePreviewEvents(
         ),
         end: Math.min(shiftedEnd, outputDuration),
         ...(event.style ? { style: event.style } : {}),
+        ...(event.preserveSegmentation ? { preserveSegmentation: true } : {}),
+        ...(event.singleLine ? { singleLine: true } : {}),
         text: event.text
       }
     ];

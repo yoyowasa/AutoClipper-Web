@@ -133,6 +133,24 @@ def _candidate_title(candidate: Candidate, index: int) -> str:
     return (candidate.title or candidate.overlay_title or f"{prefix} {index:02d}").strip()
 
 
+def convert_clip_plan_clip_to_short(document: ClipPlanDocument, clip_id: str) -> ClipPlanClip:
+    clip = next((item for item in document.clips if item.id == clip_id), None)
+    if clip is None:
+        raise ValueError("clip plan item not found")
+    if clip.type == "short":
+        return clip
+    clip.type = "short"
+    clip.hook_scene_start = None
+    clip.hook_scene_end = None
+    document.settings = {
+        **document.settings,
+        "normalClipCount": sum(item.type == "normal" for item in document.clips),
+        "shortCount": sum(item.type == "short" for item in document.clips),
+    }
+    document.updated_at = _utc_iso()
+    return clip
+
+
 def _repaired_artifact_text(text: str) -> str:
     return repair_known_transcript_artifact_text(text)
 

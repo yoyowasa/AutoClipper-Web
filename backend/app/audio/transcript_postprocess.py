@@ -44,6 +44,7 @@ class TranscriptPostprocessSettings:
     normalize_unicode: bool = True
     normalize_whitespace: bool = True
     normalize_punctuation: bool = True
+    normalize_fullwidth: bool = True
     use_default_dictionary: bool = True
     replacements: Mapping[str, str] | None = None
 
@@ -66,6 +67,7 @@ def parse_transcript_postprocess_settings(
         "transcriptNormalizeUnicode": "normalize_unicode",
         "transcriptNormalizeWhitespace": "normalize_whitespace",
         "transcriptNormalizePunctuation": "normalize_punctuation",
+        "transcriptNormalizeFullwidth": "normalize_fullwidth",
         "useDefaultTranscriptDictionary": "use_default_dictionary",
         "transcriptReplacements": "replacements",
     }
@@ -76,6 +78,7 @@ def parse_transcript_postprocess_settings(
         normalize_unicode=_as_bool(normalized.get("normalize_unicode"), True),
         normalize_whitespace=_as_bool(normalized.get("normalize_whitespace"), True),
         normalize_punctuation=_as_bool(normalized.get("normalize_punctuation"), True),
+        normalize_fullwidth=_as_bool(normalized.get("normalize_fullwidth"), True),
         use_default_dictionary=_as_bool(normalized.get("use_default_dictionary"), True),
         replacements=replacements,
     )
@@ -106,15 +109,31 @@ def _normalize_unicode(text: str) -> str:
 
 
 def _normalize_whitespace(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"[^\S\r\n]+", " ", text).strip()
+
+
+def fullwidth_transcript_text(text: str) -> str:
+    """Unify printed ASCII and halfwidth kana; retain spaces and line breaks."""
+    text = re.sub(r"[\uff61-\uff9f]+", lambda match: unicodedata.normalize("NFKC", match.group()), text)
+    return text.translate({code: code + 0xFEE0 for code in range(0x21, 0x7F)})
+
+
+def finalize_transcript_width(
+    segments: Sequence[TranscriptSegment],
+    settings: TranscriptPostprocessSettings | Mapping[str, Any] | None = None,
+) -> list[TranscriptSegment]:
+    parsed = parse_transcript_postprocess_settings(settings)
+    if not parsed.enabled or not parsed.normalize_fullwidth:
+        return list(segments)
+    return [segment.model_copy(update={"text": fullwidth_transcript_text(segment.text)}) for segment in segments]
 
 
 def _normalize_punctuation(text: str) -> str:
     text = re.sub(r"([。！？!?])\1{1,}", r"\1", text)
     text = re.sub(r"([、,])\1{1,}", r"\1", text)
-    text = re.sub(r"\s+([。、！？!?])", r"\1", text)
-    text = re.sub(r"([（「『])\s+", r"\1", text)
-    text = re.sub(r"\s+([）」』])", r"\1", text)
+    text = re.sub(r"[^\S\r\n]+([。、！？!?])", r"\1", text)
+    text = re.sub(r"([（「『])[^\S\r\n]+", r"\1", text)
+    text = re.sub(r"[^\S\r\n]+([）」』])", r"\1", text)
     return text.strip()
 
 
@@ -163,6 +182,9 @@ def postprocess_transcript_text(
         replacement_counts.update(default_counts)
     updated, custom_counts = _apply_replacements(updated, parsed.replacements or {})
     replacement_counts.update(custom_counts)
+    if parsed.normalize_fullwidth:
+        updated = fullwidth_transcript_text(updated)
+        normalization_applied.append("fullwidth")
     return updated, {
         "enabled": True,
         "changed": updated != original,
@@ -194,12 +216,7 @@ def postprocess_transcript_segments(
                 }
             )
         processed.append(
-            TranscriptSegment(
-                start=segment.start,
-                end=segment.end,
-                text=new_text,
-                confidence=segment.confidence,
-            )
+            segment.model_copy(update={"text": new_text})
         )
 
     total_chars_before = sum(len(segment.text) for segment in segments)
@@ -215,6 +232,7 @@ def postprocess_transcript_segments(
             "unicode_nfkc": parsed.normalize_unicode,
             "whitespace": parsed.normalize_whitespace,
             "punctuation": parsed.normalize_punctuation,
+            "fullwidth": parsed.normalize_fullwidth,
         },
         "used_default_dictionary": parsed.use_default_dictionary,
         "custom_replacement_count": len(parsed.replacements or {}),

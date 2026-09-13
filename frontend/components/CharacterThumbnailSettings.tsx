@@ -1,6 +1,8 @@
 "use client";
 
 import Image from "next/image";
+import { ThumbnailTextStyleEditor } from "./ThumbnailTextStyleEditor";
+import { thumbnailTextDefaults } from "../lib/thumbnailStyle";
 import { useLayoutEffect, useRef, useState } from "react";
 import { PLAIN_THUMBNAIL } from "../lib/characterPresets";
 import { bannerAssetUrl, bannerRequest } from "../lib/shortBanners";
@@ -46,10 +48,12 @@ export function CharacterThumbnailSettings({ settings, disabled, onChange }: {
       {style.design === "custom" && style.backgroundAssetId && <Image alt="サムネイル背景プレビュー" width={320} height={180} unoptimized
         className="w-full border border-neutral-200" src={bannerAssetUrl(style.backgroundAssetId)} />}
       <div className="grid grid-cols-2 gap-2">
-        {([["backgroundColor", "背景色"], ["titleColor", "見出し1の色"], ["secondTitleColor", "見出し2の色"], ["outlineColor", "文字の外縁色"]] as const).map(([key, label]) => (
+        {([["backgroundColor", "背景色"], ["outlineColor", "文字の外縁色"]] as const).map(([key, label]) => (
           <label key={key} className="grid gap-1">{label}<input type="color" aria-label={`サムネイル${label}`} value={style[key]} onInput={(event) => update({ [key]: event.currentTarget.value })} onChange={(event) => update({ [key]: event.target.value })} /></label>
         ))}
       </div>
+      <ThumbnailTextStyleEditor value={thumbnailTextDefaults(style)} disabled={disabled || busy}
+        onChange={textStyles => update({ textStyles, titleColor: textStyles.upper.color, secondTitleColor: textStyles.lower.color })} />
       <p className="text-neutral-500">右側に動画の人物、左側に見出しを配置します。変更後は上のキャラ設定で一括保存。</p>
       {error && <p role="alert" className="text-red-700">{error}</p>}
     </fieldset>
