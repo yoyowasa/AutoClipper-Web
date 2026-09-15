@@ -525,12 +525,12 @@ export type SubtitleReviewDocument = {
 export type SubtitleReviewShortBannerSettings = Pick<
   SubtitleReviewDocument,
   "shortLayout" | "shortTopBannerEnabled" | "shortBottomBannerEnabled"
->;
+> & { shortTopBannerAssetId?: string; shortBottomBannerAssetId?: string; characterPresetName?: string };
 
 export type SubtitleReviewClipFramingUpdateRequest = Pick<
   SubtitleReviewClip,
   "framingOffsetX" | "framingOffsetY" | "framingZoom"
->;
+> & { shortLayout?: SubtitleReviewDocument["shortLayout"] };
 
 export type SubtitleReviewFinalizeResponse = {
   jobId: string;

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { ReviewCharacterPreset } from "../../../../components/ReviewCharacterPreset";
 import { ShortFramingWorkspace } from "../../../../components/ShortFramingWorkspace";
 import { SubtitleSegmentActions } from "../../../../components/SubtitleSegmentActions";
 import { editSubtitleStructure } from "../../../../lib/api";
@@ -1561,7 +1562,8 @@ export default function SubtitleReviewPage() {
       framingZoom: clip.framingZoom
     };
     const signature = shortFramingSignature(nextFraming);
-    if (shortFramingEquals(nextFraming, savedFraming)) {
+    const layoutChanged = framing.shortLayout !== undefined && framing.shortLayout !== review?.shortLayout;
+    if (!layoutChanged && shortFramingEquals(nextFraming, savedFraming)) {
       setShortFramingDrafts((drafts) => {
         const next = { ...drafts };
         delete next[clipId];
@@ -1569,7 +1571,7 @@ export default function SubtitleReviewPage() {
       });
       return true;
     }
-    if (lastSavedShortFramingSignatureRef.current[clipId] === signature) {
+    if (!layoutChanged && lastSavedShortFramingSignatureRef.current[clipId] === signature) {
       setShortFramingDrafts((drafts) => {
         const next = { ...drafts };
         delete next[clipId];
@@ -1587,7 +1589,7 @@ export default function SubtitleReviewPage() {
       const updated = await updateSubtitleReviewClipFraming(
         jobId,
         clipId,
-        nextFraming
+        { ...nextFraming, shortLayout: framing.shortLayout }
       );
       lastSavedShortFramingSignatureRef.current[clipId] = signature;
       if (isCurrentReviewMutation(mutationGeneration)) {
@@ -1625,10 +1627,11 @@ export default function SubtitleReviewPage() {
   async function saveShortBannerSettings(
     shortLayout: SubtitleReviewDocument["shortLayout"],
     shortTopBannerEnabled: boolean,
-    shortBottomBannerEnabled: boolean
+    shortBottomBannerEnabled: boolean,
+    assets: { shortTopBannerAssetId?: string; shortBottomBannerAssetId?: string; characterPresetName?: string } = {}
   ) {
     if (!review || !isEditable || hasReviewMutationInFlight) {
-      return;
+      return false;
     }
     const previousSettings = {
       shortOverlayTitleMode: review.shortOverlayTitleMode,
@@ -1658,6 +1661,7 @@ export default function SubtitleReviewPage() {
           : review.clips
     };
     const requestBody = {
+      ...assets,
       shortLayout,
       shortTopBannerEnabled,
       shortBottomBannerEnabled
@@ -1680,7 +1684,27 @@ export default function SubtitleReviewPage() {
       );
       if (isCurrentReviewMutation(mutationGeneration)) {
         setReview(updated);
+        if (assets.characterPresetName) {
+          setClipContentDrafts(current => {
+            const next = { ...current };
+            for (const clip of updated.clips) {
+              const fresh = contentDraftForClip(clip);
+              const before = review.clips.find(item => item.id === clip.id);
+              const old = before ? contentDraftForClip(before) : fresh;
+              const draft = { ...(current[clip.id] ?? fresh) };
+              for (const key of Object.keys(fresh) as (keyof ClipContentDraft)[]) {
+                if (["titleStyle", "hookStyle", "subtitleStyle", "subtitleStyles"].includes(key)
+                    || JSON.stringify(draft[key]) === JSON.stringify(old[key])) {
+                  Object.assign(draft, { [key]: fresh[key] });
+                }
+              }
+              next[clip.id] = draft;
+            }
+            return next;
+          });
+        }
       }
+      return true;
     } catch (caught) {
       if (isCurrentReviewMutation(mutationGeneration)) {
         setReview((current) =>
@@ -1697,6 +1721,7 @@ export default function SubtitleReviewPage() {
           ? caught.message
           : "ショート画面設定を保存できませんでした"
       );
+      return false;
     } finally {
       endReviewMutation();
       setIsSavingShortBannerSettings(false);
@@ -2259,7 +2284,7 @@ export default function SubtitleReviewPage() {
 
 
 
-        <div className="subtitle-review-grid grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
+        <div data-clip-type={selectedClip?.type} className="subtitle-review-grid grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
           <aside className="subtitle-review-clips relative min-h-[420px] border-b border-neutral-300 lg:min-h-0 lg:border-r">
             <div className="flex min-h-[420px] flex-col lg:absolute lg:inset-0 lg:min-h-0">
             <div className="border-b border-neutral-200 px-4 py-4">
@@ -2424,40 +2449,20 @@ export default function SubtitleReviewPage() {
                       <div>
                         <p className="text-sm font-semibold text-neutral-900">ショート画角</p>
                         <p className="text-xs text-neutral-500">
-                          選択後、完成動画と同じ画角でプレビューを再生成します
+                          配置を試してから保存。試し表示では動画を再生成しません
                         </p>
                       </div>
-                      <label className="flex items-center gap-2 text-sm font-semibold text-neutral-700">
-                        <span>{isSavingShortBannerSettings ? "変更中" : "基本配置"}</span>
-                        <select
-                          aria-label="ショート画角"
-                          className="min-h-10 min-w-52 border border-neutral-300 bg-white px-3 text-sm text-neutral-900"
-                          disabled={!isEditable || isSavingShortBannerSettings}
-                          value={review.shortLayout}
-                          onChange={(event) =>
-                            void saveShortBannerSettings(
-                              event.target.value as SubtitleReviewDocument["shortLayout"],
-                              review.shortTopBannerEnabled,
-                              review.shortBottomBannerEnabled
-                            )
-                          }
-                        >
-                          <option value="auto">自動（人物を優先）</option>
-                          <option value="face_tracking_crop">人物アップ（顔を追従）</option>
-                          <option value="center_crop">中央を拡大</option>
-                          <option value="blur_background">全体表示（ぼかし背景）</option>
-                        </select>
-                      </label>
+
                     </div>
                     {selectedShortFramingDraft ? (
                       <div className="space-y-3 border-b border-neutral-300 bg-neutral-50 px-4 py-3">
                         <p className="text-sm font-semibold">このショートのみ微調整</p>
                         <p className="text-xs text-neutral-600">元映像の枠を動かして確認。位置・倍率は待たずに反映します。</p>
                         <ShortFramingWorkspace
-                          key={`${selectedClip.id}:${review.shortLayout}:${review.shortTopBannerEnabled}:${review.shortBottomBannerEnabled}`}
+                          key={`${selectedClip.id}:${selectedClip.start}:${selectedClip.end}:${review.sourceVideoUrl}:${review.shortTopBannerEnabled}:${review.shortBottomBannerEnabled}`}
                           jobId={jobId} clipId={selectedClip.id} sourceUrl={review.sourceVideoUrl}
                           start={selectedClip.start} end={selectedClip.end}
-                          value={selectedShortFramingDraft} editable={isEditable}
+                          value={selectedShortFramingDraft} layout={review.shortLayout} editable={isEditable && !hasReviewMutationInFlight}
                           onSave={async (next) => {
                             changeSelectedShortFraming(next);
                             return saveSelectedShortFraming(selectedClip.id, next);
@@ -2487,22 +2492,6 @@ export default function SubtitleReviewPage() {
                         }`}
                         style={{ containerType: "inline-size" }}
                       >
-                      <div className="absolute inset-x-2 top-2 z-40 flex items-center justify-between gap-2">
-                        <span className="pointer-events-none bg-black/70 px-2 py-1 text-[10px] font-semibold text-white">
-                          {isShowingLivePreview
-                            ? "編集中・即時反映"
-                            : "保存済み・完成表示"}
-                        </span>
-                        {livePreviewReady && selectedPreviewReady ? (
-                          <button
-                            className="bg-black/75 px-2 py-1 text-[10px] font-semibold text-white"
-                            type="button"
-                            onClick={() => setShowSavedPreview((current) => !current)}
-                          >
-                            {isShowingLivePreview ? "保存済み表示" : "編集表示へ戻る"}
-                          </button>
-                        ) : null}
-                      </div>
                       {selectedPlayerReady && selectedPlayerVideoUrl ? (
                         <video
                         className="h-full w-full cursor-pointer bg-black object-contain"
@@ -2650,7 +2639,16 @@ export default function SubtitleReviewPage() {
                     </div>
 
                     {selectedPlayerReady ? (
-                    <div className="border-t border-neutral-700 bg-neutral-900 px-3 py-3">
+                    <div className="shrink-0 border-t border-neutral-700 bg-neutral-900 px-3 py-3">
+                      <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+                        <span>{isShowingLivePreview ? "編集中・即時反映" : "保存済み・完成表示"}</span>
+                        {livePreviewReady && selectedPreviewReady ? (
+                          <button className="border border-neutral-600 px-2 py-1" type="button"
+                            onClick={() => setShowSavedPreview((current) => !current)}>
+                            {isShowingLivePreview ? "保存済み表示" : "編集表示へ戻る"}
+                          </button>
+                        ) : null}
+                      </div>
                       <input
                         aria-label="clip再生位置"
                         className="block h-2 w-full cursor-pointer accent-sky-500"
@@ -2827,6 +2825,10 @@ export default function SubtitleReviewPage() {
                       <span>空欄なら非表示。Enterを入れた位置で2行表示します（最大2行）</span>
                       <span>{selectedClipContentDraft?.title.length ?? 0} / 80</span>
                     </div>
+                    <ReviewCharacterPreset disabled={!isEditable || hasReviewMutationInFlight}
+                      onApply={characterPresetName => saveShortBannerSettings(
+                        review.shortLayout, review.shortTopBannerEnabled, review.shortBottomBannerEnabled, { characterPresetName }
+                      )} />
                     {selectedClip.type === "short" ? (
                       <fieldset className="mt-3 border-t border-neutral-300 pt-3">
                           <legend className="sr-only">ショート帯（書出し時）</legend>
@@ -3162,11 +3164,11 @@ export default function SubtitleReviewPage() {
                     shortTitleOutputEnabled={selectedShortTitleOutputEnabled}
                     shortTopBannerEnabled={review.shortTopBannerEnabled}
                     shortTopBannerUrl={toApiUrl(
-                      `/api/jobs/${jobId}/subtitle-review/banner-assets/top`
+                      `/api/jobs/${jobId}/subtitle-review/banner-assets/top?v=${encodeURIComponent(review.updatedAt)}`
                     )}
                     shortBottomBannerEnabled={review.shortBottomBannerEnabled}
                     shortBottomBannerUrl={toApiUrl(
-                      `/api/jobs/${jobId}/subtitle-review/banner-assets/bottom`
+                      `/api/jobs/${jobId}/subtitle-review/banner-assets/bottom?v=${encodeURIComponent(review.updatedAt)}`
                     )}
                     styles={{
                       ...selectedClipTextStyles,

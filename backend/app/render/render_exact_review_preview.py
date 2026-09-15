@@ -593,13 +593,21 @@ def render_exact_subtitle_review_preview(
             ):
                 short_kwargs["hook_scene_start"] = resolved_candidate.hook_scene_start
                 short_kwargs["hook_scene_end"] = resolved_candidate.hook_scene_end
-            if not exact_cached:
+            paired = not exact_cached and not live_cached and short_renderer is render_short_clip
+            if paired:
+                short_renderer(
+                    input_path,
+                    temporary_video,
+                    live_output_path=temporary_live_video,
+                    **short_kwargs,
+                )
+            elif not exact_cached:
                 short_renderer(
                     input_path,
                     temporary_video,
                     **short_kwargs,
                 )
-            if not live_cached:
+            if not live_cached and not paired:
                 live_kwargs = {**short_kwargs, "subtitle_path": None}
                 short_renderer(
                     input_path,

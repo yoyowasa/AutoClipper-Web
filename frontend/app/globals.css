@@ -184,3 +184,17 @@ body {
   .subtitle-content-fields, .subtitle-content-suggestions { min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
   .subtitle-content-suggestions > section { margin-top: 0; }
 }
+
+/* Give portrait video the full workspace height; keep its controls beside it. */
+@media (min-width: 1280px) {
+  .subtitle-review-grid[data-clip-type="short"] { --short-editor-width: 40%; grid-template-rows: minmax(0, 40fr) minmax(0, 60fr); }
+  .subtitle-review-grid[data-clip-type="short"] .subtitle-review-player { grid-row: 1 / 3; }
+  .subtitle-review-grid[data-clip-type="short"] .subtitle-review-player > div { display: grid; grid-template-columns: var(--short-editor-width) minmax(0, 1fr); }
+  .subtitle-review-grid[data-clip-type="short"] .subtitle-review-player > div > :first-child { max-height: 40%; overflow-y: auto; }
+  .subtitle-review-grid[data-clip-type="short"] .subtitle-review-editors { width: var(--short-editor-width); z-index: 1; }
+  .subtitle-review-grid[data-clip-type="short"] .subtitle-review-editors > section { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; }
+  .subtitle-review-grid[data-clip-type="short"] .subtitle-review-editors > .subtitle-content-editor { display: block; overflow-y: auto; }
+  .subtitle-review-grid[data-clip-type="short"] .subtitle-content-fields,
+  .subtitle-review-grid[data-clip-type="short"] .subtitle-content-suggestions { overflow: visible; overscroll-behavior-y: auto; }
+  .subtitle-review-grid[data-clip-type="short"] .subtitle-review-editors[data-tab="style"] > .subtitle-content-editor { display: none; }
+}

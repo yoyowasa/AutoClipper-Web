@@ -136,3 +136,35 @@ def test_api_queues_once_and_exposes_no_internal_paths(scene):
         assert client.post("/api/jobs/job_guide/subtitle-review/clips/missing/framing-guide").status_code == 409
     assert len(queued) == 1
     assert file.read_bytes() == before
+
+@pytest.mark.parametrize("layout", ["center_crop", "blur_background"])
+def test_explicit_layout_is_immediate_and_does_not_change_review(scene, layout):
+    storage, sessions, _, file = scene
+    before = file.read_bytes()
+    queued = []
+    with sessions() as db:
+        result = guide.prepare_framing_guide(db, storage, "job_guide", "short_1", lambda *args: queued.append(args), layout=layout)
+    assert result.state == "ready" and result.strategy == layout
+    assert queued == []
+    assert file.read_bytes() == before
+
+
+def test_switching_back_reuses_completed_layout_analysis(scene):
+    storage, sessions, _, file = scene
+    before = file.read_bytes()
+    queued = []
+    with sessions() as db:
+        first = guide.prepare_framing_guide(db, storage, "job_guide", "short_1", lambda *args: queued.append(args), layout="auto")
+    calls = []
+
+    def resolve(*args, **kwargs):
+        calls.append(1)
+        return CropPlan(strategy_order=("face_tracking_crop",), face_center=(.8, .5)), []
+
+    guide.run_short_framing_guide(*queued[0], paths=storage, session_factory=sessions, resolver=resolve)
+    with sessions() as db:
+        guide.prepare_framing_guide(db, storage, "job_guide", "short_1", lambda *args: queued.append(args), layout="face_tracking_crop")
+        restored = guide.prepare_framing_guide(db, storage, "job_guide", "short_1", lambda *args: queued.append(args), layout="auto")
+    assert restored.state == "ready" and restored.key == first.key and restored.center == (.8, .5)
+    assert len(calls) == 1 and len(queued) == 2
+    assert file.read_bytes() == before

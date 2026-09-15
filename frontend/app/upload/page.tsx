@@ -8,6 +8,8 @@ import {
   settingsForRuntimeProfile
 } from "../../components/SettingsPanel";
 import { UploadDropzone } from "../../components/UploadDropzone";
+import { HeatmapFileNotice } from "../../components/HeatmapFileNotice";
+import { readHeatmapContentIssue } from "../../lib/heatmapFileStatus";
 import { UploadActionBar } from "../../components/UploadActionBar";
 import { YouTubePostingSettingsPanel } from "../../components/YouTubePostingSettingsPanel";
 import {
@@ -187,6 +189,10 @@ function UploadForm() {
     setError(null);
 
     try {
+      if (uploadMode === "new" && settings.heatmapIntervalMode && heatmapFile) {
+        const issue = await readHeatmapContentIssue(heatmapFile);
+        if (issue) throw new Error(issue);
+      }
       if (uploadMode === "reedit") {
         const reopened = await reopenCompletedVideo(file, setUploadProgress);
         setSubmissionStage("opening_reedit");
@@ -564,6 +570,7 @@ function UploadForm() {
                     未選択時は従来の字幕・音声・映像評価を使います。値は動画内の相対値0〜1です。
                   </p>
                 )}
+                {heatmapFile && <HeatmapFileNotice file={heatmapFile} />}
                 <div className="mt-3 border-t border-[#e1e1de] pt-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">

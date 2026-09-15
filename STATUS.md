@@ -9815,3 +9815,95 @@ pip check: pass
 - 最小検証: ローカルMarkdownリンクとコードフェンス、ランチャー実在、CPU設定とCodex検出・ログイン処理、環境設定ファイル未作成時の警告動作をコードと照合。差分の空白検査成功。Docker/Python/Codexの導入事項は公式資料と照合。
 - 引継ぎ検証: 実装コミットbcac192のbackend 1098 passed/1 skipped、ruff、frontend typecheck/lint/buildと実画面確認は前項に記録済み。今回は文書変更のみ。
 - 未確定: 新規PCでの実インストール・動画処理は未実施。この記録時点ではPRのCI・mainへの統合は未実施。既存の未追跡base.pngとstorage/qaはローカル保持する。
+
+## 2026-09-15 画角・基本配置の試し表示で再生成待ちを減らす
+
+- 目的: 画角調整を開く際と基本配置を切り替える際の待ち時間を減らす。
+- 現在地・対象: `C:\BOT\AutoClipper Web`、`codex/task-135-framing-preview-latency`。既存の未追跡素材は対象外。
+- 原因: 基本配置を選ぶたびに全ショートの字幕入り/字幕なしプレビューが同じRQキューへ入り、画角解析も後ろで待機する。調査時の完了履歴ではプレビュー１本12.96〜33.76秒、画角解析0.06〜0.97秒。元映像の確認フレームもdialogを閉じるたび破棄していた。
+- 変更: 基本配置の選択で試し表示dialogを開き、保存前の選択では設定変更・動画生成をしない。中央/ぼかし配置は寸法のみで即時に基準を返し、人物配置は解析済み結果を再利用。解析要求をキュー先頭へ追加する。dialog内では同じ元映像を使い続け、開き直し時にも直前のフレームを再利用する。元映像URLへ開始位置のmedia fragmentを付ける。
+- 保存: 配置（全ショート共通）と位置・倍率（選択clipのみ）を既存framing APIの追加任意フィールドでまとめて確定。保存時に最終設定のプレビューだけを要求し、選択clipを先に並べる。旧形式のAPI呼び出しは維持。完了済みレビューは試し表示のみ。
+- 変更ファイル: `frontend/components/ShortFramingWorkspace.tsx`、`frontend/lib/{shortFramingApi,types}.ts`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`backend/app/api/{framing_guide,jobs}.py`、`backend/app/jobs/short_framing_guide.py`、`backend/app/schemas.py`、関連backendテスト２ファイル、本ファイル。
+- 検証: backend全体1102 passed/1 skipped。追加の１本/５本でのまとめ保存テスト２件成功。設定不変・非同期解析の再利用・古いworkerの上書き防止・既存framing保存も確認。frontend typecheck/lint/build・画角計算テスト、backend ruff、差分空白検査成功。
+- 制限: 実行中の動画処理は中断しないため、初回の人物解析がその終了を待つ場合はある。構図は静止画。保存後の動画エンコード速度そのものは変更していない。この記録時点でDocker反映・実画面確認は進行中。未コミット/未PUSH。
+- 稼働確認: backend/frontend/GPU worker image build成功。RQ queued/started=0を確認してbackend/workerを再作成し、health HTTP200。frontend変更ファイルを稼働コンテナへ反映。既存ChromeタブはFast Refreshが届かず旧表示のままだったため、入力を保護して残し、同じジョブの更新画面を別タブで開いた。
+- 実画面確認: 基本配置から試し表示dialogが開くこと、中央→ぼかし背景→人物への構図切替、拡大100→150%、保存せず閉じると人物/100%に戻ること、開き直した際に画像と操作が復帰することを確認。更新画面を画角調整が開いた状態で残した。
+- 性能と不変性: localhostのIPv4経由で配置基準APIを計測し、中央36ms、ぼかし32ms、解析済み人物34ms。これはAPI応答時間であり初回画像取得・画面全体の完了時間ではない。操作前後のレビューJSONのSHA256が一致し、RQ queued/started=0。実ジョブで確定保存・最終書出しは行っていない。未コミット/未PUSH。
+
+## 2026-09-15 画角調整に標準上下帯の目安を表示
+
+- 目的: らでん用と同じ上下各360pxの帯を仮定し、画角調整中に中央1080×1200pxの映像範囲を確認できるようにする。
+- 対象: `C:\BOT\AutoClipper Web`。変更ファイル: `frontend/components/ShortFramingWorkspace.tsx`、`frontend/lib/shortFramingBannerGuide.ts`、本ファイル。
+- 変更: 構図プレビューに帯領域の半透明表示・黄色の破線・上帯/下帯の目安ラベルを常時描画。元映像上にも対応する領域と境界を投影。実際の帯ON/OFFを別記し、目安は書き出しに含めない。
+- 検証: frontend typecheck/lint/build、Docker frontend image build、差分空白検査成功。稼働画面で上下の目安ラベル・黄色境界を確認。HMR後に倍率を一時変更して再描画を確認し、元の175%に復帰。左右79・上下-3・確認位置22.4秒・ぼかし背景の編集中状態を保持。保存操作や動画生成は行っていない。
+- 現在状態: 稼働frontendへ反映済み。実際の帯は上下OFFのまま。未コミット/未PUSH。
+
+
+## 2026-09-15 投稿案生成のhost bridge停止から復旧
+
+- 目的: 投稿案生成のcodex_title_hook_bridge_unavailableを解消する。
+- 観測: Web/backend/workerは稼働。Windows側bridge statusの最終更新は同日04:10:49 JST、記録PID43848は存在せず、生成依頼7件が未処理。連携プロセス停止が直接原因。終了理由はstderrを破棄する既存起動方式のため未確定。
+- 対応: 既存LauncherController.ensure_codex_bridge_runningでhost bridgeのみ再起動。未処理だった過去依頼は一時画像が既にないためimage_not_foundで終了。現在のブラウザの「現在の字幕から投稿案を生成」で新しい依頼を送信した。
+- 最小検証: host bridge ready、生成中heartbeat更新を確認。編集中ジョブのショート1で実際のCodex生成が成功し、事実重視・興味喚起・短く強いの3案と採用ボタンが画面に表示された。字幕・タイトルの手入力は保持し、候補の採用や確定保存はしていない。
+- 変更: 稼働プロセスの復旧と本ファイルの記録のみ。アプリコード変更・Docker再起動・画面再読込なし。既存の未コミット変更を保持。
+- 未解決: プロセスが終了した契機は未確定。恒久的な再発防止を実装済みとは扱わない。
+
+
+## 2026-09-15 人気度JSONの空データを選択時に明示
+
+- 目的: 人気度JSONの読み込み失敗とデータ未収録を区別し、空JSONで動画をアップロードしてから失敗する操作を防ぐ。
+- 原因: 対象AMa84AwGLykのアップロード済みJSONはheatmap_available=false、heatmap=[]。JSONの認識・動画との照合は成功し、人気度参考ONでのジョブ作成がheatmap_unavailableで拒否されていた。Downloaderが人気度を取得できなかった理由は未調査。
+- 変更ファイル: frontend/app/upload/page.tsx、frontend/components/HeatmapFileNotice.tsx、frontend/lib/heatmapFileStatus.ts、frontend/tests/heatmapFileStatus.test.ts、本ファイル。
+- 変更: JSON選択時に空データ・形式不正・データありを表示。参考ON時はアップロード前に同じ確認を実行。backendでの契約・動画SHA256照合は維持。利用設定を自動でOFFへ変更せず、ユーザーが選択できる状態とする。
+- 検証: 空配列・値0・BOM付き正常データ・JSON構文不正・別形式・File読込のテスト成功。frontend typecheck/lint/build、Docker frontend image build、差分空白検査成功。稼働コンテナへ反映済み。
+- 未確定: 現在のブラウザは更新が届いておらず新表示未確認。選択中動画・JSON・設定を保護するため再読み込みや処理開始は行っていない。未コミット/未PUSH。
+
+
+## 2026-09-15 編集再開したジョブでも帯画像を変更
+
+- 目的: TOP画面に戻らず、途中の5本の字幕確認画面で上下帯の画像を設定できるようにする。
+- 原因: 字幕確認の設定APIは帯ON/OFFのみ受付、画像選択UIもTOP画面だけにあった。
+- 変更ファイル: backend/app/schemas.py、backend/app/api/jobs.py、backend/tests/test_api_routes.py、frontend/lib/types.ts、frontend/app/jobs/[jobId]/subtitles/page.tsx、frontend/components/ReviewBannerImages.tsx、本ファイル。
+- 変更: 既存設定APIへ画像IDの任意フィールドを追加し、形式・画像実在を検証してジョブに保存。画像選択で該当帯をONにして同ジョブの全ショートへ反映し、既存経路でプレビューを再生成。キャラ設定・他ジョブは変更しない。画像プレビューのURLへ更新時刻を付け、古い画像のキャッシュを回避。
+- 検証: 関連backendテスト3件成功（画像差替え/GET一致、字幕・区間保持、旧形式ON/OFFの画像保持、不正ID/存在しない画像の拒否）。ruff、frontend typecheck/lint/build成功。backend/frontend image build成功、backend再作成後health200と稼働OpenAPIの追加フィールドを確認。frontendを稼働コンテナへ反映。
+- 実画面: 前の5本の字幕確認を別タブで開き、「帯画像を変更」の上下画像選択欄を確認して展開した状態で残した。実ジョブの画像選択・確定保存は未実施。現在の新規選定タブは保持。未コミット/未PUSH。
+
+
+## 2026-09-15 字幕確認でキャラ別一括設定を呼び出す
+
+- 目的: 編集中ジョブの帯を個別アップロードする代わりに、TOP画面で保存したキャラ設定を選んで反映する。
+- 変更ファイル: backend/app/api/review_character_settings.py、backend/app/api/jobs.py、backend/app/schemas.py、backend/tests/test_api_routes.py、frontend/components/ReviewCharacterPreset.tsx、frontend/app/jobs/[jobId]/subtitles/page.tsx、frontend/lib/types.ts、本ファイル。直前追加のReviewBannerImages.tsxは新UIへ置換。
+- 変更: 設定APIに保存名を渡し、保存済みキャラから帯・ON/OFF・文字書式・投稿情報・通常タイトル末尾・サムネイル設定を同ジョブへ反映。個別文字書式はキャラの既定書式へ切替。字幕文章・タイトル/フック本文・切り抜き区間・本数・画角・元配信タイトル/URLを保持する。通常公開タイトルの既存末尾は新末尾へ置換。投稿文は旧設定と完全一致する自動クレジット部分のみ取り替え、説明本文を残す。
+- 入力保護: ブラウザ上で未保存の文章を保持しつつ、サーバー反映済みの書式と変更前から未編集の投稿欄を同期する。選択だけでは保存せず「このジョブに反映」で実行。キャラ保存一覧・他ジョブは変更しない。
+- 検証: 関連backend 4 tests passed、ruff、frontend typecheck/lint/build、差分空白検査成功。保存値反映、字幕・区間・本数・画角の保持、旧API互換、不正/不存在画像、存在しない保存名、元ジョブと保存一覧の不変を確認。既定配置の検証はDB未設定値とUI既定autoの比較条件を修正して成功。
+- 稼働: backendへコード反映して再起動、health200・OpenAPIのcharacterPresetName追加を確認。frontend反映後、前の5本の字幕確認で「キャラ設定を読み込む」と保存済み2名の選択肢を確認。新規選定のタブを保持。
+- 未確定: 実ジョブへのキャラ設定反映・動画の再生成はユーザーの選択待ち。未コミット/未PUSH。backend/frontendのDocker image再build成功。
+
+## 2026-09-15 ショート画角再生成の重複処理削減と編集映像拡大
+
+- 目的: 5本の画角更新の待ち時間を減らし、小さすぎる編集映像と映像上の状態表示を修正する。
+- 観測: RQ完了記録で直近5本のpreview処理合計139.89秒、その後の1本54.43秒。編集用と保存済み用を別々に全編レンダリングしていた。画面は上段53%の高さから再生操作欄を引いており、1920px幅の確認時に縦映像の高さ272pxだった。
+- 変更ファイル: backend/app/render/paired_preview.py、render_short.py、render_exact_review_preview.py、backend/tests/test_paired_preview.py、frontend/app/jobs/[jobId]/subtitles/page.tsx、frontend/app/globals.css、本ファイル。
+- 変更: 両方のpreviewが未生成のショートは、デコード・画角・ぼかし・帯の合成を1回にして字幕付/無へ分岐し、同じ設定で2本を出力。片方のキャッシュがある場合と通常動画、最終書き出しの経路は維持。帯のループ入力時は両出力の尺を指定し、冒頭複製時は音声も分岐。
+- UI: ショートのプレビューを作業領域の全高へ拡大し、左側に画角と文字編集を配置。編集中/保存済みの表示・切替ボタンは映像外の再生操作欄へ移動。書式設定は縦並びとし、各設定欄の内容の重なりを解消。
+- 検証: 関連backend 87 tests passed、対象ruff、frontend typecheck/lint/build成功。実動画43.78秒・1080x1920/60fpsで旧55.278秒→新37.862秒（31.5%短縮）。新旧両出力の映像/音声尺一致、10秒位置の比較フレームはSSIM=1。別途帯なし/冒頭複製/帯あり冒頭複製の実FFmpeg出力で映像と音声が1秒/1.5秒に一致。
+- 実画面: HMR反映後、1920x903で映像領域高さ570px、document高さ903px（画面全体スクロールなし）、映像内に状態表示と切替ボタンがないことを確認。未保存文章を維持し、ユーザーのジョブ設定・画角は変更していない。
+- 稼働: workerの実行中/待機中ジョブが0件を確認後、変更コードを配置してworker再起動。frontendのコード・CSSを反映。backendにも同じrenderコードを配置。
+- 制限: 実測は1クリップ1回ずつ。5本一括の改修後所要時間、全フレームの画質一致は未測定。長尺previewの生成待ちは残る。未コミット/未PUSH。
+- 追加確認: backend/worker(GPU)/frontendのDocker image build成功。worker idle・backend health200を確認。次回コンテナ再作成用のimageにも変更を保存済み。
+
+## 2026-09-15 ショートのタイトル・フック欄のホイール停止を修正
+
+- 目的: ショート字幕編集のタイトル・フック欄をホイールで上下にスクロールできるようにする。
+- 原因: 直前の縦並び化後も内側のfields/suggestionsにoverflow:autoとoverscroll-behavior:containが残り、内側自身の高さと内容高が同じ状態で外側へのホイール伝播を止めていた。
+- 変更ファイル: frontend/app/globals.css、本ファイル。short条件内で内側2要素をoverflow:visible/overscroll:autoとし、外側の編集欄をスクロール主体にする。通常動画の独立した2列スクロール設定は維持。
+- 最小検証: 実ブラウザで編集欄scrollTopが506→1409→506とホイールで上下に移動、ページ全体scrollTop=0。通常動画の別ジョブも開き、上に横長プレビュー・下に編集欄の従来配置を確認。確認用タブは閉じ、元の編集タブと未保存内容を保持。
+- 稼働: CSSをHMR反映。frontend buildとDocker frontend image build成功。未コミット/未PUSH。
+
+## 2026-09-15 編集再開・画角プレビュー修正のPUSH準備
+
+- 目的: ユーザーが画面確認した今回までの23ファイルをfeature branchへまとめてPUSHし、PRのCIを確認する。
+- 検証: backend全体1113 passed, 1 skipped（DATABASE_URL=sqlite:///:memory:、backendディレクトリでpytest）。ruff backend/launcher、frontend lint/typecheck/test:overlay-fit、heatmapFileStatusテスト、build成功。直前のDocker buildと4サービス稼働も確認。
+- 初回失敗: リポジトリルートからのpytestで起動時DBの相対パスが作業領域外を向き、手動編集テスト2件がunable to open database file。メモリDBを明示し、該当5件と全体を再実行して成功。アプリの実データへの変更なし。
+- コミット対象: 設定API・キャラ読込・画角ガイドとキャッシュ・二重preview生成の共有化・ショート編集配置/スクロール・空の人気度JSON表示・関連テスト・STATUS.md。
+- 除外: 個人用サムネイルbase.png、storage/banner_assets、storage/qa。PUSH先はcodex/task-135-framing-preview-latency。GitHub CIはこの記録時点では未実行。

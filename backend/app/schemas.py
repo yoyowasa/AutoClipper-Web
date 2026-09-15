@@ -656,6 +656,7 @@ class SubtitleReviewClipContentUpdateRequest(BaseModel):
 
 
 class SubtitleReviewClipFramingUpdateRequest(BaseModel):
+    short_layout: ShortLayout | None = Field(default=None, alias="shortLayout")
     framing_offset_x: float = Field(ge=-100, le=100, alias="framingOffsetX")
     framing_offset_y: float = Field(ge=-100, le=100, alias="framingOffsetY")
     framing_zoom: float = Field(ge=1.0, le=3.0, alias="framingZoom")
@@ -787,6 +788,9 @@ class TitleHookSuggestionRequest(BaseModel):
 
 
 class SubtitleReviewSettingsUpdateRequest(BaseModel):
+    character_preset_name: str | None = Field(default=None, min_length=1, max_length=80, alias="characterPresetName")
+    short_top_banner_asset_id: BannerAssetId | None = Field(default=None, alias="shortTopBannerAssetId")
+    short_bottom_banner_asset_id: BannerAssetId | None = Field(default=None, alias="shortBottomBannerAssetId")
     short_layout: ShortLayout | None = Field(default=None, alias="shortLayout")
     short_top_banner_enabled: bool = Field(alias="shortTopBannerEnabled", strict=True)
     short_bottom_banner_enabled: bool = Field(alias="shortBottomBannerEnabled", strict=True)

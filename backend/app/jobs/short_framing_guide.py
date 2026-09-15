@@ -31,7 +31,7 @@ class ShortFramingGuide(BaseModel):
     error: str | None = None
 
 
-def guide_context(db, paths, job_id, clip_id):
+def guide_context(db, paths, job_id, clip_id, layout=None):
     job = db.get(Job, job_id)
     if job is None:
         raise FileNotFoundError("job not found")
@@ -48,14 +48,15 @@ def guide_context(db, paths, job_id, clip_id):
     top = 360 if document.short_top_banner_enabled else 0
     content_height = 1920 - top - (360 if document.short_bottom_banner_enabled else 0)
     candidate = inputs.candidate
+    layout = layout or document.short_layout
     windows = dialogue_windows_for_clip(candidate.start, candidate.end, inputs.transcript_segments)
     key = sha256(json.dumps([
         str(source), stat.st_size, stat.st_mtime_ns, candidate.start, candidate.end,
-        document.short_layout, content_height, top, [(w.start, w.end) for w in windows],
+        layout, content_height, top, [(w.start, w.end) for w in windows],
     ]).encode()).hexdigest()
     return {
         "key": key, "source": source, "start": candidate.start, "end": candidate.end,
-        "layout": document.short_layout, "width": video.width, "height": video.height,
+        "layout": layout, "width": video.width, "height": video.height,
         "contentHeight": content_height, "contentY": top, "windows": windows,
     }
 
@@ -76,10 +77,18 @@ def write_state(directory, state):
     temp.replace(directory / "state.json")
 
 
-def prepare_framing_guide(db, paths, job_id, clip_id, enqueue, *, force=False):
-    ctx = guide_context(db, paths, job_id, clip_id)
+def prepare_framing_guide(db, paths, job_id, clip_id, enqueue, *, force=False, layout=None):
+    ctx = guide_context(db, paths, job_id, clip_id, layout)
     directory = guide_dir(paths, job_id, clip_id)
     with subtitle_review_document_lock(directory):
+        cached = directory / f"ready-{ctx['key']}.json"
+        if cached.is_file() and not force:
+            return ShortFramingGuide.model_validate_json(cached.read_text(encoding="utf-8"))
+        # These layouts depend only on dimensions; do not wait behind video encoding.
+        if ctx["layout"] in {"center_crop", "blur_background"}:
+            return ShortFramingGuide.model_validate({
+                **ctx, "state": "ready", "strategy": ctx["layout"], "center": (0.5, 0.5),
+            })
         old = read_state(directory)
         if old.get("key") == ctx["key"]:
             if old.get("state") == "ready" or (old.get("state") == "failed" and not force):
@@ -90,14 +99,19 @@ def prepare_framing_guide(db, paths, job_id, clip_id, enqueue, *, force=False):
         state.update(state="queued", requestId=uuid4().hex, created=time.time())
         write_state(directory, state)
         try:
-            enqueue(job_id, clip_id, state["requestId"])
+            if layout is None:
+                enqueue(job_id, clip_id, state["requestId"])
+            else:
+                enqueue(job_id, clip_id, state["requestId"], layout)
         except Exception:
             write_state(directory, old)
             raise
     return ShortFramingGuide.model_validate(state)
 
 
-def run_short_framing_guide(job_id, clip_id, request_id, *, session_factory=SessionLocal, paths=None, resolver=resolve_short_crop_plan):
+def run_short_framing_guide(
+    job_id, clip_id, request_id, layout=None, *, session_factory=SessionLocal, paths=None, resolver=resolve_short_crop_plan,
+):
     storage = paths or get_storage_paths()
     directory = guide_dir(storage, job_id, clip_id)
     with session_factory() as db:
@@ -105,7 +119,7 @@ def run_short_framing_guide(job_id, clip_id, request_id, *, session_factory=Sess
             state = read_state(directory)
             if state.get("requestId") != request_id or state.get("state") != "queued":
                 return
-            ctx = guide_context(db, storage, job_id, clip_id)
+            ctx = guide_context(db, storage, job_id, clip_id, layout)
             if ctx["key"] != state["key"]:
                 raise ValueError("context changed")
             plan, faces = resolver(
@@ -121,9 +135,11 @@ def run_short_framing_guide(job_id, clip_id, request_id, *, session_factory=Sess
             with subtitle_review_document_lock(directory):
                 if read_state(directory).get("requestId") != request_id:
                     return
-                if guide_context(db, storage, job_id, clip_id)["key"] != ctx["key"]:
+                if guide_context(db, storage, job_id, clip_id, layout)["key"] != ctx["key"]:
                     raise ValueError("context changed")
-                write_state(directory, {**state, "state": "ready", "strategy": strategy, "center": center})
+                ready = {**state, "state": "ready", "strategy": strategy, "center": center}
+                write_state(directory, ready)
+                (directory / f"ready-{ctx['key']}.json").write_text(json.dumps(ready), encoding="utf-8")
         except Exception:
             with subtitle_review_document_lock(directory):
                 current = read_state(directory)

@@ -4326,3 +4326,143 @@ def test_named_banner_presets_keep_job_image_snapshot(client: TestClient) -> Non
     assert client.put("/api/preferences/short-banner-presets", json={"presets": ten}).status_code == 200
     assert len(client.get("/api/preferences/short-banner-presets").json()["presets"]) == 10
     assert client.put("/api/preferences/short-banner-presets", json={"presets": ten + [{**preset, "name": "11件目"}]}).status_code == 422
+
+
+@pytest.mark.parametrize("clip_count", [1, 5])
+def test_framing_and_layout_save_queues_only_final_composition(client: TestClient, clip_count: int) -> None:
+    job_id, candidate_id, _ = _seed_reeditable_export()
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    review_file = output_dir / "subtitle_review.json"
+    review = json.loads(review_file.read_text(encoding="utf-8"))
+    selection_file = output_dir / "selected_clips.json"
+    selection = json.loads(selection_file.read_text(encoding="utf-8"))
+    for index in range(1, clip_count):
+        sibling_id = f"sibling_{index}"
+        review["clips"].insert(0, {**review["clips"][-1], "id": sibling_id})
+        selection["shorts"].insert(0, {**selection["shorts"][-1], "id": sibling_id})
+    review_file.write_text(json.dumps(review), encoding="utf-8")
+    selection_file.write_text(json.dumps(selection), encoding="utf-8")
+    queued = []
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
+        lambda *args: queued.append(args)
+    )
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    queued.clear()
+    response = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/framing",
+        json={"framingOffsetX": 12, "framingOffsetY": -20, "framingZoom": 1.5, "shortLayout": "blur_background"},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["shortLayout"] == "blur_background"
+    selected = next(clip for clip in result["clips"] if clip["id"] == candidate_id)
+    assert selected["framingZoom"] == 1.5
+    assert len(queued) == clip_count
+    assert len({item[1] for item in queued}) == clip_count
+    assert queued[0] == (job_id, candidate_id, selected["previewSpecHash"])
+    assert result["confirmedClipCount"] == 0
+    with next(app.dependency_overrides[get_db]()) as db:
+        assert db.get(Job, job_id).settings_json["shortLayout"] == "blur_background"
+    queued.clear()
+    repeated = client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/framing",
+        json={"framingOffsetX": 12, "framingOffsetY": -20, "framingZoom": 1.5, "shortLayout": "blur_background"},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["clips"][0]["previewSpecHash"] == result["clips"][0]["previewSpecHash"]
+
+
+def test_review_can_replace_banners_without_changing_clip_edits(client: TestClient) -> None:
+    import io
+    from PIL import Image
+
+    _, _, rendered = _seed_reeditable_export()
+    job_id = client.post("/api/jobs/reedit-upload", files={
+        "file": ("finished.mp4", rendered, "video/mp4"),
+    }).json()["jobId"]
+    root = f"/api/jobs/{job_id}/subtitle-review"
+    before = client.get(root).json()
+    assets = []
+    for color in ("red", "blue"):
+        image = io.BytesIO()
+        Image.new("RGB", (108, 36), color).save(image, format="PNG")
+        response = client.post("/api/preferences/short-banner-assets", files={
+            "file": ("banner.png", image.getvalue(), "image/png"),
+        })
+        assert response.status_code == 200
+        assets.append(response.json()["assetId"])
+    payload = {"shortTopBannerEnabled": True, "shortBottomBannerEnabled": True,
+               "shortTopBannerAssetId": assets[0], "shortBottomBannerAssetId": assets[1]}
+    saved = client.patch(root + "/settings", json=payload)
+    assert saved.status_code == 200
+    assert saved.json()["segments"] == before["segments"]
+    assert [(c["id"], c["start"], c["end"]) for c in saved.json()["clips"]] == [
+        (c["id"], c["start"], c["end"]) for c in before["clips"]
+    ]
+    for position, asset in zip(("top", "bottom"), assets, strict=True):
+        assert client.get(root + f"/banner-assets/{position}").content == client.get(
+            f"/api/preferences/short-banner-assets/{asset}"
+        ).content
+    # Legacy ON/OFF requests preserve both selected image IDs.
+    assert client.patch(root + "/settings", json={
+        "shortTopBannerEnabled": False, "shortBottomBannerEnabled": True,
+    }).status_code == 200
+    prior_top = client.get(root + "/banner-assets/top").content
+    for invalid in ("../outside", "f" * 64):
+        assert client.patch(root + "/settings", json={
+            **payload, "shortTopBannerAssetId": invalid,
+        }).status_code == 422
+        assert client.get(root + "/banner-assets/top").content == prior_top
+    assert client.get(root + "/banner-assets/top").content == client.get(
+        f"/api/preferences/short-banner-assets/{assets[0]}"
+    ).content
+
+
+def test_review_loads_saved_character_without_reselecting(client: TestClient) -> None:
+    original_job_id, _, rendered = _seed_reeditable_export()
+    job_id = client.post('/api/jobs/reedit-upload', files={
+        'file': ('finished.mp4', rendered, 'video/mp4'),
+    }).json()['jobId']
+    root = f'/api/jobs/{job_id}/subtitle-review'
+    preset = {'name': 'キャラB', 'settings': {
+        'normalClipCount': 3, 'shortCount': 9,
+        'shortTopBannerEnabled': True, 'shortBottomBannerEnabled': True,
+        'shortTopBannerAssetId': 'raden-top', 'shortBottomBannerAssetId': 'raden-bottom',
+        'shortSubtitleFontSize': 104, 'shortTitleStyle': {'fontSize': 128},
+        'youtubePostingProfile': {'performerName': 'キャラB', 'affiliation': '',
+                                 'baseHashtags': ['#キャラB'], 'shortHashtags': ['#shorts'], 'baseTags': ['キャラB']},
+        'normalTitleSuffix': '【キャラB】', 'normalThumbnailStyle': {'design': 'plain'},
+    }}
+    stored = client.put('/api/preferences/character-presets', json={'presets': [preset], 'selectedName': 'キャラB'})
+    assert stored.status_code == 200
+    before = client.get(root).json()
+    with next(app.dependency_overrides[get_db]()) as db:
+        original_settings = dict(db.get(Job, original_job_id).settings_json)
+        old_settings = dict(db.get(Job, job_id).settings_json)
+    request = {'shortTopBannerEnabled': False, 'shortBottomBannerEnabled': False, 'characterPresetName': 'キャラB'}
+    response = client.patch(root + '/settings', json=request)
+    assert response.status_code == 200, response.text
+    after = response.json()
+    assert after['shortTopBannerEnabled'] is True
+    assert after['shortBottomBannerEnabled'] is True
+    assert after['segments'] == before['segments']
+    assert len(after['clips']) == len(before['clips'])
+    for old, new in zip(before['clips'], after['clips'], strict=True):
+        for key in ('id', 'start', 'end', 'title', 'hookText', 'framingOffsetX', 'framingOffsetY', 'framingZoom'):
+            assert new[key] == old[key]
+        assert new['resolvedSubtitleStyle']['fontSize'] == 104
+        assert new['resolvedTitleStyle']['fontSize'] == 128
+        assert 'キャラB' in new['youtubeDescription']
+        assert new['youtubeHashtags'] == ['#キャラB', '#shorts']
+    with next(app.dependency_overrides[get_db]()) as db:
+        saved = db.get(Job, job_id).settings_json
+        for key in ('shortCount', 'normalClipCount', 'youtubeSourceTitle', 'youtubeSourceUrl'):
+            assert saved.get(key) == old_settings.get(key)
+        assert saved['shortLayout'] == before['shortLayout']
+        assert saved['normalTitleSuffix'] == '【キャラB】'
+        assert saved['normalThumbnailStyle']['design'] == 'plain'
+        assert db.get(Job, original_job_id).settings_json == original_settings
+    assert client.get('/api/preferences/character-presets').json() == stored.json()
+    assert client.patch(root + '/settings', json={**request, 'characterPresetName': 'missing'}).status_code == 404
+    assert client.get(root).json()['shortTopBannerEnabled'] is True

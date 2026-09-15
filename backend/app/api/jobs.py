@@ -3280,6 +3280,22 @@ def update_subtitle_review_settings(
 
         settings = dict(job.settings_json or {})
         previous_top_banner_enabled = bool(settings.get("shortTopBannerEnabled", False))
+        if request.character_preset_name is not None:
+            from app.api.review_character_settings import apply_review_character
+
+            settings = apply_review_character(db, paths, request.character_preset_name, settings, document)
+            request = request.model_copy(update={
+                "short_top_banner_enabled": settings["shortTopBannerEnabled"],
+                "short_bottom_banner_enabled": settings["shortBottomBannerEnabled"],
+            })
+        for key, asset_id in (
+            ("shortTopBannerAssetId", request.short_top_banner_asset_id),
+            ("shortBottomBannerAssetId", request.short_bottom_banner_asset_id),
+        ):
+            if asset_id is not None:
+                if not banner_asset_path(asset_id, paths).is_file():
+                    raise HTTPException(422, "帯画像が見つかりません。画像を選び直してください。")
+                settings[key] = asset_id
         short_overlay_title_mode = _short_overlay_title_mode(settings)
         short_layout = request.short_layout or _short_layout(settings)
         if previous_top_banner_enabled and not request.short_top_banner_enabled:
@@ -3308,7 +3324,8 @@ def update_subtitle_review_settings(
             video=video,
             document=document,
             paths=paths,
-            clip_ids={clip.id for clip in document.clips if clip.type == "short"},
+            clip_ids={clip.id for clip in document.clips
+                      if request.character_preset_name is not None or clip.type == "short"},
         )
         _write_subtitle_review_unlocked(document, paths)
     return _enqueue_subtitle_review_previews(
@@ -3839,10 +3856,18 @@ def update_subtitle_review_clip_framing(
                 framing_offset_y=request.framing_offset_y,
                 framing_zoom=request.framing_zoom,
             )
+            settings = dict(job.settings_json or {})
+            layout_changed = request.short_layout is not None and request.short_layout != document.short_layout
+            if layout_changed:
+                settings["shortLayout"] = request.short_layout
+                document.short_layout = request.short_layout
+                for item in document.clips:
+                    if item.type == "short":
+                        item.confirmed = False
             document, _contract_changed = refresh_review_render_contract(
                 document,
-                render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
-                render_settings=dict(job.settings_json or {}),
+                render_mode=str(settings.get("mode", "high_quality")),
+                render_settings=settings,
                 source_width=video.width,
                 source_height=video.height,
             )
@@ -3856,18 +3881,23 @@ def update_subtitle_review_clip_framing(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
+        if layout_changed:
+            job.settings_json = settings
+            job.updated_at = utc_now()
+            db.commit()
+            db.refresh(job)
         document, queued_previews = _refresh_subtitle_review_previews_unlocked(
             job=job,
             video=video,
             document=document,
             paths=paths,
-            clip_ids={clip_id},
+            clip_ids={item.id for item in document.clips if item.type == "short"} if layout_changed else {clip_id},
         )
         _write_subtitle_review_unlocked(document, paths)
     return _enqueue_subtitle_review_previews(
         job_id=job.id,
         document=document,
-        queued=queued_previews,
+        queued=sorted(queued_previews, key=lambda item: item[0] != clip_id),
         paths=paths,
         enqueue_preview=enqueue_preview,
     )

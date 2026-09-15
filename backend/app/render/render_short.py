@@ -869,6 +869,7 @@ def render_short_clip(
     framing_offset_x: float = 0.0,
     framing_offset_y: float = 0.0,
     framing_zoom: float = 1.0,
+    live_output_path: str | Path | None = None,
 ) -> ShortRenderResult:
     for label, banner_path in (
         ("top", top_banner_path),
@@ -908,7 +909,7 @@ def render_short_clip(
                 output_path,
                 start=start,
                 end=end,
-                subtitle_path=subtitle_path,
+                subtitle_path=subtitle_path if live_output_path is None else None,
                 normalize_audio=normalize_audio,
                 ffmpeg_bin=ffmpeg_bin,
                 layout=strategy,
@@ -926,6 +927,13 @@ def render_short_clip(
                 framing_offset_y=framing_offset_y,
                 framing_zoom=framing_zoom,
             )
+            if live_output_path is not None:
+                from app.render.paired_preview import paired_preview_command
+
+                command = paired_preview_command(
+                    command, live_output_path=live_output_path,
+                    subtitle_path=subtitle_path,
+                )
             command_runner(command)
             fallback_reason = crop_plan.fallback_reason
             if len(attempted) > 1 and fallback_reason is None:
