@@ -359,12 +359,15 @@ thumbnailIsDisplayable && thumbnailUrl ? (
               </button>
               <button
                 className="min-h-9 border border-neutral-400 bg-white px-2 text-[11px] font-semibold disabled:text-neutral-400"
-                disabled={!youtubeDescription.trim() && youtubeHashtags.length === 0}
+                disabled={!youtubeDescription.trim() && youtubeHashtags.length === 0 && youtubeTags.length === 0}
                 type="button"
                 onClick={() =>
                   void copyField(
                     "description",
-                    descriptionWithHashtags(youtubeDescription, youtubeHashtags)
+                    [
+                      descriptionWithHashtags(youtubeDescription, youtubeHashtags),
+                      youtubeTags.length > 0 ? `タグ: ${youtubeTagsText(youtubeTags)}` : ""
+                    ].filter(Boolean).join("\n\n")
                   )
                 }
               >
