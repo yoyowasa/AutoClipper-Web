@@ -141,6 +141,7 @@ class SubtitleReviewClip(BaseModel):
     framing_offset_x: float = Field(default=0.0, ge=-100, le=100, alias="framingOffsetX")
     framing_offset_y: float = Field(default=0.0, ge=-100, le=100, alias="framingOffsetY")
     framing_zoom: float = Field(default=1.0, ge=1.0, le=3.0, alias="framingZoom")
+    short_layout: ShortLayout | None = Field(default=None, alias="shortLayout")
     resolved_title_style: ResolvedClipTextStyle | None = Field(
         default=None,
         alias="resolvedTitleStyle",
@@ -574,6 +575,7 @@ def build_subtitle_review(
                 framingOffsetX=candidate.framing_offset_x,
                 framingOffsetY=candidate.framing_offset_y,
                 framingZoom=candidate.framing_zoom,
+                shortLayout=candidate.short_layout,
                 start=candidate.start,
                 end=candidate.end,
                 duration=candidate.duration,
@@ -1265,6 +1267,7 @@ def apply_reviewed_clip_content(
         updates["framing_offset_x"] = clip.framing_offset_x
         updates["framing_offset_y"] = clip.framing_offset_y
         updates["framing_zoom"] = clip.framing_zoom
+        updates["short_layout"] = clip.short_layout
         return candidate.model_copy(update=updates)
 
     return selection.model_copy(

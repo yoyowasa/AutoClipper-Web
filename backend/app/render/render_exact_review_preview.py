@@ -179,7 +179,7 @@ def _canonical_render_settings(
     if candidate.type == "short":
         mode_value = raw.get("mode")
         mode = str(mode_value).strip() if mode_value is not None else "high_quality"
-        short_layout_value = raw.get("shortLayout", raw.get("layout"))
+        short_layout_value = candidate.short_layout or raw.get("shortLayout", raw.get("layout"))
         short_layout = (
             str(short_layout_value).strip()
             if short_layout_value is not None
@@ -285,7 +285,7 @@ def build_subtitle_review_preview_spec(
                 "height": source_height,
             },
             "candidateIndex": candidate_index,
-            "clip": resolved_candidate,
+            "clip": resolved_candidate.model_dump(mode="json", exclude={"short_layout"}),
             "segments": relevant_segments,
             "settings": render_settings,
             "overlayTitleExpected": title_expected,

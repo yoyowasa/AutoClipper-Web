@@ -3857,13 +3857,13 @@ def update_subtitle_review_clip_framing(
                 framing_zoom=request.framing_zoom,
             )
             settings = dict(job.settings_json or {})
-            layout_changed = request.short_layout is not None and request.short_layout != document.short_layout
+            target_clip = next(item for item in document.clips if item.id == clip_id)
+            layout_changed = request.short_layout is not None and request.short_layout != (
+                target_clip.short_layout or document.short_layout
+            )
             if layout_changed:
-                settings["shortLayout"] = request.short_layout
-                document.short_layout = request.short_layout
-                for item in document.clips:
-                    if item.type == "short":
-                        item.confirmed = False
+                target_clip.short_layout = request.short_layout
+                target_clip.confirmed = False
             document, _contract_changed = refresh_review_render_contract(
                 document,
                 render_mode=str(settings.get("mode", "high_quality")),
@@ -3881,17 +3881,12 @@ def update_subtitle_review_clip_framing(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
-        if layout_changed:
-            job.settings_json = settings
-            job.updated_at = utc_now()
-            db.commit()
-            db.refresh(job)
         document, queued_previews = _refresh_subtitle_review_previews_unlocked(
             job=job,
             video=video,
             document=document,
             paths=paths,
-            clip_ids={item.id for item in document.clips if item.type == "short"} if layout_changed else {clip_id},
+            clip_ids={clip_id},
         )
         _write_subtitle_review_unlocked(document, paths)
     return _enqueue_subtitle_review_previews(

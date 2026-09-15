@@ -1562,7 +1562,7 @@ export default function SubtitleReviewPage() {
       framingZoom: clip.framingZoom
     };
     const signature = shortFramingSignature(nextFraming);
-    const layoutChanged = framing.shortLayout !== undefined && framing.shortLayout !== review?.shortLayout;
+    const layoutChanged = framing.shortLayout !== undefined && framing.shortLayout !== (clip.shortLayout ?? review?.shortLayout);
     if (!layoutChanged && shortFramingEquals(nextFraming, savedFraming)) {
       setShortFramingDrafts((drafts) => {
         const next = { ...drafts };
@@ -2462,7 +2462,7 @@ export default function SubtitleReviewPage() {
                           key={`${selectedClip.id}:${selectedClip.start}:${selectedClip.end}:${review.sourceVideoUrl}:${review.shortTopBannerEnabled}:${review.shortBottomBannerEnabled}`}
                           jobId={jobId} clipId={selectedClip.id} sourceUrl={review.sourceVideoUrl}
                           start={selectedClip.start} end={selectedClip.end}
-                          value={selectedShortFramingDraft} layout={review.shortLayout} editable={isEditable && !hasReviewMutationInFlight}
+                          value={selectedShortFramingDraft} layout={selectedClip.shortLayout ?? review.shortLayout} editable={isEditable && !hasReviewMutationInFlight}
                           onSave={async (next) => {
                             changeSelectedShortFraming(next);
                             return saveSelectedShortFraming(selectedClip.id, next);

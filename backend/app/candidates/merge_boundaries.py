@@ -165,6 +165,7 @@ class Candidate(BaseModel):
     framing_offset_x: float = Field(default=0.0, ge=-100, le=100)
     framing_offset_y: float = Field(default=0.0, ge=-100, le=100)
     framing_zoom: float = Field(default=1.0, ge=1.0, le=3.0)
+    short_layout: Literal["auto", "face_tracking_crop", "center_crop", "blur_background"] | None = None
     reason: str | None = None
     risk_flags: list[str] = Field(default_factory=list)
     moment_key: str | None = Field(default=None, min_length=1, max_length=80)

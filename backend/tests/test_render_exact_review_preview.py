@@ -41,6 +41,26 @@ def make_candidate(
     )
 
 
+def test_per_clip_layout_overrides_defaults_without_changing_other_preview_specs() -> None:
+    candidate = make_candidate("short-layout", "short")
+    args = dict(
+        transcript_segments=[], settings={"shortLayout": "center_crop"},
+        source_fingerprint="source", source_width=1920, source_height=1080,
+    )
+    before = build_subtitle_review_preview_spec(candidate=candidate, **args)
+    explicit_same = build_subtitle_review_preview_spec(
+        candidate=candidate.model_copy(update={"short_layout": "center_crop"}), **args,
+    )
+    changed = build_subtitle_review_preview_spec(
+        candidate=candidate.model_copy(update={"short_layout": "blur_background"}), **args,
+    )
+    assert before == explicit_same
+    assert changed["settings"]["shortLayout"] == "blur_background"
+    assert before["settings"]["shortLayout"] == "center_crop"
+    assert "short_layout" not in before["clip"]
+    assert subtitle_review_preview_spec_hash(changed) != subtitle_review_preview_spec_hash(before)
+
+
 def test_exact_preview_spec_is_canonical_and_ignores_unrelated_segments() -> None:
     candidate = make_candidate("short_1", "short")
     relevant = TranscriptSegment(start=10.0, end=12.0, text="対象字幕")

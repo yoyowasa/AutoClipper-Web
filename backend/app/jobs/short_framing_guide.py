@@ -48,7 +48,7 @@ def guide_context(db, paths, job_id, clip_id, layout=None):
     top = 360 if document.short_top_banner_enabled else 0
     content_height = 1920 - top - (360 if document.short_bottom_banner_enabled else 0)
     candidate = inputs.candidate
-    layout = layout or document.short_layout
+    layout = layout or clip.short_layout or document.short_layout
     windows = dialogue_windows_for_clip(candidate.start, candidate.end, inputs.transcript_segments)
     key = sha256(json.dumps([
         str(source), stat.st_size, stat.st_mtime_ns, candidate.start, candidate.end,
