@@ -9920,3 +9920,21 @@ pip check: pass
 
 
 - PUSH前検証: backend全体1115 passed, 1 skipped、backend/launcher ruff、frontend lint/typecheck/build成功。Docker Composeの4サービス稼働確認。個人素材とQA出力はPUSH対象外。
+
+## 2026-09-15 文字色テンプレートを10色へ拡張
+
+- 目的: タイトル・フック・字幕の文字色をテンプレートから10色選べるようにする。
+- 変更ファイル: frontend/components/ClipTextStyleEditor.tsx、本ファイル。
+- 変更: 従来の白・黄・水色・ピンク・黄緑・黒へ赤(#FF4040)・オレンジ(#FF9F43)・青(#4080FF)・紫(#B57BFF)を追加。共通一覧を使う外縁も10色。通常/ショート・TOP/字幕編集の共通部品に反映。
+- 検証: frontend typecheck、対象ESLint、Docker frontend image build成功。稼働画面で文字色の10ボタンと配色を確認。既存の選択色・未保存文章は変更していない。
+- 状態: codex/task-136-text-color-presets（PR79の変更を継承）で実装、HMR反映済み。今回追加分は未コミット/未PUSH。
+
+
+## 2026-09-15 内縁の色テンプレートの追加漏れを修正
+
+- 原因: 内縁だけ独立した4色配列を参照しており、前回の共通色一覧拡張が適用されなかった。
+- 変更ファイル: frontend/components/ClipTextStyleEditor.tsx、本ファイル。内縁も文字色・外縁と同じ10色一覧を使用する。
+- 検証: 稼働frontendへ反映し、実ブラウザで内縁の10色ボタンを確認。選択済みの色値は変更していない。未コミット/未PUSH。
+
+
+- PUSH前検証: frontend lint/typecheck/build成功。文字・内縁・外縁の10色を含めてPUSH。

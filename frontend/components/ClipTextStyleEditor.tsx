@@ -100,7 +100,10 @@ const TARGET_LABELS: Record<ClipTextTarget, string> = {
   subtitle: "字幕"
 };
 
-const COLOR_PRESETS = ["#FFFFFF", "#FFF200", "#5EE7F7", "#FF8FAB", "#9BFF9B", "#000000"];
+const COLOR_PRESETS = [
+  "#FFFFFF", "#FFF200", "#5EE7F7", "#FF8FAB", "#9BFF9B",
+  "#FF4040", "#FF9F43", "#4080FF", "#B57BFF", "#000000"
+];
 
 type UsagePreset = {
   id: string;
@@ -906,7 +909,7 @@ export function ClipTextStyleEditor({
                     updateStyle({ outlineColor: event.target.value.toUpperCase() })
                   }
                 />
-                {["#000000", "#FFFFFF", "#1F2937", "#7F1D1D"].map((color) => (
+                {COLOR_PRESETS.map((color) => (
                   <button
                     aria-label={`内縁の色 ${color}`}
                     className="h-7 w-7 border border-neutral-400"
