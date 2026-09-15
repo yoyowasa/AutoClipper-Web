@@ -9938,3 +9938,20 @@ pip check: pass
 
 
 - PUSH前検証: frontend lint/typecheck/build成功。文字・内縁・外縁の10色を含めてPUSH。
+
+## 2026-09-16 結果画面で説明欄とタグをまとめてコピー
+
+- 目的: 公開用タイトルを含めず説明欄・ハッシュタグ・タグを一度にコピーする。
+- 原因: 既存の説明欄ボタンはハッシュタグまでを対象とし、タグ欄との一括コピー操作がなかった。
+- 変更ファイル: frontend/components/ResultVideoCard.tsx、本ファイル。コピーボタンの先頭に「説明欄＋タグ」を追加。説明欄とハッシュタグに続けて「タグ: 」とタグ一覧を空行区切りでコピーする。既存ボタンは維持。
+- 検証: frontend typecheck、対象ESLint、既存youtube-postingテスト、Docker frontend image build成功。稼働frontendへファイルを反映。
+- 未確認: 実ブラウザのクリップボード貼り付け確認は未実施。未コミット/未PUSH。
+
+
+## 2026-09-16 説明欄ボタンへ一括コピーを統合
+
+- 目的: ユーザー訂正に従い、既存の「説明欄」で公開用タイトル以外をコピーする。
+- 変更ファイル: frontend/components/ResultVideoCard.tsx、本ファイル。「説明欄」が説明文・ハッシュタグ・タグをまとめてコピーするよう変更。追加した「説明欄＋タグ」を削除して4ボタンへ戻した。
+- 検証: frontend typecheck、対象ESLint、Docker frontend image build成功。稼働frontendへ反映。実ブラウザでの貼り付け確認は未実施。未PUSH。
+
+- PUSH前検証: frontend lint/typecheck/build成功。説明欄ボタンへ統合した最終仕様をPUSH。
