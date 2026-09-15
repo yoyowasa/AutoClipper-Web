@@ -48,6 +48,18 @@ def scene(tmp_path):
     engine.dispose()
 
 
+def test_saved_clip_layout_is_used_when_reopening_guide(scene):
+    storage, sessions, document, file = scene
+    document.clips[0].short_layout = "blur_background"
+    write_subtitle_review(document, file)
+    queued = []
+    with sessions() as db:
+        state = guide.prepare_framing_guide(db, storage, "job_guide", "short_1", lambda *a: queued.append(a))
+    assert state.state == "ready"
+    assert state.strategy == "blur_background"
+    assert queued == []
+
+
 def test_cached_analysis_reused_for_offsets_zoom_and_completed_review_untouched(scene):
     storage, sessions, document, file = scene
     queue = []

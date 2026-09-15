@@ -4348,6 +4348,13 @@ def test_framing_and_layout_save_queues_only_final_composition(client: TestClien
         lambda *args: queued.append(args)
     )
     assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    before = json.loads(review_file.read_text(encoding="utf-8"))
+    for sibling in before["clips"]:
+        if sibling["id"] != candidate_id:
+            sibling["confirmed"] = True
+    review_file.write_text(json.dumps(before), encoding="utf-8")
+    with next(app.dependency_overrides[get_db]()) as db:
+        original_settings = dict(db.get(Job, job_id).settings_json)
     queued.clear()
     response = client.patch(
         f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/framing",
@@ -4355,15 +4362,18 @@ def test_framing_and_layout_save_queues_only_final_composition(client: TestClien
     )
     assert response.status_code == 200
     result = response.json()
-    assert result["shortLayout"] == "blur_background"
+    assert result["shortLayout"] == before["shortLayout"]
     selected = next(clip for clip in result["clips"] if clip["id"] == candidate_id)
+    assert selected["shortLayout"] == "blur_background"
     assert selected["framingZoom"] == 1.5
-    assert len(queued) == clip_count
-    assert len({item[1] for item in queued}) == clip_count
+    assert len(queued) == 1
     assert queued[0] == (job_id, candidate_id, selected["previewSpecHash"])
-    assert result["confirmedClipCount"] == 0
+    assert result["confirmedClipCount"] == clip_count - 1
+    for sibling in before["clips"]:
+        if sibling["id"] != candidate_id:
+            assert next(c for c in result["clips"] if c["id"] == sibling["id"]) == sibling
     with next(app.dependency_overrides[get_db]()) as db:
-        assert db.get(Job, job_id).settings_json["shortLayout"] == "blur_background"
+        assert db.get(Job, job_id).settings_json == original_settings
     queued.clear()
     repeated = client.patch(
         f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/framing",
@@ -4371,6 +4381,19 @@ def test_framing_and_layout_save_queues_only_final_composition(client: TestClien
     )
     assert repeated.status_code == 200
     assert repeated.json()["clips"][0]["previewSpecHash"] == result["clips"][0]["previewSpecHash"]
+    if clip_count > 1:
+        stored = json.loads(review_file.read_text(encoding="utf-8"))
+        saved = next(c for c in stored["clips"] if c["id"] == candidate_id)
+        saved["confirmed"] = True
+        review_file.write_text(json.dumps(stored), encoding="utf-8")
+        queued.clear()
+        changed = client.patch(
+            f"/api/jobs/{job_id}/subtitle-review/clips/sibling_1/framing",
+            json={"framingOffsetX": -40, "framingOffsetY": 15, "framingZoom": 2, "shortLayout": "center_crop"},
+        )
+        assert changed.status_code == 200
+        assert next(c for c in changed.json()["clips"] if c["id"] == candidate_id) == saved
+        assert [item[1] for item in queued] == ["sibling_1"]
 
 
 def test_review_can_replace_banners_without_changing_clip_edits(client: TestClient) -> None:

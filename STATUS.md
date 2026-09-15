@@ -9907,3 +9907,16 @@ pip check: pass
 - 初回失敗: リポジトリルートからのpytestで起動時DBの相対パスが作業領域外を向き、手動編集テスト2件がunable to open database file。メモリDBを明示し、該当5件と全体を再実行して成功。アプリの実データへの変更なし。
 - コミット対象: 設定API・キャラ読込・画角ガイドとキャッシュ・二重preview生成の共有化・ショート編集配置/スクロール・空の人気度JSON表示・関連テスト・STATUS.md。
 - 除外: 個人用サムネイルbase.png、storage/banner_assets、storage/qa。PUSH先はcodex/task-135-framing-preview-latency。GitHub CIはこの記録時点では未実行。
+
+## 2026-09-16 基本配置・画角の保存をクリップごとに分離
+
+- 目的: 次のショートの基本配置・画角を変更しても、保存済みの別ショートを変更しない。
+- 原因: 画角保存APIのshortLayoutがジョブ共通設定と字幕確認文書の共通配置を書き換え、全ショートの確認状態・プレビューを無効化していた。
+- 変更ファイル: backend/app/api/jobs.py、backend/app/candidates/merge_boundaries.py、backend/app/jobs/subtitle_review.py、backend/app/jobs/short_framing_guide.py、backend/app/render/render_exact_review_preview.py、backend/app/render/render_short.py、frontend/lib/types.ts、frontend/app/jobs/[jobId]/subtitles/page.tsx、frontend/components/ShortFramingWorkspace.tsx、関連backendテスト4ファイル、本ファイル。
+- 変更: shortLayoutをクリップ単位で保存し、画角ガイド・プレビュー・最終書き出しで優先。保存対象1本だけを未確認・再生成対象にする。未設定の既存クリップは共通配置を継承し、見た目が同じ場合の既存プレビューハッシュを維持。
+- 検証: 関連backendテスト213 passed、backend ruff、frontend typecheck/lint/build、git diff --check成功。1本目保存後に2本目の基本配置・位置・倍率を変更しても、1本目の全保存内容・確認状態が不変で2本目だけ再生成されるテストを実施。
+- 稼働: 待機・実行中ジョブ0件を確認後、変更コードをbackend/worker/frontendへ配置しbackend/worker再起動。Docker backend/worker/frontend image build成功。health200、実ジョブ5本のpreviewState=readyと2本目confirmed=trueを読み取り確認。
+- 未確定点: ユーザーの実ジョブに変更を加える再現テストは未実施。過去に共通設定変更で変わった画角の元の値は復元していない。未コミット/未PUSH。
+
+
+- PUSH前検証: backend全体1115 passed, 1 skipped、backend/launcher ruff、frontend lint/typecheck/build成功。Docker Composeの4サービス稼働確認。個人素材とQA出力はPUSH対象外。

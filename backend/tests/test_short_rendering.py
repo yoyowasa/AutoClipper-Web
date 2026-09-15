@@ -1254,6 +1254,7 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
                 "framing_offset_x": 15.0,
                 "framing_offset_y": -10.0,
                 "framing_zoom": 1.2,
+                "short_layout": "center_crop",
             }
         ),
         make_short("cand_short_fail", 50.0, 95.0, "Broken short", 90.0),
@@ -1306,12 +1307,12 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
 
         exports = db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all()
 
+    assert [call["layout"] for call in renderer_calls] == ["center_crop", "auto", "auto"]
     assert [export.candidate_id for export in result.exports] == ["cand_short_1", "cand_short_2"]
     assert [failure.candidate_id for failure in result.failures] == ["cand_short_fail"]
     assert [export.candidate_id for export in exports] == ["cand_short_1", "cand_short_2"]
     assert len(renderer_calls) == 3
     assert all(call["subtitle_path"] is not None for call in renderer_calls)
-    assert all(call["layout"] == "auto" for call in renderer_calls)
     assert all(call["source_width"] == 1920 for call in renderer_calls)
     assert renderer_calls[0]["hook_scene_start"] == 5.0
     assert renderer_calls[0]["hook_scene_end"] == 7.0

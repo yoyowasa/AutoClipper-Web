@@ -220,7 +220,7 @@ function FramingDialog({ jobId, clipId, sourceUrl, start, end, value, layout, ed
       </div>
       <footer className="flex shrink-0 flex-wrap items-center gap-3 border-t pt-2">
         <button type="button" disabled={!ready || saving} className="min-h-10 border bg-white px-3" onClick={() => setDraft({ framingOffsetX: 0, framingOffsetY: 0, framingZoom: 1 })}>自動値へ戻す</button>
-        <p className="min-w-0 flex-1 text-xs text-neutral-600">{editable ? draftLayout !== layout ? "保存すると基本配置を全ショートに適用し、動画を再生成します。" : "位置決めが終わったら保存。このショートの動画を１回だけ再生成します。" : "完了済みのため試し表示のみ。保存は再編集時に使えます。"}</p>
+        <p className="min-w-0 flex-1 text-xs text-neutral-600">{editable ? "保存すると基本配置・位置・倍率をこのショートだけに適用して再生成します。" : "完了済みのため試し表示のみ。保存は再編集時に使えます。"}</p>
         <button type="button" disabled={!editable || !ready || !changed || saving} className="min-h-11 bg-sky-700 px-5 font-semibold text-white disabled:bg-neutral-300"
           onClick={async () => { setSaving(true); try { if (await onSave({ ...draft, shortLayout: draftLayout })) onClose(); else setError("画角を保存できませんでした。再度保存してください。"); } finally { setSaving(false); } }}>
           {saving ? "保存中…" : "この画角を保存"}

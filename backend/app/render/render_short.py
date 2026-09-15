@@ -1303,7 +1303,7 @@ def render_selected_short_candidates(
                 "subtitle_path": subtitle_path,
                 "normalize_audio": normalize_audio,
                 "ffmpeg_bin": ffmpeg_bin,
-                "layout": layout,
+                "layout": candidate.short_layout or layout,
                 "source_width": source_width,
                 "source_height": source_height,
                 "framing_offset_x": candidate.framing_offset_x,

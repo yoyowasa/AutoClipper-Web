@@ -471,6 +471,7 @@ export type SubtitleReviewClip = {
   framingOffsetX: number;
   framingOffsetY: number;
   framingZoom: number;
+  shortLayout?: "auto" | "face_tracking_crop" | "center_crop" | "blur_background" | null;
   resolvedTitleStyle: ResolvedClipTextStyle | null;
   resolvedHookStyle: ResolvedClipTextStyle | null;
   resolvedSubtitleStyle: ResolvedClipTextStyle | null;
