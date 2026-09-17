@@ -10079,3 +10079,11 @@ pip check: pass
 - 内容: ユーザー編集のSYSTEM_PROMPTとv7を保存。lint対応の改行のみ調整。
 - 検証: 関連テスト51 passed、対象ruff成功。生成品質の実機比較は未実施。
 - 運用: codex/task-141-prompt-trialで試用。main未反映。連携プロセス修正とローカル画像はこのコミットに含めない。
+
+
+## 2026-09-18 JST サムネイル文言生成プロンプトの試用
+- 目的: 新旧の比較と個別取消が可能な形でPUSHする。
+- 変更ファイル: backend/app/scoring/thumbnail_copy.py。
+- 内容: ユーザー編集のTHUMBNAIL_COPY_PROMPTを単独保存。
+- 検証: 関連テスト51 passed、対象ruff成功。生成品質の実機比較は未実施。
+- 運用: codex/task-141-prompt-trialで試用。main未反映。連携プロセス修正とローカル画像はこのコミットに含めない。
