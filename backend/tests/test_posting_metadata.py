@@ -268,3 +268,19 @@ def test_youtube_posting_copy_does_not_duplicate_existing_source_or_performer() 
     partial = build_youtube_posting_copy(**kwargs, fallback_description="手入力の説明\n\n出演：\n儒烏風亭らでん")
     assert partial.description.count("出演：") == 1
     assert partial.description.count("元配信：") == 1
+
+
+def test_permission_number_precedes_source_and_survives_resave():
+    kwargs = {"clip_type": "short", "source_title": "配信タイトル",
+              "profile": {"vspoPermissionNumber": "TEST-0123"}}
+    first = build_youtube_posting_copy(**kwargs, fallback_description="動画の説明")
+    assert "ぶいすぽっ！許諾番号：TEST-0123\n\n元配信：" in first.description
+    second = build_youtube_posting_copy(**kwargs, fallback_description=first.description)
+    assert first.description == second.description
+    kwargs["profile"] = {"vspoPermissionNumber": "TEST-4567"}
+    changed = build_youtube_posting_copy(**kwargs, fallback_description=first.description)
+    assert "TEST-0123" not in changed.description
+    assert changed.description.count("ぶいすぽっ！許諾番号：") == 1
+    kwargs["profile"] = {}
+    cleared = build_youtube_posting_copy(**kwargs, fallback_description=changed.description)
+    assert "許諾番号" not in cleared.description

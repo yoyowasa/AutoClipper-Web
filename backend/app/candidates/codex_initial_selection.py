@@ -71,6 +71,11 @@ CODEX_TOPIC_SELECTION_PROMPT = """あなたは日本語動画の構成編集者�
 - 通常clip: 配信の主要テーマ、質問→説明→具体例→結論があり、単独で内容を理解できる話題を優先します。
   名前読み、連続お礼、スパチャ読みだけの話題は減点します。通常候補は異なるtopicKeyにしてください。
 - Short: 冒頭の反応、驚き、オチ、短い完結を優先し、スパチャ・コメント由来も許可します。
+- この段階では完成動画の区間を決めません。topicBlockIdsは次段階で精査する文脈範囲です。
+- minDuration/maxDurationは次段階で切り出す完成動画だけの制約です。話題ブロック全体の長さには適用しないでください。
+  例: 120秒のブロックに30秒の見せ場が含まれるなら、Short上限75秒でもそのブロックを選んでください。
+- 長いブロック内の一部分を切り出せます。部分の開始終了をこの段階で指定できなくても、ブロックを選べば次段階が元字幕から特定します。
+  ブロックの長さがmaxDurationを超えることだけを理由に落とさないでください。
 - minDuration/maxDurationは制約であり目標尺ではありません。特定の尺へ寄せないでください。
 - durationBandsは長さの異なる良質話題を見落とさないための探索枠です。
   自然に各尺帯へ収まる良質話題があれば、各帯から少なくとも1件を候補プールに残してください。
@@ -93,6 +98,8 @@ CODEX_INITIAL_SELECTION_PROMPT = """あなたは日本語動画の切り抜き�
 - 境界は尺帯の中心ではなく、発話内容の自然な開始・完了へ合わせ、各帯を埋めるための伸縮・水増しはしないでください。
 - selectedTopicsと同じtype/topicKeyの候補だけを返し、通常候補はtopicKeyを重複させないでください。
 - selectedTopicsのwindowStart/windowEndが、その話題に使用できる元字幕範囲です。
+- selectedTopicsのstart/endは文脈範囲であり完成区間ではありません。
+  長い話題から、その一部分の完結した見せ場をminDuration/maxDuration内で切り出してください。
 - 挨拶、宣伝、長い前置き、文の途中で切れる区間は優先しません。
 - evidenceSegmentIds は選定理由を直接裏付け、選択範囲と重なる字幕IDだけを返してください。
 - 人気区間値は動画内の相対値0〜1で、再生数でも切り抜き境界でもありません。
@@ -932,6 +939,14 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
     )
 
 
+def _selection_time_range(start: float, end: float) -> dict[str, float]:
+    rounded_start, rounded_end = round(float(start), 3), round(float(end), 3)
+    # Keep the source precision when millisecond rounding would erase a valid interval.
+    if end > start and rounded_end <= rounded_start:
+        return {"start": float(start), "end": float(end)}
+    return {"start": rounded_start, "end": rounded_end}
+
+
 def build_codex_initial_selection_request(
     *,
     job_id: str,
@@ -960,8 +975,8 @@ def build_codex_initial_selection_request(
             continue
         clean_heatmap.append(
             HeatmapSegment(
-                start_time=round(start, 3),
-                end_time=round(end, 3),
+                start_time=start,
+                end_time=end,
                 value=float(segment.value),
             )
         )
@@ -983,8 +998,7 @@ def build_codex_initial_selection_request(
         transcript=[
             CodexTranscriptInput(
                 id=f"seg_{index:06d}",
-                start=round(float(segment.start), 3),
-                end=round(float(segment.end), 3),
+                **_selection_time_range(segment.start, segment.end),
                 text=segment.text.strip(),
                 confidence=segment.confidence,
             )
@@ -993,8 +1007,7 @@ def build_codex_initial_selection_request(
         heatmap=[
             CodexHeatmapInput(
                 id=f"heat_{index:06d}",
-                start=round(float(segment.start_time), 3),
-                end=round(float(segment.end_time), 3),
+                **_selection_time_range(segment.start_time, segment.end_time),
                 value=float(segment.value),
             )
             for index, segment in enumerate(clean_heatmap, start=1)

@@ -39,7 +39,7 @@ def test_character_presets_migration_switch_and_job_snapshot(client: TestClient)
         "name": "別チャンネル／キャラB",
         "settings": {
             "channelName": "別チャンネル",
-            "youtubePostingProfile": {"performerName": "キャラB", "baseHashtags": ["#キャラB"]},
+            "youtubePostingProfile": {"performerName": "キャラB", "baseHashtags": ["#キャラB"], "vspoPermissionNumber": "TEST-0123"},
             "normalTitleSuffix": "【キャラB切り抜き】",
             "normalThumbnailStyle": {"design": "plain", "backgroundColor": "#123456"},
             "shortTopBannerEnabled": False,
@@ -51,6 +51,7 @@ def test_character_presets_migration_switch_and_job_snapshot(client: TestClient)
     loaded = client.get("/api/preferences/character-presets").json()
     assert loaded["selectedName"] == other["name"]
     snapshot = loaded["presets"][1]["settings"]
+    assert snapshot["youtubePostingProfile"]["vspoPermissionNumber"] == "TEST-0123"
     video = client.post("/api/videos/upload", files={"file": ("b.mp4", b"video", "video/mp4")}).json()
     created = client.post("/api/jobs", json={"videoId": video["videoId"], "settings": snapshot})
     assert created.status_code == 201

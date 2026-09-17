@@ -1,3 +1,4 @@
+from app.jobs.reselection_keep import target_count
 import hashlib
 import json
 import mimetypes
@@ -2749,6 +2750,11 @@ def reselect_clip_plan(
         )
     document = _get_clip_plan_or_404(job_id, paths)
     previous_settings = dict(job.settings_json or {})
+    keep_ids = set(request.kept_clip_ids)
+    if not keep_ids.issubset({clip.id for clip in document.clips}):
+        raise HTTPException(422, "キープ対象の候補が見つかりません。画面を確認してください。")
+    if keep_ids and len(keep_ids) >= sum(target_count(previous_settings, document, kind) for kind in ("normal", "short")):
+        raise HTTPException(422, "全候補がキープされています。再選定する候補のキープを外してください。")
     settings_payload = dict(previous_settings)
     settings_payload.update(
         request.model_dump(
@@ -4291,17 +4297,12 @@ def apply_subtitle_review_clip(
             or clip.description_evidence_segment_ids
             or clip.post_metadata_revision_hash
         )
-        manualize_stale_payload = (
+        manualize_stale_payload = stale_codex_payload or (
             revision_changed_in_save
             and request.post_metadata_source == "manual"
             and request.post_metadata_revision_hash != prospective_revision_hash
             and (incoming_ai_state or stored_ai_state)
         )
-        if stale_codex_payload:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="AI proposal is stale; regenerate it from the current subtitles",
-            )
 
         try:
             style_updates: dict[str, object] = {}
@@ -4386,7 +4387,7 @@ def apply_subtitle_review_clip(
                         "youtube_tags": posting_copy.tags,
                     }
                 )
-            elif supplied_posting_fields and request.post_metadata_source == "manual":
+            elif supplied_posting_fields and (request.post_metadata_source == "manual" or manualize_stale_payload):
                 # Manual edits keep their wording; source credits and default tags
                 # must not disappear just because the copy is no longer AI-owned.
                 manual_description = (

@@ -2791,6 +2791,7 @@ def test_youtube_posting_profile_is_persisted_in_database(client: TestClient) ->
     payload = {
         "version": 1,
         "profile": {
+            "vspoPermissionNumber": "",
             "performerName": "儒烏風亭らでん",
             "affiliation": "hololive DEV_IS / ReGLOSS",
             "baseHashtags": ["#儒烏風亭らでん", "#ReGLOSS"],

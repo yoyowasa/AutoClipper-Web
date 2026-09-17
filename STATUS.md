@@ -9955,3 +9955,119 @@ pip check: pass
 - 検証: frontend typecheck、対象ESLint、Docker frontend image build成功。稼働frontendへ反映。実ブラウザでの貼り付け確認は未実施。未PUSH。
 
 - PUSH前検証: frontend lint/typecheck/build成功。説明欄ボタンへ統合した最終仕様をPUSH。
+
+## 2026-09-16 Codex初期選定の時刻丸めによる入力エラーを修正
+
+- 目的: 正常な極短発話が時刻の丸めで開始＝終了となり、Codex初期選定全体がローカル仮選定へ落ちる不具合を修正する。
+- 原因: 該当ジョブの3019区間中1区間（7891.94〜7891.9400000000005秒）が小数3桁への丸めで同値となり、CodexTranscriptInputのend > start検証に失敗した。
+- 変更ファイル: backend/app/candidates/codex_initial_selection.py、backend/tests/test_codex_initial_selection.py、本ファイル。丸めが正常区間を消す場合だけ元の精度を保持する。ヒートマップにも同じ保護を適用し、途中の丸めを除去。字幕本文と元データは変更しない。
+- 検証: 関連40 tests passed、対象ruff、git diff --check成功。実ジョブの保存済み3019区間から入力と108話題ブロックの生成成功。極短区間2パターンで文字起こし・ヒートマップ両方のJSON往復を確認。
+- 稼働: 待機/実行中0件を確認後backend/workerへ反映・再起動。稼働workerで該当区間の有効性とbackend health200を確認。
+- 未確認: Codexによる実選定の再実行はまだ。現在表示中の仮選定は自動変更していない。未PUSH。
+- 追加確認: backend/workerのDocker image build成功。次回コンテナ再作成時も修正を保持。
+
+## 2026-09-16 キャラ文字書式を含むプレビューの生成失敗を修正
+
+- 目的: キャラ設定の文字書式がある動画でプレビュー生成を復旧する。
+- 原因: 保存用に辞書化されたSubtitleLayoutのdefault_title_style/default_hook_style/default_subtitle_styleを辞書のまま復元し、フォント解決時にAttributeError: dict object has no attribute font_presetが発生。
+- 変更ファイル: backend/app/render/render_exact_review_preview.py、backend/tests/test_render_exact_review_preview.py、本ファイル。3種類の既定書式をClipTextStyleへ検証・復元してからASS字幕を生成する。
+- 検証: 関連20 tests passed、対象ruff成功。通常/ショート双方で保存済み3書式からASS生成し、各フォントサイズが保持される回帰テストを追加。
+- 稼働: 待機/実行中0件を確認後backend/workerへ配置・再起動。該当ジョブの失敗した5本のみ既存APIで再試行。字幕・書式・切り抜き区間を変更していない。
+- 状態: 実動画の再生成結果は確認中。未PUSH。
+- 復旧確認: 該当ジョブ5本すべてpreviewState=readyをAPIで確認。backend/workerのDocker image buildも成功。
+
+## 2026-09-16 色欄にユーザー保存パレットを追加
+
+- 目的: スポイトや手動で選んだ色を既存テンプレートの横へ保存・再利用する。
+- 変更ファイル: frontend/components/SavedColorSwatches.tsx、frontend/components/ClipTextStyleEditor.tsx、本ファイル。文字色・内縁・外縁それぞれに保存色と「＋今の色を保存」を追加。共通パレットをlocalStorageへ永続化し、同じブラウザの各欄・タブで同期。重複防止、整理・削除、保存失敗の表示を実装。
+- 検証: frontend typecheck/lint/build成功。稼働画面で現在の水色#50B4FFを保存し、3つの色欄へ同時表示・保存済み状態を確認。動画の文字書式や未保存文章は変更していない。
+- 制限: 保存色は同一ブラウザ・同一オリジン内で共通。別ブラウザ・別PCへの同期はない。未PUSH。
+
+## 2026-09-16 古い投稿案による字幕保存の拒否を修正
+
+- 目的: 字幕修正後にAI投稿案のrevision不一致で保存全体が422になる問題を解消する。
+- 原因: postMetadataSource=codexかつ投稿案hashと保存予定字幕hashが不一致の場合、一律に保存を拒否していた。
+- 変更ファイル: backend/app/api/jobs.py、backend/tests/test_title_hook_suggestions.py、本ファイル。古い投稿案は手動文言として保存し、公開用タイトル・フック・説明文・タグと字幕修正を保持。古い候補・選択ID・根拠ID・hashのみ解除し、sourceをmanualにする。最新の投稿案は既存の検証・保存を維持。
+- 検証: 関連43 tests passed、対象ruff成功。字幕を同時変更する場合・すでに投稿案が古い場合の双方を検証。旧422期待のテスト1件が初回失敗し、新仕様の文言保持・古い情報解除の検証へ更新後成功。
+- 稼働: 待機/実行中0件確認後backend/workerへ配置、backend再起動。ブラウザの未保存入力には触れていない。実ユーザー画面での保存クリックは未実施。未PUSH。
+- 追加検証: backend health200、backend/worker Docker image build成功。
+
+## 2026-09-17 再選定で提示済み区間を避ける設定を追加
+
+- 目的: 狙う場面を変更して再選定しても同じ区間が繰り返される挙動を改善する。
+- 観測: プリセット・具体的方針はAPIからCodex制約へ渡される。一方、再選定時の前回候補除外はなかった。直近2ジョブのCodex再選定はcompleted/fallbackUsed=falseであり、仮選定エラーの使い回しではない。
+- 変更ファイル: backend/app/schemas.py、backend/app/candidates/used_ranges.py、backend/app/jobs/runner.py、backend/tests/test_reselection_exclusions.py、frontend/lib/types.ts、frontend/app/jobs/[jobId]/clips/page.tsx、本ファイル。
+- 仕様: 再選定画面の「これまでの候補を避けて選ぶ」を初期ON。現在候補と過去の再選定除外区間をジョブ内で累積し、Codex入力・ローカル候補・最終候補へ既存の区間除外を適用。OFFなら提示候補の除外を解除するが、書き出し済み素材の重複除外は維持。別候補がない場合は前の候補を保持して日本語理由を返す。既存API呼び出しは未指定時Falseで互換性維持。
+- 検証: 再選定除外テストとreal_pipeline合計43 passed、対象ruff、frontend typecheck/lint/build成功。累積除外・OFF・元設定不変・選定方針伝達・Codexとローカル候補の両方を検証。
+- 稼働: キュー待機/実行中0件を確認後backend/worker/frontendに反映、backend/worker再起動。ユーザーの現在候補は自動変更していない。
+- 制限: 変更前の全再選定履歴は保存されていないため、今回表示中の候補から蓄積する。実動画のCodex再選定結果は未確認。未PUSH。
+- 追加確認: 稼働APIのexcludePreviousSelection受付とhealth200を確認。
+
+## 2026-09-17 候補キープと残りだけ再選定
+- 目的: 5本中2本をキープし、残り3本だけ選び直せるようにする。
+- 変更: backend/app/schemas.py、app/api/jobs.py、app/jobs/runner.py、app/jobs/reselection_keep.py、frontend/lib/types.ts、app/jobs/[jobId]/clips/page.tsx。候補ごとのキープ、対象本数表示、keptClipIds保存、種別ごとの残り本数選定、元の順番への差し込みを追加。
+- 保持: キープ候補の区間・個別スタイル・画角設定・候補情報と既存プレビューを維持。キープ区間は置換候補から除外。全候補キープ／不明IDは422。代替候補ゼロの場合は前の候補に戻す。
+- 検証: tests/test_reselection_keep.py、test_reselection_exclusions.py、test_real_pipeline.py 合計46 passed。2/5キープ、候補不足、通常/ショート別本数、API入力、既存プレビューの内容維持を検証。ruff、frontend typecheck/lint/build 成功。
+- 反映: queue/active=0確認後、backend/workerへコード反映・再起動、frontendへ反映。health、選定画面HTTP200、稼働APIのkeptClipIds公開を確認。
+- 未確認: ユーザーの実動画でキープを指定したCodex再選定は未実施。テストでは代替生成を模擬。勝手に現候補を再選定していない。
+- 継続反映: Docker backend/worker-gpu/frontend のイメージビルド成功。git diff --check成功。
+
+## 2026-09-17 指定5本・実候補4本で全キープすると不足1本を再選定できない問題
+- 観測: 現行選定ジョブはshortCount=5、実候補4本。画面とAPIが実候補数だけで全キープ判定し、不足枠を無視していた。
+- 修正: backend/app/jobs/reselection_keep.py、app/api/jobs.py、frontend/app/jobs/[jobId]/clips/page.tsx。指定数と実候補数の大きい方からキープ数を引く。候補が足りない枠も生成・追加対象にする。キープ候補は保持。
+- 検証: 関連48件成功。4/4キープ・指定5本と4/5キープの双方で残り1本を生成して5本になる回帰テストを追加。追加APIテストでも不足枠あり全キープは202、不足枠なし全キープは422を確認。ruff、frontend typecheck/lint/build成功。
+- 反映: queue/active=0確認後、backend/worker再起動とfrontend反映。health HTTP200。ユーザーの候補を実際に再選定する操作は未実施。
+- 稼働workerで現行データの実候補4・指定5・全キープ時残り1を確認。Docker backend/worker-gpu/frontendのイメージビルド成功。
+
+## 2026-09-17 ぶいすぽっ！許諾番号入力
+- 目的: 許諾番号を手入力し、説明欄の元配信の直前に表示する。
+- 変更: backend/app/posting_metadata.py、frontend/lib/types.ts、frontend/components/YouTubePostingSettingsPanel.tsx。youtubePostingProfile.vspoPermissionNumberを追加。既存のキャラ設定保存・呼出に含める。初期値は空欄。空欄は非表示。
+- 説明欄: 「ぶいすぽっ！許諾番号：入力値」を元配信の上へ挿入。既に説明欄に元配信がある場合も同じ位置。再保存で重複せず、番号変更・削除を反映。
+- 検証: test_posting_metadata.py / test_character_presets.py 14 passed（配置・再保存・変更・削除・キャラ設定保存読出）。ruff、frontend typecheck/lint/build成功。
+- 反映: queue/active=0確認後backend/workerへコード反映・再起動、frontend反映。health/upload HTTP200、OpenAPI項目を確認。実動画の説明生成は未実施。保存済みジョブへの番号一括入力は実施していない。
+- Docker backend/worker-gpu/frontend のイメージビルド成功。
+
+## 2026-09-17 キープ再選定で新候補が繰り返し0件になる原因修正
+- 観測: 対象ジョブはreselection_no_alternativesで元候補に復帰。直近3回のCodex応答selectedTopics=[]。応答理由は「有力な81.84秒の話題はShort上限75秒超過、部分指定できないため除外」。キープ処理以前の話題選定で候補を失っていた。
+- 原因: 第1段階の指示で話題ブロックの文脈区間と完成動画の尺制約の区別が不足。実装は長いブロックから部分切り出し可能だが、AIがブロック全長にmaxDurationを適用していた。
+- 変更: backend/app/candidates/codex_initial_selection.py。話題選定は文脈を選ぶ段階、min/maxは完成動画だけの制約、120秒の話題から30秒を切り出せることを明記。境界精密化にも部分切り出しを明記。
+- 検証: test_codex_initial_selection.pyに長い話題から短い動画の精密化要求を作れる回帰テスト追加。キープ・除外関連含む48 passed、ruff成功。
+- 反映: queue/active=0確認後backend/workerへコピー・再起動。通常2本キープを保持し同条件で実データ再選定を1回開始。結果確認中。
+- 実データ確認: 話題候補0件から5件へ改善。境界精密化後、新規Short4本が選定されawaiting_clip_review（errorなし）。通常キープ2本はclip_plan情報の完全一致を確認。全6本。残り1本は最短20秒未満の見せ場のため不採用。Docker backend/workerイメージビルド成功。
+
+## 2026-09-17 通常動画の字幕確認プレビュー拡大
+- 原因: 通常画面がプレビュー53%・設定47%の高さ配分で、1920x903表示時の実映像は約454x256まで縮小していた。
+- 変更: frontend/app/globals.css、frontend/app/jobs/[jobId]/subtitles/page.tsx。通常画面の設定欄を180〜240pxの独立スクロール領域とし、残りをプレビューへ。余白と操作欄の高さを削減。状態/切替は映像外に配置済みで、表示名を編集プレビュー／保存済みを見るに整理。
+- 検証: typecheck、lint、build、Docker frontend build成功。ユーザーの通常字幕画面でHMR反映を撮影確認し、実映像は約756x425へ拡大（縦横約1.66倍）。字幕一覧と下の設定欄は画面内に維持。リロード・編集内容の保存操作は実施していない。
+
+## 2026-09-17 字幕確認の上部clip切替・字幕欄縮小・黒余白除去
+- 変更ファイル: frontend/app/jobs/[jobId]/subtitles/page.tsx、frontend/app/globals.css。
+- 変更内容: clip一覧を形式切替直下の横並びへ移動。レンダリング操作も同列右端へ。左サイドバーを廃止し2列構成へ。字幕欄を最大460pxから360pxへ縮小。通常プレビューの枠幅を映像の16:9比率と利用可能高さに合わせる。映像自体はクロップしない。
+- 検証: frontend typecheck/lint/build、Docker frontend build成功。稼働frontendへ反映。アプリ内ブラウザで上部clip切替、字幕欄の縮小、映像左右の大きな黒余白がない状態をスクリーンショット確認。保存操作・ページ再読み込みは未実施。
+
+## 2026-09-17 字幕確認の通常編集を4列へ再配置
+- 目的: clip一覧を細い左欄へ戻し、その上に形式切替、clipと映像の間にタイトル・フック編集を配置する。
+- 変更ファイル: frontend/app/jobs/[jobId]/subtitles/page.tsx、frontend/app/globals.css。
+- 変更内容: 形式切替をclip欄内へ移動。通常編集をclip・編集・映像・字幕の4列へ変更。編集欄は独立スクロール、映像は字幕側へ寄せ、16:9を維持。
+- 検証: frontend typecheck / lint / build成功。Docker frontend build成功。稼働中frontendへ反映し、既存ブラウザの通常編集画面で配置と表示を確認。
+- 未確認: 小画面での実操作、ショート編集の今回の実画面回帰確認。
+
+## 2026-09-17 通常字幕画面の書式設定を映像下へ配置
+- 目的: 映像と書体・位置・色を同時に確認する。
+- 変更ファイル: frontend/app/globals.css。
+- 変更内容: 通常のデスクトップ画面はタイトル・フックを左に常時表示。書体・サイズ、位置、色を映像下の3列へ移動し、各列を独立スクロールにした。
+- 検証: frontend lint / build（TypeScript検証含む）、Docker frontend build成功。稼働コンテナに反映し2209x1272の既存画面で映像下3列と左タイトル欄の同時表示を確認。
+- 未確認: 小画面の実操作。ショート用レイアウトは変更なし。
+
+## 2026-09-17 通常プレビュー左右の空白を黒帯表示
+- 目的: 編集プレビュー左右の空白を黒で埋める。
+- 変更ファイル: frontend/app/globals.css。
+- 変更内容: 通常プレビュー領域の背景を黒、映像を中央配置に変更。映像のサイズ・縦横比の計算は維持。
+- 検証: Docker frontend build成功。稼働frontendへ反映し、既存ブラウザで左右黒帯を確認。
+- 未解決事項: 本変更についてなし。
+
+## 2026-09-17 PUSH前検証
+- 対象: 選定・キープ・プレビュー修正、保存色、許諾番号、字幕確認レイアウトの累積変更。
+- 検証: backend全体1128 passed / 1 skipped / 1 failed。失敗は許諾番号追加に伴う既存テスト期待値で、修正後の対象テスト1 passed。ruff成功。frontend typecheck / lint / build成功。Docker各サービス稼働確認。
+- 追加変更: backend/tests/test_api_routes.pyの保存プロフィール期待値に空の許諾番号を追加。
+- ローカル画像・storage配下の作業データはPUSH対象外。

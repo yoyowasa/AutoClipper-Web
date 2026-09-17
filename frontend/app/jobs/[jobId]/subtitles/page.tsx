@@ -2247,14 +2247,16 @@ export default function SubtitleReviewPage() {
           </div>
         ) : null}
 
-        <div
+        <div data-clip-type={selectedClip?.type} className="subtitle-review-grid grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
+          <aside className="subtitle-review-clips flex min-h-0 flex-col border border-neutral-300">
+<div
           aria-label="編集する動画形式"
-          className="grid grid-cols-2 border border-neutral-300 bg-neutral-100 p-1"
+          className="grid grid-cols-1 border border-neutral-300 bg-neutral-100 p-1"
           role="tablist"
         >
           <button
             aria-selected={activeClipType === "normal"}
-            className={`min-h-11 px-4 text-sm font-semibold ${
+            className={`min-h-11 px-2 text-sm font-semibold ${
               activeClipType === "normal"
                 ? "bg-neutral-950 text-white"
                 : "bg-white text-neutral-700"
@@ -2268,7 +2270,7 @@ export default function SubtitleReviewPage() {
           </button>
           <button
             aria-selected={activeClipType === "short"}
-            className={`min-h-11 px-4 text-sm font-semibold ${
+            className={`min-h-11 px-2 text-sm font-semibold ${
               activeClipType === "short"
                 ? "bg-neutral-950 text-white"
                 : "bg-white text-neutral-700"
@@ -2281,12 +2283,7 @@ export default function SubtitleReviewPage() {
             ショート編集（{shortClips.length}本）
           </button>
         </div>
-
-
-
-        <div data-clip-type={selectedClip?.type} className="subtitle-review-grid grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
-          <aside className="subtitle-review-clips relative min-h-[420px] border-b border-neutral-300 lg:min-h-0 lg:border-r">
-            <div className="flex min-h-[420px] flex-col lg:absolute lg:inset-0 lg:min-h-0">
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <div className="border-b border-neutral-200 px-4 py-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold">
@@ -2432,6 +2429,8 @@ export default function SubtitleReviewPage() {
               </div>
             </div>
           </aside>
+
+
 
           <section className="subtitle-review-player flex min-w-0 flex-col border-b border-neutral-300 lg:border-r 2xl:min-h-0 2xl:overflow-hidden">
             {selectedClip ? (
@@ -2639,13 +2638,13 @@ export default function SubtitleReviewPage() {
                     </div>
 
                     {selectedPlayerReady ? (
-                    <div className="shrink-0 border-t border-neutral-700 bg-neutral-900 px-3 py-3">
+                    <div className="shrink-0 border-t border-neutral-700 bg-neutral-900 px-3 py-2">
                       <div className="mb-2 flex items-center justify-between gap-2 text-xs">
-                        <span>{isShowingLivePreview ? "編集中・即時反映" : "保存済み・完成表示"}</span>
+                        <span>{isShowingLivePreview ? "編集プレビュー" : "保存済みプレビュー"}</span>
                         {livePreviewReady && selectedPreviewReady ? (
                           <button className="border border-neutral-600 px-2 py-1" type="button"
                             onClick={() => setShowSavedPreview((current) => !current)}>
-                            {isShowingLivePreview ? "保存済み表示" : "編集表示へ戻る"}
+                            {isShowingLivePreview ? "保存済みを見る" : "編集プレビューへ戻る"}
                           </button>
                         ) : null}
                       </div>

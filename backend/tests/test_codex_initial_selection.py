@@ -81,6 +81,23 @@ def _request(
     )
 
 
+@pytest.mark.parametrize("start,end", [(7891.94, 7891.9400000000005), (1.0001, 1.0002)])
+def test_request_preserves_submillisecond_ranges(start: float, end: float) -> None:
+    request = build_codex_initial_selection_request(
+        job_id="job_precision",
+        transcript_segments=[TranscriptSegment(start=start, end=end, text="短い発話")],
+        heatmap_segments=[HeatmapSegment(start_time=start, end_time=end, value=0.8)],
+        video_duration=9000,
+        settings=_settings(heatmapIntervalMode=True),
+    )
+    restored = type(request).model_validate_json(request.model_dump_json(by_alias=True))
+    assert len(restored.transcript) == len(restored.heatmap) == 1
+    for segment in [restored.transcript[0], restored.heatmap[0]]:
+        assert (segment.start, segment.end) == (start, end)
+        assert segment.end > segment.start
+    assert restored.transcript[0].text == "短い発話"
+
+
 def _response(request, *, short_start: float = 100, short_end: float = 120):
     return CodexInitialSelectionResponse(
         version=1,
@@ -1715,3 +1732,19 @@ def test_response_schema_rejects_extra_fields() -> None:
     payload["unexpected"] = True
     with pytest.raises(ValidationError):
         CodexInitialSelectionResponse.model_validate(payload)
+
+
+def test_short_can_be_refined_from_topic_longer_than_max_duration():
+    source = _request(settings=_settings(normalClipCount=0, shortMaxDuration=40))
+    topics = build_codex_topic_selection_request(source)
+    block = max(topics.topic_blocks, key=lambda item: item.end - item.start)
+    assert block.end - block.start > 40
+    response = _topic_response(topics)
+    response.selected_topics = [response.selected_topics[-1].model_copy(update={"topic_block_ids": [block.id]})]
+    refinement = build_codex_boundary_refinement_request(source, topics, response)
+    assert refinement is not None
+    assert refinement.selected_topics[0].end - refinement.selected_topics[0].start > 40
+    assert refinement.constraints.short.max_duration == 40
+    assert len(refinement.transcript) > 0
+    prompt = _topic_bridge_envelope(topics, thread_id=None).prompt
+    assert "話題ブロック全体の長さには適用しない" in prompt

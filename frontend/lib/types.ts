@@ -42,6 +42,7 @@ export type PostTitleCandidate = {
 };
 
 export type YouTubePostingProfile = {
+  vspoPermissionNumber?: string;
   performerName: string;
   affiliation: string;
   baseHashtags: string[];
@@ -69,6 +70,7 @@ export type ClipTimeRange = {
 };
 
 export type ClipSettings = {
+  keptClipIds?: string[];
   characterPresetName?: string;
   channelName?: string;
   normalTitleSuffix?: string | null;
@@ -625,7 +627,7 @@ export type ClipPlanReselectionRequest = Pick<
   | "selectionPolicy"
   | "heatmapIntervalMode"
   | "useOpenAIScoring"
->;
+> & { excludePreviousSelection?: boolean; keptClipIds?: string[] };
 
 export type ClipPlanActionResponse = {
   jobId: string;

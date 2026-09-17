@@ -665,7 +665,7 @@ def test_review_selection_separates_publication_and_overlay_titles(
 
 
 @pytest.mark.parametrize("post_metadata_source", ["codex", "manual"])
-def test_apply_rejects_stale_ai_but_keeps_manual_copy_when_subtitles_change(
+def test_apply_keeps_copy_and_clears_stale_ai_metadata_when_subtitles_change(
     title_hook_api: dict[str, Any],
     post_metadata_source: str,
 ) -> None:
@@ -704,14 +704,6 @@ def test_apply_rejects_stale_ai_but_keeps_manual_copy_when_subtitles_change(
             "postMetadataRevisionHash": generation_input.revision_hash,
         },
     )
-
-    if post_metadata_source == "codex":
-        assert response.status_code == 422
-        saved_review = load_subtitle_review(
-            subtitle_review_output_path(title_hook_api["storage"].job_outputs(title_hook_api["job_id"]))
-        )
-        assert saved_review == review
-        return
 
     assert response.status_code == 200
     saved = next(item for item in response.json()["clips"] if item["id"] == "short_1")
@@ -802,8 +794,10 @@ def test_posting_set_generated_from_unsaved_subtitles_survives_confirmation_and_
     assert posting["youtubeTags"] == saved["youtubeTags"]
 
 
-def test_apply_rejects_codex_posting_copy_already_stale_before_save(
+@pytest.mark.parametrize("change_subtitle", [False, True])
+def test_apply_preserves_stale_codex_copy_as_manual_without_blocking_save(
     title_hook_api: dict[str, Any],
+    change_subtitle: bool,
 ) -> None:
     review = title_hook_api["review"]
     short = next(item for item in review.clips if item.id == "short_1")
@@ -812,6 +806,8 @@ def test_apply_rejects_codex_posting_copy_already_stale_before_save(
         {"segmentId": segment_id, "text": segment_by_id[segment_id].text}
         for segment_id in short.segment_ids
     ]
+    if change_subtitle:
+        unchanged_drafts[0]["text"] = "修正した字幕"
 
     response = title_hook_api["client"].post(
         f"/api/jobs/{title_hook_api['job_id']}/subtitle-review/clips/short_1/apply",
@@ -824,15 +820,25 @@ def test_apply_rejects_codex_posting_copy_already_stale_before_save(
             "titleCandidates": [],
             "youtubeDescription": "説明欄",
             "youtubeHashtags": ["#切り抜き"],
+            "youtubeTags": ["保存するタグ"],
             "postMetadataSource": "codex",
             "postMetadataRevisionHash": "f" * 64,
         },
     )
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == (
-        "AI proposal is stale; regenerate it from the current subtitles"
-    )
+    assert response.status_code == 200, response.text
+    saved = next(item for item in response.json()["clips"] if item["id"] == "short_1")
+    assert saved["publicationTitle"] == "公開用タイトル"
+    assert saved["hookText"] == "冒頭フック"
+    assert saved["youtubeDescription"].startswith("説明欄")
+    assert saved["youtubeTags"] == ["保存するタグ"]
+    assert saved["postMetadataSource"] == "manual"
+    assert saved["postMetadataRevisionHash"] is None
+    assert saved["titleCandidates"] == []
+    assert saved["descriptionEvidenceSegmentIds"] == []
+    if change_subtitle:
+        segment = next(item for item in response.json()["segments"] if item["id"] == unchanged_drafts[0]["segmentId"])
+        assert segment["text"] == "修正した字幕"
 
 
 def test_apply_rehydrates_evidence_ids_from_ready_codex_artifact(

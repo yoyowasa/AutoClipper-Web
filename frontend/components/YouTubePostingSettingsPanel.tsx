@@ -43,6 +43,17 @@ export function YouTubePostingSettingsPanel({
             onChange={(event) => onChange({ ...settings, channelName: event.target.value })} />
         </label>
         <label className="text-[11px] font-bold text-[#4b4b47]">
+          ぶいすぽっ！許諾番号
+          <input
+            className={inputClassName}
+            disabled={disabled}
+            maxLength={80}
+            placeholder="入力すると説明欄の元配信の上に表示"
+            value={profile.vspoPermissionNumber ?? ""}
+            onChange={(event) => updateProfile({ vspoPermissionNumber: event.target.value })}
+          />
+        </label>
+        <label className="text-[11px] font-bold text-[#4b4b47]">
           元配信タイトル
           <input
             className={inputClassName}

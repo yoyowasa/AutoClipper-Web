@@ -198,3 +198,34 @@ body {
   .subtitle-review-grid[data-clip-type="short"] .subtitle-content-suggestions { overflow: visible; overscroll-behavior-y: auto; }
   .subtitle-review-grid[data-clip-type="short"] .subtitle-review-editors[data-tab="style"] > .subtitle-content-editor { display: none; }
 }
+
+/* Keep format selection with the narrow clip sidebar. */
+@media (min-width: 1280px) {
+  .subtitle-review-screen .subtitle-review-grid {
+    grid-template-columns: clamp(150px, 8vw, 190px) minmax(0, 1fr) clamp(290px, 16vw, 360px);
+  }
+  .subtitle-review-clips > [role="tablist"] { flex-shrink: 0; }
+  .subtitle-review-clips > div > :first-child,
+  .subtitle-review-clips > div > :last-child { flex-shrink: 0; }
+  .subtitle-review-clips button { overflow-wrap: anywhere; }
+  .subtitle-review-screen .subtitle-review-grid[data-clip-type="normal"] {
+    grid-template-columns: clamp(150px, 8vw, 190px) clamp(290px, 19vw, 400px) minmax(0, 1fr) clamp(290px, 16vw, 360px);
+    grid-template-rows: minmax(0, 1fr) clamp(280px, 30dvh, 390px);
+  }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-review-clips { grid-row: 1 / 3; }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-review-editors {
+    display: contents;
+  }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-review-player { grid-column: 3; grid-row: 1; }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-review-captions { grid-column: 4; grid-row: 1 / 3; }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-editor-tabs { display: none; }
+  .subtitle-review-screen .subtitle-review-grid[data-clip-type="normal"] .subtitle-review-editors > .subtitle-content-editor { display: block; grid-column: 2; grid-row: 1 / 3; overflow-y: auto; border-right: 1px solid #d4d4d4; }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-content-fields,
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-content-suggestions { overflow: visible; }
+  .subtitle-review-screen .subtitle-review-grid[data-clip-type="normal"] .subtitle-review-editors > section { display: grid; grid-column: 3; grid-row: 2; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: hidden; border-top: 1px solid #d4d4d4; }
+  .subtitle-review-screen .subtitle-review-grid[data-clip-type="normal"] .subtitle-review-editors > section > div { min-height: 0; overflow-y: auto; border-right: 1px solid #d4d4d4; }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-video-area { padding: 4px; container-type: size; justify-content: center; background: #000; }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-video-chrome { max-width: none; width: min(100%, calc((100cqh - 114px) * 16 / 9)); align-self: flex-start; }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-video-fit { flex: none; background: transparent; }
+  .subtitle-review-grid[data-clip-type="normal"] .subtitle-video-fit > div { width: 100%; height: auto; aspect-ratio: 16 / 9; }
+}

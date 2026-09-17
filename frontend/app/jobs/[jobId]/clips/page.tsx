@@ -65,8 +65,9 @@ type TranscriptPreview = ClipBoundaryDraft & {
   segments: ClipPlanTranscriptSegment[];
 };
 
-function reselectionPayload(settings: ClipSettings): ClipPlanReselectionRequest {
+function reselectionPayload(settings: ClipSettings, excludePreviousSelection: boolean): ClipPlanReselectionRequest {
   return {
+    excludePreviousSelection,
     normalClipSelectionPreset: settings.normalClipSelectionPreset,
     shortClipSelectionPreset: settings.shortClipSelectionPreset,
     normalClipGuidance: settings.normalClipGuidance,
@@ -86,6 +87,13 @@ export default function ClipPlanReviewPage() {
   const [plan, setPlan] = useState<ClipPlanDocument | null>(null);
   const [draftSettings, setDraftSettings] = useState<ClipSettings | null>(null);
   const [selectedClipId, setSelectedClipId] = useState("");
+  const [excludePreviousSelection, setExcludePreviousSelection] = useState(true);
+  const [keptClipIds, setKeptClipIds] = useState<string[]>([]);
+  const remainingReselectionCount = plan ? (["normal", "short"] as const).reduce((total, kind) => {
+    const existing = plan.clips.filter(clip => clip.type === kind);
+    const requested = kind === "normal" ? plan.settings.normalClipCount : plan.settings.shortCount;
+    return total + Math.max(requested ?? 0, existing.length) - existing.filter(clip => keptClipIds.includes(clip.id)).length;
+  }, 0) : 0;
   const [job, setJob] = useState<JobStatusResponse | null>(null);
   const [isReselecting, setIsReselecting] = useState(false);
   const [isAdjusting, setIsAdjusting] = useState(false);
@@ -160,6 +168,8 @@ export default function ClipPlanReviewPage() {
           return;
         }
         setPlan(document);
+        setKeptClipIds(Array.isArray(document.settings.keptClipIds)
+          ? document.settings.keptClipIds.filter((id: unknown): id is string => typeof id === "string" && document.clips.some(clip => clip.id === id)) : []);
         setDraftSettings(document.settings);
         setSelectedClipId(document.clips[0]?.id ?? "");
         setPreviewPlayheadSourceTime(
@@ -589,7 +599,8 @@ export default function ClipPlanReviewPage() {
     setError(null);
     setIsReselecting(true);
     try {
-      await reselectClipPlan(jobId, reselectionPayload(draftSettings));
+      await reselectClipPlan(jobId, { ...reselectionPayload(draftSettings, excludePreviousSelection),
+        keptClipIds: keptClipIds.filter(id => plan?.clips.some(clip => clip.id === id)) });
       setJob((current) =>
         current
           ? {
@@ -734,6 +745,7 @@ export default function ClipPlanReviewPage() {
             {plan.clips.map((clip) => {
               const selected = clip.id === selectedClipId;
               return (
+                <div key={clip.id}>
                 <button
                   className={`block w-full border-b border-neutral-200 px-4 py-4 text-left ${
                     selected
@@ -768,6 +780,13 @@ export default function ClipPlanReviewPage() {
                     {formatTime(clip.duration)}
                   </span>
                 </button>
+                <label className="flex items-center gap-2 border-b border-neutral-300 bg-sky-50 px-4 py-2 text-xs font-semibold">
+                  <input type="checkbox" checked={keptClipIds.includes(clip.id)} disabled={controlsDisabled}
+                    onChange={event => setKeptClipIds(current => event.target.checked
+                      ? [...current, clip.id] : current.filter(id => id !== clip.id))} />
+                  この候補をキープ
+                </label>
+                </div>
               );
             })}
           </div>
@@ -921,6 +940,16 @@ export default function ClipPlanReviewPage() {
             </summary>
             <div className="mt-3">
               <h2 className="mt-1 text-lg font-semibold">狙う場面を調整</h2>
+              <p className="mt-2 text-sm font-semibold text-sky-800">
+                {plan.clips.filter(clip => keptClipIds.includes(clip.id)).length}本キープ・
+                {remainingReselectionCount}本を再選定
+              </p>
+              <label className="mt-3 flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={excludePreviousSelection} disabled={controlsDisabled}
+                  onChange={event => setExcludePreviousSelection(event.target.checked)} />
+                これまでの候補を避けて選ぶ
+              </label>
+              <p className="mt-1 text-xs text-neutral-600">ONではこのジョブで提示済みの区間を除外します。同じ場所も選び直す場合はOFFにしてください。</p>
               <p className="mt-2 text-sm leading-6 text-neutral-600">
                 保存済みの文字起こし・音声・映像解析を使うため、動画の再アップロードや再文字起こしは行いません。
               </p>
@@ -997,13 +1026,13 @@ export default function ClipPlanReviewPage() {
 
             <button
               className="mt-4 min-h-11 w-full border border-neutral-950 bg-white px-4 text-sm font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={controlsDisabled}
+              disabled={controlsDisabled || remainingReselectionCount === 0}
               type="button"
               onClick={() => void handleReselect()}
             >
               {isReselecting
                 ? job?.currentStep || "再選定中"
-                : "この条件でもう一度選ぶ"}
+                : `キープ以外の${remainingReselectionCount}本を再選定`}
             </button>
           </details>
 

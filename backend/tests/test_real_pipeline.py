@@ -1156,6 +1156,35 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
         assert stored_job.settings_json["heatmapIntervalMode"] is False
 
 
+    # Keep the short candidate while replacing only the normal candidate.
+    kept_clip = next(clip for clip in revised_plan["clips"] if clip["type"] == "short")
+    kept_preview = client.get(kept_clip["previewVideoUrl"]).content
+    for ids in [["missing"], [clip["id"] for clip in revised_plan["clips"]]]:
+        invalid = client.post(f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+                              json={**reselection_payload(False), "keptClipIds": ids})
+        assert invalid.status_code == 422
+    response = client.post(f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+                           json={**reselection_payload(False), "keptClipIds": [kept_clip["id"]]})
+    assert response.status_code == 202
+    run_clip_plan_reselection(created["jobId"],
+        session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage, dependencies=dependencies)
+    kept_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
+    assert next(clip for clip in kept_plan["clips"] if clip["id"] == kept_clip["id"]) == kept_clip
+    assert client.get(kept_clip["previewVideoUrl"]).content == kept_preview
+    assert len(kept_plan["clips"]) == len(revised_plan["clips"])
+    assert kept_plan["settings"]["keptClipIds"] == [kept_clip["id"]]
+
+    # A missing requested slot must remain selectable even when all visible clips are kept.
+    with next(app.dependency_overrides[get_db]()) as db:
+        stored_job = db.get(Job, created["jobId"])
+        stored_job.settings_json = {**stored_job.settings_json, "shortCount": 2}
+        db.commit()
+    missing_slot_response = client.post(f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+        json={**reselection_payload(False), "keptClipIds": [clip["id"] for clip in kept_plan["clips"]]})
+    assert missing_slot_response.status_code == 202
+
+
 def test_pipeline_falls_back_to_content_candidates_when_heatmap_reference_is_tampered(
     client: TestClient,
 ) -> None:

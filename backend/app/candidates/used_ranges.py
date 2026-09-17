@@ -36,3 +36,19 @@ def merge_ranges(ranges: Sequence[tuple[float, float]]) -> list[tuple[float, flo
         else:
             merged.append((start, end))
     return merged
+
+
+def with_reselection_exclusions(settings: dict[str, Any], previous_plan: Any) -> dict[str, Any]:
+    """Avoid earlier proposals in this job without marking them as exported footage."""
+    if not settings.get("excludePreviousSelection") or previous_plan is None:
+        return settings
+    previous = previous_plan.settings.get("_reselectionExcludedRanges", [])
+    ranges = merge_ranges([
+        *[tuple(item) for item in previous],
+        *[(clip.start, clip.end) for clip in previous_plan.clips if clip.end > clip.start],
+    ])
+    return {
+        **settings,
+        "_reselectionExcludedRanges": ranges,
+        USED_RANGES_SETTING: merge_ranges([*used_ranges(settings), *ranges]),
+    }

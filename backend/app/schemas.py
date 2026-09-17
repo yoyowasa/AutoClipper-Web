@@ -306,6 +306,8 @@ class JobSettings(UploadTextStyles):
     )
     normal_clip_guidance: str = Field(default="", max_length=1000, alias="normalClipGuidance")
     short_clip_guidance: str = Field(default="", max_length=1000, alias="shortClipGuidance")
+    exclude_previous_selection: bool = Field(default=False, alias="excludePreviousSelection", strict=True)
+    kept_clip_ids: list[str] = Field(default_factory=list, max_length=36, alias="keptClipIds")
     normal_clip_time_ranges: list[ClipTimeRange] = Field(
         default_factory=list,
         max_length=12,
@@ -799,6 +801,8 @@ class SubtitleReviewSettingsUpdateRequest(BaseModel):
 
 
 class ClipPlanReselectionRequest(BaseModel):
+    kept_clip_ids: list[str] = Field(default_factory=list, max_length=36, alias="keptClipIds")
+    exclude_previous_selection: bool = Field(default=False, alias="excludePreviousSelection", strict=True)
     normal_clip_selection_preset: ClipSelectionPreset = Field(alias="normalClipSelectionPreset")
     short_clip_selection_preset: ClipSelectionPreset = Field(alias="shortClipSelectionPreset")
     normal_clip_guidance: str = Field(max_length=1000, alias="normalClipGuidance")

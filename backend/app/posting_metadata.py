@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal
@@ -44,6 +45,7 @@ def strip_normal_publication_title_suffix(title: str, *, suffix: str = NORMAL_CL
 
 
 class YouTubePostingProfile(BaseModel):
+    vspo_permission_number: str = Field(default="", max_length=80, pattern=r"^[^\r\n]*$", alias="vspoPermissionNumber")
     performer_name: str = Field(default="", max_length=120, alias="performerName")
     affiliation: str = Field(default="", max_length=160)
     base_hashtags: list[str] = Field(
@@ -172,19 +174,30 @@ def build_youtube_posting_copy(
         hashtags = _unique_strings(
             item if item.startswith("#") else f"#{item}" for item in topic_hashtags
         )[:12]
-    content_description = fallback_description.strip()
+    permission_prefix = "ぶいすぽっ！許諾番号："
+    permission_line = (f"{permission_prefix}{resolved_profile.vspo_permission_number}"
+                       if resolved_profile.vspo_permission_number else "")
+    description_limit = 2000 - (len(permission_line) + 2 if permission_line else 0)
+    content_description = re.sub(
+        rf"(?m)^{re.escape(permission_prefix)}[^\n]*(?:\n\n|\n|$)", "", fallback_description.strip()
+    ).strip()
     # Re-saving an already completed posting set must not duplicate credits.
     fixed_description = "\n\n".join(
         section for section in fixed_description_sections if section not in content_description
     ).strip()
     if content_description and fixed_description:
-        available_length = max(0, 2000 - len(fixed_description) - 2)
+        available_length = max(0, description_limit - len(fixed_description) - 2)
         content_description = content_description[:available_length].rstrip()
     description = "\n\n".join(
         section
         for section in (content_description, fixed_description)
         if section
-    )[:2000].rstrip()
+    )[:description_limit].rstrip()
+    if permission_line:
+        lines = description.splitlines()
+        source_index = next((i for i, line in enumerate(lines) if line in ("元配信：", "元配信:")), len(lines))
+        lines[source_index:source_index] = [permission_line, ""]
+        description = "\n".join(lines).strip()
     return YouTubePostingCopy(
         description=description,
         hashtags=hashtags,

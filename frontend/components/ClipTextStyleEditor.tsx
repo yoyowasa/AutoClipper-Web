@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useEffect, useState } from "react";
+import { SavedColorSwatches } from "./SavedColorSwatches";
 
 import {
   CLIP_TEXT_FONT_GROUPS,
@@ -893,6 +894,8 @@ export function ClipTextStyleEditor({
                     onClick={() => updateStyle({ primaryColor: color })}
                   />
                 ))}
+                <SavedColorSwatches color={style.primaryColor} label="文字色" disabled={disabled}
+                  onSelect={color => updateStyle({ primaryColor: color })} />
               </div>
             </fieldset>
 
@@ -920,6 +923,8 @@ export function ClipTextStyleEditor({
                     onClick={() => updateStyle({ outlineColor: color })}
                   />
                 ))}
+                <SavedColorSwatches color={style.outlineColor} label="内縁の色" disabled={disabled}
+                  onSelect={color => updateStyle({ outlineColor: color })} />
               </div>
             </fieldset>
 
@@ -948,6 +953,8 @@ export function ClipTextStyleEditor({
                     onClick={() => updateStyle({ outerOutlineColor: color })}
                   />
                 ))}
+                <SavedColorSwatches color={style.outerOutlineColor ?? "#FFFFFF"} label="外縁の色" disabled={disabled}
+                  onSelect={color => updateStyle({ outerOutlineColor: color })} />
               </div>
             </fieldset>
           </div>

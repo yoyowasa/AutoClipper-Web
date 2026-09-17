@@ -41,6 +41,31 @@ def make_candidate(
     )
 
 
+@pytest.mark.parametrize("kind", ["short", "normal"])
+def test_preview_restores_character_default_text_styles(tmp_path: Path, kind: str) -> None:
+    def renderer(_input: str | Path, output: str | Path, **kwargs: Any) -> Path:
+        path = Path(output)
+        path.write_bytes(b"preview")
+        return path
+
+    result = render_exact_subtitle_review_preview(
+        tmp_path / "source.mp4", tmp_path / "job",
+        candidate=make_candidate("styled", kind),
+        transcript_segments=[TranscriptSegment(start=10, end=12, text="test")],
+        settings={"burnSubtitles": True, **{
+            f"{kind}{role}Style": {"fontName": "Noto Sans CJK JP", "fontSize": size,
+                                  "primaryColor": "#FF4040"}
+            for role, size in [("Title", 81), ("Hook", 73), ("Subtitle", 67)]
+        }},
+        source_fingerprint="styled-source", source_width=1920, source_height=1080,
+        normal_renderer=renderer, short_renderer=renderer,
+    )
+    ass = result.subtitle_path.read_text(encoding="utf-8-sig")
+    for role, size in [("Title", 81), ("Hook", 73), ("Subtitle", 67)]:
+        assert f"Style: {role},Noto Sans CJK JP,{size}," in ass
+    assert result.path.is_file()
+
+
 def test_per_clip_layout_overrides_defaults_without_changing_other_preview_specs() -> None:
     candidate = make_candidate("short-layout", "short")
     args = dict(

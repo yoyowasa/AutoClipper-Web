@@ -15,7 +15,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.title_fallback import candidate_with_title, resolve_candidate_title
 from app.render.render_normal import render_normal_clip
 from app.render.render_short import (
@@ -519,7 +519,11 @@ def render_exact_subtitle_review_preview(
 
     try:
         if not exact_cached:
-            layout = SubtitleLayout(**dict(render_settings["layout"]))
+            layout_values = dict(render_settings["layout"])
+            for key in ("default_title_style", "default_hook_style", "default_subtitle_style"):
+                if layout_values.get(key) is not None:
+                    layout_values[key] = ClipTextStyle.model_validate(layout_values[key])
+            layout = SubtitleLayout(**layout_values)
             ass_candidate = (
                 resolved_candidate
                 if burn_subtitles

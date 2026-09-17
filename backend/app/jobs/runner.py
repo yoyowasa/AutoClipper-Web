@@ -101,6 +101,7 @@ from app.candidates.select_candidates import (
 )
 from app.candidates.title_fallback import titled_candidates
 from app.config import get_settings
+from app.jobs.reselection_keep import prepare_kept_candidates, merge_kept_candidates
 from app.db import SessionLocal
 from app.ids import make_id
 from app.jobs.clip_plan import (
@@ -198,7 +199,7 @@ from app.jobs.title_hook_suggestions import (
     title_hook_suggestions_path,
 )
 from app.models import ExportItem, Job, Video, utc_now
-from app.candidates.used_ranges import overlaps_used, unused_items, used_ranges
+from app.candidates.used_ranges import overlaps_used, unused_items, used_ranges, with_reselection_exclusions
 from app.source_clip_history import (
     SourceTimelineChanged,
     record_completed_exports,
@@ -3348,9 +3349,15 @@ def _prepare_clip_plan_review(
     job_dir: Path,
     preview_renderer: Callable[..., Path],
     source_duration: float,
+    kept_plan: Any = None,
 ) -> Path:
     selected = [*selection.normal_clips, *selection.shorts]
     if not selected:
+        if settings.get("_reselectionExcludedRanges"):
+            raise PipelineExpectedError(
+                "reselection_no_alternatives",
+                "これまでの候補以外に条件を満たす場面が見つかりませんでした。前の候補を保持しています。狙う場面や長さを変えるか、候補を避ける設定をOFFにしてください。",
+            )
         raise PipelineExpectedError(
             "no_usable_selection",
             "Pipeline completed analysis but selection produced no usable clips.",
@@ -3364,6 +3371,11 @@ def _prepare_clip_plan_review(
         source_duration=source_duration,
     )
     output_path = clip_plan_output_path(job_dir)
+    if kept_plan is not None:
+        kept_ids = set(settings.get("keptClipIds", []))
+        kept_by_id = {clip.id: clip for clip in kept_plan.clips if clip.id in kept_ids}
+        document.clips = [kept_by_id[clip.id].model_copy(deep=True) if clip.id in kept_by_id else clip
+                          for clip in document.clips]
     write_clip_plan(document, output_path)
     total = len(selected)
     _set_clip_plan_preview_progress(db, job, completed=0, total=total)
@@ -5637,6 +5649,11 @@ def run_clip_plan_reselection(
                 heatmap_summary,
             )
             settings = _settings_with_source_history(db, job, video, storage_paths)
+            settings = with_reselection_exclusions(settings, previous_plan)
+            full_reselection_settings = dict(settings)
+            previous_selection = (CandidateSelection.model_validate(_read_json_file(job_dir / "selected_clips.json"))
+                                  if settings.get("keptClipIds") else CandidateSelection())
+            settings, kept_candidates = prepare_kept_candidates(settings, previous_plan, previous_selection)
             normal_manual_ranges = manual_ranges_for_type(settings, "normal")
             short_manual_ranges = manual_ranges_for_type(settings, "short")
             automatic_settings = automatic_selection_settings(
@@ -5872,6 +5889,15 @@ def run_clip_plan_reselection(
                 scored_candidates,
                 transcript_segments,
             )
+            if kept_candidates:
+                if not automatic_selection.normal_clips and not automatic_selection.shorts and not manual_candidates:
+                    raise PipelineExpectedError(
+                        "reselection_no_alternatives",
+                        "キープ以外の新しい候補が見つかりませんでした。前の候補を保持しています。",
+                    )
+                selection = merge_kept_candidates(selection, kept_candidates, previous_plan)
+                scored_candidates = [*scored_candidates, *kept_candidates]
+            settings = full_reselection_settings
             write_candidates(
                 scored_candidates,
                 job_dir / "scored_candidates.json",
@@ -5919,6 +5945,7 @@ def run_clip_plan_reselection(
                 transcription_diagnostics=transcript_summary.get("transcription_runtime"),
             )
             _prepare_clip_plan_review(
+                kept_plan=previous_plan,
                 db=db,
                 job=job,
                 input_path=input_path,
