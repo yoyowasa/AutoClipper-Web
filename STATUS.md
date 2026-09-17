@@ -10071,3 +10071,11 @@ pip check: pass
 - 検証: backend全体1128 passed / 1 skipped / 1 failed。失敗は許諾番号追加に伴う既存テスト期待値で、修正後の対象テスト1 passed。ruff成功。frontend typecheck / lint / build成功。Docker各サービス稼働確認。
 - 追加変更: backend/tests/test_api_routes.pyの保存プロフィール期待値に空の許諾番号を追加。
 - ローカル画像・storage配下の作業データはPUSH対象外。
+
+
+## 2026-09-18 JST タイトル・フック生成プロンプトの試用
+- 目的: 新旧の比較と個別取消が可能な形でPUSHする。
+- 変更ファイル: backend/app/scoring/title_hook_suggestions.py。
+- 内容: ユーザー編集のSYSTEM_PROMPTとv7を保存。lint対応の改行のみ調整。
+- 検証: 関連テスト51 passed、対象ruff成功。生成品質の実機比較は未実施。
+- 運用: codex/task-141-prompt-trialで試用。main未反映。連携プロセス修正とローカル画像はこのコミットに含めない。

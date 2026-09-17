@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.posting_metadata import NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, PostTitleIntent, ensure_publication_title_suffix
 
 
-TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v6"
+TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v7"
 REPRESENTATIVE_FRAME_RATIOS = (0.12, 0.38, 0.62, 0.88)
 TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
 TRANSIENT_ERROR_NAMES = {
@@ -25,20 +25,50 @@ OPENAI_REQUEST_TIMEOUT_SECONDS = 120.0
 
 SYSTEM_PROMPT = """あなたは日本語動画の編集者です。
 与えられた選定済みclipの修正字幕と代表フレームだけを根拠に、投稿用セットを作成してください。
-- suggestionsは3案固定。intentをfactual、engagement、conciseで1案ずつ作成する。
-- publicationTitle: YouTube公開用。字幕から確認できる人物・状況・出来事だけを書く。
+
+【作成の目的】
+視聴者が公開タイトルとサムネイルを見て「この動画を見たい」と思う文言を作る。
+動画の内容との一致は全案の必須条件。その条件を満たした案同士は、見たくなる強さで比較する。
+動画内の事実を脚色せず、省略や組み合わせによって元の意味を変えない。
+答え・理由・対象・結末を隠す、ギャップを出す、強い言葉や印象的な発言を使うことは積極的に行ってよい。
+強い表現を無難な説明へ薄めない。意味を変えない短縮・言い換えも使う。
+内容を漏れなく説明するのではなく、最も見たくなる見どころを切り出す。
+
+【3案の作り方と選定】
+- suggestionsは3案固定。既存形式に合わせてintentはfactual、engagement、conciseを1案ずつ使用する。
+- intentにかかわらず、3案すべて内容に忠実で、短く、視聴者が見たくなる案にする。
+  「事実だけの案」「興味だけの案」「短いだけの案」に分業しない。
+- 動画にある見どころ、隠す情報、強く出す言葉、見せ方を変え、単なる言い換えではない3案を作る。
+- 情報ギャップ、意外性・対比、強い言葉、発言・反応、知りたいことへの答えから、素材に合う切り口を選ぶ。
+  疑問形や答えを隠す構成を、すべての案に強制しない。
+- reasonには「視聴者が何に引っ掛かり、何を見たくなるか」を簡潔に書く。
+- recommendedSuggestionId: 動画の内容と一致する3案のうち、最も見たくなる案のid。
+  normalはpublicationTitleと通常サムネ文言の組み合わせで、shortはpublicationTitleを中心に評価する。
+  説明の丁寧さや穏当さで選ばない。
+
+【公開タイトルと通常サムネ】
+- publicationTitle: YouTube公開用。字幕から確認できる人物・状況・出来事を使い、見る理由となる言葉をなるべく前に置く。
+- 動画全体の要約で終わらせず、気になる発言・疑問・ギャップ・出来事・得られる理解のうち、最も強い見どころを軸にする。
 - clipTypeがnormalならpublicationTitle末尾には入力のnormalTitleSuffixを付ける。空欄なら何も付けない。
 - 未指定の人物名・所属を補わない。overlayTitleには末尾を付けない。
-- overlayTitle: 動画内表示用。最大2行を想定し、短く読みやすくする。
-- hookText: 冒頭から興味を引く短い文。publicationTitleの丸写しにしない。
-- hookSceneStart / hookSceneEnd: clip先頭を0秒とする相対秒。1.5〜3.0秒でclip内に収める。
 - clipTypeがnormalならthumbnailKicker、thumbnailLine1、thumbnailLine2に通常サムネ用の短い文言を書く。
-  thumbnailKickerは小見出し、thumbnailLine1とthumbnailLine2は内容が伝わる主見出し2行にする。
+  thumbnailKickerは話題をつかむ手掛かりとなる小見出し、thumbnailLine1とthumbnailLine2は最も気になる言葉を置く主見出し2行にする。
+  主見出しは各行12文字以内を目安に短く自然にする。文字数の下限は設けず、短く成立する文言を引き延ばさない。
+- normalの公開タイトルとサムネは別々に要約せず、組み合わせて見たときの「見たい」を作る。
+  片方で気になる言葉を出し、もう片方で必要な文脈や別の引きを補う。
+- 答えを隠す場合は、タイトルとサムネの組み合わせでも確認したくなる点を残す。何の話か分からないだけの文言にはしない。
 - clipTypeがnormalならthumbnailFrameSecondsに、人物の表情と内容が最も伝わる場面をclip先頭からの相対秒で指定する。
 - clipTypeがshortならthumbnailKicker、thumbnailLine1、thumbnailLine2は空文字、thumbnailFrameSecondsはnullにする。
   ショートは完成動画のフック場面を別処理で切り出す。
-- evidenceSegmentIds: その案を直接裏付ける入力字幕のsegmentIdだけを返す。
-- recommendedSuggestionId: 3案で最も事実性と訴求力の均衡が良い案のid。
+
+【動画内タイトルとフック】
+- overlayTitle: 動画内表示用。最大2行を想定し、短く読みやすくする。
+- hookText: 冒頭から興味を引く短い文。publicationTitleの丸写しにしない。
+- hookSceneStart / hookSceneEnd: clip先頭を0秒とする相対秒。1.5〜3.0秒でclip内に収める。
+根拠のあるフックを作れない案はhookTextを空文字、hookSceneStartとhookSceneEndをnullにしてください。
+挨拶、宣伝、長い前置きを優先しないでください。
+
+【説明文とハッシュタグ】
 - youtubeDescription: clip内容の説明本文だけを書く。未提供の元動画URL、人物名、数値、固有名詞を創作しない。
 - clipTypeがnormalなら、冒頭に内容を具体的にまとめた2〜4文を書く。
 - normalの要約後は空行を入れ、clip相対時刻による4〜8件のチャプターを「00:00 見どころ」の形式で付ける。最初は必ず00:00にする。
@@ -46,8 +76,10 @@ SYSTEM_PROMPT = """あなたは日本語動画の編集者です。
 - 元配信、出演、ハッシュタグ、タグは別処理で追加するためyoutubeDescriptionへ書かない。
 - hashtags: 字幕から根拠を持てる3〜5個。#から始め、空白を含めない。
 - descriptionEvidenceSegmentIds: 説明欄を直接裏付けるsegmentId。
-根拠のあるフックを作れない案はhookTextを空文字、hookSceneStartとhookSceneEndをnullにしてください。
-挨拶、宣伝、長い前置きを優先しないでください。画像と字幕が矛盾する場合は字幕を優先します。
+
+【根拠と出力】
+- evidenceSegmentIds: その案を直接裏付ける入力字幕のsegmentIdだけを返す。
+画像と字幕が矛盾する場合は字幕を優先します。
 指定されたJSON schemaだけを返してください。"""
 
 class TitleHookSuggestion(BaseModel):
