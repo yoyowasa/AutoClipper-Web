@@ -1150,3 +1150,75 @@ def test_launcher_desktop_entrypoint_auto_starts_recommended_profile() -> None:
 
     assert 'lambda: self.controller.start(profile="recommended")' in app_source
     assert "Docker DesktopとAutoClipperを自動起動します" in app_source
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object lifetime regression")
+def test_background_bridge_survives_parent_job_close(tmp_path: Path) -> None:
+    import ctypes
+    import ctypes.wintypes as w
+    import subprocess
+    import time
+    from launcher.codex_bridge import process_is_running
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateJobObjectW.argtypes = [ctypes.c_void_p, w.LPCWSTR]
+    kernel.CreateJobObjectW.restype = w.HANDLE
+    kernel.SetInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD]
+    kernel.AssignProcessToJobObject.argtypes = [w.HANDLE, w.HANDLE]
+    kernel.CloseHandle.argtypes = [w.HANDLE]
+    kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
+    kernel.OpenProcess.restype = w.HANDLE
+    kernel.TerminateProcess.argtypes = [w.HANDLE, w.UINT]
+    job = kernel.CreateJobObjectW(None, None)
+    limits = ctypes.create_string_buffer(144)
+    ctypes.c_uint32.from_buffer(limits, 16).value = 0x2000  # KILL_ON_JOB_CLOSE
+    assert kernel.SetInformationJobObject(job, 9, limits, len(limits))
+    gate = tmp_path / "start"
+    marker = tmp_path / "child.pid"
+    child = tmp_path / "child.py"
+    child.write_text("import os,time;from pathlib import Path;Path(" + repr(str(marker)) + ").write_text(str(os.getpid()));time.sleep(120)")
+    parent_script = tmp_path / "parent.py"
+    parent_script.write_text(
+        "import sys,time;from pathlib import Path\n"
+        + "sys.path.insert(0," + repr(str(ROOT)) + ")\n"
+        + "from launcher.controller import start_background_process\n"
+        + "while not Path(" + repr(str(gate)) + ").exists():time.sleep(.05)\n"
+        + "start_background_process([sys.executable," + repr(str(child)) + "],Path(" + repr(str(ROOT)) + "))\n"
+        + "time.sleep(120)\n"
+    )
+    parent = subprocess.Popen([sys.executable, str(parent_script)], creationflags=subprocess.CREATE_NO_WINDOW)
+    pid = None
+    try:
+        assert kernel.AssignProcessToJobObject(job, w.HANDLE(int(parent._handle)))
+        gate.touch()
+        deadline = time.monotonic() + 30
+        while not marker.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        pid = int(marker.read_text())
+        assert process_is_running(pid)
+        kernel.CloseHandle(job)
+        job = None
+        parent.wait(timeout=10)
+        time.sleep(.2)
+        assert process_is_running(pid), "background bridge inherited caller lifetime"
+    finally:
+        if job:
+            kernel.CloseHandle(job)
+        if parent.poll() is None:
+            parent.kill()
+        parent.wait(timeout=10)
+        if pid:
+            handle = kernel.OpenProcess(1, False, pid)
+            if handle:
+                kernel.TerminateProcess(handle, 0)
+                kernel.CloseHandle(handle)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows WMI start")
+@pytest.mark.parametrize("stdout", ['{"returnValue":2,"processId":0}', '[]', 'not-json'])
+def test_detached_start_failure_is_reported_without_subprocess_output(tmp_path, monkeypatch, stdout):
+    import subprocess
+    monkeypatch.setattr(launcher_controller.subprocess, "run", lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout, "private-output"))
+    with pytest.raises(OSError, match="detached_process_start") as error:
+        launcher_controller.start_background_process([sys.executable, "bridge.py"], tmp_path)
+    assert "private-output" not in str(error.value)

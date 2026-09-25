@@ -21,6 +21,8 @@ from typing import Any, Iterator
 
 
 BRIDGE_PROTOCOL_VERSION = 1
+CODEX_MODEL = "gpt-5.6-sol"
+CODEX_REASONING_EFFORT = "high"
 BRIDGE_DIRNAME = "codex_bridge"
 REQUEST_TASK = "title_hook_suggestions"
 INITIAL_CLIP_TOPIC_SELECTION_TASK = "initial_clip_topic_selection"
@@ -389,7 +391,20 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
         encoding="utf-8",
     )
-    os.replace(temporary, path)
+    try:
+        for attempt in range(8):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def read_json_object(
@@ -759,8 +774,10 @@ def build_codex_command(
         ]
     for feature in DISABLED_CODEX_FEATURES:
         command.extend(["--disable", feature])
-    if request.model:
-        command.extend(["--model", request.model])
+    # Apply the same policy to new requests and resumed threads, including legacy inputs.
+    command.extend(
+        ["--model", CODEX_MODEL, "-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"']
+    )
     command.extend(
         [
             "--output-schema",
@@ -1147,6 +1164,23 @@ def recover_processing_requests(paths: BridgePaths) -> None:
             os.replace(processing_path, destination)
 
 
+def record_bridge_error(paths: BridgePaths, phase: str, exc: Exception) -> None:
+    # Never persist exception messages, prompts, subprocess output or local variables.
+    frames = []
+    tb = exc.__traceback__
+    while tb is not None:
+        frames.append({"function": tb.tb_frame.f_code.co_name, "line": tb.tb_lineno})
+        tb = tb.tb_next
+    event = {"at": utc_iso(), "pid": os.getpid(), "phase": phase,
+             "type": type(exc).__name__, "errno": getattr(exc, "errno", None),
+             "winerror": getattr(exc, "winerror", None), "frames": frames}
+    try:
+        with (paths.root / "diagnostics.jsonl").open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(event) + "\n")
+    except OSError:
+        pass
+
+
 def process_pending_requests(
     paths: BridgePaths,
     *,
@@ -1174,13 +1208,17 @@ def process_pending_requests(
             request_id=request_path.stem,
             interval_seconds=status_heartbeat_seconds,
         ):
-            response = process_request_file(
-                processing_path,
-                project_root=project_root,
-                codex_executable=codex_executable,
-                runner=runner,
-                timeout=timeout,
-            )
+            try:
+                response = process_request_file(
+                    processing_path,
+                    project_root=project_root,
+                    codex_executable=codex_executable,
+                    runner=runner,
+                    timeout=timeout,
+                )
+            except Exception as exc:
+                record_bridge_error(paths, "request", exc)
+                response = _failed_response(request_path.stem, "bridge_request_exception")
             atomic_write_json(response_path, response)
             processing_path.unlink(missing_ok=True)
         processed += 1
@@ -1236,6 +1274,8 @@ def _write_status(paths: BridgePaths, state: str, **extra: Any) -> None:
             "bridgeBuildFingerprint": BRIDGE_BUILD_FINGERPRINT,
             "contractFingerprint": BRIDGE_CONTRACT_FINGERPRINT,
             "taskSchemaFingerprints": EXPECTED_RESPONSE_SCHEMA_SHA256,
+            "model": CODEX_MODEL,
+            "reasoningEffort": CODEX_REASONING_EFFORT,
             **extra,
         },
     )
@@ -1327,12 +1367,15 @@ def serve(
         recover_processing_requests(paths)
         _write_request_status(paths, request_id=None, request_state="idle")
         while True:
-            process_pending_requests(
-                paths,
-                project_root=root,
-                runner=runner,
-                timeout=timeout,
-            )
+            try:
+                process_pending_requests(
+                    paths,
+                    project_root=root,
+                    runner=runner,
+                    timeout=timeout,
+                )
+            except Exception as exc:
+                record_bridge_error(paths, "poll", exc)
             if once or paths.stop_request.exists():
                 break
             sleeper(POLL_INTERVAL_SECONDS)

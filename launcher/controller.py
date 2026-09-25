@@ -267,14 +267,38 @@ def start_desktop_application(executable: Path) -> None:
 
 
 def start_background_process(command: Sequence[str], cwd: Path) -> None:
+    if os.name == "nt":
+        # A daemon must outlive the terminal/Codex Job Object that starts it.
+        # CREATE_NO_WINDOW (and breakaway flags under nested jobs) is insufficient.
+        # Local WMI creates it under the Windows provider, with the same user token.
+        powershell = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        script = """
+$ErrorActionPreference = 'Stop'
+$inputData = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ShowWindow=[uint16]0}
+$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=[string]$inputData.command; CurrentDirectory=[string]$inputData.cwd; ProcessStartupInformation=$startup}
+@{returnValue=[int]$result.ReturnValue; processId=[int]$result.ProcessId} | ConvertTo-Json -Compress
+"""
+        try:
+            result = subprocess.run(
+                [str(powershell), "-NoProfile", "-NonInteractive", "-Command", script],
+                input=json.dumps({"command": subprocess.list2cmdline(list(command)), "cwd": str(cwd)}),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            raise OSError("detached_process_start_timeout") from None
+        try:
+            outcome = json.loads(result.stdout.lstrip("\ufeff"))
+        except (ValueError, TypeError):
+            raise OSError("detached_process_start_invalid_response") from None
+        if result.returncode or not isinstance(outcome, dict) or outcome.get("returnValue") != 0 or not outcome.get("processId"):
+            raise OSError("detached_process_start_failed")
+        return
     subprocess.Popen(
-        list(command),
-        cwd=cwd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-        close_fds=True,
+        list(command), cwd=cwd, stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True, close_fds=True,
     )
 
 

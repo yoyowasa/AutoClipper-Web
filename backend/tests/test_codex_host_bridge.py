@@ -22,6 +22,7 @@ from app.candidates.codex_initial_selection import (  # noqa: E402
 from app.scoring.title_hook_suggestions import TITLE_HOOK_GENERATION_SCHEMA  # noqa: E402
 
 from launcher.codex_bridge import (  # noqa: E402
+    ALLOWED_REQUEST_TASKS,
     BRIDGE_BUILD_FINGERPRINT,
     BRIDGE_CONTRACT_FINGERPRINT,
     BRIDGE_PROTOCOL_VERSION,
@@ -197,6 +198,27 @@ def test_resume_codex_command_reuses_thread_with_read_only_override(tmp_path: Pa
     assert 'sandbox_mode="read-only"' in command
     assert command[-2:] == [thread_id, "-"]
     assert "--ephemeral" not in command
+
+
+@pytest.mark.parametrize("task", sorted(ALLOWED_REQUEST_TASKS))
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("model", [None, "gpt-6-astra"])
+def test_all_tasks_use_sol_high_even_for_legacy_threads(
+    tmp_path: Path, task: str, resume: bool, model: str | None,
+) -> None:
+    request = BridgeRequest(
+        request_id="model-policy", task=task, prompt="prompt", image_paths=(),
+        response_schema=TITLE_HOOK_OUTPUT_SCHEMA, thread_scope="job_test",
+        model=model, thread_id=str(uuid.uuid4()) if resume else None,
+    )
+    command = build_codex_command(
+        "codex.exe", request, session_dir=tmp_path,
+        schema_path=tmp_path / "schema.json", output_path=tmp_path / "output.json",
+    )
+    assert command.count("--model") == 1
+    assert command[command.index("--model") + 1] == "gpt-5.6-sol"
+    assert command.count('model_reasoning_effort="high"') == 1
+    assert command[command.index('model_reasoning_effort="high"') - 1] == "-c"
 
 
 def test_process_request_captures_thread_and_structured_output(tmp_path: Path) -> None:
@@ -1055,3 +1077,75 @@ def test_codex_runner_stops_child_when_launcher_requests_stop(tmp_path: Path) ->
 
     assert result.returncode == 130
     assert time.monotonic() - started_at < 3
+
+
+def test_bridge_continues_after_request_exception(tmp_path, monkeypatch):
+    import launcher.codex_bridge as bridge
+    paths = bridge_paths(tmp_path)
+    ensure_bridge_directories(paths)
+    for name in ("request-a", "request-b"):
+        atomic_write_json(paths.requests / f"{name}.json", request_payload(name))
+    seen = []
+    def process(path, **kwargs):
+        seen.append(path.stem)
+        if path.stem == "request-a":
+            raise RuntimeError("secret-do-not-log")
+        return {"state": "ready", "requestId": path.stem}
+    monkeypatch.setattr(bridge, "process_request_file", process)
+    assert process_pending_requests(paths, project_root=tmp_path) == 2
+    assert seen == ["request-a", "request-b"]
+    failure = json.loads((paths.responses / "request-a.json").read_text())
+    assert failure["error"]["code"] == "bridge_request_exception"
+    diagnostic = (paths.root / "diagnostics.jsonl").read_text()
+    assert "RuntimeError" in diagnostic
+    assert "secret-do-not-log" not in diagnostic
+
+
+def test_atomic_write_retries_permission_error(tmp_path, monkeypatch):
+    import launcher.codex_bridge as bridge
+    original = bridge.os.replace
+    attempts = []
+    def replace(source, target):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise PermissionError(13, "locked")
+        original(source, target)
+    monkeypatch.setattr(bridge.os, "replace", replace)
+    monkeypatch.setattr(bridge.time, "sleep", lambda _: None)
+    target = tmp_path / "status.json"
+    atomic_write_json(target, {"state": "ready"})
+    assert json.loads(target.read_text()) == {"state": "ready"}
+    assert len(attempts) == 3
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_atomic_write_preserves_previous_file_after_persistent_lock(tmp_path, monkeypatch):
+    import launcher.codex_bridge as bridge
+    target = tmp_path / "status.json"
+    target.write_text('{"state":"ready"}')
+    def locked(*args):
+        raise PermissionError(13, "locked")
+    monkeypatch.setattr(bridge.os, "replace", locked)
+    monkeypatch.setattr(bridge.time, "sleep", lambda _: None)
+    with pytest.raises(PermissionError):
+        atomic_write_json(target, {"state": "new"})
+    assert json.loads(target.read_text()) == {"state": "ready"}
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_serve_survives_poll_exception(tmp_path, monkeypatch):
+    import launcher.codex_bridge as bridge
+    monkeypatch.setattr(bridge, "find_codex_executable", lambda: "codex.exe")
+    monkeypatch.setattr(bridge, "codex_login_configured", lambda _: True)
+    calls = []
+    def poll(paths, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            raise PermissionError(13, "secret-do-not-log")
+        paths.stop_request.touch()
+    monkeypatch.setattr(bridge, "process_pending_requests", poll)
+    assert serve(tmp_path, sleeper=lambda _: None) == 0
+    assert len(calls) == 2
+    diagnostic = (bridge_paths(tmp_path).root / "diagnostics.jsonl").read_text()
+    assert "PermissionError" in diagnostic
+    assert "secret-do-not-log" not in diagnostic
