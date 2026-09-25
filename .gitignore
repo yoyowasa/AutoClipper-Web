@@ -25,6 +25,8 @@ storage/heatmaps/*
 storage/codex_bridge/*
 storage/fonts/*
 storage/transcripts/*
+storage/banner_assets/*
+storage/qa/*
 storage/*.db
 storage/*.db-*
 storage/.storage-lifecycle.lock
@@ -54,3 +56,6 @@ Thumbs.db
 frontend/public/fonts/GN-KillGothic-U-KanaNB.ttf
 frontend/public/fonts/local/*
 !frontend/public/fonts/local/.gitkeep
+
+# Local thumbnail design source; runtime template uses background.png.
+backend/app/assets/thumbnail_templates/raden_normal_v1/base.png

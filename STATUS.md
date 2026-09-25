@@ -10072,6 +10072,29 @@ pip check: pass
 - 追加変更: backend/tests/test_api_routes.pyの保存プロフィール期待値に空の許諾番号を追加。
 - ローカル画像・storage配下の作業データはPUSH対象外。
 
+## 2026-09-17 通常動画の投稿案生成を復旧
+- 観測: 通常1の投稿案がcodex_title_hook_bridge_unavailableで失敗。Windows側bridgeのstatus更新は14:28 JSTで停止し、記録PIDは存在しなかった。Web/backend/workerは稼働。
+- 対応: LauncherController.ensure_codex_bridge_runningで連携プロセスを復旧。直前の生成入力から字幕修正文を引き継ぎ、同じ通常clipの投稿案だけを再生成。
+- 検証: 連携プロセス稼働、生成完了後idle。投稿案artifactがready、errorなし、3候補を確認。候補採用・字幕確定保存は実施していない。
+- 未確定: 旧連携プロセスの終了理由。現在のin-appタブは取得できず、表示の確認は未実施。
+
+## 2026-09-17 Codex連携の例外停止対策と診断記録
+- 調査: 14:28停止の旧プロセスは消失し、stderrはDEVNULL。該当時刻のApplicationエラー記録なし。過去のstatus一時ファイルは残存するが、今回の終了原因を特定する証拠は残っていない。
+- 再現した欠陥: process_request_fileからの例外が処理ループへ伝播し、後続依頼を処理できない。atomic_write_jsonの一時PermissionErrorに再試行がない。
+- 変更ファイル: launcher/codex_bridge.py、backend/tests/test_codex_host_bridge.py。
+- 修正: 原子的置換を最大8回再試行。失敗時も旧ファイル維持・一時ファイル掃除。依頼単位と監視ループの例外を隔離。diagnostics.jsonlに時刻・PID・例外型・errno・関数/行番号のみ記録し、例外本文・入力・子プロセス出力は保存しない。
+- 検証: 修正前の障害注入2件失敗→修正後43 passed、ruff成功。一時ロック復旧、恒久ロック時の旧ファイル保持、依頼例外後の次依頼処理、監視ループ継続、診断への本文非記録を確認。
+- 稼働反映: bridge idleを確認して既存controllerで再起動。修正版で同じ通常1の投稿案を生成しready・errorなし・3候補を確認。候補採用と字幕保存は実施せず。
+- 未確定: 過去プロセスの直接の終了原因。強制終了・OS終了などPython例外以外は本対策の範囲外。
+
+## 2026-09-17 16:55 JST 連携の親プロセス寿命依存を修正
+- 目的: 正常生成後に連携が消失し、次の投稿案がbridge_unavailableになる再発を解消。
+- 観測: 前回修正版PID42132も消失。最終statusは16:07:32 idle、生成成功は16:07:33。障害診断記録なし。現在の起動元はWindows Job管理下でlimit_flags=0x3000（KILL_ON_JOB_CLOSEを含む）。CREATE_NO_WINDOWだけの既存起動で、親Job終了に伴い子が終了することを実機再現。
+- 変更ファイル: launcher/controller.py、backend/tests/test_windows_launcher.py。前回の例外隔離変更は保持。
+- 修正: Windows常駐プロセスをローカルWMI経由で同一ユーザー・非表示起動し、起動元Jobの寿命から分離。失敗時は安全な固定エラーを返し、元の起動方式へ黙って戻さない。Unixは独立session起動。
+- 検証: 同じKILL_ON_JOB_CLOSE条件で修正前child生存True→False、修正後True→True。自動回帰テストにも追加。関連97 passed、ruff成功。稼働bridgeの親系列はpython→python→WmiPrvSE→svchost。失敗していた通常2を直前の字幕入力で再生成しready・errorなし・3候補を確認。
+- 未確定点: 過去の各終了についてOS側の終了イベントそのものは取得できない。今回の再現で親寿命依存の欠陥と修正効果を確認した。前回の例外対策だけではこの経路を防げなかった。
+
 
 ## 2026-09-18 JST タイトル・フック生成プロンプトの試用
 - 目的: 新旧の比較と個別取消が可能な形でPUSHする。
@@ -10088,6 +10111,116 @@ pip check: pass
 - 検証: 関連テスト51 passed、対象ruff成功。生成品質の実機比較は未実施。
 - 運用: codex/task-141-prompt-trialで試用。main未反映。連携プロセス修正とローカル画像はこのコミットに含めない。
 
+## 2026-09-21 JST Codex選定・生成をSol highに統一
+- 目的: ユーザー指定のgpt-5.6-sol・highを明示し、CLI既定値に依存しない。
+- 変更ファイル: launcher/codex_bridge.py、backend/tests/test_codex_host_bridge.py。
+- 内容: 全4種の依頼で--model gpt-5.6-solとmodel_reasoning_effort="high"を指定。既存threadのresumeと旧model指定にも同じ方針を適用。statusへ実行方針を表示。
+- 検証: 関連113 passed、対象ruff成功。全task×新規/resume×model未指定/旧指定の16条件を確認。idle確認後に連携を再起動しready、model=gpt-5.6-sol、reasoningEffort=highを確認。
+- 未実施: 実動画による新たな生成品質比較。既存の生成結果は変更していない。
+
+## 2026-09-21 JST 画角保存時の動画再生成を停止
+- 目的: ショートの基本配置・位置・倍率を保存するたびに発生する動画再生成待ちをなくす。
+- 原因: framing APIが保存直後にプレビュー更新・キュー投入していた。保存処理だけ除去してもGET時のspec変更判定で再生成される。
+- 変更: backend/app/api/jobs.py、jobs/subtitle_review.py、jobs/subtitle_review_preview.pyで、字幕確認動画の画角を初回変更前の値として保持し、画角保存ではキューへ投入しない。新しい画角はクリップに保存し、画角ガイドと最終書き出しは最新値を使用する。通常クリップにはプレビュー画角の上書きを適用しない。
+- UI: frontend/components/ShortFramingWorkspace.tsx、app/jobs/[jobId]/subtitles/page.tsx、lib/types.ts。画角調整内で即時確認、字幕確認の再生動画は変更前の画角、最終書き出しで反映することを明示。
+- 検証: backend/tests/test_api_routes.pyで既存プレビューのready判定をモックし、保存と再GETでhash不変・キュー投入なし、1本/5本で他clip保持、最終出力用Candidateに最新値が渡ることを確認。API/字幕関連129 passed、最終微修正後の対象3 passed、ruff・frontend typecheck/lint/build成功。
+- 未確認: 実動画の最終書き出し映像比較。既存ユーザーclipの設定変更や書き出しは検証では行っていない。
+- 稼働反映: 最初のDocker build成功後、最終修正の再build中にEngine接続EOF・VM health timeoutが発生。通常再起動も停止timeout。Docker停止後、runとdocker-secrets-engineの一時socketディレクトリを.stale-20260921-*へ退避して復旧（削除・factory resetなし、直接のEngine停止原因は未確定）。
+- 復旧検証: 成功済みimageへ最終3ファイルを追加して起動。backend/workerの対象3ファイルSHA256が作業ツリーと一致。4サービス稼働、backend healthy、/healthと/upload HTTP200、CUDA device 1、キュー0・処理中0。画角変更による再生成停止は上記回帰テストで確認し、実ユーザー動画の画角値はテストで変更していない。
+
+## 2026-09-21 JST URLによる文字起こし設定の意図しない低下を修正
+- 原因: frontend/app/upload/page.tsxはruntimeProfile=gpuのURL指定だけでturbo/cuda/float16を初期化し、通常の/uploadではbase/cpu/autoに戻っていた。表示は「自動判定」で、実際の環境取得はなかった。最新job_d027eb1db7734c67961d960f27a585bdのtranscript_summary.jsonはbase/cpu/int8、直前job_1f9ef099d1ed4aa095610026427a5dddはturbo/cuda/float16を記録。
+- 変更ファイル: backend/app/main.py、docker-compose.gpu.yml、frontend/lib/api.ts、frontend/app/upload/page.tsx、backend/tests/test_api_routes.py、frontend/tests/runtimeProfile.test.ts。
+- 修正: APIが稼働profileを返し、GPU composeでbackendにもgpuを設定。URLに依存せず初期値を取得。取得失敗は開始を禁止し再読み込みを案内。初期設定完了後にキャラ設定を読み込み、暫定CPU値の書き戻しも防ぐ。
+- 検証: APIのCPU/GPUとURL指定の独立性2件成功。frontendはGPU値・キャラ読み込み後維持・取得不正/HTTP失敗/通信失敗のテスト成功。実画面の/upload（queryなし）でキャラ自動読み込み後turbo/NVIDIA GPU/float16を確認。runtime-profile APIはgpuを返す。
+- 未実施: 既存字幕は上書きせず、再文字起こしはしていない。モデル差による当該音声の誤字率比較は未測定。PUSHなし。
+- 最終検証・反映: frontend typecheck/lint/build成功、修正版frontend imageへ更新し再起動。backend稼働profile APIと画面表示を確認済み。
+
+## 2026-09-21 18:28 JST 画角変更後の編集画面で動画を確認可能に修正
+- 原因: 先の再生成停止では字幕確認の動画を変更前の画角のまま保持し、変更後は調整ダイアログの静止画でしか確認できなかった。編集画面で再生確認する要件を満たしていなかった。
+- 変更ファイル: frontend/components/LiveShortFramingPreview.tsx（追加）、frontend/lib/shortPreviewTime.ts（追加）、frontend/tests/shortPreviewTime.test.ts（追加）、frontend/app/jobs/[jobId]/subtitles/page.tsx、frontend/components/ShortFramingWorkspace.tsx。
+- 内容: 画角変更済みショートでは元動画をブラウザ内で切り取り・配置し、編集プレビューへ合成する。既存動画を音声と再生時計に使い、元動画を無音で同期。上下帯は既存動画から保持、字幕は既存の即時表示を使用。冒頭フック複製分の時刻を考慮。変更前表示へも切り替え可能。動画のサーバー再エンコードは追加しない。
+- 検証: 時刻変換7条件・既存画角geometryテスト成功、frontend lint/typecheck/build成功、git diff --check成功。実job_d027eb1db7734c67961d960f27a585bdのショート2で、人物アップの変更前と全体表示の変更後を画面比較し、変更後で再生・停止・5秒シークを確認。停止時刻22.433419に対し元動画7500.473419、シーク後27.433419に対し7505.473419で区間開始7478.04との一致を確認。帯と字幕を目視確認。ユーザーの保存済み設定・字幕は検証で変更していない。
+- 稼働反映: frontend imageをbuildしfrontendのみ再作成。最終書き出しの実映像比較は本作業では未実施。PUSHなし。
+
+## 2026-09-21 20:07 JST 編集中のDocker停止を復旧
+- 症状: 字幕編集途中にlocalhostのAutoClipper全体が応答しなくなった。Docker API pipeが消失し、backend/frontend/worker/redisが同時停止していた。
+- 原因: Docker Desktop backendは19:56ごろ終了したが、終了理由を示す例外・Windows障害・メモリ枯渇イベントは残っておらず、最初の停止原因は未確定。再起動を妨げた直接原因は、Docker 4.88.1が残存AF_UNIX socket（Docker/run/sailor-ingest.sock、docker-secrets-engine/engine.sock）を削除できず起動時クラッシュしたこと。
+- 復旧: Docker関連プロセスとWSL停止を確認後、該当一時実行ディレクトリを削除せず20260921-200224/200406/200529のstale名へ退避。Docker Desktopを再起動し、GPU composeの4サービスを再開。
+- 検証: Docker Engine 29.7.2応答、backend healthy、frontend /upload HTTP 200、字幕編集画面HTTP 200、worker/redis稼働、RQ queued=0/active=0。job_d027eb1db7734c67961d960f27a585bdはawaiting_review、5 clip中1本確認済みで保存ファイルは破損なく読み込み可能。
+- 保存状態: subtitle_review.jsonの最終保存は2026-09-21 18:29:53 JST。ブラウザ内だけで保持され、保存操作前だった変更の有無はファイルからは確認できない。コード変更・PUSHなし。
+
+## 2026-09-21 AutoClipper × Clip Intelligence 構想 v0.1 既存仕様比較
+
+- 目的: 添付の検討用構想を実装せず、AutoClipper Webと別workspaceのClip Intelligenceの既存仕様・現行コード・実施記録と比較して評価を保存する。
+- 変更ファイル: `docs/AUTOCLIPPER_CLIP_INTELLIGENCE_PLAN_V0_1_EVALUATION_2026-09-21.md`、本ファイル。
+- 評価: 長期ビジョンとしては妥当だが、既存v1へ直接採用する仕様としては保留。現行制作工程の多くは再利用できる一方、映像・原音理解、完成物の独立した意味検査、永続revision、AutoClipperとClip Intelligenceの接続契約、自己改善の安全条件が未確定。
+- 重要事項: 添付文書を実装指示または採用仕様へ昇格していない。コード、設定、DB、runtimeは変更していない。評価開始前からのworking tree変更と未追跡ファイルは保持した。
+- 検証: 添付原文のSHA-256、両workspaceのbranch／HEAD／working tree、AGENTS／README／STATUS、関連schema・artifact・storage cleanup、Clip IntelligenceのData Contract／DB schema／改善追跡を読み取り確認。保存後にMarkdownの末尾空白、改行、repo内参照先、STATUS差分を静的確認し、問題なし。
+- 未解決: 仕様正本の版、Production Record Contract、Clip Intelligence ingestion、映像・原音model比較、品質gate、利用量・保持・権利条件。実装・実素材による新規受入・モデル品質比較は未実施。
+
+## 2026-09-21 AutoClipper × Clip Intelligence 統合目標の解釈更新
+
+- ユーザー確認: 目的は2つのツールを別々に運用することではなく、利用者から見て1つのツールへ統合すること。動画upload後、映像・原音を含む場面選定、字幕修正、動画ごとの書体・色・サイズ・画角・タイトル・フック選定、render、完成物再検査、履歴保存までを正常系では人の操作なしで完走させる。完成物と投稿後実績を次回制作へ反映し、品質を継続改善する。
+- 評価更新: `docs/AUTOCLIPPER_CLIP_INTELLIGENCE_PLAN_V0_1_EVALUATION_2026-09-21.md` の結論を訂正。統合目標をv2製品方向として採用推奨に変更し、1つのjob導線、内部の制作／完成物検査／学習境界、Production Record、完成直後と投稿後の2層学習、例外時の未完了停止を明記した。
+- Pro方針: OpenAI公式のCodex pricing／authentication／non-interactive modeを確認。現行の初期選定と既定のタイトル／フックはChatGPTログインを使う`codex exec`経路。字幕修正、OpenAI候補scoring、任意のOpenAIタイトル／フックproviderは`OPENAI_API_KEY`を使う別課金API経路。現行既定では後者はOFFのため大部分はPro＋ローカルで動くが、目標に必要な意味ベース字幕修正はCodex経路または採用品質のローカル処理へ移す必要がある。
+- 推奨: Pro-first、Platform API既定OFF。利用枠不足時に別課金APIへ黙って切り替えず、jobを安全に待機・再開する。現行の初期選定は字幕＋heatmapで画像0件、タイトル／フックは代表4frame＋字幕で原音・動画本体なし。長尺映像・原音の意味理解は、連続frame、字幕、timecode、ローカル音声特徴を束ねた実素材試作で能力と利用量を確認する。
+- 変更範囲: 評価文書と本記録のみ。コード、設定、DB、runtime、既存jobは変更していない。実装・実素材受入・モデル品質比較は未実施。
+
+## 2026-09-23 AutoClipper × Clip Intelligence 統合構想 v1 大枠合意版を保存
+
+- 目的: AutoClipperとClip Intelligenceを一つの自律型動画制作・成長システムへ統合する長期ビジョンについて、会話で合意した上位方針を仕様検討の基準として保存する。
+- 変更ファイル: `docs/AUTOCLIPPER_CLIP_INTELLIGENCE_INTEGRATED_VISION_V1_2026-09-23.md`、本ファイル。
+- 内容: uploadから映像・原音を含む場面選定、字幕／画角／デザイン／タイトル決定、完成MP4の独立検査と自動修復、自動投稿、無料YouTube APIによる実績収集、次回制作への改善反映までを一つの閉ループとして定義。毎回バズと視聴回数の最大化を狙い、投稿前から数値目標と仮説を持つこと、本数合わせの弱い投稿を行わないことを最上位方針にした。有料契約は基本ChatGPT Proのみ、有料APIと有料fallbackは禁止し、無料API・無料OSS・ローカル処理を許可する。
+- 検証: Markdownの見出し構造、既存評価文書への相対リンク、末尾空白、差分を静的確認し、問題なし。文書保存のみで、コード、設定、DB、runtime、既存jobは変更していない。
+- 未解決事項: 対象チャンネル／ジャンル、数値目標、バズ候補基準、投稿頻度、取得指標、無料API許可リスト、保存期間、実装段階、受入基準。実装、実素材受入、自動投稿、投稿効果の確認は未実施。
+
+## 2026-09-24 JST 編集後ショートの時間上限超過を保存可能に修正
+
+- 症状: 字幕確認でショートへ冒頭フック映像を追加した際、完成尺が設定上限を少し超えると保存APIが422を返し、編集内容を確定できなかった。実jobでは本体73.55秒、上限75秒のため、2秒追加時の完成尺75.55秒が拒否されていた。
+- 原因: 自動選定用のショート上限を、選定済みclipの手動編集後にも必須条件として適用していた。
+- 変更ファイル: `backend/app/jobs/subtitle_review.py`、`backend/tests/test_subtitle_review.py`、`backend/tests/test_api_routes.py`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/components/ClipHookSceneEditor.tsx`、本ファイル。
+- 修正: 字幕確認中の既存ショートでは完成尺上限を警告扱いに変更。冒頭追加は従来どおり0.5〜3秒かつclip内に限定する。自動選定、選定画面、通常からショートへの変換にある上限判定は維持した。
+- 検証: 73.55秒のショートへ2秒追加し、完成尺75.55秒でもapply APIがHTTP 200で保存・確定する回帰テストに成功。subtitle review 21 passed、対象API 2 passed、ruff、frontend typecheck／lint／build、git diff --check成功。
+- 稼働反映: backend／frontend／GPU workerのimageを再build・再作成。backend healthy、API／字幕画面HTTP 200、GPU CUDA稼働、queue 0を確認。backend／worker内の対象PythonファイルSHA-256は作業ツリーと一致。実画面で完成予定75.5秒、上限75.0秒の警告と有効な追加ボタンを確認した。
+- 未確認: 当該ユーザーjobへ変更後の値を保存する実操作は行っていない。既存の編集内容を保護し、実際の保存操作はユーザーに残した。
+
+## 2026-09-24 JST カスタム帯付き再編集のレンダリング失敗を修正
+
+- 症状: 再編集job `job_f07cb7c9ad144bb5ac57c069721bcca9` は確定API受理後も約0.17秒で終了し、出力0本の `no_usable_output` で字幕確認へ戻っていた。
+- 原因: 再編集ではMP4を一時領域へ安全に書き出してから本領域へ昇格するが、カスタム上下帯の入力画像まで一時領域から解決していた。帯画像は共有の `storage/banner_assets` にあるため、FFmpegへ存在しないパスが渡されていた。
+- 変更ファイル: `backend/app/render/render_short.py`、`backend/app/jobs/runner.py`、`backend/tests/test_short_rendering.py`、本ファイル。
+- 修正: 動画・字幕の出力先と帯画像の参照元を分離した。再編集は従来どおり一時領域へ出力し、保存済みのカスタム帯は本来の共有保存領域から読み込む。通常レンダリングの参照規則は維持した。
+- 回帰検証: 出力先を再編集用一時領域、カスタム帯を共有保存領域に置いた条件で、帯画像を正しく解決してMP4を書き出すテストを追加。対象3 passed、字幕確認からの再レンダリング3 passed、再レンダリング昇格・ロールバック14 passed、対象ruff、py_compile、git diff --check成功。
+- 稼働反映: backend／GPU worker imageをbuildして再作成。backend healthyを確認後、同じ再編集jobを再投入し64.8秒でcompleted。1080x1920 H.264/AAC、76.216667秒のMP4、JPEGサムネイル、ZIPを生成し、メタデータで冒頭映像2.66秒・上帯・下帯の描画済みを確認。現在queue 0・実行中0。
+
+## 2026-09-25 JST 長すぎる文字起こし区間と字幕行の追加・削除を修正
+
+- 症状: ASRが約20〜30秒分の発話を1区間へまとめる場合、字幕確認でも長文が1つの編集欄へ詰め込まれ、修正しにくかった。既存UIは区間の結合・分割だけで、空の字幕行追加と不要行の削除ができなかった。
+- 原因: `build_subtitle_review` がASRの各区間をそのまま1つのレビュー行へ変換していた。一方、最終字幕の描画側だけは文字数と表示時間に応じて内部分割していたため、確認画面と完成字幕の単位も一致していなかった。
+- 変更ファイル: `backend/app/jobs/subtitle_review.py`、`backend/app/jobs/subtitle_structure.py`、`backend/app/schemas.py`、`backend/tests/test_subtitle_structure.py`、`frontend/components/SubtitleSegmentActions.tsx`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/lib/types.ts`、本ファイル。
+- 修正: レイアウト上限の2倍を超える長文ASR区間だけを、字幕確認の作成時に表示文字数・表示尺に合わせて複数行へ分割する。通常量の文字起こしは元区間を維持する。字幕編集には指定時刻の前側／後ろ側へ空行を追加する操作と、字幕行を削除して保存する操作を追加した。削除時は元ASRの参照情報を隣接行へ引き継ぎ、最終出力で削除文字が復活しないようにした。
+- 回帰対応: 当初は発話時間だけ長い通常字幕も自動分割したため、冒頭フック区間に隠れて編集字幕が最終ASSから消える回帰を実レンダリング試験が検出した。自動分割条件を実際の文字量が過大な区間に限定し、保存字幕が最終ASSへ残ることを再確認した。
+- 検証: 字幕構造と実レンダリング16 passed、subtitle review／API／字幕構造145 passed、対象ruff、frontend typecheck／lint／build、git diff --check成功。実ユーザーjobの選定内容・字幕は変更していない。
+
+## 2026-09-25 JST 字幕分割・結合後のプレビュー待ちを短縮
+
+- 症状: 字幕行を分割・結合するたびに再生画面が読み込み表示へ戻り、続けて編集すると同じclipの古いプレビュー生成が順番待ちになった。実行中jobでは同じ通常clipの旧仕様が5件キューに残る状態を確認した。
+- 原因: プレビューjob IDは編集内容のhashを含むため、字幕操作ごとに別jobとして追加され、最新内容になっても古い待機jobが削除されなかった。またAPIが新しいプレビューURLを返すまで、画面側は直前の再生可能なプレビューを捨てていた。
+- 変更ファイル: `backend/app/jobs/queue.py`、`backend/tests/test_job_queue.py`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、本ファイル。
+- 修正: 同一job・同一clipのプレビュー投入前に、未開始の旧プレビューjobだけをキューから除去して最新1件へ集約する。workerが取得済みのjobは削除しない。画面は最新プレビュー生成中も直前の再生可能な映像を保持し、保存された分割・結合結果の字幕をブラウザ上で即時反映する。完成表示プレビューは最新内容で引き続きバックグラウンド生成する。
+- 検証: queue単体22 passed、字幕構造／プレビューAPI 3 passed、preview runner 6 passed、対象ruff、frontend typecheck／lint／build、git diff --check成功。実ユーザー字幕を変更する連続操作は行っていない。
+- 稼働反映: backend／GPU worker／frontendをbuildして再作成。backend healthy、字幕編集画面HTTP 200、worker待機・queue 0を確認。worker内のqueue実装SHA-256は作業ツリーと一致し、Chromeの現在の字幕編集画面を再読み込みした。
+
+## 2026-09-25 JST 字幕分割後に保持プレビューが404になる不具合を修正
+
+- 症状: 字幕分割後、直前の再生可能な映像を保持するUIへ変更したにもかかわらず、「完成表示と同じプレビューを読み込めませんでした」が表示され、再読み込みを求められた。
+- 原因: 直前のプレビューMP4と仕様JSONは保存領域に残っていたが、配信APIが現在生成中のspec hashと一致しない要求をファイル確認前に404で拒否していた。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/tests/test_api_routes.py`、本ファイル。
+- 修正: 同じjob・clip配下の保持済みプレビューについて、MP4と仕様JSONが存在し、仕様内容のSHA-256が要求hashと一致する場合はimmutableな過去版として配信する。存在しない過去版は404、現在版が未完成の場合は従来どおり409を返す。
+- 検証: 現在版が別hashで生成待ちの状態でも保持済み過去版をHTTP 200で取得でき、存在しない過去版は404になる回帰テストを追加。API全112 passed、対象ruff成功。
+- 稼働反映: backend imageをbuildしてbackendのみ再作成。healthyを確認し、実jobで以前404だった保持版MP4をRange取得してHTTP 206・1 byte／総138,718,116 bytes、存在しないhashは404を確認。Chromeの字幕編集画面を再読み込みし、エラー表示なし、video errorなし、readyState 4を確認した。ユーザーの字幕・選定・確定状態は変更していない。
+
 ## 2026-09-25 JST ショート用タイトル・フック生成基準を強化
 
 - 目的: 強化済みv7でもショート案に汎用的なフックや説明型タイトルが混ざり、ショートフィード向けの引きが弱い問題を改善する。
@@ -10097,3 +10230,10 @@ pip check: pass
 - 検証: prompt versionとショート専用契約を固定する回帰テストを追加。タイトル／フック、Codex連携関連104 passed、対象ruff、git diff --check成功。
 - 稼働反映: backend／GPU worker imageをbuildして再作成。backend healthy、worker稼働、両containerの対象ファイルSHA-256とprompt version v9が作業ツリーと一致することを確認した。モデルは`gpt-5.6-sol`、reasoning effortは`high`。
 - 実素材確認: 現行jobのショート5本をv9で強制再生成し、全5本がreadyになった。v8で推薦された対象不明フックは、「犯人逮捕で終わるはずだった」「風の描写は、ないの。」のようにclip固有の内容が単体で分かる文言へ変わり、各入力artifactのprompt versionがv9であることを確認した。再提案だけを更新し、字幕・選定範囲・保存済み編集内容は変更していない。
+
+## 2026-09-25 JST 現行仕様と統合後の到達仕様を整理
+
+- 目的: 現行AutoClipper・別アプリのClip Intelligenceと、会話で合意した無人制作・投稿・分析・改善の到達仕様を混同せず提示する。
+- 変更ファイル: `docs/AUTOCLIPPER_CURRENT_AND_TARGET_SPEC_2026-09-25.md`、本ファイル。現行の機能と未達部分、ひとコマ採集からの展開、30日再生目標・月間収益目標、費用制約、レンダラー未採用の位置付けを記録。
+- 検証: 対象コード・設定・AutoClipper/Clip IntelligenceのREADME・AGENTS・既存統合構想を読み取り、文書を照合。文書差分を確認。コード、設定、DB、runtime、既存jobは変更していない。実動画・外部投稿の受入検証は未実施。
+- 未解決: 到達仕様の詳細契約・受入基準、無料APIの取得範囲、代替レンダラーの実測・採否。
