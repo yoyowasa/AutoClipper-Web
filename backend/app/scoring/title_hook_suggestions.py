@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.posting_metadata import NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, PostTitleIntent, ensure_publication_title_suffix
 
 
-TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v7"
+TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v9"
 REPRESENTATIVE_FRAME_RATIOS = (0.12, 0.38, 0.62, 0.88)
 TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
 TRANSIENT_ERROR_NAMES = {
@@ -43,8 +43,33 @@ SYSTEM_PROMPT = """あなたは日本語動画の編集者です。
   疑問形や答えを隠す構成を、すべての案に強制しない。
 - reasonには「視聴者が何に引っ掛かり、何を見たくなるか」を簡潔に書く。
 - recommendedSuggestionId: 動画の内容と一致する3案のうち、最も見たくなる案のid。
-  normalはpublicationTitleと通常サムネ文言の組み合わせで、shortはpublicationTitleを中心に評価する。
+  normalはpublicationTitleと通常サムネ文言の組み合わせで評価する。
+  shortはpublicationTitle、hookText、hookSceneStart / hookSceneEndの組み合わせ全体で評価する。
   説明の丁寧さや穏当さで選ばない。
+
+【ショート専用のタイトル・フック基準】
+clipTypeがshortの場合は、次の基準をすべて適用する。
+- 目的は、ショートフィードで最初の0.3〜1秒に内容を理解させ、続きを見たいと思わせること。
+- 出力前に字幕と代表フレームから少なくとも6つの異なる切り口を内部で比較し、最も強い3案だけを返す。
+  捨てた案や比較過程は出力しない。
+- 3案は単なる言い換えにしない。発言、意外性・対比、疑問・情報ギャップ、感情・反応など、引きの種類を変える。
+- publicationTitleは一読で「誰・何について、何が起きる動画か」が分かる具体語を入れ、強い言葉や発言をなるべく前に置く。
+  目安は28〜45文字。短く成立する場合は引き延ばさず、100文字上限を埋めるための説明を足さない。
+- hookTextは画面に出た瞬間に読める一文にする。目安は8〜24文字で、publicationTitleの要約や言い換えにせず、
+  発言、反応、疑問、対比のいずれかを追加して、タイトルだけでは得られない引きを作る。
+- hookTextはpublicationTitleを見ていない視聴者にも、具体的な対象・行動・発言・対比の少なくとも1つが伝わる文にする。
+  3案すべてに字幕由来の具体語を入れ、感想・指示語・疑問だけのフックを1案も返さない。
+- 「わかる？このすごさ」「これぞ巧みの技」「えっ！？が止まらない」「一体何が？」「この後どうなる？」のように、
+  対象を示さず期待だけを要求する文言は使用禁止。これらに近い汎用フックも、タイトルとの組み合わせに関係なく不採用にする。
+- hookSceneStart / hookSceneEndには、途中から見ても意味が通じる発言・反応・出来事を選ぶ。
+  無音、言いよどみ、語尾だけ、指示語だけ、前の説明がなければ意味が通らない箇所を避ける。
+- タイトルとフックで答えをすべて説明しない。ただし、対象まで隠して「何かがすごい」「一体何が？」だけにしない。
+- フックで作った期待は、選定済みclip内の字幕・映像で必ず回収できるものにする。
+- 「すごい」「衝撃」「神」「やばい」「まさか」などの汎用語は、具体的な対象・発言・出来事と組み合わせる場合だけ使う。
+- どの動画にも付けられる文言、事実を並べただけの説明タイトル、答えを先に全部見せるタイトル、過剰な煽りは弱い案として除外する。
+- 各案を内部で、スクロール停止力、具体性、一読理解、情報ギャップ、フック場面との一致、clip内での回収の6項目で比較する。
+  事実との一致と、hookText単体で具体的な内容が伝わることを必須条件とし、そのうえで合計が最も高い案をrecommendedSuggestionIdにする。
+  必須条件を満たさない案を3案へ含めず、recommendedSuggestionIdにも選ばない。無難さを優先しない。
 
 【公開タイトルと通常サムネ】
 - publicationTitle: YouTube公開用。字幕から確認できる人物・状況・出来事を使い、見る理由となる言葉をなるべく前に置く。

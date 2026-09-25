@@ -48,7 +48,9 @@ from app.posting_metadata import (
 )
 from app.scoring.title_hook_suggestions import (
     OPENAI_REQUEST_TIMEOUT_SECONDS,
+    SYSTEM_PROMPT,
     TITLE_HOOK_GENERATION_SCHEMA,
+    TITLE_HOOK_PROMPT_VERSION,
     OpenAITitleHookSuggestionGenerator,
     TitleHookSuggestionResult,
     extract_representative_frames,
@@ -129,6 +131,19 @@ def _suggestion_result() -> TitleHookSuggestionResult:
             "descriptionEvidenceSegmentIds": [],
         }
     )
+
+
+def test_short_prompt_requires_scroll_stop_package_ranking() -> None:
+    assert TITLE_HOOK_PROMPT_VERSION == "title_hook_suggestions_v9"
+    assert "【ショート専用のタイトル・フック基準】" in SYSTEM_PROMPT
+    assert "最初の0.3〜1秒" in SYSTEM_PROMPT
+    assert "少なくとも6つの異なる切り口" in SYSTEM_PROMPT
+    assert "publicationTitle、hookText、hookSceneStart / hookSceneEndの組み合わせ全体" in SYSTEM_PROMPT
+    assert "スクロール停止力、具体性、一読理解、情報ギャップ" in SYSTEM_PROMPT
+    assert "感想・指示語・疑問だけのフックを1案も返さない" in SYSTEM_PROMPT
+    assert "対象を示さず期待だけを要求する文言は使用禁止" in SYSTEM_PROMPT
+    assert "必須条件を満たさない案を3案へ含めず" in SYSTEM_PROMPT
+    assert "無難さを優先しない" in SYSTEM_PROMPT
 
 
 @pytest.fixture()
