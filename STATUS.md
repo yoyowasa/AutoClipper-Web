@@ -10245,3 +10245,11 @@ pip check: pass
 - 検証: backend pytest 1164 passed・1 skipped、ruff成功。frontend typecheck・lint・build、追加したruntime profileとショートプレビュー時刻のテスト成功。Docker Compose設定検証成功、既存のbackend/frontend/worker/redis稼働とbackend healthyを確認。差分の空白・秘密値パターンを確認。
 - 範囲: 今回はGit履歴の整理とmain反映。実ジョブの追加レンダリング、稼働コンテナの再構築、字幕編集の新規実機操作は行っていない。各機能の個別実機確認は上記の該当作業記録に従う。
 - CI修正: 初回main push後、GitHubのbackend lintで`launcher/controller.py`内PowerShell文字列が140文字制限を超えて失敗。ローカル検査の対象にlauncherを含めていなかったため見逃した。WMIの引数マップを複数行へ整形し、処理内容は維持。修正後にbackendとlauncherのruff、関連launcherテスト、GitHub CIを再確認する。
+
+## 2026-09-26 JST 話題選定のブロックID混入による全件仮選定を修正
+
+- 症状: job `job_78bbdc1cc21b4cb9ae06eb55de943e91` はCodexの話題選定応答を受信したが、`codex_topic_selection_block_unknown`で全件ローカル仮選定へ切り替わった。
+- 原因: 応答7候補のうち1件だけ、存在するブロックIDの後ろにCodexの余計な英文が混入した。検証処理はその候補を含む応答全体を不合格とし、他の正常な6件も失っていた。直近のフォント追加は選定処理を変更していない。
+- 変更ファイル: `backend/app/candidates/codex_initial_selection.py`、`backend/tests/test_codex_initial_selection.py`、本ファイル。入力に実在するIDの後ろに明らかな余計な文章が続く場合だけIDを復元。複数IDが紛れた曖昧な値や未知IDは採用しない。不正候補だけを除外し、正常候補がある場合は選定を継続。全候補が不正なら従来どおりエラーにする。
+- 検証: 問題の保存済み応答を読み取り専用で再投入し、通常2件・ショート5件の正規IDが次段階の入力へ渡ることを確認。回帰テストを追加し対象44 passed、backend全体1167 passed・1 skipped、backend/launcher ruff成功。
+- 未確認: ユーザーjob自体の再選定実行、修正後のCodexモデルとの実通信、実動画の候補確定は未実施。
