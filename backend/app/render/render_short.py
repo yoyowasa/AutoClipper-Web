@@ -1231,8 +1231,10 @@ def render_selected_short_candidates(
     short_overlay_title_mode: str | None = None,
     short_top_banner_enabled: bool = False,
     short_bottom_banner_enabled: bool = False,
+    banner_paths: StoragePaths | None = None,
 ) -> ShortRenderBatchResult:
     storage_paths = paths or get_storage_paths()
+    banner_storage_paths = banner_paths or storage_paths
     output_dir = shorts_output_dir(storage_paths, job.id)
     subtitle_dir = shorts_subtitle_dir(storage_paths, job.id)
     exports: list[ExportItem] = []
@@ -1317,11 +1319,11 @@ def render_selected_short_candidates(
             }
             if short_top_banner_enabled:
                 render_kwargs["top_banner_path"] = resolve_banner_path(
-                    job.settings_json, "top", DEFAULT_SHORT_TOP_BANNER_PATH, storage_paths
+                    job.settings_json, "top", DEFAULT_SHORT_TOP_BANNER_PATH, banner_storage_paths
                 )
             if short_bottom_banner_enabled:
                 render_kwargs["bottom_banner_path"] = resolve_banner_path(
-                    job.settings_json, "bottom", DEFAULT_SHORT_BOTTOM_BANNER_PATH, storage_paths
+                    job.settings_json, "bottom", DEFAULT_SHORT_BOTTOM_BANNER_PATH, banner_storage_paths
                 )
             if hook_scene_rendered:
                 render_kwargs["hook_scene_start"] = candidate.hook_scene_start

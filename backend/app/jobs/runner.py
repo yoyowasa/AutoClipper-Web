@@ -2519,6 +2519,7 @@ def _render_selected_outputs(
     transcript_segments: Sequence[TranscriptSegment],
     settings: dict[str, Any],
     storage_paths: StoragePaths,
+    asset_storage_paths: StoragePaths | None = None,
     dependencies: AutoClipperPipelineDependencies,
     visited_statuses: list[str],
 ) -> tuple[NormalRenderBatchResult, ShortRenderBatchResult, list[ExportItem], Path]:
@@ -2559,6 +2560,7 @@ def _render_selected_outputs(
         short_overlay_title_mode=settings.get("shortOverlayTitleMode"),
         short_top_banner_enabled=bool(settings.get("shortTopBannerEnabled", False)),
         short_bottom_banner_enabled=bool(settings.get("shortBottomBannerEnabled", False)),
+        banner_paths=asset_storage_paths,
     )
 
     render_failures_path = _write_json(
@@ -6187,6 +6189,7 @@ def run_subtitle_review_render(
                 transcript_segments=transcript_segments,
                 settings=settings,
                 storage_paths=render_paths,
+                asset_storage_paths=storage_paths,
                 dependencies=deps,
                 visited_statuses=visited_statuses,
             )

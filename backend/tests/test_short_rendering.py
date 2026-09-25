@@ -1377,6 +1377,65 @@ def test_render_selected_short_candidates_creates_exports_visible_in_results(cli
     assert download_response.content.startswith(b"rendered short_")
 
 
+def test_render_selected_short_candidates_resolves_custom_banners_from_canonical_storage(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    import io
+
+    from PIL import Image
+
+    from app.short_banners import store_banner_image
+
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+    created = client.post(
+        "/api/jobs",
+        json={"videoId": upload["videoId"], "settings": {}},
+    ).json()
+    canonical_storage = app.dependency_overrides[get_storage_paths]()
+    staging_storage = StoragePaths(tmp_path / "rerender-staging")
+    staging_storage.ensure()
+
+    image = io.BytesIO()
+    Image.new("RGB", (90, 30), "cyan").save(image, format="PNG")
+    asset_id = store_banner_image(image.getvalue(), canonical_storage)
+    renderer_calls: list[dict[str, Any]] = []
+
+    def fake_renderer(
+        input_path: str | Path,
+        output_path: str | Path,
+        **kwargs: Any,
+    ) -> ShortRenderResult:
+        renderer_calls.append({"input_path": input_path, "output_path": output_path, **kwargs})
+        Path(output_path).write_bytes(b"rendered")
+        return ShortRenderResult(path=Path(output_path), strategy="center_crop")
+
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, created["jobId"])
+        assert job is not None
+        job.settings_json = {**job.settings_json, "shortTopBannerAssetId": asset_id}
+
+        result = render_selected_short_candidates(
+            db=db,
+            job=job,
+            input_path=Path(canonical_storage.uploads) / "sample.mp4",
+            selected_candidates=[make_short("cand_short_1", 0.0, 45.0, "First short", 93.0)],
+            paths=staging_storage,
+            banner_paths=canonical_storage,
+            renderer=fake_renderer,
+            short_top_banner_enabled=True,
+        )
+
+    assert len(result.exports) == 1
+    assert len(renderer_calls) == 1
+    assert Path(renderer_calls[0]["output_path"]).is_relative_to(staging_storage.outputs)
+    assert Path(renderer_calls[0]["top_banner_path"]) == canonical_storage.banner_assets / f"{asset_id}.png"
+    assert Path(renderer_calls[0]["top_banner_path"]).is_file()
+
+
 def test_render_selected_short_candidates_writes_fallback_title_metadata(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",
