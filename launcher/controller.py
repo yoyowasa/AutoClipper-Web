@@ -276,7 +276,11 @@ def start_background_process(command: Sequence[str], cwd: Path) -> None:
 $ErrorActionPreference = 'Stop'
 $inputData = [Console]::In.ReadToEnd() | ConvertFrom-Json
 $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ShowWindow=[uint16]0}
-$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=[string]$inputData.command; CurrentDirectory=[string]$inputData.cwd; ProcessStartupInformation=$startup}
+$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+    CommandLine = [string]$inputData.command
+    CurrentDirectory = [string]$inputData.cwd
+    ProcessStartupInformation = $startup
+}
 @{returnValue=[int]$result.ReturnValue; processId=[int]$result.ProcessId} | ConvertTo-Json -Compress
 """
         try:
