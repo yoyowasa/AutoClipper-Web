@@ -10254,3 +10254,11 @@ pip check: pass
 - 検証: backend全テスト1167 passed・1 skipped、対象テスト再実行49 passed、ruff、frontend typecheck・lint・build、関連TSテスト、git diff --check成功。Pillowで3書体を使うサムネイルをそれぞれ生成。稼働中backendのFFmpeg/libassで3書体の日本語字幕を描画し、各指定書体が実際に選択されるログを確認した。
 - 稼働反映: backend／GPU worker／frontendを再build・再作成。backend healthy、frontendの源暎TTF配信HTTP 200、backend health HTTP 200、backendとGPU workerの書体登録を確認。更新前のworkerは待機中、queue 0を確認した。
 - 未確認: 実ユーザーjobでの書体選択・保存・再レンダリング操作は行っていない。既存jobの編集内容は変更していない。
+
+## 2026-09-25 JST 851ゴチカクットとNikkyou Sansを追加
+
+- 目的: 指定された追加書体を通常・ショートの字幕／動画内文字と通常サムネイルで選べるようにする。
+- 変更ファイル: `frontend/public/fonts/851Gkktt_005.ttf`、同書体の権利表記とREADME、`.gitignore`、`.dockerignore`、書体選択・プレビュー・ASS描画・サムネイル描画のfrontend/backend実装、関連テスト、本ファイル。
+- 変更: 851ゴチカクットは作者の再配布条件を確認して同梱。Nikkyou Sansは動画利用は許可されているがフォント再配布の明示がないため、このPCへのローカル導入に限定し、GitとDocker配布から除外した。漢字の収録範囲が狭いことをUIにも表示。
+- 検証: backend全テスト1168 passed・1 skipped、ruff、frontend typecheck・lint・build、関連TSテスト成功。Pillowで851ゴチカクットの通常サムネイルを描画。FFmpeg/libassで両書体の指定familyが選択されることを確認。backend／GPU worker／frontendを再build・再作成し、backend healthy、書体配信HTTP 200を確認。
+- 未解決: 指定された源直ゴシックは公式の無料ファイルにBOOTHログインが必要で、取得・組込み・実描画は未実施。実ユーザーjobでの書体選択・保存・再レンダリングも未確認。

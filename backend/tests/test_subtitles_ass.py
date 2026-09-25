@@ -691,6 +691,8 @@ def test_bundled_normal_and_emphasis_font_presets_map_to_ass_names() -> None:
         "genei_kiwami_go": "GenEi Kiwami Gothic Ultra",
         "genei_mono_go": "GenEi Mono Gothic",
         "genei_antique": "GenEi Antique v6",
+        "gochi_kakutto": "851Gkktt",
+        "nikkyou_sans": "Nikkyou Sans",
     }
     segments = [TranscriptSegment(start=0.0, end=4.0, text="確認字幕")]
 

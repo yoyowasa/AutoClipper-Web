@@ -121,9 +121,10 @@ def test_three_roles_render_with_independent_fonts_sizes_colors(tmp_path, monkey
         ("genei_kiwami_go", "GenEiKiwamiGo.ttf"),
         ("genei_mono_go", "GenEiMonoGothic-Bold.ttf"),
         ("genei_antique", "GenEiAntiqueNv6-M.ttf"),
+        ("gochi_kakutto", "851Gkktt_005.ttf"),
     ],
 )
-def test_genei_fonts_render_normal_thumbnails(tmp_path, preset, filename):
+def test_added_fonts_render_normal_thumbnails(tmp_path, preset, filename):
     styles = ThumbnailTextStyles().model_dump(by_alias=True)
     styles["heading"]["fontPreset"] = preset
     validated = ThumbnailTextStyles.model_validate(styles)

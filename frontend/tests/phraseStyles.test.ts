@@ -21,7 +21,9 @@ strictEqual(assPreviewFontMetrics("Keifont").fontSizeScale, 1024 / 1134);
 for (const [preset, family, scale] of [
   ["genei_kiwami_go", "GenEi Kiwami Gothic Ultra", 1000 / 1200],
   ["genei_mono_go", "GenEi Mono Gothic", 1024 / 1224],
-  ["genei_antique", "GenEi Antique v6", 1024 / 1280]
+  ["genei_antique", "GenEi Antique v6", 1024 / 1280],
+  ["gochi_kakutto", "851Gkktt", 1024 / 1000],
+  ["nikkyou_sans", "Nikkyou Sans", 2048 / 2590]
 ] as const) {
   ok(CLIP_TEXT_FONT_GROUPS.some(group => group.options.some(option => option.value === preset && option.fontName === family)));
   strictEqual(assPreviewFontMetrics(family).fontSizeScale, scale);

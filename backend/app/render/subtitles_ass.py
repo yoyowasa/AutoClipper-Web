@@ -52,6 +52,8 @@ TEXT_FONT_PRESETS: dict[TextFontPreset, tuple[str, bool]] = {
     "genei_kiwami_go": ("GenEi Kiwami Gothic Ultra", False),
     "genei_mono_go": ("GenEi Mono Gothic", True),
     "genei_antique": ("GenEi Antique v6", False),
+    "gochi_kakutto": ("851Gkktt", False),
+    "nikkyou_sans": ("Nikkyou Sans", False),
     "sans": ("Noto Sans CJK JP", False),
     "sans_bold": ("Noto Sans CJK JP", True),
     "noto_black": ("Noto Sans JP Black", False),

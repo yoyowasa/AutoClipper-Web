@@ -55,6 +55,7 @@ TitleSource = Literal[
 TextFontPreset = Literal[
     "chikara_yowaku", "keifont", "mushin", "ankoku_zonji", "killgo_nb", "tanuki_magic",
     "genei_kiwami_go", "genei_mono_go", "genei_antique",
+    "gochi_kakutto", "nikkyou_sans",
     "sans",
     "sans_bold",
     "noto_black",

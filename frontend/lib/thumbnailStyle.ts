@@ -3,7 +3,8 @@ import type { NormalThumbnailStyle, ThumbnailFontPreset, ThumbnailTextStyles } f
 
 const PRESETS: ThumbnailFontPreset[] = ["noto_black", "heavy", "mplus_extrabold", "mplus_rounded_extrabold",
   "chikara", "chikara_yowaku", "keifont", "mushin", "ankoku_zonji", "tanuki_magic",
-  "genei_kiwami_go", "genei_mono_go", "genei_antique", "dela_gothic", "corporate_logo"];
+  "genei_kiwami_go", "genei_mono_go", "genei_antique", "gochi_kakutto", "nikkyou_sans",
+  "dela_gothic", "corporate_logo"];
 export const THUMBNAIL_FONTS = PRESETS.map(preset => CLIP_TEXT_FONT_GROUPS.flatMap(group => group.options)
   .find(option => option.value === preset)!);
 

@@ -17,6 +17,8 @@ THUMBNAIL_FONT_FILES: dict[ThumbnailFontPreset, str] = {
     "genei_kiwami_go": "GenEiKiwamiGo.ttf",
     "genei_mono_go": "GenEiMonoGothic-Bold.ttf",
     "genei_antique": "GenEiAntiqueNv6-M.ttf",
+    "gochi_kakutto": "851Gkktt_005.ttf",
+    "nikkyou_sans": "NikkyouSans-mLKax.ttf",
     "dela_gothic": "DelaGothicOne-Regular.ttf",
     "corporate_logo": "Corporate-Logo-Bold-ver3.otf",
 }
