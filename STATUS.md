@@ -10252,4 +10252,5 @@ pip check: pass
 - 原因: 応答7候補のうち1件だけ、存在するブロックIDの後ろにCodexの余計な英文が混入した。検証処理はその候補を含む応答全体を不合格とし、他の正常な6件も失っていた。直近のフォント追加は選定処理を変更していない。
 - 変更ファイル: `backend/app/candidates/codex_initial_selection.py`、`backend/tests/test_codex_initial_selection.py`、本ファイル。入力に実在するIDの後ろに明らかな余計な文章が続く場合だけIDを復元。複数IDが紛れた曖昧な値や未知IDは採用しない。不正候補だけを除外し、正常候補がある場合は選定を継続。全候補が不正なら従来どおりエラーにする。
 - 検証: 問題の保存済み応答を読み取り専用で再投入し、通常2件・ショート5件の正規IDが次段階の入力へ渡ることを確認。回帰テストを追加し対象44 passed、backend全体1167 passed・1 skipped、backend/launcher ruff成功。
+- 稼働反映: backend／GPU workerを再build・再作成。両containerで保存済み応答を再投入して通常2件・ショート5件の正規IDと境界調整入力7件を確認。実行コードのSHA-256は作業ツリーと一致。backend healthyとhealth API HTTP 200を確認。GitHub CIのbackend／frontendも成功。
 - 未確認: ユーザーjob自体の再選定実行、修正後のCodexモデルとの実通信、実動画の候補確定は未実施。
