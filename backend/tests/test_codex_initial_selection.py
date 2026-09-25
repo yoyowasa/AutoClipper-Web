@@ -471,6 +471,55 @@ def test_topic_selection_requires_contiguous_blocks_and_drops_normal_overlap() -
     assert error.value.code == "codex_topic_selection_block_not_contiguous"
 
 
+def test_topic_selection_recovers_known_id_with_stray_prose_without_fallback() -> None:
+    source_request = _request()
+    topic_request = build_codex_topic_selection_request(source_request)
+    response = _topic_response(topic_request)
+    normal = response.selected_topics[0]
+    response.selected_topics[0] = normal.model_copy(
+        update={"topic_block_ids": [f"{normal.topic_block_ids[0]} systematic coinage? Wait schema no issue"]}
+    )
+
+    selected = _validate_topic_selection_response(topic_request, response)
+
+    assert [item.selection_id for item in selected] == ["topic_normal_1", "topic_short_1"]
+    assert selected[0].topic_block_ids == [topic_request.topic_blocks[0].id]
+    refinement = build_codex_boundary_refinement_request(source_request, topic_request, response)
+    assert refinement is not None
+    assert refinement.selected_topics[0].topic_block_ids == [topic_request.topic_blocks[0].id]
+
+
+def test_topic_selection_rejects_only_invalid_choice_when_others_are_valid() -> None:
+    topic_request = build_codex_topic_selection_request(_request())
+    response = _topic_response(topic_request)
+    invalid = response.selected_topics[0].model_copy(
+        update={"topic_block_ids": ["topic_999999"]}
+    )
+    response.selected_topics[0] = invalid
+
+    selected = _validate_topic_selection_response(topic_request, response)
+
+    assert [item.selection_id for item in selected] == ["topic_short_1"]
+    response.selected_topics = [invalid]
+    with pytest.raises(CodexInitialSelectionError) as error:
+        _validate_topic_selection_response(topic_request, response)
+    assert error.value.code == "codex_topic_selection_block_unknown"
+
+
+def test_topic_selection_does_not_guess_when_stray_text_contains_another_id() -> None:
+    topic_request = build_codex_topic_selection_request(_request())
+    response = _topic_response(topic_request)
+    response.selected_topics = [
+        response.selected_topics[0].model_copy(
+            update={"topic_block_ids": ["topic_000001 topic_000002"]}
+        )
+    ]
+
+    with pytest.raises(CodexInitialSelectionError) as error:
+        _validate_topic_selection_response(topic_request, response)
+    assert error.value.code == "codex_topic_selection_block_unknown"
+
+
 def test_normal_selection_drops_duplicate_topic_keys_without_backfill() -> None:
     request = _request(
         settings=_settings(
