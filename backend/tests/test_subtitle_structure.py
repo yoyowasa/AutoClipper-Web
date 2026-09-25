@@ -86,6 +86,91 @@ def test_merge_split_persist_and_reach_ass_without_automatic_regrouping(client):
     assert apply_reviewed_text(original, load_subtitle_review(path))[0].text == "修正前半"
 
 
+def test_insert_empty_subtitle_row_then_edit_and_delete_it(client):  # noqa: F811
+    job_id, path, doc, original, _ = seed_structure(client)
+    url = f"/api/jobs/{job_id}/subtitle-review/segment-structure"
+    first = doc.segments[0]
+    response = client.post(
+        url,
+        json={
+            "action": "insert",
+            "segments": items(first),
+            "splitTime": 1.5,
+            "insertPosition": "after",
+        },
+    )
+    assert response.status_code == 200, response.text
+    inserted = load_subtitle_review(path)
+    first_parts = [segment for segment in inserted.segments if 0 in segment.source_indices]
+    assert [(segment.start, segment.end, segment.text) for segment in first_parts] == [
+        (1, 1.5, "前半"),
+        (1.5, 2, ""),
+    ]
+    blank = first_parts[1]
+    assert client.patch(
+        f"/api/jobs/{job_id}/subtitle-review/segments/{blank.id}",
+        json={"text": "追加"},
+    ).status_code == 200
+    edited = load_subtitle_review(path)
+    assert [(segment.start, segment.end, segment.text) for segment in apply_reviewed_text(original, edited)[:3]] == [
+        (1, 1.5, "前半"),
+        (1.5, 2, "追加"),
+        (2, 3, "後半"),
+    ]
+    blank = next(segment for segment in edited.segments if segment.id == blank.id)
+    response = client.post(url, json={"action": "delete", "segments": items(blank)})
+    assert response.status_code == 200, response.text
+    deleted = load_subtitle_review(path)
+    assert len([segment for segment in deleted.segments if "normal" in segment.affected_clip_ids]) == 2
+    assert [(segment.start, segment.end, segment.text) for segment in apply_reviewed_text(original, deleted)[:2]] == [
+        (1, 1.5, "前半"),
+        (2, 3, "後半"),
+    ]
+
+
+def test_delete_subtitle_row_does_not_restore_original_text(client):  # noqa: F811
+    job_id, path, doc, original, _ = seed_structure(client)
+    response = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/segment-structure",
+        json={"action": "delete", "segments": items(doc.segments[0])},
+    )
+    assert response.status_code == 200, response.text
+    deleted = load_subtitle_review(path)
+    rendered = apply_reviewed_text(original, deleted)
+    assert [(segment.start, segment.end, segment.text) for segment in rendered[:2]] == [
+        (2, 3, "後半"),
+        (21, 22, "変更しない"),
+    ]
+
+
+def test_review_build_splits_abnormally_long_asr_segment_for_editing() -> None:
+    text = "線で表現されがちな水の流れについて北斎の作品を見ながら詳しく説明していきます。" * 5
+    source = [TranscriptSegment(start=10, end=40, text=text)]
+    short = Candidate(id="short", type="short", start=10, end=40, duration=30, transcript_text=text)
+    document = build_subtitle_review("job_long", CandidateSelection(normalClips=[], shorts=[short]), source)
+
+    assert len(document.segments) >= 7
+    assert document.clips[0].segment_ids == [segment.id for segment in document.segments]
+    assert all(segment.preserve_segmentation for segment in document.segments)
+    assert all(segment.source_indices == [0] for segment in document.segments)
+    assert all(segment.end - segment.start <= 4.21 for segment in document.segments)
+    assert "".join(segment.text for segment in document.segments) == text
+    assert "".join(segment.text for segment in apply_reviewed_text(source, document)) == text
+
+
+def test_review_build_keeps_ordinary_asr_segment_as_one_editing_row() -> None:
+    text = "通常の長さの字幕です"
+    source = [TranscriptSegment(start=10, end=14.5, text=text)]
+    normal = Candidate(id="normal", type="normal", start=10, end=14.5, duration=4.5, transcript_text=text)
+    document = build_subtitle_review("job_ordinary", CandidateSelection(normalClips=[normal], shorts=[]), source)
+
+    assert len(document.segments) == 1
+    assert document.segments[0].id == "segment_00000"
+    assert document.segments[0].text == text
+    assert document.segments[0].source_indices == []
+    assert document.segments[0].preserve_segmentation is False
+
+
 @pytest.mark.parametrize(
     "failure,status", [("conflict", 409), ("time", 422), ("empty", 422), ("duplicate", 422), ("completed", 409), ("shared", 422)]
 )

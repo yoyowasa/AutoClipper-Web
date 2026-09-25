@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ReviewCharacterPreset } from "../../../../components/ReviewCharacterPreset";
 import { ShortFramingWorkspace } from "../../../../components/ShortFramingWorkspace";
+import { LiveShortFramingPreview } from "../../../../components/LiveShortFramingPreview";
 import { SubtitleSegmentActions } from "../../../../components/SubtitleSegmentActions";
 import { editSubtitleStructure } from "../../../../lib/api";
 import type { SubtitleStructureRequest } from "../../../../lib/types";
@@ -404,6 +405,9 @@ export default function SubtitleReviewPage() {
   const [bulkCorrectionSelection, setBulkCorrectionSelection] = useState<CorrectionSelection | null>(null);
   const [isSavingBulkCorrection, setIsSavingBulkCorrection] = useState(false);
   const [isSavingStructure, setIsSavingStructure] = useState(false);
+  const [retainedLivePreviews, setRetainedLivePreviews] = useState<
+    Record<string, { url: string; version: string }>
+  >({});
   const [segmentCursor, setSegmentCursor] = useState<{ id: string; offset: number } | null>(null);
   const [workspaceTab, setWorkspaceTab] = useState<"content" | "style">("content");
   const [suggestionHydrationRetryVersion, setSuggestionHydrationRetryVersion] =
@@ -470,6 +474,35 @@ export default function SubtitleReviewPage() {
     autoSuggestionAttemptedClipIdsRef.current = new Set();
     setAutoGeneratingSuggestionClipIds(new Set());
   }, [jobId]);
+
+  useEffect(() => {
+    if (!review) {
+      return;
+    }
+    setRetainedLivePreviews((current) => {
+      let next = current;
+      for (const clip of review.clips) {
+        if (!clip.livePreviewVideoUrl || !clip.livePreviewSpecHash) {
+          continue;
+        }
+        const saved = current[clip.id];
+        if (
+          saved?.url === clip.livePreviewVideoUrl &&
+          saved.version === clip.livePreviewSpecHash
+        ) {
+          continue;
+        }
+        if (next === current) {
+          next = { ...current };
+        }
+        next[clip.id] = {
+          url: clip.livePreviewVideoUrl,
+          version: clip.livePreviewSpecHash
+        };
+      }
+      return next;
+    });
+  }, [review]);
 
   useEffect(() => {
     if (!isUpdatingHookScene || !jobId) {
@@ -928,8 +961,14 @@ export default function SubtitleReviewPage() {
   const selectedPreviewVersion = selectedPreviewReady
     ? selectedClip?.previewSpecHash ?? ""
     : "";
-  const selectedLiveVideoUrl = selectedClip?.livePreviewVideoUrl ?? null;
-  const selectedLivePreviewVersion = selectedClip?.livePreviewSpecHash ?? "";
+  const retainedLivePreview = selectedClip
+    ? retainedLivePreviews[selectedClip.id]
+    : undefined;
+  const selectedLiveVideoUrl =
+    selectedClip?.livePreviewVideoUrl ?? retainedLivePreview?.url ?? null;
+  const selectedLivePreviewVersion = selectedClip?.livePreviewVideoUrl
+    ? selectedClip.livePreviewSpecHash ?? ""
+    : retainedLivePreview?.version ?? "";
   const livePreviewReady = Boolean(
     selectedLiveVideoUrl && selectedLivePreviewVersion
   );
@@ -2471,8 +2510,11 @@ export default function SubtitleReviewPage() {
                           左右 {selectedShortFramingDraft.framingOffsetX} ・ 上下 {selectedShortFramingDraft.framingOffsetY} ・ 拡大 {Math.round(selectedShortFramingDraft.framingZoom * 100)}%
                         </p>
                         <p className="text-xs font-semibold text-sky-700" aria-live="polite">
-                          {selectedShortPreviewRegenerating ? "保存した画角で動画を再生成中" : selectedShortFramingDirty ? "未保存の変更あり" : "保存済み"}
+                          {selectedShortPreviewRegenerating ? "プレビュー準備中" : selectedShortFramingDirty ? "未保存の変更あり" : "保存済み"}
                         </p>
+                        {selectedClip.previewFraming ? <p className="text-xs text-sky-800">
+                          変更した画角を編集プレビューで再生できます。動画の再生成は不要です。
+                        </p> : null}
                       </div>
                     ) : null}
                   </div>
@@ -2526,6 +2568,15 @@ export default function SubtitleReviewPage() {
                         onSeeking={handleVideoSeeking}
                         onTimeUpdate={handleVideoTimeUpdate}
                         onWaiting={() => setIsBuffering(true)}
+                        />
+                      ) : null}
+                      {isShowingLivePreview && selectedClip.type === "short" && selectedClip.previewFraming && selectedShortFramingDraft ? (
+                        <LiveShortFramingPreview
+                          key={`${selectedClip.id}:${selectedClip.shortLayout ?? review.shortLayout}`} jobId={jobId} clipId={selectedClip.id}
+                          sourceUrl={review.sourceVideoUrl} clockRef={videoRef}
+                          framing={selectedShortFramingDraft} layout={selectedClip.shortLayout ?? review.shortLayout}
+                          start={selectedClip.start} end={selectedClip.end}
+                          hookStart={selectedClip.hookSceneStart} hookEnd={selectedClip.hookSceneEnd}
                         />
                       ) : null}
                       {isShowingLivePreview && selectedClip ? (
@@ -2644,7 +2695,7 @@ export default function SubtitleReviewPage() {
                         {livePreviewReady && selectedPreviewReady ? (
                           <button className="border border-neutral-600 px-2 py-1" type="button"
                             onClick={() => setShowSavedPreview((current) => !current)}>
-                            {isShowingLivePreview ? "保存済みを見る" : "編集プレビューへ戻る"}
+                            {isShowingLivePreview ? (selectedClip.previewFraming ? "変更前の画角を見る" : "保存済みを見る") : "編集プレビューへ戻る"}
                           </button>
                         ) : null}
                       </div>
@@ -3135,7 +3186,7 @@ export default function SubtitleReviewPage() {
                                 dirtySegmentIds.size > 0 ||
                                 hasDirtyClipContent
                               }
-                              enforceMaximumDuration={selectedClip.type === "short"}
+                              enforceMaximumDuration={false}
                               key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
                               playheadSourceTime={absolutePlaybackTime}
                               saving={isUpdatingHookScene}
@@ -3296,7 +3347,8 @@ export default function SubtitleReviewPage() {
                               }
                             }}
                           />
-                          <SubtitleSegmentActions segment={segment} next={selectedSegments[segmentIndex + 1]}
+                          <SubtitleSegmentActions segment={segment} previous={selectedSegments[segmentIndex - 1]}
+                            next={selectedSegments[segmentIndex + 1]}
                             text={drafts[segment.id] ?? segment.text}
                             nextText={selectedSegments[segmentIndex + 1] ? drafts[selectedSegments[segmentIndex + 1].id] ?? selectedSegments[segmentIndex + 1].text : ""}
                             cursor={segmentCursor?.id === segment.id ? segmentCursor.offset : null}

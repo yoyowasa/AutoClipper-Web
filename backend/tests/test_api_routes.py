@@ -48,6 +48,7 @@ from app.render.render_short import (
     DEFAULT_SHORT_BOTTOM_BANNER_PATH,
     DEFAULT_SHORT_TOP_BANNER_PATH,
 )
+from app.render.render_exact_review_preview import subtitle_review_preview_spec_hash
 from app.storage.paths import StoragePaths, get_storage_paths
 
 
@@ -92,6 +93,15 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
         app.dependency_overrides.clear()
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
+
+
+@pytest.mark.parametrize("profile", ["gpu", "cpu"])
+def test_runtime_profile_comes_from_server_not_url(client: TestClient, profile: str) -> None:
+    app.dependency_overrides[get_settings] = lambda: Settings(autoclipper_runtime_profile=profile)
+    for query in ("", "?runtimeProfile=cpu", "?runtimeProfile=gpu"):
+        response = client.get("/api/runtime-profile" + query)
+        assert response.status_code == 200
+        assert response.json() == {"profile": profile}
 
 
 def test_upload_video_creates_video_record(client: TestClient) -> None:
@@ -897,6 +907,50 @@ def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
     assert persisted["segments"][0]["text"] == "OKでまとめて保存した字幕"
 
 
+def test_apply_subtitle_review_clip_allows_edited_short_past_duration_target(
+    client: TestClient,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    review_path = output_dir / "subtitle_review.json"
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    review["clips"][0].update({"end": 73.55, "duration": 73.55})
+    review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+    selected_path = output_dir / "selected_clips.json"
+    selected = json.loads(selected_path.read_text(encoding="utf-8"))
+    selected["shorts"][0].update({"end": 73.55, "duration": 73.55})
+    selected_path.write_text(json.dumps(selected, ensure_ascii=False), encoding="utf-8")
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.settings_json = {"shortMaxDuration": 75}
+        db.commit()
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
+        lambda _job_id, _clip_id, _spec_hash: None
+    )
+
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+    applied = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
+        json={
+            "title": "上限を少し超える編集",
+            "hookText": "",
+            "hookDurationSeconds": 3,
+            "hookSceneStart": 10,
+            "hookSceneEnd": 12,
+            "segments": [],
+        },
+    )
+
+    assert applied.status_code == 200
+    clip = applied.json()["clips"][0]
+    assert clip["confirmed"] is True
+    assert clip["hookSceneStart"] == 10
+    assert clip["hookSceneEnd"] == 12
+
+
 def test_apply_subtitle_review_clip_accepts_empty_overlay_title(
     client: TestClient,
 ) -> None:
@@ -1005,9 +1059,12 @@ def test_auto_clip_acceptance_queues_render_without_confirming_auto_passed_sibli
     )
 
 
-def test_patch_subtitle_review_clip_framing_persists_and_requeues_preview(
+def test_patch_subtitle_review_clip_framing_persists_without_reencoding(
     client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("app.jobs.subtitle_review_preview.exact_subtitle_review_preview_is_ready", lambda *args: True)
+    monkeypatch.setattr("app.jobs.subtitle_review_preview.live_subtitle_review_preview_is_ready", lambda *args: True)
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     _write_reeditable_preview_inputs(job_id, candidate_id)
     queued: list[tuple[str, str, str]] = []
@@ -1018,7 +1075,7 @@ def test_patch_subtitle_review_clip_framing_persists_and_requeues_preview(
     )
     reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
     assert reopened.status_code == 200
-    baseline_hash = reopened.json()["clips"][0]["previewSpecHash"]
+    baseline_hash = client.get(f"/api/jobs/{job_id}/subtitle-review").json()["clips"][0]["previewSpecHash"]
     queued.clear()
 
     response = client.patch(
@@ -1037,9 +1094,12 @@ def test_patch_subtitle_review_clip_framing_persists_and_requeues_preview(
     assert clip["framingOffsetY"] == -30.87
     assert clip["framingZoom"] == 1.235
     assert clip["confirmed"] is False
-    assert clip["previewState"] == "queued"
-    assert clip["previewSpecHash"] != baseline_hash
-    assert queued == [(job_id, candidate_id, clip["previewSpecHash"])]
+    assert clip["previewState"] == "ready"
+    assert clip["previewSpecHash"] == baseline_hash
+    assert queued == []
+    refreshed = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
+    assert refreshed["clips"][0]["previewSpecHash"] == baseline_hash
+    assert queued == []
 
     output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
     persisted = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
@@ -1339,6 +1399,56 @@ def test_completed_legacy_preview_is_transiently_playable_until_reopen(
     assert active_clip["previewSpecHash"] is not None
     assert active_clip["previewVideoUrl"] is None
     assert queued == [(job_id, candidate_id, active_clip["previewSpecHash"])]
+
+
+def test_retained_live_preview_revision_remains_playable_while_current_is_queued(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
+    _write_reeditable_preview_inputs(job_id, candidate_id)
+    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
+    assert reopened.status_code == 200
+
+    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    review_path = output_dir / "subtitle_review.json"
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    current_hash = "b" * 64
+    retained_spec = {"rendererVersion": "retained-test-preview"}
+    retained_hash = subtitle_review_preview_spec_hash(retained_spec)
+    review["clips"][0]["livePreviewSpecHash"] = current_hash
+    review["clips"][0]["livePreviewVideoUrl"] = None
+    review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+
+    retained_paths = jobs_api.live_subtitle_review_preview_paths(
+        output_dir,
+        candidate_id,
+        retained_hash,
+    )
+    retained_paths.video_path.parent.mkdir(parents=True, exist_ok=True)
+    retained_paths.video_path.write_bytes(b"retained live preview")
+    retained_paths.spec_path.write_text(
+        json.dumps(retained_spec, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        jobs_api,
+        "_refresh_subtitle_review_previews_unlocked",
+        lambda **kwargs: (kwargs["document"], []),
+    )
+    retained = client.get(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/live-preview-video",
+        params={"specHash": retained_hash},
+    )
+    missing = client.get(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/live-preview-video",
+        params={"specHash": "c" * 64},
+    )
+
+    assert retained.status_code == 200
+    assert retained.content == b"retained live preview"
+    assert retained.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert missing.status_code == 404
 
 
 def test_subtitle_review_get_poll_cannot_overwrite_concurrent_content_patch(
@@ -4330,7 +4440,11 @@ def test_named_banner_presets_keep_job_image_snapshot(client: TestClient) -> Non
 
 
 @pytest.mark.parametrize("clip_count", [1, 5])
-def test_framing_and_layout_save_queues_only_final_composition(client: TestClient, clip_count: int) -> None:
+def test_framing_and_layout_save_preserves_preview_and_other_clips(
+    client: TestClient, clip_count: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.jobs.subtitle_review_preview.exact_subtitle_review_preview_is_ready", lambda *args: True)
+    monkeypatch.setattr("app.jobs.subtitle_review_preview.live_subtitle_review_preview_is_ready", lambda *args: True)
     job_id, candidate_id, _ = _seed_reeditable_export()
     _write_reeditable_preview_inputs(job_id, candidate_id)
     output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
@@ -4349,7 +4463,7 @@ def test_framing_and_layout_save_queues_only_final_composition(client: TestClien
         lambda *args: queued.append(args)
     )
     assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
-    before = json.loads(review_file.read_text(encoding="utf-8"))
+    before = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
     for sibling in before["clips"]:
         if sibling["id"] != candidate_id:
             sibling["confirmed"] = True
@@ -4367,8 +4481,19 @@ def test_framing_and_layout_save_queues_only_final_composition(client: TestClien
     selected = next(clip for clip in result["clips"] if clip["id"] == candidate_id)
     assert selected["shortLayout"] == "blur_background"
     assert selected["framingZoom"] == 1.5
-    assert len(queued) == 1
-    assert queued[0] == (job_id, candidate_id, selected["previewSpecHash"])
+    assert queued == []
+    original = next(c for c in before["clips"] if c["id"] == candidate_id)
+    assert selected["previewSpecHash"] == original["previewSpecHash"]
+    refreshed = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
+    assert next(c for c in refreshed["clips"] if c["id"] == candidate_id)["previewSpecHash"] == original["previewSpecHash"]
+    assert queued == []
+    from app.jobs.subtitle_review import SubtitleReviewDocument, apply_reviewed_clip_content
+    final = apply_reviewed_clip_content(
+        CandidateSelection.model_validate(selection), SubtitleReviewDocument.model_validate(result),
+    )
+    final_clip = next(c for c in final.shorts if c.id == candidate_id)
+    assert (final_clip.framing_offset_x, final_clip.framing_offset_y, final_clip.framing_zoom) == (12, -20, 1.5)
+    assert final_clip.short_layout == "blur_background"
     assert result["confirmedClipCount"] == clip_count - 1
     for sibling in before["clips"]:
         if sibling["id"] != candidate_id:
@@ -4394,7 +4519,7 @@ def test_framing_and_layout_save_queues_only_final_composition(client: TestClien
         )
         assert changed.status_code == 200
         assert next(c for c in changed.json()["clips"] if c["id"] == candidate_id) == saved
-        assert [item[1] for item in queued] == ["sibling_1"]
+        assert queued == []
 
 
 def test_review_can_replace_banners_without_changing_clip_edits(client: TestClient) -> None:

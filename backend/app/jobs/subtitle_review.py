@@ -1,4 +1,5 @@
 import json
+import math
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -9,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, SubtitleStyleOverride, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
-from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.overlay_text import normalize_overlay_text
 from app.posting_metadata import (
     NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX,
@@ -25,6 +25,7 @@ from app.render.subtitles_ass import (
     SubtitleLayout,
     SubtitleRenderSettings,
     resolve_clip_text_style,
+    split_subtitle_text,
 )
 from app.render.title_policy import short_overlay_title_expected
 from app.schemas import ShortLayout, ShortOverlayTitleMode
@@ -89,7 +90,15 @@ class ResolvedClipTextStyle(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
 
+class PreviewFraming(BaseModel):
+    framing_offset_x: float = Field(ge=-100, le=100)
+    framing_offset_y: float = Field(ge=-100, le=100)
+    framing_zoom: float = Field(ge=1, le=3)
+    short_layout: ShortLayout | None = None
+
+
 class SubtitleReviewClip(BaseModel):
+    preview_framing: PreviewFraming | None = Field(default=None, alias="previewFraming")
     normal_title_suffix: str = Field(default=NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, max_length=80, alias="normalTitleSuffix")
     id: str
     type: Literal["normal", "short"]
@@ -340,6 +349,99 @@ def _segment_id(index: int) -> str:
     return f"segment_{index:05d}"
 
 
+def _review_segments_for_source(
+    index: int,
+    segment: TranscriptSegment,
+    affected_clip_ids: list[str],
+    layouts: dict[str, SubtitleLayout],
+) -> list[SubtitleReviewSegment]:
+    base = {
+        "index": index,
+        "confidence": segment.confidence,
+        "affectedClipIds": affected_clip_ids,
+    }
+    if segment.preserve_segmentation or segment.single_line or not segment.text.strip():
+        return [
+            SubtitleReviewSegment(
+                id=_segment_id(index),
+                start=segment.start,
+                end=segment.end,
+                originalText=segment.text,
+                text=segment.text,
+                preserveSegmentation=segment.preserve_segmentation,
+                singleLine=segment.single_line,
+                **base,
+            )
+        ]
+
+    active_layouts = [layouts[clip_id] for clip_id in affected_clip_ids]
+    max_chars = min(layout.max_chars_per_line * layout.max_lines for layout in active_layouts)
+    max_duration = min(layout.max_subtitle_duration for layout in active_layouts)
+    min_duration = max(layout.min_subtitle_duration for layout in active_layouts)
+    duration = max(0.01, segment.end - segment.start)
+    # Rendering already wraps ordinary subtitle segments.  Splitting every
+    # segment at the render limit would turn normal ASR output into many tiny
+    # review rows and needlessly rewrite its timing.  Normalize only clear ASR
+    # outliers (for example the 20-30 second text walls seen in the clip view).
+    if len(segment.text.strip()) <= max_chars * 2:
+        return [
+            SubtitleReviewSegment(
+                id=_segment_id(index),
+                start=segment.start,
+                end=segment.end,
+                originalText=segment.text,
+                text=segment.text,
+                preserveSegmentation=False,
+                singleLine=False,
+                **base,
+            )
+        ]
+    chunks = split_subtitle_text(segment.text, max_chars)
+    minimum_count = max(1, math.ceil(duration / max_duration))
+    if len(chunks) < minimum_count and len(segment.text.strip()) >= minimum_count * 4:
+        chunks = split_subtitle_text(segment.text, max(4, math.ceil(len(segment.text.strip()) / minimum_count)))
+    maximum_count = max(1, int(duration // min_duration))
+    if len(chunks) > maximum_count:
+        chunks = split_subtitle_text(segment.text, max(max_chars, math.ceil(len(segment.text.strip()) / maximum_count)))
+    if len(chunks) <= 1:
+        return [
+            SubtitleReviewSegment(
+                id=_segment_id(index),
+                start=segment.start,
+                end=segment.end,
+                originalText=segment.text,
+                text=segment.text,
+                preserveSegmentation=False,
+                singleLine=False,
+                **base,
+            )
+        ]
+
+    total_weight = sum(max(1, len(chunk)) for chunk in chunks)
+    cursor = segment.start
+    review_segments: list[SubtitleReviewSegment] = []
+    for part, chunk in enumerate(chunks):
+        end = segment.end if part == len(chunks) - 1 else min(
+            segment.end,
+            cursor + duration * max(1, len(chunk)) / total_weight,
+        )
+        review_segments.append(
+            SubtitleReviewSegment(
+                id=f"{_segment_id(index)}_part_{part + 1}",
+                start=round(cursor, 3),
+                end=round(end, 3),
+                originalText=chunk,
+                text=chunk,
+                sourceIndices=[index],
+                preserveSegmentation=True,
+                singleLine=False,
+                **base,
+            )
+        )
+        cursor = end
+    return review_segments
+
+
 def _overlaps(segment: TranscriptSegment, candidate: Candidate) -> bool:
     if segment.clip_id is not None and segment.clip_id != candidate.id:
         return False
@@ -523,7 +625,6 @@ def build_subtitle_review(
     source_height: int | None = None,
 ) -> SubtitleReviewDocument:
     selected_candidates = [*selection.normal_clips, *selection.shorts]
-    clip_segment_indices: dict[str, list[int]] = {}
     affected_clips: dict[int, list[str]] = {}
     type_indices: dict[str, int] = {"normal": 0, "short": 0}
 
@@ -533,9 +634,32 @@ def build_subtitle_review(
             for index, segment in enumerate(transcript_segments)
             if _overlaps(segment, candidate)
         ]
-        clip_segment_indices[candidate.id] = indices
         for index in indices:
             affected_clips.setdefault(index, []).append(candidate.id)
+
+    layouts = {
+        candidate.id: (
+            SubtitleLayout.short(render_settings)
+            if candidate.type == "short"
+            else SubtitleLayout.normal(
+                width=source_width or DEFAULT_NORMAL_WIDTH,
+                height=source_height or DEFAULT_NORMAL_HEIGHT,
+                settings=render_settings,
+            )
+        )
+        for candidate in selected_candidates
+    }
+    segments = [
+        review_segment
+        for index, segment in enumerate(transcript_segments)
+        if index in affected_clips
+        for review_segment in _review_segments_for_source(
+            index,
+            segment,
+            affected_clips[index],
+            layouts,
+        )
+    ]
 
     normal_title_suffix = (render_settings or {}).get("normalTitleSuffix")
     if normal_title_suffix is None:
@@ -580,27 +704,12 @@ def build_subtitle_review(
                 end=candidate.end,
                 duration=candidate.duration,
                 segmentIds=[
-                    _segment_id(segment_index)
-                    for segment_index in clip_segment_indices[candidate.id]
+                    segment.id
+                    for segment in segments
+                    if candidate.id in segment.affected_clip_ids
                 ],
             )
         )
-    segments = [
-        SubtitleReviewSegment(
-            id=_segment_id(index),
-            index=index,
-            start=segment.start,
-            end=segment.end,
-            originalText=segment.text,
-            text=segment.text,
-            confidence=segment.confidence,
-            affectedClipIds=affected_clips[index],
-            preserveSegmentation=segment.preserve_segmentation,
-            singleLine=segment.single_line,
-        )
-        for index, segment in enumerate(transcript_segments)
-        if index in affected_clips
-    ]
     now = _utc_iso()
     document = _refresh_counts(
         SubtitleReviewDocument(
@@ -1014,14 +1123,10 @@ def update_review_hook_scene(
             raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
         if start < clip.start - 0.001 or end > clip.end + 0.001:
             raise ValueError("hook scene must stay within the selected clip")
-        if clip.type == "short" and hook_scene_newly_exceeds_short_limit(
-            clip_duration=clip.duration,
-            hook_duration=hook_duration,
-            short_max_duration=document.short_max_duration,
-        ):
-            raise ValueError(
-                "hook scene would exceed the configured short maximum duration"
-            )
+        # The configured short maximum is a selection target. Once a short is in
+        # subtitle review, a manual hook-scene edit may take the finished duration
+        # slightly past that target. The hook itself remains bounded to 0.5-3s and
+        # must stay inside the selected clip.
 
     if clip.hook_scene_start == start and clip.hook_scene_end == end:
         return _refresh_counts(document)

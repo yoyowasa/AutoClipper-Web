@@ -10237,3 +10237,10 @@ pip check: pass
 - 変更ファイル: `docs/AUTOCLIPPER_CURRENT_AND_TARGET_SPEC_2026-09-25.md`、本ファイル。現行の機能と未達部分、ひとコマ採集からの展開、30日再生目標・月間収益目標、費用制約、レンダラー未採用の位置付けを記録。
 - 検証: 対象コード・設定・AutoClipper/Clip IntelligenceのREADME・AGENTS・既存統合構想を読み取り、文書を照合。文書差分を確認。コード、設定、DB、runtime、既存jobは変更していない。実動画・外部投稿の受入検証は未実施。
 - 未解決: 到達仕様の詳細契約・受入基準、無料APIの取得範囲、代替レンダラーの実測・採否。
+
+## 2026-09-25 JST 未コミット変更の整理とmain統合前検証
+
+- 目的: 既存の作業変更を機能ごとに記録し、ユーザーのローカル素材・検証出力を公開せずにmainへ統合する。
+- 変更: 連携プロセス、稼働profile、帯付き再レンダー、字幕編集・画角プレビューの変更を段階的にコミット。`.gitignore`にローカル帯画像、QA出力、未使用のサムネイル元画像を追加。統合構想の文書から個人名入りローカルパスを除去。
+- 検証: backend pytest 1164 passed・1 skipped、ruff成功。frontend typecheck・lint・build、追加したruntime profileとショートプレビュー時刻のテスト成功。Docker Compose設定検証成功、既存のbackend/frontend/worker/redis稼働とbackend healthyを確認。差分の空白・秘密値パターンを確認。
+- 範囲: 今回はGit履歴の整理とmain反映。実ジョブの追加レンダリング、稼働コンテナの再構築、字幕編集の新規実機操作は行っていない。各機能の個別実機確認は上記の該当作業記録に従う。

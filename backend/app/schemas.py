@@ -623,10 +623,11 @@ class SubtitleReviewBatchUpdateRequest(BaseModel):
 
 
 class SubtitleStructureRequest(BaseModel):
-    action: Literal["merge", "split", "line"]
+    action: Literal["merge", "split", "insert", "delete", "line"]
     segments: list[SubtitleReviewBatchSegmentUpdate] = Field(min_length=1, max_length=2)
     split_offset: int | None = Field(default=None, ge=1, alias="splitOffset")
     split_time: float | None = Field(default=None, ge=0, alias="splitTime")
+    insert_position: Literal["before", "after"] | None = Field(default=None, alias="insertPosition")
     single_line: bool = Field(default=True, alias="singleLine")
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")

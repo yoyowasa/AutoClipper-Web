@@ -1,0 +1,10 @@
+import assert from "node:assert/strict";
+import { shortPreviewSourceTime as time } from "../lib/shortPreviewTime";
+assert.equal(time(0, 100, 140, null, null), 100);
+assert.equal(time(5, 100, 140, null, null), 105);
+assert.equal(time(0, 100, 140, 120, 122), 120);
+assert.equal(time(1, 100, 140, 120, 122), 121);
+assert.equal(time(2, 100, 140, 120, 122), 100);
+assert.equal(time(7, 100, 140, 120, 122), 105);
+assert.equal(time(500, 100, 140, 120, 122), 140);
+console.log("short preview timing passed");

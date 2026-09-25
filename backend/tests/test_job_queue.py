@@ -17,7 +17,7 @@ class FakeJob:
         assert refresh is True
         return self.status
 
-    def delete(self) -> None:
+    def delete(self, *, remove_from_queue: bool = False) -> None:
         self.deleted = True
 
 
@@ -29,6 +29,19 @@ class FakeQueue:
 
     def fetch_job(self, job_id: str) -> FakeJob | None:
         return self.jobs.get(job_id)
+
+    def get_job_ids(self) -> list[str]:
+        return [
+            job_id
+            for job_id, job in self.jobs.items()
+            if job.status == JobStatus.QUEUED and not job.deleted
+        ]
+
+    def remove(self, job_id: str) -> int:
+        job = self.jobs.get(job_id)
+        if job is None or job.status != JobStatus.QUEUED or job.deleted:
+            return 0
+        return 1
 
     def enqueue(self, function: Any, *args: Any, **kwargs: Any) -> None:
         self.calls.append((function, args, kwargs))
@@ -263,6 +276,59 @@ def test_subtitle_preview_enqueue_keeps_active_same_spec(
     )
 
     assert queue.calls == []
+
+
+def test_subtitle_preview_enqueue_removes_older_queued_specs_for_same_clip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queue = FakeQueue()
+    old_same_clip_id = queue_module.subtitle_review_preview_rq_job_id(
+        "job_preview",
+        "candidate_short_1",
+        "a" * 64,
+    )
+    other_clip_id = queue_module.subtitle_review_preview_rq_job_id(
+        "job_preview",
+        "candidate_short_2",
+        "b" * 64,
+    )
+    prefix_collision_clip_id = queue_module.subtitle_review_preview_rq_job_id(
+        "job_preview",
+        "candidate_short_1-extra",
+        "e" * 64,
+    )
+    started_same_clip_id = queue_module.subtitle_review_preview_rq_job_id(
+        "job_preview",
+        "candidate_short_1",
+        "c" * 64,
+    )
+    old_same_clip = FakeJob(JobStatus.QUEUED)
+    other_clip = FakeJob(JobStatus.QUEUED)
+    prefix_collision_clip = FakeJob(JobStatus.QUEUED)
+    started_same_clip = FakeJob(JobStatus.STARTED)
+    queue.jobs[old_same_clip_id] = old_same_clip
+    queue.jobs[other_clip_id] = other_clip
+    queue.jobs[prefix_collision_clip_id] = prefix_collision_clip
+    queue.jobs[started_same_clip_id] = started_same_clip
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+
+    newest_hash = "d" * 64
+    queue_module.enqueue_subtitle_review_preview(
+        "job_preview",
+        "candidate_short_1",
+        newest_hash,
+    )
+
+    assert old_same_clip.deleted is True
+    assert other_clip.deleted is False
+    assert prefix_collision_clip.deleted is False
+    assert started_same_clip.deleted is False
+    assert len(queue.calls) == 1
+    assert queue.calls[0][2]["job_id"] == queue_module.subtitle_review_preview_rq_job_id(
+        "job_preview",
+        "candidate_short_1",
+        newest_hash,
+    )
 
 
 def test_subtitle_preview_enqueue_reuses_id_after_terminal_job(

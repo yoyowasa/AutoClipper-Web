@@ -16,10 +16,12 @@ def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleS
         if by_id[item.segment_id].text != item.before:
             raise RuntimeError("字幕が別の操作で更新されています。画面を読み直してください。")
     first = selected[0]
+    style_sources = list(selected)
     affected = set(first.affected_clip_ids)
     if any(set(s.affected_clip_ids) != affected for s in selected):
         raise ValueError("別の動画と共有する範囲が異なるため、この２区間は結合できません。")
     texts = {item.segment_id: item.text for item in request.segments}
+    propagate_first_style = True
     if request.action == "merge":
         positions = [document.segments.index(s) for s in selected]
         if len(selected) != 2 or positions[1] != positions[0] + 1:
@@ -65,6 +67,62 @@ def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleS
             )
             for start, end, content in [(first.start, point, text[:offset]), (point, first.end, text[offset:])]
         ]
+    elif request.action == "insert":
+        text = texts[first.id]
+        point = request.split_time
+        if len(selected) != 1 or point is None or request.insert_position is None:
+            raise ValueError("追加位置と時刻を指定してください。")
+        if not first.start + 0.05 <= point <= first.end - 0.05:
+            raise ValueError("字幕区間の内側に追加時刻を指定してください。")
+        pieces = (
+            [(first.start, point, "", ""), (point, first.end, text, first.original_text)]
+            if request.insert_position == "before"
+            else [(first.start, point, text, first.original_text), (point, first.end, "", "")]
+        )
+        replacements = [
+            first.model_copy(
+                update={
+                    "id": f"seg_{uuid4().hex}",
+                    "start": start,
+                    "end": end,
+                    "text": content,
+                    "original_text": original_text,
+                    "source_indices": first.source_indices or [first.index],
+                    "preserve_segmentation": True,
+                    "edited": True,
+                }
+            )
+            for start, end, content, original_text in pieces
+        ]
+    elif request.action == "delete":
+        if len(selected) != 1:
+            raise ValueError("削除する字幕を１行指定してください。")
+        position = document.segments.index(first)
+        candidates = [
+            document.segments[index]
+            for index in (position + 1, position - 1)
+            if 0 <= index < len(document.segments)
+            and set(document.segments[index].affected_clip_ids) == affected
+        ]
+        if not candidates:
+            raise ValueError("この字幕は対象動画内の最後の１行なので削除できません。")
+        neighbor = candidates[0]
+        replacements = [
+            neighbor.model_copy(
+                update={
+                    "source_indices": sorted(
+                        {
+                            *(neighbor.source_indices or [neighbor.index]),
+                            *(first.source_indices or [first.index]),
+                        }
+                    ),
+                    "preserve_segmentation": True,
+                    "edited": True,
+                }
+            )
+        ]
+        selected.append(neighbor)
+        propagate_first_style = False
     else:
         if len(selected) != 1:
             raise ValueError("字幕を１区間指定してください。")
@@ -87,10 +145,10 @@ def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleS
             continue
         clip.confirmed = False
         clip.segment_ids = [s.id for s in document.segments if clip.id in s.affected_clip_ids]
-        old_ranges = {(s.start, s.end) for s in selected}
+        old_ranges = {(s.start, s.end) for s in style_sources}
         first_style = next((s.style for s in clip.subtitle_styles if (s.start, s.end) == (first.start, first.end)), None)
         clip.subtitle_styles = [s for s in clip.subtitle_styles if (s.start, s.end) not in old_ranges]
-        if first_style:
+        if first_style and propagate_first_style:
             clip.subtitle_styles.extend(SubtitleStyleOverride(start=s.start, end=s.end, style=first_style) for s in replacements)
     _refresh_counts(document)
     return affected

@@ -97,6 +97,7 @@ from app.jobs.queue import (
 )
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP
 from app.jobs.subtitle_review import (
+    PreviewFraming,
     SubtitleReviewDocument,
     apply_reviewed_clip_content,
     subtitle_review_source_path,
@@ -3500,17 +3501,24 @@ def get_subtitle_review_live_preview_video(
         enqueue_preview=enqueue_preview,
     )
     clip = next(item for item in document.clips if item.id == clip_id)
-    if clip.live_preview_spec_hash != spec_hash:
+    requested_is_current = clip.live_preview_spec_hash == spec_hash
+    try:
+        live_paths = live_subtitle_review_preview_paths(
+            output_dir,
+            clip_id,
+            spec_hash,
+        )
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="subtitle review live preview revision not found",
-        )
-    live_paths = live_subtitle_review_preview_paths(
-        output_dir,
-        clip_id,
-        spec_hash,
-    )
+        ) from exc
     if not live_subtitle_review_preview_is_ready(live_paths, spec_hash):
+        if not requested_is_current:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="subtitle review live preview revision not found",
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -3826,7 +3834,6 @@ def update_subtitle_review_clip_framing(
     request: SubtitleReviewClipFramingUpdateRequest,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
-    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> SubtitleReviewDocument:
     job = _get_job_or_404(db, job_id)
     video = db.get(Video, job.video_id)
@@ -3855,6 +3862,16 @@ def update_subtitle_review_clip_framing(
                 detail="subtitle review is not awaiting edits",
             )
         try:
+            target_clip = next((item for item in document.clips if item.id == clip_id), None)
+            if target_clip is None:
+                raise KeyError(clip_id)
+            if target_clip.preview_framing is None:
+                target_clip.preview_framing = PreviewFraming(
+                    framing_offset_x=target_clip.framing_offset_x,
+                    framing_offset_y=target_clip.framing_offset_y,
+                    framing_zoom=target_clip.framing_zoom,
+                    short_layout=target_clip.short_layout,
+                )
             document = update_review_clip_framing(
                 document,
                 clip_id,
@@ -3887,21 +3904,8 @@ def update_subtitle_review_clip_framing(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
-        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
-            job=job,
-            video=video,
-            document=document,
-            paths=paths,
-            clip_ids={clip_id},
-        )
         _write_subtitle_review_unlocked(document, paths)
-    return _enqueue_subtitle_review_previews(
-        job_id=job.id,
-        document=document,
-        queued=sorted(queued_previews, key=lambda item: item[0] != clip_id),
-        paths=paths,
-        enqueue_preview=enqueue_preview,
-    )
+    return document
 
 
 @router.post(

@@ -146,6 +146,37 @@ def subtitle_review_preview_rq_job_id(
     return f"subtitle_review_preview-{job_id}-{clip_id}-{spec_hash}"
 
 
+def _remove_superseded_queued_subtitle_review_previews(
+    queue: Queue,
+    *,
+    job_id: str,
+    clip_id: str,
+    keep_rq_job_id: str,
+) -> None:
+    """Keep only the newest queued preview for one review clip.
+
+    A subtitle edit produces a new content-addressed job ID. Without removing
+    the older queued IDs, rapid split/merge operations render every obsolete
+    intermediate document before the latest one.
+    """
+    rq_job_base = f"subtitle_review_preview-{job_id}-{clip_id}"
+    for queued_job_id in queue.get_job_ids():
+        if (
+            queued_job_id == keep_rq_job_id
+            or queued_job_id.rsplit("-", 1)[0] != rq_job_base
+        ):
+            continue
+        stale_job = queue.fetch_job(queued_job_id)
+        if stale_job is None:
+            continue
+        if stale_job.get_status(refresh=True) != JobStatus.QUEUED:
+            continue
+        # Remove from the Redis queue first. If a worker claimed the job in the
+        # meantime, lrem returns 0 and we must leave the running job record alone.
+        if queue.remove(queued_job_id):
+            stale_job.delete(remove_from_queue=False)
+
+
 def enqueue_subtitle_review_preview(
     job_id: str,
     clip_id: str,
@@ -153,6 +184,12 @@ def enqueue_subtitle_review_preview(
 ) -> None:
     queue = get_queue()
     rq_job_id = subtitle_review_preview_rq_job_id(job_id, clip_id, spec_hash)
+    _remove_superseded_queued_subtitle_review_previews(
+        queue,
+        job_id=job_id,
+        clip_id=clip_id,
+        keep_rq_job_id=rq_job_id,
+    )
     existing = queue.fetch_job(rq_job_id)
     if existing is not None:
         if existing.get_status(refresh=True) in ACTIVE_RETRY_RQ_STATUSES:

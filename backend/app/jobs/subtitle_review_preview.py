@@ -4,7 +4,7 @@ import os
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -370,6 +370,13 @@ def current_subtitle_review_preview_spec(
         paths=paths,
         clip_id=clip_id,
     )
+    # Only review movies retain the original framing; guides and final export
+    # use the latest candidate settings.
+    clip = next(item for item in document.clips if item.id == clip_id)
+    if clip.type == "short" and clip.preview_framing is not None:
+        inputs = replace(inputs, candidate=inputs.candidate.model_copy(
+            update=clip.preview_framing.model_dump(),
+        ))
     spec = build_subtitle_review_preview_spec(
         candidate=inputs.candidate,
         transcript_segments=inputs.transcript_segments,

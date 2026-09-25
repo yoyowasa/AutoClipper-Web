@@ -383,10 +383,11 @@ export type ThumbnailCopyState = {
 };
 
 export type SubtitleStructureRequest = {
-  action: "merge" | "split" | "line";
+  action: "merge" | "split" | "insert" | "delete" | "line";
   segments: Array<{ segmentId: string; before: string; text: string }>;
   splitOffset?: number;
   splitTime?: number;
+  insertPosition?: "before" | "after";
   singleLine?: boolean;
 };
 
@@ -473,6 +474,12 @@ export type SubtitleReviewClip = {
   framingOffsetX: number;
   framingOffsetY: number;
   framingZoom: number;
+  previewFraming?: {
+    framing_offset_x: number;
+    framing_offset_y: number;
+    framing_zoom: number;
+    short_layout: ClipSettings["shortLayout"] | null;
+  } | null;
   shortLayout?: "auto" | "face_tracking_crop" | "center_crop" | "blur_background" | null;
   resolvedTitleStyle: ResolvedClipTextStyle | null;
   resolvedHookStyle: ResolvedClipTextStyle | null;

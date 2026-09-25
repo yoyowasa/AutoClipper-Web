@@ -545,17 +545,20 @@ def test_hook_scene_update_is_applied_to_rerendered_short() -> None:
     assert cleared.shorts[0].hook_scene_end is None
 
 
-def test_hook_scene_update_respects_review_short_duration_limit() -> None:
+def test_hook_scene_update_allows_manual_edit_past_review_short_duration_target() -> None:
     _transcript, review = _review_fixture()
     review.short_max_duration = 21.0
 
-    with pytest.raises(ValueError, match="short maximum duration"):
-        update_review_hook_scene(
-            review,
-            "short_1",
-            start=12.0,
-            end=14.0,
-        )
+    updated = update_review_hook_scene(
+        review,
+        "short_1",
+        start=12.0,
+        end=14.0,
+    )
+
+    assert updated.clips[1].hook_scene_start == 12.0
+    assert updated.clips[1].hook_scene_end == 14.0
+    assert updated.clips[1].confirmed is False
 
 
 def test_hook_scene_update_allows_clip_already_over_duration_limit() -> None:

@@ -160,8 +160,11 @@ export function ClipHookSceneEditor({
   const duration = start !== null && end !== null ? end - start : null;
   const projectedDuration =
     duration !== null && duration > 0 ? clip.duration + duration : null;
+  const projectedDurationExceedsMaximum =
+    projectedDuration !== null &&
+    projectedDuration > shortMaxDuration + 0.001;
   const clipAlreadyExceedsMaximum =
-    enforceMaximumDuration && clip.duration > shortMaxDuration + 0.001;
+    clip.duration > shortMaxDuration + 0.001;
   const validation = useMemo(() => {
     if (start === null || end === null) {
       return "分と秒を正しく入力してください";
@@ -340,12 +343,14 @@ export function ClipHookSceneEditor({
         </p>
       ) : (
         <>
-          {clipAlreadyExceedsMaximum && projectedDuration !== null ? (
+          {projectedDurationExceedsMaximum ? (
             <p
               className={`${compact ? "mt-1 leading-4" : "mt-2"} text-xs font-medium text-amber-800`}
             >
-              元のclipが上限 {formatTime(shortMaxDuration)} を超えています。
-              追加後 {formatTime(projectedDuration)} で保存します。
+              {clipAlreadyExceedsMaximum
+                ? `元のclipが上限 ${formatTime(shortMaxDuration)} を超えています。`
+                : `編集後の完成尺が上限 ${formatTime(shortMaxDuration)} を超えます。`}
+              追加後 {formatTime(projectedDuration ?? 0)} で保存します。
             </p>
           ) : null}
           <p
