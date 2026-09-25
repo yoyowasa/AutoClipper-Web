@@ -12,6 +12,7 @@ from app.jobs.thumbnail_regeneration import run_export_thumbnail_regeneration
 from app.main import app
 from app.models import ExportItem, Job, Video
 from app.render import render_thumbnail as renderer
+from app.render.thumbnail_fonts import thumbnail_font_path
 from app.storage.paths import get_storage_paths
 from app.thumbnail_style import ThumbnailTextStyles
 
@@ -112,6 +113,29 @@ def test_three_roles_render_with_independent_fonts_sizes_colors(tmp_path, monkey
     assert image.size == (1280, 720)
     for channel in range(3):
         assert sum(pixel[channel] > 220 and all(pixel[c] < 45 for c in range(3) if c != channel) for pixel in image.getdata()) > 100
+
+
+@pytest.mark.parametrize(
+    "preset,filename",
+    [
+        ("genei_kiwami_go", "GenEiKiwamiGo.ttf"),
+        ("genei_mono_go", "GenEiMonoGothic-Bold.ttf"),
+        ("genei_antique", "GenEiAntiqueNv6-M.ttf"),
+        ("gochi_kakutto", "851Gkktt_005.ttf"),
+    ],
+)
+def test_added_fonts_render_normal_thumbnails(tmp_path, preset, filename):
+    styles = ThumbnailTextStyles().model_dump(by_alias=True)
+    styles["heading"]["fontPreset"] = preset
+    validated = ThumbnailTextStyles.model_validate(styles)
+    assert thumbnail_font_path(preset, tmp_path / "default.ttf").name == filename
+
+    output = tmp_path / f"{preset}.jpg"
+    real_test_renderer(
+        "source", output, frame_time=4, eyebrow="日本語の見出し",
+        title_first_line="", title_second_line="", text_styles=validated.model_dump(by_alias=True),
+    )
+    assert Image.open(output).size == (1280, 720)
 
 
 @pytest.mark.parametrize("role,sizes", [("heading", (60, 70)), ("upper", (120, 140)), ("lower", (120, 140))])

@@ -8,6 +8,11 @@
 @font-face { font-family: "AnkokuZombic"; src: url("/fonts/Zomzi.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "GN-KMBFont-UB-NewstyleKanaB"; src: url("/fonts/GN-KillGothic-U-KanaNB.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Tanuki Permanent Marker"; src: url("/fonts/TanukiMagic.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "GenEi Kiwami Gothic Ultra"; src: url("/fonts/GenEiKiwamiGo.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "GenEi Mono Gothic"; src: url("/fonts/GenEiMonoGothic-Bold.ttf") format("truetype"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "GenEi Antique v6"; src: url("/fonts/GenEiAntiqueNv6-M.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "851Gkktt"; src: url("/fonts/851Gkktt_005.ttf") format("truetype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Nikkyou Sans"; src: url("/fonts/NikkyouSans-mLKax.ttf") format("truetype"); font-weight: 400; font-display: swap; }
 
 @font-face {
   font-family: "Source Han Sans JP Heavy";

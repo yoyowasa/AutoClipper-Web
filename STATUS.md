@@ -10245,3 +10245,20 @@ pip check: pass
 - 検証: backend pytest 1164 passed・1 skipped、ruff成功。frontend typecheck・lint・build、追加したruntime profileとショートプレビュー時刻のテスト成功。Docker Compose設定検証成功、既存のbackend/frontend/worker/redis稼働とbackend healthyを確認。差分の空白・秘密値パターンを確認。
 - 範囲: 今回はGit履歴の整理とmain反映。実ジョブの追加レンダリング、稼働コンテナの再構築、字幕編集の新規実機操作は行っていない。各機能の個別実機確認は上記の該当作業記録に従う。
 - CI修正: 初回main push後、GitHubのbackend lintで`launcher/controller.py`内PowerShell文字列が140文字制限を超えて失敗。ローカル検査の対象にlauncherを含めていなかったため見逃した。WMIの引数マップを複数行へ整形し、処理内容は維持。修正後にbackendとlauncherのruff、関連launcherテスト、GitHub CIを再確認する。
+
+## 2026-09-25 JST 源暎フォント3書体を追加
+
+- 目的: 指定された源暎きわみゴ、源暎モノゴ、源暎アンチックを字幕・動画内タイトル／フックと通常サムネイルの書体として選べるようにする。
+- 変更ファイル: `frontend/public/fonts` の3書体TTF・各公式ライセンス文書・README、`frontend/lib/clipTextStyle.ts`、`frontend/lib/thumbnailStyle.ts`、`frontend/lib/types.ts`、`frontend/app/globals.css`、`backend/app/candidates/merge_boundaries.py`、`backend/app/render/subtitles_ass.py`、`backend/app/render/thumbnail_fonts.py`、`backend/app/thumbnail_style.py`、関連テスト、本ファイル。
+- 変更: 公式配布のTTFを無改変で同梱し、3書体を共有の選択肢・ブラウザプレビュー・ASS字幕描画・サムネイル描画に登録。元ZIPのSIL OFL 1.1文書をそれぞれ保持した。源暎きわみゴは内部family名を「GenEi Kiwami Gothic Ultra」に合わせた。
+- 検証: backend全テスト1167 passed・1 skipped、対象テスト再実行49 passed、ruff、frontend typecheck・lint・build、関連TSテスト、git diff --check成功。Pillowで3書体を使うサムネイルをそれぞれ生成。稼働中backendのFFmpeg/libassで3書体の日本語字幕を描画し、各指定書体が実際に選択されるログを確認した。
+- 稼働反映: backend／GPU worker／frontendを再build・再作成。backend healthy、frontendの源暎TTF配信HTTP 200、backend health HTTP 200、backendとGPU workerの書体登録を確認。更新前のworkerは待機中、queue 0を確認した。
+- 未確認: 実ユーザーjobでの書体選択・保存・再レンダリング操作は行っていない。既存jobの編集内容は変更していない。
+
+## 2026-09-25 JST 851ゴチカクットとNikkyou Sansを追加
+
+- 目的: 指定された追加書体を通常・ショートの字幕／動画内文字と通常サムネイルで選べるようにする。
+- 変更ファイル: `frontend/public/fonts/851Gkktt_005.ttf`、同書体の権利表記とREADME、`.gitignore`、`.dockerignore`、書体選択・プレビュー・ASS描画・サムネイル描画のfrontend/backend実装、関連テスト、本ファイル。
+- 変更: 851ゴチカクットは作者の再配布条件を確認して同梱。Nikkyou Sansは動画利用は許可されているがフォント再配布の明示がないため、このPCへのローカル導入に限定し、GitとDocker配布から除外した。漢字の収録範囲が狭いことをUIにも表示。
+- 検証: backend全テスト1168 passed・1 skipped、ruff、frontend typecheck・lint・build、関連TSテスト成功。Pillowで851ゴチカクットの通常サムネイルを描画。FFmpeg/libassで両書体の指定familyが選択されることを確認。backend／GPU worker／frontendを再build・再作成し、backend healthy、書体配信HTTP 200を確認。
+- 未解決: 指定された源直ゴシックは公式の無料ファイルにBOOTHログインが必要で、取得・組込み・実描画は未実施。実ユーザーjobでの書体選択・保存・再レンダリングも未確認。

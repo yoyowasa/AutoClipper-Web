@@ -15,5 +15,6 @@ storage/.storage-lifecycle.lock
 youtube/
 *.log
 frontend/public/fonts/GN-KillGothic-U-KanaNB.ttf
+frontend/public/fonts/NikkyouSans-mLKax.ttf
 frontend/public/fonts/local/
 .codex_tmp/
