@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -1181,6 +1182,48 @@ def _time_range_overlap_ratio(
     return overlap / shortest
 
 
+def _resolve_topic_block_ids(
+    ids: list[str],
+    block_order: dict[str, int],
+) -> list[str]:
+    resolved: list[str] = []
+    for raw_id in ids:
+        if raw_id in block_order:
+            resolved.append(raw_id)
+            continue
+        # A model can append its own prose to an otherwise exact block ID.
+        # Only recover the unambiguous ID from this request; never invent one.
+        match = re.fullmatch(r"(topic_[0-9]{6})\s+(.+)", raw_id, flags=re.DOTALL)
+        if (
+            match is None
+            or match.group(1) not in block_order
+            or not match.group(2).strip()
+            or re.search(r"\btopic_[0-9]{6}\b", match.group(2))
+        ):
+            raise CodexInitialSelectionError(
+                "codex_topic_selection_block_unknown",
+                "Codex話題選定のブロックが入力に存在しません。",
+            )
+        resolved.append(match.group(1))
+    if len(resolved) != len(set(resolved)):
+        raise CodexInitialSelectionError(
+            "codex_topic_selection_duplicate_block",
+            "Codex話題選定に重複した話題ブロックがあります。",
+        )
+    indices = [block_order[item_id] for item_id in resolved]
+    if indices != sorted(indices):
+        raise CodexInitialSelectionError(
+            "codex_topic_selection_block_order_invalid",
+            "Codex話題選定のブロック順が不正です。",
+        )
+    if indices != list(range(indices[0], indices[0] + len(indices))):
+        raise CodexInitialSelectionError(
+            "codex_topic_selection_block_not_contiguous",
+            "Codex話題選定のブロックが連続していません。",
+        )
+    return resolved
+
+
 def _validate_topic_selection_response(
     request: CodexTopicSelectionRequest,
     response: CodexTopicSelectionResponse,
@@ -1204,6 +1247,7 @@ def _validate_topic_selection_response(
     block_order = {item.id: index for index, item in enumerate(request.topic_blocks)}
     block_by_id = {item.id: item for item in request.topic_blocks}
     selected: list[CodexTopicChoice] = []
+    first_invalid_choice: CodexInitialSelectionError | None = None
     used_normal_topic_keys: set[str] = set()
     used_normal_block_ids: set[str] = set()
     used_normal_ranges: list[tuple[float, float]] = []
@@ -1217,28 +1261,12 @@ def _validate_topic_selection_response(
             continue
         if counts[choice.type] >= limits[choice.type]:
             continue
-        if len(choice.topic_block_ids) != len(set(choice.topic_block_ids)):
-            raise CodexInitialSelectionError(
-                "codex_topic_selection_duplicate_block",
-                "Codex話題選定に重複した話題ブロックがあります。",
-            )
         try:
-            indices = [block_order[item_id] for item_id in choice.topic_block_ids]
-        except KeyError as exc:
-            raise CodexInitialSelectionError(
-                "codex_topic_selection_block_unknown",
-                "Codex話題選定のブロックが入力に存在しません。",
-            ) from exc
-        if indices != sorted(indices):
-            raise CodexInitialSelectionError(
-                "codex_topic_selection_block_order_invalid",
-                "Codex話題選定のブロック順が不正です。",
-            )
-        if indices != list(range(indices[0], indices[0] + len(indices))):
-            raise CodexInitialSelectionError(
-                "codex_topic_selection_block_not_contiguous",
-                "Codex話題選定のブロックが連続していません。",
-            )
+            resolved_ids = _resolve_topic_block_ids(choice.topic_block_ids, block_order)
+        except CodexInitialSelectionError as exc:
+            first_invalid_choice = first_invalid_choice or exc
+            continue
+        choice = choice.model_copy(update={"topic_block_ids": resolved_ids})
         topic_key = choice.topic_key.casefold()
         if choice.type == "normal":
             blocks = [block_by_id[item_id] for item_id in choice.topic_block_ids]
@@ -1259,6 +1287,8 @@ def _validate_topic_selection_response(
             used_normal_topic_keys.add(topic_key)
             used_normal_block_ids.update(choice.topic_block_ids)
             used_normal_ranges.append((topic_start, topic_end))
+    if not selected and first_invalid_choice is not None:
+        raise first_invalid_choice
     return selected
 
 

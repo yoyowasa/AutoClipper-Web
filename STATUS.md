@@ -10262,3 +10262,11 @@ pip check: pass
 - 変更: 851ゴチカクットは作者の再配布条件を確認して同梱。Nikkyou Sansは動画利用は許可されているがフォント再配布の明示がないため、このPCへのローカル導入に限定し、GitとDocker配布から除外した。漢字の収録範囲が狭いことをUIにも表示。
 - 検証: backend全テスト1168 passed・1 skipped、ruff、frontend typecheck・lint・build、関連TSテスト成功。Pillowで851ゴチカクットの通常サムネイルを描画。FFmpeg/libassで両書体の指定familyが選択されることを確認。backend／GPU worker／frontendを再build・再作成し、backend healthy、書体配信HTTP 200を確認。
 - 未解決: 指定された源直ゴシックは公式の無料ファイルにBOOTHログインが必要で、取得・組込み・実描画は未実施。実ユーザーjobでの書体選択・保存・再レンダリングも未確認。
+
+## 2026-09-26 JST 話題選定のブロックID混入による全件仮選定を修正
+
+- 症状: job `job_78bbdc1cc21b4cb9ae06eb55de943e91` はCodexの話題選定応答を受信したが、`codex_topic_selection_block_unknown`で全件ローカル仮選定へ切り替わった。
+- 原因: 応答7候補のうち1件だけ、存在するブロックIDの後ろにCodexの余計な英文が混入した。検証処理はその候補を含む応答全体を不合格とし、他の正常な6件も失っていた。直近のフォント追加は選定処理を変更していない。
+- 変更ファイル: `backend/app/candidates/codex_initial_selection.py`、`backend/tests/test_codex_initial_selection.py`、本ファイル。入力に実在するIDの後ろに明らかな余計な文章が続く場合だけIDを復元。複数IDが紛れた曖昧な値や未知IDは採用しない。不正候補だけを除外し、正常候補がある場合は選定を継続。全候補が不正なら従来どおりエラーにする。
+- 検証: 問題の保存済み応答を読み取り専用で再投入し、通常2件・ショート5件の正規IDが次段階の入力へ渡ることを確認。回帰テストを追加し対象44 passed、backend全体1167 passed・1 skipped、backend/launcher ruff成功。
+- 未確認: ユーザーjob自体の再選定実行、修正後のCodexモデルとの実通信、実動画の候補確定は未実施。
