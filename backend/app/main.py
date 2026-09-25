@@ -1,11 +1,11 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import character_presets, exports, framing_guide, jobs, preferences, short_banners, storage, videos
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db import init_db
 
 
@@ -41,6 +41,11 @@ app.include_router(storage.router)
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/runtime-profile")
+def runtime_profile(config: Settings = Depends(get_settings)) -> dict[str, str]:
+    return {"profile": config.autoclipper_runtime_profile}
 
 
 @app.get("/api/health")

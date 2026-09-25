@@ -1,4 +1,7 @@
 services:
+  backend:
+    environment:
+      AUTOCLIPPER_RUNTIME_PROFILE: gpu
   worker:
     image: ${COMPOSE_PROJECT_NAME:-autoclipperweb}-worker-gpu
     build:

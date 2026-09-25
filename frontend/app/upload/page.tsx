@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, Suspense, useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 import {
   SettingsPanel,
@@ -16,6 +16,7 @@ import {
   cleanupExpiredStorage,
   createJob,
   getStorageStatus,
+  getRuntimeProfile,
   reopenCompletedVideo,
   saveYouTubePostingProfile,
   uploadVideo
@@ -77,10 +78,8 @@ function actionLabelForStage(
 
 function UploadForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const requestedProfile = searchParams.get("runtimeProfile");
-  const runtimeProfile =
-    requestedProfile === "gpu" ? "gpu" : requestedProfile === "cpu" ? "cpu" : null;
+  const [runtimeProfile, setRuntimeProfile] = useState<"gpu" | "cpu" | null>(null);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [uploadMode, setUploadMode] = useState<UploadMode>("new");
   const [file, setFile] = useState<File | null>(null);
   const [heatmapFile, setHeatmapFile] = useState<File | null>(null);
@@ -96,6 +95,23 @@ function UploadForm() {
   const [storageStatusError, setStorageStatusError] = useState<string | null>(null);
   const [isCleaningStorage, setIsCleaningStorage] = useState(false);
   const [storageCleanupMessage, setStorageCleanupMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void getRuntimeProfile().then((profile) => {
+      if (!active) return;
+      const defaults = settingsForRuntimeProfile(profile);
+      setSettings(current => ({ ...current,
+        whisperModelSize: defaults.whisperModelSize,
+        transcriptionDevice: defaults.transcriptionDevice,
+        transcriptionComputeType: defaults.transcriptionComputeType
+      }));
+      setRuntimeProfile(profile);
+    }).catch(() => {
+      if (active) setRuntimeError("文字起こしの処理環境を取得できません。画面を再読み込みしてください。設定未確認のまま開始することはありません。");
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -159,6 +175,7 @@ function UploadForm() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!runtimeProfile) return;
     if (!file) {
       setError("No file selected");
       return;
@@ -279,6 +296,7 @@ function UploadForm() {
     file !== null
   );
   const submitDisabled =
+    !runtimeProfile ||
     !file ||
     isSubmitting ||
     isCleaningStorage ||
@@ -288,6 +306,14 @@ function UploadForm() {
       ? storageStatus.reasons.map(readableStorageReason)
       : ["容量が警告基準に達しています"]
     : [];
+
+  // Preset loaders must not write back provisional CPU settings while runtime loads.
+  if (!runtimeProfile) {
+    return <main className="p-6">
+      <p role={runtimeError ? "alert" : "status"}>{runtimeError ?? "文字起こしの処理環境を確認中…"}</p>
+      {runtimeError ? <button type="button" className="mt-3 border px-4 py-2" onClick={() => window.location.reload()}>再読み込み</button> : null}
+    </main>;
+  }
 
   return (
     <main className="top-workspace min-h-screen bg-[#f1f1ef] text-[#1d1d1b] sm:p-3 xl:p-4">
@@ -319,8 +345,9 @@ function UploadForm() {
                 ? "GPU recommended"
                 : runtimeProfile === "cpu"
                   ? "CPU compatible"
-                  : "Runtime 自動判定"}
+                  : runtimeError ? "処理環境の取得失敗" : "処理環境を確認中…"}
             </span>
+            {runtimeError ? <p role="alert" className="text-xs text-red-700">{runtimeError}</p> : null}
             <button
               className="min-h-10 bg-sky-700 px-4 text-xs font-bold text-white hover:bg-sky-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-700 disabled:cursor-not-allowed disabled:bg-[#d2d2cf] xl:hidden"
               disabled={submitDisabled}
@@ -677,7 +704,7 @@ function UploadForm() {
             <div className="min-h-0 flex-1 xl:overflow-y-auto">
               {uploadMode === "new" ? (
                 <SettingsPanel
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || !runtimeProfile}
                   revealManualRanges={manualRangeRevealKey}
                   settings={settings}
                   workspace

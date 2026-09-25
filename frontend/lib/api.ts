@@ -35,6 +35,16 @@ import type {
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
+export async function getRuntimeProfile(): Promise<"gpu" | "cpu"> {
+  const result = await parseJsonResponse<{ profile: string }>(
+    await fetch(`${API_BASE_URL}/api/runtime-profile`, { cache: "no-store" })
+  );
+  if (result.profile !== "gpu" && result.profile !== "cpu") {
+    throw new Error("処理環境を確認できません。");
+  }
+  return result.profile;
+}
+
 export async function thumbnailCopyRequest(exportId: string, generate = false): Promise<import("./types").ThumbnailCopyState> {
   return parseJsonResponse(await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/copy${generate ? "?force=true" : ""}`,
     { method: generate ? "POST" : "GET", cache: "no-store" }));
