@@ -393,6 +393,7 @@ export type SubtitleStructureRequest = {
 
 export type ClipTextFontPreset =
   | "chikara_yowaku" | "keifont" | "mushin" | "ankoku_zonji" | "killgo_nb" | "tanuki_magic"
+  | "genei_kiwami_go" | "genei_mono_go" | "genei_antique"
   | "sans"
   | "sans_bold"
   | "noto_black"
@@ -678,6 +679,7 @@ export type NormalThumbnailStyle = {
 
 export type ThumbnailFontPreset = Extract<ClipTextFontPreset,
   "noto_black" | "heavy" | "mplus_extrabold" | "mplus_rounded_extrabold" | "chikara" |
-  "chikara_yowaku" | "keifont" | "mushin" | "ankoku_zonji" | "tanuki_magic" | "dela_gothic" | "corporate_logo">;
+  "chikara_yowaku" | "keifont" | "mushin" | "ankoku_zonji" | "tanuki_magic" |
+  "genei_kiwami_go" | "genei_mono_go" | "genei_antique" | "dela_gothic" | "corporate_logo">;
 export type ThumbnailTextStyle = { fontPreset: ThumbnailFontPreset; fontSize: number; color: string; autoFit?: boolean };
 export type ThumbnailTextStyles = { heading: ThumbnailTextStyle; upper: ThumbnailTextStyle; lower: ThumbnailTextStyle };

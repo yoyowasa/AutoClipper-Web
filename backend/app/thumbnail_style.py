@@ -16,6 +16,9 @@ ThumbnailFontPreset = Literal[
     "mushin",
     "ankoku_zonji",
     "tanuki_magic",
+    "genei_kiwami_go",
+    "genei_mono_go",
+    "genei_antique",
     "dela_gothic",
     "corporate_logo",
 ]

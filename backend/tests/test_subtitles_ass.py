@@ -688,6 +688,9 @@ def test_bundled_normal_and_emphasis_font_presets_map_to_ass_names() -> None:
         "chikara": "851CHIKARA-DZUYOKU-KANA-A",
         "dela_gothic": "Dela Gothic One",
         "corporate_logo": "Corporate-Logo-Bold-ver3",
+        "genei_kiwami_go": "GenEi Kiwami Gothic Ultra",
+        "genei_mono_go": "GenEi Mono Gothic",
+        "genei_antique": "GenEi Antique v6",
     }
     segments = [TranscriptSegment(start=0.0, end=4.0, text="確認字幕")]
 

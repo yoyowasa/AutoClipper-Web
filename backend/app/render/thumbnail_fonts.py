@@ -14,6 +14,9 @@ THUMBNAIL_FONT_FILES: dict[ThumbnailFontPreset, str] = {
     "mushin": "mushin.otf",
     "ankoku_zonji": "Zomzi.ttf",
     "tanuki_magic": "TanukiMagic.ttf",
+    "genei_kiwami_go": "GenEiKiwamiGo.ttf",
+    "genei_mono_go": "GenEiMonoGothic-Bold.ttf",
+    "genei_antique": "GenEiAntiqueNv6-M.ttf",
     "dela_gothic": "DelaGothicOne-Regular.ttf",
     "corporate_logo": "Corporate-Logo-Bold-ver3.otf",
 }

@@ -2,7 +2,8 @@ import { CLIP_TEXT_FONT_GROUPS } from "./clipTextStyle";
 import type { NormalThumbnailStyle, ThumbnailFontPreset, ThumbnailTextStyles } from "./types";
 
 const PRESETS: ThumbnailFontPreset[] = ["noto_black", "heavy", "mplus_extrabold", "mplus_rounded_extrabold",
-  "chikara", "chikara_yowaku", "keifont", "mushin", "ankoku_zonji", "tanuki_magic", "dela_gothic", "corporate_logo"];
+  "chikara", "chikara_yowaku", "keifont", "mushin", "ankoku_zonji", "tanuki_magic",
+  "genei_kiwami_go", "genei_mono_go", "genei_antique", "dela_gothic", "corporate_logo"];
 export const THUMBNAIL_FONTS = PRESETS.map(preset => CLIP_TEXT_FONT_GROUPS.flatMap(group => group.options)
   .find(option => option.value === preset)!);
 
