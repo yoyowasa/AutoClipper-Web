@@ -16,7 +16,9 @@ from app.jobs.thumbnail_frame_selection import select_thumbnail_frame_seconds
 from app.jobs.codex_thumbnail_frame_selection import select_codex_thumbnail_frame_seconds
 from app.models import ExportItem, Video
 from app.render.render_thumbnail import ThumbnailRenderResult, render_normal_thumbnail
-from app.thumbnail_style import resolve_export_thumbnail_style, resolve_thumbnail_text_styles
+from app.thumbnail_style import (
+    ThumbnailSubjectPlacement, resolve_export_thumbnail_style, resolve_thumbnail_text_styles,
+)
 from app.storage.paths import StoragePaths, get_storage_paths
 
 
@@ -153,6 +155,9 @@ def run_export_thumbnail_regeneration(
             crop_mode = str(payload.get("thumbnail_crop_mode") or "standard")
             if crop_mode not in THUMBNAIL_FACE_HEIGHT_RATIOS:
                 crop_mode = "standard"
+            subject_placement = ThumbnailSubjectPlacement.model_validate(
+                payload.get("thumbnail_subject_placement") or {}
+            )
             output_path = thumbnail_output_path(storage.job_outputs(export.job_id), export)
             output_path.resolve(strict=False).relative_to(
                 storage.job_outputs(export.job_id).resolve(strict=False)
@@ -177,6 +182,9 @@ def run_export_thumbnail_regeneration(
                 title_second_line=str(payload.get("thumbnail_line2") or "").strip(),
                 subject_anchor_x=min(1.0, max(0.0, subject_anchor_x)),
                 face_height_ratio=THUMBNAIL_FACE_HEIGHT_RATIOS[crop_mode],
+                subject_scale=subject_placement.scale,
+                subject_offset_x=subject_placement.offset_x,
+                subject_offset_y=subject_placement.offset_y,
             )
             if result.path.resolve() != temp_output.resolve() or not temp_output.is_file():
                 raise RuntimeError("thumbnail renderer returned an unpublished path")

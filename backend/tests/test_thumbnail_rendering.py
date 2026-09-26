@@ -10,6 +10,7 @@ from app.render.render_thumbnail import (
     DEFAULT_NORMAL_FONT_PATH,
     DEFAULT_NORMAL_TEMPLATE_PATH,
     SOPIA_NORMAL_TEMPLATE_PATH,
+    _load_template,
     _select_primary_face,
     build_extract_thumbnail_frame_command,
     render_normal_thumbnail,
@@ -79,6 +80,25 @@ def test_portrait_frame_supports_a_closer_face_crop(
     )
 
     assert ImageChops.difference(standard, close).getbbox() is not None
+
+
+def test_sopia_crop_keeps_the_outer_edge_of_an_off_center_character(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = Image.new("RGB", (320, 180), "#202020")
+    ImageDraw.Draw(source).rectangle((300, 0, 319, 179), fill="#ff00ff")
+    monkeypatch.setattr(
+        thumbnail_renderer,
+        "_primary_face",
+        lambda _image: (0.84, 0.60, 0.08, 0.13),
+    )
+    crop = thumbnail_renderer._portrait_frame(
+        source, 160, 180,
+        frame_config=_load_template(SOPIA_NORMAL_TEMPLATE_PATH)["frame"],
+        anchor_x=1.0, face_height_ratio=0.34,
+    )
+    right = crop.getpixel((156, 90))
+    assert right[0] > 200 and right[2] > 200 and right[1] < 80
 
 
 def test_build_extract_thumbnail_frame_command_does_not_resize() -> None:

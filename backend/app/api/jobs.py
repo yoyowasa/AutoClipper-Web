@@ -736,6 +736,7 @@ def _result_item(
         thumbnailLine1=str(_first_value(metadata.get("thumbnail_line1"), selected.get("thumbnail_line1"), "")),
         thumbnailLine2=str(_first_value(metadata.get("thumbnail_line2"), selected.get("thumbnail_line2"), "")),
         thumbnailCropMode="close" if metadata.get("thumbnail_crop_mode") == "close" else "standard",
+        thumbnailSubjectPlacement=metadata.get("thumbnail_subject_placement") or {},
         id=export.id,
         type=export.type,
         candidateId=export.candidate_id,

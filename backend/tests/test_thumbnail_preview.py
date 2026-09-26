@@ -74,6 +74,26 @@ def test_template_switch_previews_immediately_without_saving(client):  # noqa: F
     assert invalid.status_code == 409
 
 
+def test_subject_placement_preview_uses_saved_renderer_without_mutating_files(client, tmp_path):  # noqa: F811
+    _, _, metadata, thumbnail, video, _, key = prepare(client)
+    before = [path.read_bytes() for path in (metadata, thumbnail, video)]
+    placement = {"scale": 0.7, "offsetX": -65, "offsetY": 25}
+    expected = tmp_path / "placed.jpg"
+    real_test_renderer(
+        "source", expected, frame_time=14, eyebrow=TEXT["heading"],
+        title_first_line=TEXT["upper"], title_second_line=TEXT["lower"],
+        subject_anchor_x=1, face_height_ratio=0.34, text_styles=TEXT_STYLES,
+        subject_scale=0.7, subject_offset_x=-65, subject_offset_y=25,
+    )
+    response = client.post(ENDPOINT, json={
+        "frameKey": key, "text": TEXT, "textStyles": TEXT_STYLES,
+        "subjectPlacement": placement,
+    })
+    assert response.status_code == 200, response.text
+    assert response.content == expected.read_bytes()
+    assert [path.read_bytes() for path in (metadata, thumbnail, video)] == before
+
+
 def test_changed_source_frame_invalidates_old_preview_and_prepares_once(client):  # noqa: F811
     storage, factory, metadata, _, _, queue, old_key = prepare(client)
     payload = json.loads(metadata.read_text(encoding="utf-8"))

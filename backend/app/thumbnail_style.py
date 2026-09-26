@@ -27,6 +27,13 @@ ThumbnailFontPreset = Literal[
 ThumbnailDesign = Literal["raden", "sopia", "plain", "custom"]
 
 
+class ThumbnailSubjectPlacement(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    scale: float = Field(default=1.0, ge=0.5, le=1.5)
+    offset_x: int = Field(default=0, ge=-300, le=300, alias="offsetX")
+    offset_y: int = Field(default=0, ge=-250, le=250, alias="offsetY")
+
+
 class ThumbnailTextStyle(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     font_preset: ThumbnailFontPreset = Field(default="noto_black", alias="fontPreset")

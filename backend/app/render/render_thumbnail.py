@@ -302,10 +302,16 @@ def _feather_mask(width: int, height: int, frame_config: dict[str, Any]) -> Imag
     mask = Image.new("L", (width, height), 255)
     pixels = mask.load()
     left_width = min(width, max(0, int(frame_config.get("feather_left", 0))))
+    right_width = min(width, max(0, int(frame_config.get("feather_right", 0))))
     top_height = min(height, max(0, int(frame_config.get("feather_top", 0))))
     bottom_height = min(height, max(0, int(frame_config.get("feather_bottom", 0))))
     for x in range(left_width):
         alpha = round(255 * (x / max(1, left_width - 1)) ** 1.5)
+        for y in range(height):
+            pixels[x, y] = min(pixels[x, y], alpha)
+    for offset in range(right_width):
+        x = width - 1 - offset
+        alpha = round(255 * offset / max(1, right_width - 1))
         for y in range(height):
             pixels[x, y] = min(pixels[x, y], alpha)
     for y in range(top_height):
@@ -507,6 +513,9 @@ def _compose_normal_thumbnail(
     font_path: Path,
     subject_anchor_x: float | None,
     face_height_ratio: float | None = None,
+    subject_scale: float = 1.0,
+    subject_offset_x: int = 0,
+    subject_offset_y: int = 0,
     background_image: Image.Image | None = None,
     text_styles: ThumbnailTextStyles | None = None,
 ) -> Image.Image:
@@ -551,7 +560,30 @@ def _compose_normal_thumbnail(
         anchor_x=anchor_x,
         face_height_ratio=face_height_ratio,
     ).convert("RGBA")
-    fitted_frame.putalpha(_feather_mask(frame_width, frame_height, frame_config))
+    mask_config = frame_config
+    if subject_scale < 1.0:
+        mask_config = {
+            **frame_config,
+            "feather_top": max(50, int(frame_config.get("feather_top", 0))),
+            "feather_bottom": max(65, int(frame_config.get("feather_bottom", 0))),
+            "feather_right": max(32, int(frame_config.get("feather_right", 0))),
+        }
+    fitted_frame.putalpha(_feather_mask(frame_width, frame_height, mask_config))
+    if subject_scale != 1.0 or subject_offset_x or subject_offset_y:
+        scaled_width = max(1, round(frame_width * subject_scale))
+        scaled_height = max(1, round(frame_height * subject_scale))
+        fitted_frame = fitted_frame.resize(
+            (scaled_width, scaled_height), Image.Resampling.LANCZOS
+        )
+        placement = Image.new("RGBA", (frame_width, frame_height))
+        placement.alpha_composite(
+            fitted_frame,
+            (
+                round((frame_width - scaled_width) / 2) + subject_offset_x,
+                round((frame_height - scaled_height) / 2) + subject_offset_y,
+            ),
+        )
+        fitted_frame = placement
     canvas.alpha_composite(fitted_frame, (frame_x, frame_y))
 
     draw = ImageDraw.Draw(canvas, "RGBA")
@@ -651,6 +683,9 @@ def render_normal_thumbnail(
     command_runner: ThumbnailCommandRunner = _run_command,
     subject_anchor_x: float | None = None,
     face_height_ratio: float | None = None,
+    subject_scale: float = 1.0,
+    subject_offset_x: int = 0,
+    subject_offset_y: int = 0,
     character_style: dict[str, Any] | None = None,
     text_styles: dict[str, Any] | None = None,
     source_frame_path: str | Path | None = None,
@@ -662,6 +697,8 @@ def render_normal_thumbnail(
     """
     output = _validate_jpeg_path(output_path)
     timestamp = _validate_timestamp(frame_time)
+    if not 0.5 <= subject_scale <= 1.5 or not -300 <= subject_offset_x <= 300 or not -250 <= subject_offset_y <= 250:
+        raise ValueError("thumbnail subject placement is out of range")
     style = NormalThumbnailStyle.model_validate(character_style) if character_style is not None else None
     if style and style.design == "sopia" and Path(template_path) == DEFAULT_NORMAL_TEMPLATE_PATH:
         template_path = SOPIA_NORMAL_TEMPLATE_PATH
@@ -728,6 +765,9 @@ def render_normal_thumbnail(
                         font_path=selected_font,
                         subject_anchor_x=subject_anchor_x,
                         face_height_ratio=face_height_ratio,
+                        subject_scale=subject_scale,
+                        subject_offset_x=subject_offset_x,
+                        subject_offset_y=subject_offset_y,
                         background_image=source_background,
                         text_styles=resolved_text_styles,
                     )
@@ -741,6 +781,9 @@ def render_normal_thumbnail(
                     font_path=selected_font,
                     subject_anchor_x=subject_anchor_x,
                     face_height_ratio=face_height_ratio,
+                    subject_scale=subject_scale,
+                    subject_offset_x=subject_offset_x,
+                    subject_offset_y=subject_offset_y,
                     background_image=plain_background,
                     text_styles=resolved_text_styles,
                 )

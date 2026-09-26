@@ -6,7 +6,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
 from app.short_banners import BannerAssetId
-from app.thumbnail_style import NormalThumbnailStyle, ThumbnailDesign, ThumbnailTextStyles
+from app.thumbnail_style import (
+    NormalThumbnailStyle, ThumbnailDesign, ThumbnailSubjectPlacement, ThumbnailTextStyles,
+)
 from app.scoring.thumbnail_copy import ThumbnailCopyText
 from app.posting_metadata import (
     PostMetadataSource,
@@ -942,6 +944,9 @@ class ResultExportItem(BaseModel):
     thumbnail_line1: str = Field(default="", alias="thumbnailLine1")
     thumbnail_line2: str = Field(default="", alias="thumbnailLine2")
     thumbnail_crop_mode: Literal["standard", "close"] = Field(default="standard", alias="thumbnailCropMode")
+    thumbnail_subject_placement: ThumbnailSubjectPlacement = Field(
+        default_factory=ThumbnailSubjectPlacement, alias="thumbnailSubjectPlacement"
+    )
     id: str
     type: ExportType
     candidate_id: str | None = Field(default=None, alias="candidateId")
@@ -1003,6 +1008,9 @@ class ThumbnailRegenerationRequest(BaseModel):
     text_styles: ThumbnailTextStyles | None = Field(default=None, alias="textStyles")
     frame_seconds: float = Field(alias="frameSeconds", ge=0)
     subject_anchor_x: float = Field(default=1.0, alias="subjectAnchorX", ge=0, le=1)
+    subject_placement: ThumbnailSubjectPlacement | None = Field(
+        default=None, alias="subjectPlacement"
+    )
     advance_frame: bool = Field(default=False, alias="advanceFrame")
     select_with_codex: bool = Field(default=False, alias="selectWithCodex")
     crop_mode: Literal["standard", "close"] = Field(

@@ -283,6 +283,7 @@ export type ResultExportItem = {
   thumbnailLine1?: string;
   thumbnailLine2?: string;
   thumbnailCropMode?: "standard" | "close";
+  thumbnailSubjectPlacement?: ThumbnailSubjectPlacement;
   id: string;
   type: ExportType;
   candidateId: string | null;
@@ -340,6 +341,12 @@ export type ThumbnailRegenerationResponse = {
   exportId: string;
   status: "generating";
   revision: number;
+};
+
+export type ThumbnailSubjectPlacement = {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
 };
 
 export type JobAuditSummary = {

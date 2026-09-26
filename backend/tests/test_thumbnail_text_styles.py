@@ -224,6 +224,30 @@ def test_per_video_template_is_saved_without_changing_character_preset(client): 
         assert db.get(Job, "job_thumbnail_style").settings_json == {}
 
 
+def test_subject_placement_is_saved_and_used_for_only_this_thumbnail(client):  # noqa: F811
+    storage, factory, metadata_path, _, video_path = seed_thumbnail(client)
+    queued = []
+    app.dependency_overrides[get_enqueue_thumbnail_regeneration] = lambda: lambda *args: queued.append(args)
+    placement = {"scale": 0.7, "offsetX": -65, "offsetY": 25}
+    response = client.post("/api/exports/exp_thumbnail_style/thumbnail/regenerate", json={
+        "frameSeconds": 4, "subjectPlacement": placement,
+    })
+    assert response.status_code == 202, response.text
+    seen = {}
+
+    def capture(*args, **kwargs):
+        seen.update(kwargs)
+        return real_test_renderer(*args, **kwargs)
+
+    run_export_thumbnail_regeneration(
+        *queued[-1], session_factory=factory, paths=storage, normal_renderer=capture,
+    )
+    assert (seen["subject_scale"], seen["subject_offset_x"], seen["subject_offset_y"]) == (0.7, -65, 25)
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["thumbnail_subject_placement"] == placement
+    assert client.get("/api/jobs/job_thumbnail_style/results").json()["normalClips"][0]["thumbnailSubjectPlacement"] == placement
+    assert video_path.read_bytes() == b"completed video unchanged"
+
+
 def test_codex_frame_selection_runs_only_in_worker_and_saves_selected_frame(client):  # noqa: F811
     storage, factory, metadata_path, _, video_path = seed_thumbnail(client)
     queued = []

@@ -3,9 +3,9 @@
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { prepareThumbnailPreview, renderThumbnailPreview, toBrowserApiUrl } from "../lib/api";
-import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailTextStyles } from "../lib/types";
+import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailSubjectPlacement, ThumbnailTextStyles } from "../lib/types";
 
-export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles; design: NormalThumbnailStyle["design"] };
+export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles; design: NormalThumbnailStyle["design"]; subjectPlacement: ThumbnailSubjectPlacement };
 
 export function LiveThumbnailPreview({ item, draft, active }: { item: ResultExportItem; draft: ThumbnailDraft; active: boolean }) {
   const [source, setSource] = useState<{ key: string; frameKey: string } | null>(null);
@@ -16,7 +16,7 @@ export function LiveThumbnailPreview({ item, draft, active }: { item: ResultExpo
   const saving = item.thumbnailStatus === "generating";
   const sourceContext = JSON.stringify([item.id, item.thumbnailRenderRevision, saving, retry]);
   const frameKey = source?.key === sourceContext ? source.frameKey : "";
-  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles, design: draft.design });
+  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles, design: draft.design, subjectPlacement: draft.subjectPlacement });
 
   useEffect(() => {
     if (!active || saving) return;
@@ -71,7 +71,7 @@ export function LiveThumbnailPreview({ item, draft, active }: { item: ResultExpo
       <p className="font-semibold">{saving ? "サムネを保存中…" : error ? "プレビューを更新できませんでした" : !frameKey ? "場面を読み込み中…" : current ? "編集中のプレビュー" : "変更をプレビューへ反映中…"}</p>
       {error ? <><p className="mt-1 text-red-700">{error}</p><button type="button" onClick={() => setRetry(v => v + 1)}
         className="mt-2 min-h-9 border border-neutral-400 bg-white px-3">プレビューを再読み込み</button></>
-        : <p className="mt-1 text-neutral-600">文言・書体・サイズ・色は自動反映。確定するときだけ保存してください。</p>}
+        : <p className="mt-1 text-neutral-600">文言・書体・人物の大きさと位置は自動反映。確定するときだけ保存してください。</p>}
     </div>
   </section>;
 }

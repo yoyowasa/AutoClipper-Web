@@ -294,6 +294,8 @@ def regenerate_export_thumbnail(
         "thumbnail_request_revision": revision,
         "thumbnail_error_code": None,
     }
+    if request.subject_placement is not None:
+        pending["thumbnail_subject_placement"] = request.subject_placement.model_dump(mode="json", by_alias=True)
     if request.design is not None:
         from app.models import Job
         from app.thumbnail_style import resolve_export_thumbnail_style
