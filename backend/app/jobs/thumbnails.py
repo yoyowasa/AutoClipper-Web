@@ -10,6 +10,7 @@ from typing import Any
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
 from app.models import ExportItem
+from app.jobs.thumbnail_frame_selection import thumbnail_frame_near
 from app.render.render_thumbnail import (
     ThumbnailRenderResult,
     render_normal_thumbnail,
@@ -19,6 +20,7 @@ from app.render.render_thumbnail import (
 
 NormalThumbnailRenderer = Callable[..., ThumbnailRenderResult]
 ShortThumbnailRenderer = Callable[..., ThumbnailRenderResult]
+NormalThumbnailFrameSelector = Callable[..., float]
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,7 @@ def generate_export_thumbnails(
     job_output_dir: str | Path,
     normal_renderer: NormalThumbnailRenderer = render_normal_thumbnail,
     short_renderer: ShortThumbnailRenderer = render_short_thumbnail,
+    normal_frame_selector: NormalThumbnailFrameSelector = thumbnail_frame_near,
     character_style: dict[str, Any] | None = None,
 ) -> ThumbnailGenerationBatchResult:
     output_dir = Path(job_output_dir)
@@ -190,11 +193,22 @@ def generate_export_thumbnails(
             output_path.resolve(strict=False).relative_to(resolved_output_dir)
             payload = read_export_metadata(export)
             if export.type == "normal":
+                proposed = _normal_frame_seconds(candidate) - candidate.start
+                selected = normal_frame_selector(
+                    input_path, clip_start=candidate.start, clip_end=candidate.end,
+                    preferred_seconds=proposed,
+                )
+                if abs(selected - proposed) > 0.001:
+                    payload = {
+                        **payload,
+                        "thumbnail_frame_seconds": round(selected, 3),
+                        "thumbnail_frame_selection_source": "face",
+                    }
                 result = normal_renderer(
                     input_path,
                     output_path,
                     **({"character_style": character_style} if character_style is not None else {}),
-                    frame_time=_normal_frame_seconds(candidate),
+                    frame_time=candidate.start + selected,
                     eyebrow=candidate.thumbnail_kicker.strip(),
                     title_first_line=candidate.thumbnail_line1.strip(),
                     title_second_line=candidate.thumbnail_line2.strip(),

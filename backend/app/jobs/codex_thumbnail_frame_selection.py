@@ -8,6 +8,9 @@ from typing import Any, Callable
 
 from PIL import Image, ImageDraw, ImageOps
 
+from app.jobs.thumbnail_frame_selection import (
+    FaceDetector, detect_thumbnail_faces_for_clip, thumbnail_frame_candidates,
+)
 from app.render.render_thumbnail import extract_thumbnail_frame
 from app.scoring.thumbnail_frame_rank import CodexThumbnailFrameRanker, ThumbnailFrameRanking
 
@@ -60,10 +63,14 @@ def select_codex_thumbnail_frame_seconds(
     segments: list[dict[str, Any]],
     extractor: FrameExtractor = extract_thumbnail_frame,
     ranker: Any = None,
+    face_detector: FaceDetector = detect_thumbnail_faces_for_clip,
 ) -> float:
     """Return one clip-relative timestamp; do not change source video or presets."""
     duration = float(clip_end) - float(clip_start)
-    seconds = _candidate_seconds(duration)
+    seconds = thumbnail_frame_candidates(
+        video_path, clip_start=clip_start, clip_end=clip_end,
+        count=FRAME_COUNT, face_detector=face_detector,
+    ) or _candidate_seconds(duration)
     temporary_root = Path(temp_root)
     temporary_root.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="codex-thumbnail-", dir=temporary_root) as directory:

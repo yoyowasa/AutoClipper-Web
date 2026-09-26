@@ -5,6 +5,7 @@ from PIL import Image
 
 from app.jobs.codex_thumbnail_frame_selection import select_codex_thumbnail_frame_seconds
 from app.scoring.thumbnail_frame_rank import ThumbnailFrameRanking
+from app.video.face_detect import FaceDetection
 
 
 class FakeRanker:
@@ -44,3 +45,32 @@ def test_codex_uses_real_frames_copy_and_nearby_subtitles_and_avoids_current(tmp
 def test_codex_rejects_duplicate_ranked_candidates() -> None:
     with pytest.raises(ValueError):
         ThumbnailFrameRanking(rankedFrameIds=[0] * 8)
+
+
+def test_codex_only_shows_verified_late_character_frames(tmp_path: Path) -> None:
+    extracted = []
+
+    def extractor(_source, path, timestamp):
+        extracted.append(timestamp)
+        Image.new("RGB", (1280, 720), "white").save(path)
+        return path
+
+    def detector(_source, start, end, sample_count):
+        if sample_count == 24:
+            return [FaceDetection(start=95, end=95, center_x=0.5, center_y=0.4, width=0.2, height=0.2)]
+        assert sample_count == 7
+        return [
+            FaceDetection(start=second, end=second, center_x=0.5, center_y=0.4, width=0.2, height=0.2)
+            for second in (92, 93, 94, 95, 96, 97, 98)
+        ]
+
+    selected = select_codex_thumbnail_frame_seconds(
+        "source.mp4", clip_start=0, clip_end=100, current_frame_seconds=10,
+        variant_index=0, storage_root=tmp_path, temp_root=tmp_path / "temp",
+        job_id="job", export_id="exp", text={"heading": "", "upper": "", "lower": ""},
+        design="sopia", segments=[], extractor=extractor, ranker=FakeRanker(),
+        face_detector=detector,
+    )
+    assert len(extracted) == 8
+    assert all(92 <= second <= 98 for second in extracted)
+    assert 92 <= selected <= 98
