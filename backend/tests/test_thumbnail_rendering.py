@@ -9,6 +9,7 @@ import app.render.render_thumbnail as thumbnail_renderer
 from app.render.render_thumbnail import (
     DEFAULT_NORMAL_FONT_PATH,
     DEFAULT_NORMAL_TEMPLATE_PATH,
+    SOPIA_NORMAL_TEMPLATE_PATH,
     _select_primary_face,
     build_extract_thumbnail_frame_command,
     render_normal_thumbnail,
@@ -144,6 +145,30 @@ def test_render_normal_thumbnail_uses_template_and_fits_long_japanese_text(
         ).mean
     assert yellow_pixels > 300
     assert max(subject_difference) > 8
+
+
+def test_sopia_style_selects_its_template_and_keeps_raden_default(tmp_path: Path) -> None:
+    frame = tmp_path / "frame.jpg"
+    _synthetic_frame(frame, size=(1920, 1080))
+    sopia_output = tmp_path / "sopia.jpg"
+    raden_output = tmp_path / "raden.jpg"
+    kwargs = {
+        "frame_time": 0,
+        "eyebrow": "宙科そぴあ切り抜き",
+        "title_first_line": "宇宙で見つけた",
+        "title_second_line": "意外な発見",
+        "source_frame_path": frame,
+    }
+    render_normal_thumbnail("source.mp4", sopia_output, **kwargs, character_style={"design": "sopia"})
+    render_normal_thumbnail("source.mp4", raden_output, **kwargs)
+
+    assert SOPIA_NORMAL_TEMPLATE_PATH.is_file()
+    with Image.open(sopia_output) as sopia, Image.open(raden_output) as raden:
+        assert sopia.size == raden.size == (1280, 720)
+        # The same portrait and text use distinct frame/background artwork.
+        assert min(sopia.getpixel((220, 170))) > 140
+        assert max(raden.getpixel((220, 170))) < 140
+        assert ImageChops.difference(sopia, raden).getbbox() is not None
 
 
 @pytest.mark.parametrize(

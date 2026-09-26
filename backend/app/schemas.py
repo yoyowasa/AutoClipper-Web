@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
 from app.short_banners import BannerAssetId
-from app.thumbnail_style import NormalThumbnailStyle, ThumbnailTextStyles
+from app.thumbnail_style import NormalThumbnailStyle, ThumbnailDesign, ThumbnailTextStyles
 from app.scoring.thumbnail_copy import ThumbnailCopyText
 from app.posting_metadata import (
     PostMetadataSource,
@@ -935,6 +935,8 @@ class ExportItemRead(BaseModel):
 
 
 class ResultExportItem(BaseModel):
+    thumbnail_design: ThumbnailDesign = Field(default="raden", alias="thumbnailDesign")
+    thumbnail_can_use_custom_background: bool = Field(default=False, alias="thumbnailCanUseCustomBackground")
     thumbnail_text_styles: ThumbnailTextStyles | None = Field(default=None, alias="thumbnailTextStyles")
     thumbnail_kicker: str = Field(default="", alias="thumbnailKicker")
     thumbnail_line1: str = Field(default="", alias="thumbnailLine1")
@@ -986,6 +988,7 @@ class ResultExportItem(BaseModel):
     thumbnail_url: str | None = Field(default=None, alias="thumbnailUrl")
     thumbnail_download_url: str | None = Field(default=None, alias="thumbnailDownloadUrl")
     thumbnail_status: ThumbnailStatus | None = Field(default=None, alias="thumbnailStatus")
+    thumbnail_error_code: str | None = Field(default=None, alias="thumbnailErrorCode")
     thumbnail_filename: str | None = Field(default=None, alias="thumbnailFilename")
     thumbnail_frame_seconds: float | None = Field(default=None, alias="thumbnailFrameSeconds")
     thumbnail_subject_anchor_x: float | None = Field(default=None, alias="thumbnailSubjectAnchorX")
@@ -995,11 +998,13 @@ class ResultExportItem(BaseModel):
 
 
 class ThumbnailRegenerationRequest(BaseModel):
+    design: ThumbnailDesign | None = None
     text: "ThumbnailCopyText | None" = None
     text_styles: ThumbnailTextStyles | None = Field(default=None, alias="textStyles")
     frame_seconds: float = Field(alias="frameSeconds", ge=0)
     subject_anchor_x: float = Field(default=1.0, alias="subjectAnchorX", ge=0, le=1)
     advance_frame: bool = Field(default=False, alias="advanceFrame")
+    select_with_codex: bool = Field(default=False, alias="selectWithCodex")
     crop_mode: Literal["standard", "close"] = Field(
         default="standard",
         alias="cropMode",

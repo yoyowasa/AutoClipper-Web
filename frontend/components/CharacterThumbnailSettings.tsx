@@ -17,6 +17,21 @@ export function CharacterThumbnailSettings({ settings, disabled, onChange }: {
   useLayoutEffect(() => { latest.current = settings; }, [settings]);
   const style = settings.normalThumbnailStyle ?? PLAIN_THUMBNAIL;
   const update = (patch: Partial<NormalThumbnailStyle>) => onChange({ ...settings, normalThumbnailStyle: { ...style, ...patch } });
+  const chooseDesign = (design: NormalThumbnailStyle["design"]) => {
+    if (design !== "sopia") { update({ design }); return; }
+    const current = thumbnailTextDefaults(style);
+    update({
+      design,
+      outlineColor: "#10264B",
+      titleColor: "#FFFFFF",
+      secondTitleColor: "#FFD88C",
+      textStyles: {
+        heading: { ...current.heading, color: "#A8EBFF" },
+        upper: { ...current.upper, color: "#FFFFFF" },
+        lower: { ...current.lower, color: "#FFD88C" },
+      },
+    });
+  };
   return <details className="border-t border-neutral-200 p-3 text-xs">
     <summary className="cursor-pointer font-bold">通常動画のタイトル末尾・サムネイル</summary>
     <fieldset disabled={disabled || busy} className="mt-3 grid gap-3">
@@ -27,8 +42,8 @@ export function CharacterThumbnailSettings({ settings, disabled, onChange }: {
       </label>
       <label className="grid gap-1">サムネイル背景
         <select className="min-h-9 border border-neutral-300 bg-white px-2" value={style.design}
-          onChange={(event) => update({ design: event.target.value as NormalThumbnailStyle["design"] })}>
-          <option value="plain">単色</option><option value="raden">らでん用（既存デザイン）</option>
+          onChange={(event) => chooseDesign(event.target.value as NormalThumbnailStyle["design"])}>
+          <option value="plain">単色</option><option value="raden">らでん用（既存デザイン）</option><option value="sopia">宙科そぴあ用（宇宙・科学）</option>
           {style.backgroundAssetId && <option value="custom">アップロード画像</option>}
         </select>
       </label>

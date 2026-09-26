@@ -24,6 +24,7 @@ ThumbnailFontPreset = Literal[
     "dela_gothic",
     "corporate_logo",
 ]
+ThumbnailDesign = Literal["raden", "sopia", "plain", "custom"]
 
 
 class ThumbnailTextStyle(BaseModel):
@@ -49,7 +50,7 @@ class ThumbnailTextStyles(BaseModel):
 
 class NormalThumbnailStyle(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    design: Literal["raden", "plain", "custom"] = "plain"
+    design: ThumbnailDesign = "plain"
     background_asset_id: BannerAssetId | None = Field(default=None, alias="backgroundAssetId")
     background_color: str = Field(default="#20242B", pattern=r"^#[0-9A-Fa-f]{6}$", alias="backgroundColor")
     title_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", alias="titleColor")
@@ -75,3 +76,17 @@ def resolve_thumbnail_text_styles(character_style: dict | None, override: dict |
         result.upper.color = style.title_color
         result.lower.color = style.second_title_color
     return result
+
+
+def resolve_export_thumbnail_style(
+    character_style: dict | None, design: ThumbnailDesign | None = None,
+) -> dict | None:
+    """Apply a per-export template without changing the job/character preset."""
+    if design is None:
+        return character_style
+    settings = dict(character_style or {})
+    settings["design"] = design
+    if design == "custom" and not settings.get("backgroundAssetId"):
+        raise ValueError("このキャラにはカスタム背景が登録されていません。")
+    NormalThumbnailStyle.model_validate(settings)
+    return settings

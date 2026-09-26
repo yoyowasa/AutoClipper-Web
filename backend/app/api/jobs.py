@@ -727,6 +727,9 @@ def _result_item(
     if resolution is None and (metadata.get("width") is not None or metadata.get("height") is not None):
         resolution = {"width": metadata.get("width"), "height": metadata.get("height")}
     return ResultExportItem(
+        thumbnailDesign=(metadata.get("thumbnail_design") or (thumbnail_style or {}).get("design") or "raden")
+        if export.type == "normal" else "raden",
+        thumbnailCanUseCustomBackground=bool((thumbnail_style or {}).get("backgroundAssetId")) if export.type == "normal" else False,
         thumbnailTextStyles=resolve_thumbnail_text_styles(thumbnail_style, metadata.get("thumbnail_text_styles"))
         if export.type == "normal" else None,
         thumbnailKicker=str(_first_value(metadata.get("thumbnail_kicker"), selected.get("thumbnail_kicker"), "")),
@@ -828,6 +831,7 @@ def _result_item(
         thumbnailUrl=thumbnail_url,
         thumbnailDownloadUrl=thumbnail_download_url,
         thumbnailStatus=thumbnail_status,
+        thumbnailErrorCode=metadata.get("thumbnail_error_code") if thumbnail_status == "failed" else None,
         thumbnailFilename=thumbnail_filename,
         thumbnailFrameSeconds=_number_or_none(
             _first_value(

@@ -276,6 +276,8 @@ export type JobStatusResponse = {
 };
 
 export type ResultExportItem = {
+  thumbnailDesign?: NormalThumbnailStyle["design"];
+  thumbnailCanUseCustomBackground?: boolean;
   thumbnailTextStyles?: ThumbnailTextStyles | null;
   thumbnailKicker?: string;
   thumbnailLine1?: string;
@@ -327,6 +329,7 @@ export type ResultExportItem = {
   thumbnailUrl: string | null;
   thumbnailDownloadUrl: string | null;
   thumbnailStatus: "not_generated" | "generating" | "ready" | "failed" | null;
+  thumbnailErrorCode?: string | null;
   thumbnailFilename: string | null;
   thumbnailFrameSeconds: number | null;
   thumbnailSubjectAnchorX: number | null;
@@ -669,7 +672,7 @@ export type ClipPlanTranscriptSegment = {
 };
 
 export type NormalThumbnailStyle = {
-  design: "raden" | "plain" | "custom";
+  design: "raden" | "sopia" | "plain" | "custom";
   backgroundAssetId?: string | null;
   backgroundColor: string;
   titleColor: string;

@@ -60,6 +60,7 @@ export async function prepareThumbnailPreview(exportId: string, signal: AbortSig
 
 export async function renderThumbnailPreview(exportId: string, draft: {
   frameKey: string; text: import("./types").ThumbnailCopyText; textStyles: import("./types").ThumbnailTextStyles;
+  design: import("./types").NormalThumbnailStyle["design"];
 }, signal: AbortSignal): Promise<Blob> {
   const response = await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/preview`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft), signal, cache: "no-store",
@@ -646,9 +647,11 @@ export async function regenerateExportThumbnail(
     frameSeconds: number;
     subjectAnchorX: number;
     advanceFrame?: boolean;
+    selectWithCodex?: boolean;
     cropMode?: "standard" | "close";
     textStyles?: import("./types").ThumbnailTextStyles;
     text?: import("./types").ThumbnailCopyText;
+    design?: import("./types").NormalThumbnailStyle["design"];
   }
 ): Promise<ThumbnailRegenerationResponse> {
   const response = await fetch(

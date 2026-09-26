@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { ResultExportItem, ThumbnailCopyText, ThumbnailTextStyles } from "../lib/types";
+import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailTextStyles } from "../lib/types";
 import { ResultThumbnailEditor } from "./ResultThumbnailEditor";
 import { LiveThumbnailPreview, type ThumbnailDraft } from "./LiveThumbnailPreview";
 import { thumbnailTextDefaults } from "../lib/thumbnailStyle";
@@ -9,13 +9,14 @@ import { thumbnailTextDefaults } from "../lib/thumbnailStyle";
 export function ResultThumbnailWorkspace({ item, busy, onRender }: {
   item: ResultExportItem;
   busy?: boolean;
-  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean) => void;
+  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"], selectWithCodex: boolean) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<ThumbnailDraft>(() => ({
     text: { heading: item.thumbnailKicker ?? "", upper: item.thumbnailLine1 ?? "", lower: item.thumbnailLine2 ?? "" },
     styles: item.thumbnailTextStyles ?? thumbnailTextDefaults(),
+    design: item.thumbnailDesign ?? "raden",
   }));
 
   useEffect(() => {

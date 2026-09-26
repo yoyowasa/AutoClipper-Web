@@ -40,7 +40,7 @@ class CodexTitleHookSuggestionError(RuntimeError):
 
 class _BridgeEnvelope(BaseModel):
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
-    task: Literal["title_hook_suggestions", "thumbnail_copy_suggestions"] = "title_hook_suggestions"
+    task: Literal["title_hook_suggestions", "thumbnail_copy_suggestions", "thumbnail_frame_rank"] = "title_hook_suggestions"
     request_id: str = Field(pattern=r"^[0-9a-f]{32}$", alias="requestId")
     prompt: str = Field(min_length=1)
     response_schema: dict[str, Any] = Field(alias="responseSchema")

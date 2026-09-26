@@ -10271,3 +10271,35 @@ pip check: pass
 - 検証: 問題の保存済み応答を読み取り専用で再投入し、通常2件・ショート5件の正規IDが次段階の入力へ渡ることを確認。回帰テストを追加し対象44 passed、backend全体1167 passed・1 skipped、backend/launcher ruff成功。
 - 稼働反映: backend／GPU workerを再build・再作成。両containerで保存済み応答を再投入して通常2件・ショート5件の正規IDと境界調整入力7件を確認。実行コードのSHA-256は作業ツリーと一致。backend healthyとhealth API HTTP 200を確認。GitHub CIのbackend／frontendも成功。
 - 未確認: ユーザーjob自体の再選定実行、修正後のCodexモデルとの実通信、実動画の候補確定は未実施。
+
+## 2026-09-27 JST 宙科そぴあ用の通常サムネイルテンプレ
+
+- 目的: らでん用サムネイルの二重枠・右側人物・左側文字の構図を参考に、キャラ別に保存できる宙科そぴあ用の通常動画テンプレを追加する。
+- 変更ファイル: `backend/app/assets/thumbnail_templates/sopia_normal_v1/`、`scripts/generate_sopia_thumbnail_background.py`、`backend/app/render/render_thumbnail.py`、`backend/app/thumbnail_style.py`、`backend/pyproject.toml`、`frontend/components/CharacterThumbnailSettings.tsx`、`frontend/lib/types.ts`、関連テスト、本ファイル。
+- 変更: 宇宙・科学をイメージした青系背景と枠色を新設。キャラ設定のサムネイル背景で「宙科そぴあ用」を選べるようにし、選択時に見出し・上下行・外縁の初期色を設定。設定は既存のキャラ保存経路に含まれる。らでん用テンプレの既定値は維持。
+- 検証: 合成フレームで1280×720の出力を生成し、文字・枠・人物の重なりを目視確認。宙科用とらでん用の枠色・背景の差を回帰テストで確認。backend全テスト1165 passed / 1 skipped、対象ruff、frontend typecheck・lint・webpack build成功。通常のTurbopack buildは検証worktreeの外部依存ディレクトリへのリンクを拒否したため、この環境ではwebpack buildで確認した。
+- 未確認: 実際の宙科素材を使ったサムネイル表示と、稼働中アプリへの反映。ショートのサムネイルは従来どおり完成動画から切り出す仕様。
+
+## 2026-09-27 JST 宙科サムネ背景を明るいロケット案へ変更
+
+- 目的: 暗い宇宙背景を、参考画像のような明るい白・水色の背景に変更し、星と一機のロケット、その斜めの噴射を追加する。
+- 変更ファイル: `backend/app/assets/thumbnail_templates/sopia_normal_v1/background.png`、同`template.json`、`backend/tests/test_thumbnail_rendering.py`、本ファイル。旧背景の再生成スクリプトは現在の画像と食い違うため削除した。
+- 変更: imagegenで参考画像を配色・雰囲気の参照として背景を制作。左下から右上への噴射と金色の枠を配置し、人物画像が重なる右側と大きな文字の視認性を確保。顔が上で切れないよう宙科用テンプレの顔検出なし時の切り取り範囲を調整した。らでん用テンプレは変更していない。
+- 検証: 合成素材と参考画像をフレームとしてそれぞれ1280×720の出力を生成し、文字・ロケット・人物顔・枠の重なりを目視確認。関連テスト17 passed、対象ruff、差分チェック成功。PR #86の更新後CIでbackend/frontendとも成功。
+- 未確認: 実動画のフレームでの切り取りと稼働中アプリでの表示。
+
+## 2026-09-27 JST 完成動画ごとの通常サムネテンプレ切り替え
+
+- 目的: キャラ設定の既定テンプレを維持したまま、完成した通常動画ごとにサムネの背景テンプレを選べるようにする。
+- 変更ファイル: `backend/app/thumbnail_style.py`、`backend/app/schemas.py`、`backend/app/api/exports.py`、`backend/app/api/jobs.py`、`backend/app/jobs/thumbnail_preview.py`、`backend/app/jobs/thumbnail_regeneration.py`、結果画面のサムネ編集コンポーネント・API型、関連テスト、本ファイル。
+- 変更: らでん・宙科・単色・登録済みカスタム背景を動画ごとに選択。選択直後のプレビューと保存後の再生成に同じテンプレを使い、選択は各動画のメタデータに保存。キャラ共通設定は変更しない。背景未登録の場合はカスタム選択を許可しない。
+- 検証: 対象のプレビュー・保存・書式テスト16 passed、backend全テスト1167 passed / 1 skipped、対象ruff、frontend typecheck・lint・webpack build成功。
+- 未確認: 稼働中アプリへの反映と実動画のサムネ表示。宙科テンプレの親PR #86が未統合のため、この変更はそのブランチを基点にする。
+
+## 2026-09-27 JST Codexによる通常サムネの人物・場面選別
+
+- 目的: 顔検出と固定時刻だけでは選びにくいVTuberの表情を、サムネ文言・近くの確定字幕・テンプレに合わせて選び直せるようにする。画像生成APIは使用しない。
+- 変更ファイル: `backend/app/jobs/codex_thumbnail_frame_selection.py`、`backend/app/scoring/thumbnail_frame_rank.py`、Codexブリッジの契約、サムネ再生成APIとworker、結果画面の操作、関連テスト、本ファイル。
+- 変更: 完成通常動画の元映像から８コマを抽出し、２枚の一覧画像としてホストCodexへ渡す。Codexの順位を検証し、現在の場面と異なる上位候補を選んで既存テンプレに合成する。「Codexで文言に合う人物・場面を選び直す」を明示操作として追加。従来の別場面ボタンは維持。
+- 検証: 対象90 passed、backend全テスト1175 passed / 1 skipped、対象ruff、frontend typecheck・lint・webpack build成功。ChatGPTログイン済みCodexブリッジを独立した作業ツリーで起動し、合成された８候補の画像入力から有効な順位JSONを取得した。APIキーなしでのブリッジ動作を確認。
+- 未確認: 実際の配信動画での人物選別品質と稼働中アプリでの表示。Codexが起動していない場合は再生成失敗として表示する。親PR #87を基点にする。

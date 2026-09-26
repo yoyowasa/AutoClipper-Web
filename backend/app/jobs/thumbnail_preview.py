@@ -19,7 +19,7 @@ from app.models import ExportItem, Job, Video
 from app.render.render_thumbnail import extract_thumbnail_frame, render_normal_thumbnail
 from app.scoring.thumbnail_copy import ThumbnailCopyText
 from app.storage.paths import get_storage_paths
-from app.thumbnail_style import ThumbnailTextStyles
+from app.thumbnail_style import ThumbnailDesign, ThumbnailTextStyles, resolve_export_thumbnail_style
 
 
 class ThumbnailPreviewState(BaseModel):
@@ -34,6 +34,7 @@ class ThumbnailPreviewRequest(BaseModel):
     frame_key: str = Field(alias="frameKey", pattern=r"^[0-9a-f]{64}$")
     text: ThumbnailCopyText
     text_styles: ThumbnailTextStyles = Field(alias="textStyles")
+    design: ThumbnailDesign | None = None
 
 
 def preview_cache_dir(paths, export):
@@ -148,7 +149,8 @@ def render_thumbnail_preview(db, paths, export, request: ThumbnailPreviewRequest
                 context["source"], output, source_frame_path=directory / "frame.jpg", frame_time=context["timestamp"],
                 eyebrow=request.text.heading.strip(), title_first_line=request.text.upper.strip(),
                 title_second_line=request.text.lower.strip(),
-                subject_anchor_x=context["anchor"], face_height_ratio=context["faceRatio"], character_style=context["characterStyle"],
+                subject_anchor_x=context["anchor"], face_height_ratio=context["faceRatio"],
+                character_style=resolve_export_thumbnail_style(context["characterStyle"], request.design),
                 text_styles=request.text_styles.model_dump(mode="json", by_alias=True),
             )
             return output.read_bytes()

@@ -22,6 +22,7 @@ THUMBNAIL_TEMPLATE_DIR = (
     / "raden_normal_v1"
 )
 DEFAULT_NORMAL_TEMPLATE_PATH = THUMBNAIL_TEMPLATE_DIR / "template.json"
+SOPIA_NORMAL_TEMPLATE_PATH = THUMBNAIL_TEMPLATE_DIR.parent / "sopia_normal_v1" / "template.json"
 DEFAULT_NORMAL_FONT_PATH = THUMBNAIL_TEMPLATE_DIR / "NotoSansJP-Black.ttf"
 
 ThumbnailKind = Literal["normal", "short"]
@@ -563,7 +564,7 @@ def _compose_normal_thumbnail(
         draw.rectangle(
             (box_x, box_y, box_x + box_width, box_y + box_height),
             fill=_hex_rgba(colors["eyebrow_background"], 230),
-            outline=_hex_rgba(colors["gold"]),
+            outline=_hex_rgba(colors.get("frame", colors["gold"])),
             width=5,
         )
         eyebrow_fit = _fit_text(
@@ -625,12 +626,12 @@ def _compose_normal_thumbnail(
     draw = ImageDraw.Draw(canvas, "RGBA")
     draw.rectangle(
         (13, 13, width - 14, height - 14),
-        outline=_hex_rgba(colors["gold"]),
+        outline=_hex_rgba(colors.get("frame", colors["gold"])),
         width=5,
     )
     draw.rectangle(
         (27, 27, width - 28, height - 28),
-        outline=_hex_rgba(colors["gold_light"], 145),
+        outline=_hex_rgba(colors.get("frame_light", colors["gold_light"]), 145),
         width=2,
     )
     return canvas.convert("RGB")
@@ -661,6 +662,9 @@ def render_normal_thumbnail(
     """
     output = _validate_jpeg_path(output_path)
     timestamp = _validate_timestamp(frame_time)
+    style = NormalThumbnailStyle.model_validate(character_style) if character_style is not None else None
+    if style and style.design == "sopia" and Path(template_path) == DEFAULT_NORMAL_TEMPLATE_PATH:
+        template_path = SOPIA_NORMAL_TEMPLATE_PATH
     template = _load_template(template_path)
     background_image_path = (
         Path(template_path).parent / str(template["background_image"])
@@ -673,8 +677,7 @@ def render_normal_thumbnail(
         )
     plain_background = None
     resolved_text_styles = ThumbnailTextStyles.model_validate(text_styles) if text_styles is not None else None
-    if character_style is not None:
-        style = NormalThumbnailStyle.model_validate(character_style)
+    if style is not None:
         resolved_text_styles = resolved_text_styles or style.text_styles
         template["colors"].update({
             "title_first": style.title_color,

@@ -41,7 +41,7 @@ build-backend = "setuptools.build_meta"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["assets/thumbnail_templates/raden_normal_v1/*"]
+app = ["assets/thumbnail_templates/raden_normal_v1/*", "assets/thumbnail_templates/sopia_normal_v1/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -3,17 +3,18 @@
 import { useEffect, useRef, useState } from "react";
 import { thumbnailCopyRequest } from "../lib/api";
 import { thumbnailTextDefaults } from "../lib/thumbnailStyle";
-import type { ResultExportItem, ThumbnailCopyText, ThumbnailCopyState, ThumbnailTextStyles } from "../lib/types";
+import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailCopyState, ThumbnailTextStyles } from "../lib/types";
 import { ThumbnailTextStyleEditor } from "./ThumbnailTextStyleEditor";
 import type { ThumbnailDraft } from "./LiveThumbnailPreview";
 
 export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange }: {
   item: ResultExportItem; busy?: boolean;
-  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean) => void;
+  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"], selectWithCodex: boolean) => void;
   onDraftChange: (draft: ThumbnailDraft) => void;
 }) {
   const [text, setText] = useState<ThumbnailCopyText>(() => ({ heading: item.thumbnailKicker ?? "", upper: item.thumbnailLine1 ?? "", lower: item.thumbnailLine2 ?? "" }));
   const [styles, setStyles] = useState(() => item.thumbnailTextStyles ?? thumbnailTextDefaults());
+  const [design, setDesign] = useState<NormalThumbnailStyle["design"]>(() => item.thumbnailDesign ?? "raden");
   const [copy, setCopy] = useState<ThumbnailCopyState>({ state: "idle", suggestions: [] });
   const [requesting, setRequesting] = useState(false);
   const [error, setError] = useState("");
@@ -23,7 +24,7 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange }: {
   const locked = busy || item.thumbnailStatus === "generating" || generating || requesting;
   const endpoint = item.id;
 
-  useEffect(() => { onDraftChange({ text, styles }); }, [text, styles, onDraftChange]);
+  useEffect(() => { onDraftChange({ text, styles, design }); }, [text, styles, design, onDraftChange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,21 +98,41 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange }: {
     </fieldset>
     </div>
     <div aria-label="サムネの書式編集" tabIndex={0} className="min-h-0 min-w-0 xl:overflow-y-auto xl:overscroll-contain">
+    <fieldset disabled={locked} className="min-w-0 border border-amber-300 bg-white p-3">
+      <legend className="px-1 text-xs font-bold">この動画のテンプレート</legend>
+      <div className="grid grid-cols-2 gap-2 text-sm">
+        {([ ["raden", "らでん"], ["sopia", "宙科"], ["plain", "単色"],
+          ...(item.thumbnailCanUseCustomBackground ? [["custom", "カスタム背景"]] : [])
+        ] as [NormalThumbnailStyle["design"], string][]).map(([value, label]) =>
+          <button key={value} type="button" aria-pressed={design === value}
+            onClick={() => setDesign(value)}
+            className={`min-h-10 border px-2 ${design === value ? "border-sky-700 bg-sky-100 font-semibold" : "border-neutral-300 bg-white"}`}>
+            {label}
+          </button>)}
+      </div>
+      <p className="mt-2 text-xs text-neutral-600">この動画だけ切り替わります。プレビューで確認後、保存してください。</p>
+    </fieldset>
     <section aria-label="サムネの書式設定" className="min-w-0 border border-amber-300 bg-white p-3">
       <h4 className="text-sm font-semibold">書体・サイズ・色</h4>
       <div className="mt-3"><ThumbnailTextStyleEditor value={styles} onChange={setStyles} disabled={locked} texts={text} /></div>
     </section>
-    <button type="button" disabled={locked} onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false)}
+    <button type="button" disabled={locked} onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false, design, false)}
       className="mt-3 min-h-11 w-full bg-sky-700 px-3 text-sm font-semibold text-white disabled:bg-neutral-300">
       {item.thumbnailStatus === "generating" ? "サムネ更新中…" : "サムネを保存・更新"}
     </button>
     <p className="mt-2 text-xs text-neutral-600">プレビューは自動反映。保存するとサムネを確定します。</p>
     <div className="mt-3 grid gap-2 sm:grid-cols-2">
       <button type="button" disabled={locked} className="min-h-10 bg-amber-600 px-2 text-xs font-semibold text-white disabled:bg-neutral-300"
-        onClick={() => onRender("standard", styles, text, true)}>別場面で更新（上半身）</button>
+        onClick={() => onRender("standard", styles, text, true, design, false)}>別場面で更新（上半身）</button>
       <button type="button" disabled={locked} className="min-h-10 bg-neutral-950 px-2 text-xs font-semibold text-white disabled:bg-neutral-300"
-        onClick={() => onRender("close", styles, text, true)}>別場面で更新（顔寄り）</button>
+        onClick={() => onRender("close", styles, text, true, design, false)}>別場面で更新（顔寄り）</button>
     </div>
+    <button type="button" disabled={locked}
+      className="mt-3 min-h-11 w-full border border-violet-700 bg-violet-50 px-3 text-sm font-semibold text-violet-900 disabled:text-neutral-400"
+      onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false, design, true)}>
+      Codexで文言に合う人物・場面を選び直す
+    </button>
+    <p className="mt-1 text-xs text-neutral-600">元動画の８場面と近くの字幕を比較します。選んだ場面でサムネを保存し直します。</p>
     </div>
     </div>
   </section>;
