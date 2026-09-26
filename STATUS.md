@@ -10253,3 +10253,4 @@ pip check: pass
 - 変更ファイル: `backend/app/api/jobs.py`、`backend/app/jobs/title_hook_suggestions.py`、`backend/app/scoring/title_hook_suggestions.py`、`backend/tests/test_title_hook_suggestions.py`、CI lintを通すための既存fixture注記2ファイル、本ファイル。
 - 修正: 同じ字幕での再生成時に直近最大24件の公開タイトルを除外リストとして保存・入力し、前回の会話を引き継がずに生成する。3案すべてが過去案と実質同じなら1回だけ再試行し、なお同じなら新案として表示せず明確な失敗を返す。字幕が変わった場合は除外リストを持ち越さない。prompt versionをv10に更新。
 - 検証: 通常・ショートの再生成入力、重複時の再試行を回帰テストで確認。backend全1167 passed・1 skipped、backendとlauncherのruff、frontend typecheck・lint・overlay fit・build、git diff --check成功。実ユーザーclipに対する新規Codex生成結果は未検証。
+- 稼働反映: ローカル稼働branchへコードを反映し、queue 0・実行中job 0を確認してbackend／GPU workerを再build・再作成。両containerでprompt version v10、backend healthyとhealth API HTTP 200、既存clipの案取得APIがready・3案を返すことを確認。既存clipの再生成操作は行っていない。
