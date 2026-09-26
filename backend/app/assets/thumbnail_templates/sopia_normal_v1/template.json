@@ -2,6 +2,7 @@
   "version": 1,
   "canvas": { "width": 1280, "height": 720 },
   "background_image": "background.png",
+  "subject_mode": "anime_cutout",
   "frame": {
     "x": 588,
     "y": 0,
@@ -9,7 +10,7 @@
     "height": 720,
     "anchor_x": 1.0,
     "face_target_x": 0.52,
-    "face_target_y": 0.34,
+    "face_target_y": 0.45,
     "face_height_ratio": 0.25,
     "min_crop_height_ratio": 0.70,
     "max_crop_height_ratio": 0.90,

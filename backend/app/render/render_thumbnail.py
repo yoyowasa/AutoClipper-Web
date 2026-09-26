@@ -5,11 +5,13 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.render.anime_subject import Face, anime_character_mask, anime_matte_path, detect_anime_face
 from app.thumbnail_style import NormalThumbnailStyle, ThumbnailTextStyles
 from app.render.thumbnail_fonts import thumbnail_font_path
 from app.short_banners import banner_asset_path
@@ -169,8 +171,7 @@ def _select_primary_face(
     usable = [
         face
         for face in faces
-        if face[0] >= 0.46
-        and 0.20 <= face[1] <= 0.72
+        if 0.20 <= face[1] <= 0.72
         and face[2] >= 0.04
         and face[3] >= 0.07
     ]
@@ -180,7 +181,10 @@ def _select_primary_face(
 
 
 def _primary_face(image: Image.Image) -> tuple[float, float, float, float] | None:
-    """Detect the upper-most usable face in the right half of one source frame."""
+    """Detect an anime character first, then use the existing face fallback."""
+    anime_face = detect_anime_face(image)
+    if anime_face is not None:
+        return anime_face
     try:
         import cv2
         import numpy as np
@@ -216,6 +220,34 @@ def _primary_face(image: Image.Image) -> tuple[float, float, float, float] | Non
     return _select_primary_face(normalized_faces)
 
 
+@lru_cache(maxsize=8)
+def _cached_anime_subject(
+    frame_path: str, frame_mtime: int, frame_size: int,
+    model_path: str, model_mtime: int, model_size: int,
+) -> tuple[Face, Image.Image] | None:
+    # The stat values are cache keys: a new frame or newly installed model is re-detected.
+    del frame_mtime, frame_size, model_mtime, model_size
+    with Image.open(frame_path) as source:
+        image = source.convert("RGB")
+    face = detect_anime_face(image)
+    if face is None:
+        return None
+    mask = anime_character_mask(image, face, model_path=Path(model_path))
+    return (face, mask) if mask is not None else None
+
+
+def _anime_subject_for_frame(frame_path: Path) -> tuple[Face, Image.Image] | None:
+    model = anime_matte_path()
+    if not model.is_file():
+        return None
+    frame_stat = frame_path.stat()
+    model_stat = model.stat()
+    return _cached_anime_subject(
+        str(frame_path.resolve()), frame_stat.st_mtime_ns, frame_stat.st_size,
+        str(model.resolve()), model_stat.st_mtime_ns, model_stat.st_size,
+    )
+
+
 def _portrait_frame(
     image: Image.Image,
     width: int,
@@ -224,6 +256,9 @@ def _portrait_frame(
     frame_config: dict[str, Any],
     anchor_x: float,
     face_height_ratio: float | None = None,
+    subject_scale: float = 1.0,
+    subject_offset_x: int = 0,
+    subject_offset_y: int = 0,
 ) -> Image.Image:
     source = image.convert("RGB")
     face = _primary_face(source)
@@ -242,49 +277,44 @@ def _portrait_frame(
         ) * 0.25
         fallback_center_x = min(0.95, max(0.05, fallback_center_x))
         fallback_center_y = float(frame_config.get("fallback_center_y", 0.68))
-        left = fallback_center_x * source.width - crop_width * target_x
-        top = fallback_center_y * source.height - crop_height * target_y
-        left = min(max(0.0, left), max(0.0, source.width - crop_width))
-        top = min(max(0.0, top), max(0.0, source.height - crop_height))
-        crop = source.crop(
-            (
-                round(left),
-                round(top),
-                round(left + crop_width),
-                round(top + crop_height),
-            )
-        )
-        return crop.resize((width, height), Image.Resampling.LANCZOS)
-
-    center_x, center_y, _face_width, face_height = face
-    target_face_height = min(
-        0.5,
-        max(
-            0.05,
-            float(
-                frame_config.get("face_height_ratio", 0.25)
-                if face_height_ratio is None
-                else face_height_ratio
+        center_x, center_y = fallback_center_x, fallback_center_y
+    else:
+        center_x, center_y, _face_width, face_height = face
+        target_face_height = min(
+            0.5,
+            max(
+                0.05,
+                float(
+                    frame_config.get("face_height_ratio", 0.25)
+                    if face_height_ratio is None
+                    else face_height_ratio
+                ),
             ),
-        ),
-    )
-    crop_height = source.height * face_height / target_face_height
-    crop_height = min(
-        source.height * float(frame_config.get("max_crop_height_ratio", 0.72)),
-        max(
-            source.height * float(frame_config.get("min_crop_height_ratio", 0.44)),
-            crop_height,
-        ),
-    )
+        )
+        crop_height = source.height * face_height / target_face_height
+        crop_height = min(
+            source.height * float(frame_config.get("max_crop_height_ratio", 0.72)),
+            max(
+                source.height * float(frame_config.get("min_crop_height_ratio", 0.44)),
+                crop_height,
+            ),
+        )
+        crop_width = crop_height * width / height
+        if crop_width > source.width:
+            crop_width = float(source.width)
+            crop_height = crop_width * height / width
+        target_x = min(0.9, max(0.1, float(frame_config.get("face_target_x", 0.68))))
+        target_y = min(0.75, max(0.1, float(frame_config.get("face_target_y", 0.27))))
+
+    # Move the viewport over the *original* pixels. Translating a previously
+    # clipped rectangle could never reveal the missing side of a character.
+    crop_height = min(source.height, crop_height / subject_scale)
     crop_width = crop_height * width / height
     if crop_width > source.width:
         crop_width = float(source.width)
         crop_height = crop_width * height / width
-
-    target_x = min(0.9, max(0.1, float(frame_config.get("face_target_x", 0.68))))
-    target_y = min(0.75, max(0.1, float(frame_config.get("face_target_y", 0.27))))
-    left = center_x * source.width - crop_width * target_x
-    top = center_y * source.height - crop_height * target_y
+    left = center_x * source.width - crop_width * target_x - subject_offset_x * crop_width / width
+    top = center_y * source.height - crop_height * target_y - subject_offset_y * crop_height / height
     left = min(max(0.0, left), max(0.0, source.width - crop_width))
     top = min(max(0.0, top), max(0.0, source.height - crop_height))
     crop = source.crop(
@@ -518,6 +548,7 @@ def _compose_normal_thumbnail(
     subject_offset_y: int = 0,
     background_image: Image.Image | None = None,
     text_styles: ThumbnailTextStyles | None = None,
+    anime_subject: tuple[Face, Image.Image] | None = None,
 ) -> Image.Image:
     canvas_config = template["canvas"]
     frame_config = template["frame"]
@@ -552,39 +583,46 @@ def _compose_normal_thumbnail(
         if subject_anchor_x is None
         else min(1.0, max(0.0, float(subject_anchor_x)))
     )
-    fitted_frame = _portrait_frame(
-        frame,
-        frame_width,
-        frame_height,
-        frame_config=frame_config,
-        anchor_x=anchor_x,
-        face_height_ratio=face_height_ratio,
-    ).convert("RGBA")
-    mask_config = frame_config
-    if subject_scale < 1.0:
-        mask_config = {
-            **frame_config,
-            "feather_top": max(50, int(frame_config.get("feather_top", 0))),
-            "feather_bottom": max(65, int(frame_config.get("feather_bottom", 0))),
-            "feather_right": max(32, int(frame_config.get("feather_right", 0))),
-        }
-    fitted_frame.putalpha(_feather_mask(frame_width, frame_height, mask_config))
-    if subject_scale != 1.0 or subject_offset_x or subject_offset_y:
-        scaled_width = max(1, round(frame_width * subject_scale))
-        scaled_height = max(1, round(frame_height * subject_scale))
-        fitted_frame = fitted_frame.resize(
-            (scaled_width, scaled_height), Image.Resampling.LANCZOS
-        )
-        placement = Image.new("RGBA", (frame_width, frame_height))
-        placement.alpha_composite(
-            fitted_frame,
-            (
-                round((frame_width - scaled_width) / 2) + subject_offset_x,
-                round((frame_height - scaled_height) / 2) + subject_offset_y,
-            ),
-        )
-        fitted_frame = placement
-    canvas.alpha_composite(fitted_frame, (frame_x, frame_y))
+    if anime_subject is not None:
+        face, subject_mask = anime_subject
+        bounds = subject_mask.getbbox()
+        if bounds is not None:
+            portrait = frame.convert("RGBA").crop(bounds)
+            portrait.putalpha(subject_mask.crop(bounds))
+            portrait_width, portrait_height = portrait.size
+            fit = min(frame_width / portrait_width, frame_height / portrait_height) * 0.96 * subject_scale
+            portrait = portrait.resize(
+                (max(1, round(portrait_width * fit)), max(1, round(portrait_height * fit))),
+                Image.Resampling.LANCZOS,
+            )
+            face_x, face_y, _face_width, _face_height = face
+            desired_x = frame_width * float(frame_config.get("face_target_x", 0.5))
+            desired_y = frame_height * float(frame_config.get("face_target_y", 0.45))
+            x = round(desired_x - (face_x * frame.width - bounds[0]) * fit + subject_offset_x)
+            y = round(
+                (frame_height - portrait.height if subject_scale <= 1 else
+                 desired_y - (face_y * frame.height - bounds[1]) * fit) + subject_offset_y
+            )
+            # The default fit keeps the complete detected character in frame.
+            if subject_scale <= 1 and not subject_offset_x:
+                x = min(max(x, 0), max(0, frame_width - portrait.width))
+            placement = Image.new("RGBA", (frame_width, frame_height))
+            placement.alpha_composite(portrait, (x, y))
+            canvas.alpha_composite(placement, (frame_x, frame_y))
+    else:
+        fitted_frame = _portrait_frame(
+            frame,
+            frame_width,
+            frame_height,
+            frame_config=frame_config,
+            anchor_x=anchor_x,
+            face_height_ratio=face_height_ratio,
+            subject_scale=subject_scale,
+            subject_offset_x=subject_offset_x,
+            subject_offset_y=subject_offset_y,
+        ).convert("RGBA")
+        fitted_frame.putalpha(_feather_mask(frame_width, frame_height, frame_config))
+        canvas.alpha_composite(fitted_frame, (frame_x, frame_y))
 
     draw = ImageDraw.Draw(canvas, "RGBA")
     if eyebrow.strip():
@@ -753,6 +791,7 @@ def render_normal_thumbnail(
                 ffmpeg_bin=ffmpeg_bin,
                 command_runner=command_runner,
             )
+        anime_subject = _anime_subject_for_frame(frame_path) if template.get("subject_mode") == "anime_cutout" else None
         with Image.open(frame_path) as source_frame:
             if background_image_path is not None:
                 with Image.open(background_image_path) as source_background:
@@ -770,6 +809,7 @@ def render_normal_thumbnail(
                         subject_offset_y=subject_offset_y,
                         background_image=source_background,
                         text_styles=resolved_text_styles,
+                        anime_subject=anime_subject,
                     )
             else:
                 composed = _compose_normal_thumbnail(
@@ -786,6 +826,7 @@ def render_normal_thumbnail(
                     subject_offset_y=subject_offset_y,
                     background_image=plain_background,
                     text_styles=resolved_text_styles,
+                    anime_subject=anime_subject,
                 )
     composed.save(output, format="JPEG", quality=94, optimize=True, subsampling=0)
     return ThumbnailRenderResult(

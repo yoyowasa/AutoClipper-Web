@@ -3,11 +3,44 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from app.video.face_detect import FaceDetection, detect_faces_for_clip
+from PIL import Image
+
+from app.render.render_thumbnail import _primary_face
+from app.video.face_detect import FaceDetection
 
 
 THUMBNAIL_FRAME_RATIOS = (0.08, 0.24, 0.40, 0.56, 0.72, 0.88)
 FaceDetector = Callable[[str | Path, float, float, int], Sequence[FaceDetection]]
+
+
+def detect_thumbnail_faces_for_clip(
+    video_path: str | Path, start: float, end: float, sample_count: int,
+) -> list[FaceDetection]:
+    """Sample this clip using the same anime-face detector as thumbnail rendering."""
+    try:
+        import cv2
+    except ImportError:
+        return []
+    capture = cv2.VideoCapture(str(video_path))
+    if not capture.isOpened():
+        return []
+    found: list[FaceDetection] = []
+    try:
+        for index in range(sample_count):
+            second = start + (end - start) * (index + 0.5) / sample_count
+            capture.set(cv2.CAP_PROP_POS_MSEC, second * 1000)
+            ok, image = capture.read()
+            if not ok or image is None:
+                continue
+            face = _primary_face(Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)))
+            if face is not None:
+                found.append(FaceDetection(
+                    start=second, end=second,
+                    center_x=face[0], center_y=face[1], width=face[2], height=face[3],
+                ))
+    finally:
+        capture.release()
+    return found
 
 
 def _usable_face_times(
@@ -16,16 +49,16 @@ def _usable_face_times(
     start: float,
     end: float,
 ) -> list[float]:
-    """Return sampled times where a usable, right-side face is visible.
+    """Return sampled times where a usable face is visible anywhere in frame.
 
     配信画面では同一フレームの衣装やUIを顔として誤検出する場合がある。
-    右側かつ上側にある十分な大きさの検出を人物の顔として優先する。
+    アニメ顔検出で選んだ十分な大きさの検出を人物の顔として使う。
     """
     grouped: dict[float, FaceDetection] = {}
     for detection in detections:
         if not start <= detection.start <= end:
             continue
-        if detection.center_x < 0.48 or not 0.20 <= detection.center_y <= 0.72:
+        if not 0.08 <= detection.center_y <= 0.85:
             continue
         if detection.width < 0.04 or detection.height < 0.07:
             continue
@@ -40,7 +73,12 @@ def _usable_face_times(
         ) if previous is not None else (float("inf"), 0.0)
         if current_priority < previous_priority:
             grouped[detection.start] = detection
-    return sorted(grouped)
+    centered = {
+        second: face for second, face in grouped.items()
+        if 0.18 <= face.center_x <= 0.82
+    }
+    # When centered frames exist, avoid a character clipped at the source edge.
+    return sorted(centered or grouped)
 
 
 def _candidate_times(
@@ -71,9 +109,9 @@ def select_thumbnail_frame_seconds(
     clip_start: float,
     clip_end: float,
     variant_index: int,
-    face_detector: FaceDetector = detect_faces_for_clip,
+    face_detector: FaceDetector = detect_thumbnail_faces_for_clip,
 ) -> float:
-    """Choose a distinct clip-relative frame, preferring visible right-side faces."""
+    """Choose a distinct clip-relative frame with a visible character face."""
     start = max(0.0, float(clip_start))
     end = max(start, float(clip_end))
     duration = end - start

@@ -121,3 +121,15 @@ def test_frame_selection_rejects_lower_body_false_positive() -> None:
     )
 
     assert selected == pytest.approx(20)
+
+
+def test_frame_selection_prefers_centered_character_over_clipped_edge() -> None:
+    detections = [
+        FaceDetection(start=20, end=20, center_x=0.90, center_y=0.5, width=0.15, height=0.2),
+        FaceDetection(start=40, end=40, center_x=0.52, center_y=0.45, width=0.18, height=0.24),
+    ]
+    selected = select_thumbnail_frame_seconds(
+        "source.mp4", clip_start=0, clip_end=60, variant_index=0,
+        face_detector=lambda *_args: detections,
+    )
+    assert selected == pytest.approx(40)

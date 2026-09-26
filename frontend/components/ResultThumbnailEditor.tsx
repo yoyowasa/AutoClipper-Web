@@ -117,7 +117,7 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange }: {
     </fieldset>
     <fieldset disabled={locked} className="mt-3 min-w-0 border border-amber-300 bg-white p-3">
       <legend className="px-1 text-xs font-bold">人物の画角・位置</legend>
-      <p className="text-xs text-neutral-600">同じ場面のまま調整します。左のプレビューへ自動反映され、保存時にも同じ配置を使います。</p>
+      <p className="text-xs text-neutral-600">宙科テンプレでは切り抜きモデル導入時に人物だけを配置します。未導入時やほかのテンプレでは元映像の表示範囲を調整します。左のプレビューと保存画像は同じ配置になります。</p>
       <div className="mt-2 grid gap-2">
         {([
           ["scale", "大きさ", 0.5, 1.5, 0.05, `${Math.round(placement.scale * 100)}%`],
@@ -159,7 +159,7 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange }: {
       onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false, design, true, placement)}>
       Codexで文言に合う人物・場面を選び直す
     </button>
-    <p className="mt-1 text-xs text-neutral-600">元動画の８場面と近くの字幕を比較します。選んだ場面でサムネを保存し直します。</p>
+    <p className="mt-1 text-xs text-neutral-600">元動画の８場面と近くの字幕を比較します。中央の人物も対象です。選んだ場面でサムネを保存し直します。</p>
     </div>
     </div>
   </section>;

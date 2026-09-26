@@ -27,6 +27,7 @@ storage/fonts/*
 storage/transcripts/*
 storage/banner_assets/*
 storage/qa/*
+storage/models/*
 storage/*.db
 storage/*.db-*
 storage/.storage-lifecycle.lock
