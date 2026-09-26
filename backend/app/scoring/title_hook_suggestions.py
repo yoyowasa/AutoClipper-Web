@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.posting_metadata import NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, PostTitleIntent, ensure_publication_title_suffix
 
 
-TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v9"
+TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v10"
 REPRESENTATIVE_FRAME_RATIOS = (0.12, 0.38, 0.62, 0.88)
 TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
 TRANSIENT_ERROR_NAMES = {
@@ -41,6 +41,11 @@ SYSTEM_PROMPT = """あなたは日本語動画の編集者です。
 - 動画にある見どころ、隠す情報、強く出す言葉、見せ方を変え、単なる言い換えではない3案を作る。
 - 情報ギャップ、意外性・対比、強い言葉、発言・反応、知りたいことへの答えから、素材に合う切り口を選ぶ。
   疑問形や答えを隠す構成を、すべての案に強制しない。
+- 入力のpreviousPublicationTitlesは、このclipで過去に提示した公開タイトルの除外リストであり、内容の根拠ではない。
+  再生成では通常・ショートとも、そのタイトルや句読点・語順だけを変えた案を繰り返さず、
+  字幕と代表フレームに根拠のある別の見どころ・切り口から3案を作る。
+  素材が限られていても、少なくとも1案の公開タイトルは過去案と実質的に異なるものにする。
+  事実を創作してまで差別化しない。
 - reasonには「視聴者が何に引っ掛かり、何を見たくなるか」を簡潔に書く。
 - recommendedSuggestionId: 動画の内容と一致する3案のうち、最も見たくなる案のid。
   normalはpublicationTitleと通常サムネ文言の組み合わせで評価する。

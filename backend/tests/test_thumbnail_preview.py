@@ -18,7 +18,7 @@ def frame_extractor(source, output, timestamp):
     Image.new("RGB", (1280, 720), "#667788").save(output, format="JPEG")
 
 
-def prepare(client):
+def prepare(client):  # noqa: F811 - imported pytest fixture is passed to this helper
     storage, factory, metadata, thumbnail, video = seed_thumbnail(client)
     queue = []
     app.dependency_overrides[get_enqueue_thumbnail_preview] = lambda: lambda *args: queue.append(args)

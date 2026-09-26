@@ -134,7 +134,7 @@ def _suggestion_result() -> TitleHookSuggestionResult:
 
 
 def test_short_prompt_requires_scroll_stop_package_ranking() -> None:
-    assert TITLE_HOOK_PROMPT_VERSION == "title_hook_suggestions_v9"
+    assert TITLE_HOOK_PROMPT_VERSION == "title_hook_suggestions_v10"
     assert "【ショート専用のタイトル・フック基準】" in SYSTEM_PROMPT
     assert "最初の0.3〜1秒" in SYSTEM_PROMPT
     assert "少なくとも6つの異なる切り口" in SYSTEM_PROMPT
@@ -286,9 +286,93 @@ def test_title_hook_api_queues_caches_force_regenerates_and_gets(
     assert cached.json()["inputHash"] == first.json()["inputHash"]
     assert cached.json()["draftHash"] == first.json()["draftHash"]
     assert forced.json()["inputHash"] == first.json()["inputHash"]
-    assert forced.json()["threadId"] == "thread-existing"
+    assert forced.json()["threadId"] is None
     assert fetched.json() == forced.json()
     assert len(title_hook_api["queued"]) == 4
+
+
+@pytest.mark.parametrize("clip_id", ["normal_1", "short_1"])
+def test_force_regeneration_excludes_previous_titles_for_both_clip_types(
+    title_hook_api: dict[str, Any], clip_id: str
+) -> None:
+    client: TestClient = title_hook_api["client"]
+    review = title_hook_api["review"]
+    clip = next(item for item in review.clips if item.id == clip_id)
+    segments = {item.id: item for item in review.segments}
+    drafts = [
+        {"segmentId": segment_id, "text": segments[segment_id].text}
+        for segment_id in clip.segment_ids
+    ]
+    url = f"/api/jobs/{title_hook_api['job_id']}/subtitle-review/clips/{clip_id}/title-hook-suggestions"
+    first = client.post(url, json={"segments": drafts, "forceRegenerate": False})
+    state_path = title_hook_suggestions_path(
+        title_hook_api["storage"].job_outputs(title_hook_api["job_id"]), clip_id
+    )
+    result = _suggestion_result()
+    ready = load_title_hook_suggestions(state_path).model_copy(
+        update={"state": "ready", "suggestions": result.suggestions, "thread_id": "old-thread"}
+    )
+    write_title_hook_suggestions(ready, state_path)
+
+    forced = client.post(url, json={"segments": drafts, "forceRegenerate": True})
+    input_path = title_hook_suggestion_input_path(
+        title_hook_api["storage"].job_outputs(title_hook_api["job_id"]), clip_id
+    )
+    from app.jobs.title_hook_suggestions import load_title_hook_suggestion_input
+
+    generation_input = load_title_hook_suggestion_input(input_path)
+    assert forced.status_code == 200
+    assert forced.json()["state"] == "queued"
+    assert forced.json()["threadId"] is None
+    assert forced.json()["inputHash"] == first.json()["inputHash"]
+    assert generation_input.prompt_payload()["previousPublicationTitles"] == [
+        item.publication_title for item in result.suggestions
+    ]
+    assert len(forced.json()["avoidPublicationTitles"]) == 3
+
+
+def test_worker_retries_when_regeneration_repeats_all_previous_titles(
+    title_hook_api: dict[str, Any]
+) -> None:
+    case = _prepare_worker_case(title_hook_api)
+    previous = _suggestion_result()
+    request = case["request"].model_copy(
+        update={
+            "avoid_publication_titles": [
+                item.publication_title for item in previous.suggestions
+            ]
+        }
+    )
+    write_title_hook_suggestion_input(
+        request,
+        title_hook_suggestion_input_path(case["output_dir"], "short_1"),
+    )
+    write_title_hook_suggestions(
+        queued_title_hook_suggestions(request), case["state_path"]
+    )
+
+    class RepeatingGenerator:
+        payloads: list[dict[str, Any]] = []
+
+        def generate(self, payload: dict[str, Any], _frames: list[Path]) -> TitleHookSuggestionResult:
+            self.payloads.append(payload)
+            if len(self.payloads) == 1:
+                return previous
+            alternative = previous.model_copy(deep=True)
+            alternative.suggestions[0].publication_title = "異なる見どころから作り直した案"
+            return alternative
+
+    generator = RepeatingGenerator()
+    outcome = run_title_hook_suggestion_generation(
+        case["job_id"], "short_1", request.input_hash,
+        session_factory=title_hook_api["session_factory"], paths=case["storage"],
+        generator=generator, frame_extractor=lambda *_args, **_kwargs: [],
+    )
+    artifact = load_title_hook_suggestions(case["state_path"])
+    assert outcome == ["ready"]
+    assert len(generator.payloads) == 2
+    assert "retryInstruction" in generator.payloads[1]
+    assert artifact.suggestions[0].publication_title == "異なる見どころから作り直した案"
 
 
 def test_ready_cache_requires_matching_raw_draft_hash(
@@ -1237,6 +1321,7 @@ def test_worker_uses_text_only_fallback_and_normalizes_clip_relative_scene(
         "timestampSemantics",
         "subtitleStatus",
         "segments",
+        "previousPublicationTitles",
     }
     assert artifact.suggestions[1].hook_scene_start == 17
     assert artifact.suggestions[1].hook_scene_end == 20
