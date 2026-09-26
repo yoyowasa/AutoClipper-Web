@@ -9,7 +9,7 @@ import { thumbnailTextDefaults } from "../lib/thumbnailStyle";
 export function ResultThumbnailWorkspace({ item, busy, onRender }: {
   item: ResultExportItem;
   busy?: boolean;
-  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"]) => void;
+  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"], selectWithCodex: boolean) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [open, setOpen] = useState(false);

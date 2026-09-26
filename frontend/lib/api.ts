@@ -647,6 +647,7 @@ export async function regenerateExportThumbnail(
     frameSeconds: number;
     subjectAnchorX: number;
     advanceFrame?: boolean;
+    selectWithCodex?: boolean;
     cropMode?: "standard" | "close";
     textStyles?: import("./types").ThumbnailTextStyles;
     text?: import("./types").ThumbnailCopyText;

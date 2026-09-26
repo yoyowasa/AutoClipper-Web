@@ -102,7 +102,7 @@ export function ResultVideoCard({
     item: ResultExportItem,
     cropMode: "standard" | "close",
     textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean,
-    design?: import("../lib/types").NormalThumbnailStyle["design"]
+    design?: import("../lib/types").NormalThumbnailStyle["design"], selectWithCodex?: boolean
   ) => void;
   isReediting?: boolean;
   isRegeneratingThumbnail?: boolean;
@@ -196,6 +196,9 @@ thumbnailIsDisplayable && thumbnailUrl ? (
               }`}
             >
               {thumbnailLabel}
+              {item.thumbnailStatus === "failed" && item.thumbnailErrorCode?.includes("bridge_unavailable")
+                ? "：Codex連携が利用できません。起動状態を確認して再試行してください。"
+                : null}
             </div>
           ) : null
   );
@@ -225,7 +228,8 @@ thumbnailIsDisplayable && thumbnailUrl ? (
           {thumbnailPreview}
           {item.type === "normal" && onRegenerateThumbnail ? (
             <ResultThumbnailWorkspace item={item} busy={isRegeneratingThumbnail}
-              onRender={(crop, styles, text, advance, design) => onRegenerateThumbnail(item, crop, styles, text, advance, design)} />
+              onRender={(crop, styles, text, advance, design, selectWithCodex) =>
+                onRegenerateThumbnail(item, crop, styles, text, advance, design, selectWithCodex)} />
           ) : null}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
             <span>title: {readableToken(item.titleSource)}</span>

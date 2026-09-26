@@ -830,6 +830,7 @@ def _result_item(
         thumbnailUrl=thumbnail_url,
         thumbnailDownloadUrl=thumbnail_download_url,
         thumbnailStatus=thumbnail_status,
+        thumbnailErrorCode=metadata.get("thumbnail_error_code") if thumbnail_status == "failed" else None,
         thumbnailFilename=thumbnail_filename,
         thumbnailFrameSeconds=_number_or_none(
             _first_value(

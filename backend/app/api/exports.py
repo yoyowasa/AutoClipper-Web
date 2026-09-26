@@ -278,8 +278,8 @@ def regenerate_export_thumbnail(
     except (TypeError, ValueError):
         previous_variant_index = -1
     variant_index = (
-        (previous_variant_index + 1) % 6
-        if request.advance_frame
+        (previous_variant_index + 1) % (8 if request.select_with_codex else 6)
+        if request.advance_frame or request.select_with_codex
         else max(0, previous_variant_index)
     )
     pending = {
@@ -288,6 +288,7 @@ def regenerate_export_thumbnail(
         "thumbnail_frame_seconds": round(request.frame_seconds, 3),
         "thumbnail_subject_anchor_x": round(request.subject_anchor_x, 3),
         "thumbnail_advance_frame": request.advance_frame,
+        "thumbnail_select_with_codex": request.select_with_codex,
         "thumbnail_variant_index": variant_index,
         "thumbnail_crop_mode": request.crop_mode,
         "thumbnail_request_revision": revision,

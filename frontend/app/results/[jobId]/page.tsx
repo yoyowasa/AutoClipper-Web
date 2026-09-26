@@ -149,7 +149,7 @@ export default function ResultsPage() {
     item: ResultExportItem,
     cropMode: "standard" | "close",
     textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean,
-    design?: import("../../../lib/types").NormalThumbnailStyle["design"]
+    design?: import("../../../lib/types").NormalThumbnailStyle["design"], selectWithCodex?: boolean
   ) {
     const frameSeconds = Math.min(
       item.duration,
@@ -163,6 +163,7 @@ export default function ResultsPage() {
         frameSeconds,
         subjectAnchorX,
         advanceFrame: advanceFrame ?? !textStyles,
+        selectWithCodex: Boolean(selectWithCodex),
         cropMode,
         ...(design ? { design } : {}),
         ...(textStyles ? { textStyles } : {}),

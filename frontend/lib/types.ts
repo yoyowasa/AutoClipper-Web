@@ -329,6 +329,7 @@ export type ResultExportItem = {
   thumbnailUrl: string | null;
   thumbnailDownloadUrl: string | null;
   thumbnailStatus: "not_generated" | "generating" | "ready" | "failed" | null;
+  thumbnailErrorCode?: string | null;
   thumbnailFilename: string | null;
   thumbnailFrameSeconds: number | null;
   thumbnailSubjectAnchorX: number | null;

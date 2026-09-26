@@ -9,7 +9,7 @@ import type { ThumbnailDraft } from "./LiveThumbnailPreview";
 
 export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange }: {
   item: ResultExportItem; busy?: boolean;
-  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"]) => void;
+  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"], selectWithCodex: boolean) => void;
   onDraftChange: (draft: ThumbnailDraft) => void;
 }) {
   const [text, setText] = useState<ThumbnailCopyText>(() => ({ heading: item.thumbnailKicker ?? "", upper: item.thumbnailLine1 ?? "", lower: item.thumbnailLine2 ?? "" }));
@@ -116,17 +116,23 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange }: {
       <h4 className="text-sm font-semibold">書体・サイズ・色</h4>
       <div className="mt-3"><ThumbnailTextStyleEditor value={styles} onChange={setStyles} disabled={locked} texts={text} /></div>
     </section>
-    <button type="button" disabled={locked} onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false, design)}
+    <button type="button" disabled={locked} onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false, design, false)}
       className="mt-3 min-h-11 w-full bg-sky-700 px-3 text-sm font-semibold text-white disabled:bg-neutral-300">
       {item.thumbnailStatus === "generating" ? "サムネ更新中…" : "サムネを保存・更新"}
     </button>
     <p className="mt-2 text-xs text-neutral-600">プレビューは自動反映。保存するとサムネを確定します。</p>
     <div className="mt-3 grid gap-2 sm:grid-cols-2">
       <button type="button" disabled={locked} className="min-h-10 bg-amber-600 px-2 text-xs font-semibold text-white disabled:bg-neutral-300"
-        onClick={() => onRender("standard", styles, text, true, design)}>別場面で更新（上半身）</button>
+        onClick={() => onRender("standard", styles, text, true, design, false)}>別場面で更新（上半身）</button>
       <button type="button" disabled={locked} className="min-h-10 bg-neutral-950 px-2 text-xs font-semibold text-white disabled:bg-neutral-300"
-        onClick={() => onRender("close", styles, text, true, design)}>別場面で更新（顔寄り）</button>
+        onClick={() => onRender("close", styles, text, true, design, false)}>別場面で更新（顔寄り）</button>
     </div>
+    <button type="button" disabled={locked}
+      className="mt-3 min-h-11 w-full border border-violet-700 bg-violet-50 px-3 text-sm font-semibold text-violet-900 disabled:text-neutral-400"
+      onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false, design, true)}>
+      Codexで文言に合う人物・場面を選び直す
+    </button>
+    <p className="mt-1 text-xs text-neutral-600">元動画の８場面と近くの字幕を比較します。選んだ場面でサムネを保存し直します。</p>
     </div>
     </div>
   </section>;

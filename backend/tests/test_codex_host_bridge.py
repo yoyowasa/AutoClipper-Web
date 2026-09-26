@@ -20,6 +20,7 @@ from app.candidates.codex_initial_selection import (  # noqa: E402
     codex_topic_selection_response_schema,
 )
 from app.scoring.title_hook_suggestions import TITLE_HOOK_GENERATION_SCHEMA  # noqa: E402
+from app.scoring.thumbnail_frame_rank import THUMBNAIL_FRAME_RANK_SCHEMA  # noqa: E402
 
 from launcher.codex_bridge import (  # noqa: E402
     ALLOWED_REQUEST_TASKS,
@@ -33,6 +34,7 @@ from launcher.codex_bridge import (  # noqa: E402
     MAX_PROMPT_CHARS,
     REQUEST_TASK,
     TITLE_HOOK_OUTPUT_SCHEMA,
+    THUMBNAIL_FRAME_RANK_TASK,
     _response_schema_sha256,
     _write_status,
     BridgeRequest,
@@ -112,6 +114,24 @@ def test_title_hook_bridge_schema_matches_backend_generation_contract() -> None:
     assert EXPECTED_RESPONSE_SCHEMA_SHA256[REQUEST_TASK] == _response_schema_sha256(
         TITLE_HOOK_OUTPUT_SCHEMA
     )
+
+
+def test_thumbnail_frame_ranking_schema_matches_bridge_contract(tmp_path: Path) -> None:
+    assert EXPECTED_RESPONSE_SCHEMA_SHA256[THUMBNAIL_FRAME_RANK_TASK] == _response_schema_sha256(
+        THUMBNAIL_FRAME_RANK_SCHEMA
+    )
+    image = tmp_path / "sheet.jpg"
+    image.write_bytes(b"fixture")
+    parsed = validate_request({
+        "schemaVersion": BRIDGE_PROTOCOL_VERSION,
+        "task": THUMBNAIL_FRAME_RANK_TASK,
+        "requestId": "thumbnail-rank",
+        "prompt": "候補画像を比較",
+        "responseSchema": THUMBNAIL_FRAME_RANK_SCHEMA,
+        "images": ["sheet.jpg"],
+        "threadScope": "job_test:thumbnail",
+    }, tmp_path)
+    assert parsed.image_paths == (image,)
 
 
 def test_two_stage_selection_schemas_match_backend_contracts() -> None:

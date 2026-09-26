@@ -988,6 +988,7 @@ class ResultExportItem(BaseModel):
     thumbnail_url: str | None = Field(default=None, alias="thumbnailUrl")
     thumbnail_download_url: str | None = Field(default=None, alias="thumbnailDownloadUrl")
     thumbnail_status: ThumbnailStatus | None = Field(default=None, alias="thumbnailStatus")
+    thumbnail_error_code: str | None = Field(default=None, alias="thumbnailErrorCode")
     thumbnail_filename: str | None = Field(default=None, alias="thumbnailFilename")
     thumbnail_frame_seconds: float | None = Field(default=None, alias="thumbnailFrameSeconds")
     thumbnail_subject_anchor_x: float | None = Field(default=None, alias="thumbnailSubjectAnchorX")
@@ -1003,6 +1004,7 @@ class ThumbnailRegenerationRequest(BaseModel):
     frame_seconds: float = Field(alias="frameSeconds", ge=0)
     subject_anchor_x: float = Field(default=1.0, alias="subjectAnchorX", ge=0, le=1)
     advance_frame: bool = Field(default=False, alias="advanceFrame")
+    select_with_codex: bool = Field(default=False, alias="selectWithCodex")
     crop_mode: Literal["standard", "close"] = Field(
         default="standard",
         alias="cropMode",
