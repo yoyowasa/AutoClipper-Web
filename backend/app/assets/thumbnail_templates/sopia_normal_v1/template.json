@@ -14,8 +14,8 @@
     "min_crop_height_ratio": 0.44,
     "max_crop_height_ratio": 0.72,
     "fallback_center_x": 0.82,
-    "fallback_center_y": 0.68,
-    "fallback_crop_height_ratio": 0.56,
+    "fallback_center_y": 0.43,
+    "fallback_crop_height_ratio": 0.85,
     "feather_left": 170,
     "feather_top": 12,
     "feather_bottom": 18
@@ -39,12 +39,12 @@
     "rotation_degrees": 2.0
   },
   "colors": {
-    "background": "#07132D",
-    "pattern": "#1B3762",
+    "background": "#F1FBFF",
+    "pattern": "#B9E5F7",
     "gold": "#79DCFA",
     "gold_light": "#D6A9F6",
-    "frame": "#79DCFA",
-    "frame_light": "#D6A9F6",
+    "frame": "#F3C956",
+    "frame_light": "#FFF0AE",
     "accent": "#8B6ACE",
     "eyebrow": "#A8EBFF",
     "eyebrow_background": "#09162E",

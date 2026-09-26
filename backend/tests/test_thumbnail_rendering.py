@@ -166,8 +166,8 @@ def test_sopia_style_selects_its_template_and_keeps_raden_default(tmp_path: Path
     with Image.open(sopia_output) as sopia, Image.open(raden_output) as raden:
         assert sopia.size == raden.size == (1280, 720)
         # The same portrait and text use distinct frame/background artwork.
-        assert sopia.getpixel((15, 15))[2] > sopia.getpixel((15, 15))[0]
-        assert raden.getpixel((15, 15))[0] > raden.getpixel((15, 15))[2]
+        assert min(sopia.getpixel((220, 170))) > 140
+        assert max(raden.getpixel((220, 170))) < 140
         assert ImageChops.difference(sopia, raden).getbbox() is not None
 
 
