@@ -293,6 +293,18 @@ def regenerate_export_thumbnail(
         "thumbnail_request_revision": revision,
         "thumbnail_error_code": None,
     }
+    if request.design is not None:
+        from app.models import Job
+        from app.thumbnail_style import resolve_export_thumbnail_style
+        job = db.get(Job, export.job_id)
+        try:
+            resolve_export_thumbnail_style(
+                (job.settings_json or {}).get("normalThumbnailStyle") if job else None,
+                request.design,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+        pending["thumbnail_design"] = request.design
     if request.text is not None:
         pending.update({"thumbnail_kicker": request.text.heading.strip(),
                         "thumbnail_line1": request.text.upper.strip(), "thumbnail_line2": request.text.lower.strip()})

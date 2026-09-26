@@ -148,7 +148,8 @@ export default function ResultsPage() {
   async function regenerateThumbnail(
     item: ResultExportItem,
     cropMode: "standard" | "close",
-    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean
+    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean,
+    design?: import("../../../lib/types").NormalThumbnailStyle["design"]
   ) {
     const frameSeconds = Math.min(
       item.duration,
@@ -163,6 +164,7 @@ export default function ResultsPage() {
         subjectAnchorX,
         advanceFrame: advanceFrame ?? !textStyles,
         cropMode,
+        ...(design ? { design } : {}),
         ...(textStyles ? { textStyles } : {}),
         ...(text ? { text } : {})
       });
@@ -176,6 +178,7 @@ export default function ResultsPage() {
                       ...clip,
                       thumbnailSubjectAnchorX: subjectAnchorX,
                       ...(textStyles ? { thumbnailTextStyles: textStyles } : {}),
+                      ...(design ? { thumbnailDesign: design } : {}),
                       thumbnailStatus: "generating"
                     }
                   : clip

@@ -18,16 +18,16 @@ def frame_extractor(source, output, timestamp):
     Image.new("RGB", (1280, 720), "#667788").save(output, format="JPEG")
 
 
-def prepare(client):
-    storage, factory, metadata, thumbnail, video = seed_thumbnail(client)
+def prepare(api):
+    storage, factory, metadata, thumbnail, video = seed_thumbnail(api)
     queue = []
     app.dependency_overrides[get_enqueue_thumbnail_preview] = lambda: lambda *args: queue.append(args)
-    response = client.post(ENDPOINT + "/prepare")
+    response = api.post(ENDPOINT + "/prepare")
     assert response.status_code == 200, response.text
     assert response.json()["state"] == "queued"
     assert len(queue) == 1
     run_thumbnail_preview_prepare(*queue[-1], session_factory=factory, paths=storage, extractor=frame_extractor)
-    ready = client.post(ENDPOINT + "/prepare").json()
+    ready = api.post(ENDPOINT + "/prepare").json()
     assert ready["state"] == "ready"
     assert len(queue) == 1
     return storage, factory, metadata, thumbnail, video, queue, ready["frameKey"]
@@ -57,6 +57,21 @@ def test_live_preview_matches_saved_renderer_without_changing_exports_or_extract
     assert next_response.content != response.content
     assert [path.read_bytes() for path in (metadata, thumbnail, video)] == before
     assert len(queue) == 1
+
+
+def test_template_switch_previews_immediately_without_saving(client):  # noqa: F811
+    _, _, metadata, thumbnail, video, queue, key = prepare(client)
+    before = [path.read_bytes() for path in (metadata, thumbnail, video)]
+    base = {"frameKey": key, "text": TEXT, "textStyles": TEXT_STYLES}
+    raden = client.post(ENDPOINT, json={**base, "design": "raden"})
+    sopia = client.post(ENDPOINT, json={**base, "design": "sopia"})
+    assert raden.status_code == 200, raden.text
+    assert sopia.status_code == 200, sopia.text
+    assert raden.content != sopia.content
+    assert [path.read_bytes() for path in (metadata, thumbnail, video)] == before
+    assert len(queue) == 1
+    invalid = client.post(ENDPOINT, json={**base, "design": "custom"})
+    assert invalid.status_code == 409
 
 
 def test_changed_source_frame_invalidates_old_preview_and_prepares_once(client):  # noqa: F811

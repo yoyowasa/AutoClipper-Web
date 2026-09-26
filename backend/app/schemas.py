@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
 from app.short_banners import BannerAssetId
-from app.thumbnail_style import NormalThumbnailStyle, ThumbnailTextStyles
+from app.thumbnail_style import NormalThumbnailStyle, ThumbnailDesign, ThumbnailTextStyles
 from app.scoring.thumbnail_copy import ThumbnailCopyText
 from app.posting_metadata import (
     PostMetadataSource,
@@ -935,6 +935,8 @@ class ExportItemRead(BaseModel):
 
 
 class ResultExportItem(BaseModel):
+    thumbnail_design: ThumbnailDesign = Field(default="raden", alias="thumbnailDesign")
+    thumbnail_can_use_custom_background: bool = Field(default=False, alias="thumbnailCanUseCustomBackground")
     thumbnail_text_styles: ThumbnailTextStyles | None = Field(default=None, alias="thumbnailTextStyles")
     thumbnail_kicker: str = Field(default="", alias="thumbnailKicker")
     thumbnail_line1: str = Field(default="", alias="thumbnailLine1")
@@ -995,6 +997,7 @@ class ResultExportItem(BaseModel):
 
 
 class ThumbnailRegenerationRequest(BaseModel):
+    design: ThumbnailDesign | None = None
     text: "ThumbnailCopyText | None" = None
     text_styles: ThumbnailTextStyles | None = Field(default=None, alias="textStyles")
     frame_seconds: float = Field(alias="frameSeconds", ge=0)

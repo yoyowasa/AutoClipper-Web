@@ -15,7 +15,7 @@ from app.jobs.thumbnails import (
 from app.jobs.thumbnail_frame_selection import select_thumbnail_frame_seconds
 from app.models import ExportItem, Video
 from app.render.render_thumbnail import ThumbnailRenderResult, render_normal_thumbnail
-from app.thumbnail_style import resolve_thumbnail_text_styles
+from app.thumbnail_style import resolve_export_thumbnail_style, resolve_thumbnail_text_styles
 from app.storage.paths import StoragePaths, get_storage_paths
 
 
@@ -133,7 +133,10 @@ def run_export_thumbnail_regeneration(
             )
             from app.models import Job
             job = db.get(Job, export.job_id)
-            character_style = (job.settings_json or {}).get("normalThumbnailStyle") if job else None
+            character_style = resolve_export_thumbnail_style(
+                (job.settings_json or {}).get("normalThumbnailStyle") if job else None,
+                payload.get("thumbnail_design"),
+            )
             result = normal_renderer(
                 source_path,
                 temp_output,

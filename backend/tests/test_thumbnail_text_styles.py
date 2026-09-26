@@ -181,6 +181,25 @@ def test_saved_role_settings_flow_through_api_worker_and_results(client):  # noq
     assert video_path.read_bytes() == b"completed video unchanged"
 
 
+def test_per_video_template_is_saved_without_changing_character_preset(client):  # noqa: F811
+    storage, factory, metadata_path, _, video_path = seed_thumbnail(client)
+    queued = []
+    app.dependency_overrides[get_enqueue_thumbnail_regeneration] = lambda: lambda *args: queued.append(args)
+    endpoint = "/api/exports/exp_thumbnail_style/thumbnail/regenerate"
+    assert client.post(endpoint, json={"frameSeconds": 4, "design": "custom"}).status_code == 422
+    assert "thumbnail_design" not in json.loads(metadata_path.read_text(encoding="utf-8"))
+    response = client.post(endpoint, json={"frameSeconds": 4, "design": "sopia"})
+    assert response.status_code == 202, response.text
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["thumbnail_design"] == "sopia"
+    run_export_thumbnail_regeneration(*queued[-1], session_factory=factory, paths=storage, normal_renderer=real_test_renderer)
+    result = client.get("/api/jobs/job_thumbnail_style/results").json()["normalClips"][0]
+    assert result["thumbnailDesign"] == "sopia"
+    assert result["thumbnailCanUseCustomBackground"] is False
+    assert video_path.read_bytes() == b"completed video unchanged"
+    with factory() as db:
+        assert db.get(Job, "job_thumbnail_style").settings_json == {}
+
+
 @pytest.mark.parametrize("patch", [{"fontPreset": "../bad.ttf"}, {"fontSize": 500}, {"color": "red"}, {"fontSize": 11}])
 def test_invalid_font_settings_rejected_without_metadata_changes(client, patch):  # noqa: F811
     _, _, metadata_path, _, _ = seed_thumbnail(client)

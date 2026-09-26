@@ -3,9 +3,9 @@
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import { prepareThumbnailPreview, renderThumbnailPreview, toBrowserApiUrl } from "../lib/api";
-import type { ResultExportItem, ThumbnailCopyText, ThumbnailTextStyles } from "../lib/types";
+import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailTextStyles } from "../lib/types";
 
-export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles };
+export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles; design: NormalThumbnailStyle["design"] };
 
 export function LiveThumbnailPreview({ item, draft, active }: { item: ResultExportItem; draft: ThumbnailDraft; active: boolean }) {
   const [source, setSource] = useState<{ key: string; frameKey: string } | null>(null);
@@ -16,7 +16,7 @@ export function LiveThumbnailPreview({ item, draft, active }: { item: ResultExpo
   const saving = item.thumbnailStatus === "generating";
   const sourceContext = JSON.stringify([item.id, item.thumbnailRenderRevision, saving, retry]);
   const frameKey = source?.key === sourceContext ? source.frameKey : "";
-  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles });
+  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles, design: draft.design });
 
   useEffect(() => {
     if (!active || saving) return;

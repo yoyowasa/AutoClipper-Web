@@ -101,7 +101,8 @@ export function ResultVideoCard({
   onRegenerateThumbnail?: (
     item: ResultExportItem,
     cropMode: "standard" | "close",
-    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean
+    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean,
+    design?: import("../lib/types").NormalThumbnailStyle["design"]
   ) => void;
   isReediting?: boolean;
   isRegeneratingThumbnail?: boolean;
@@ -224,7 +225,7 @@ thumbnailIsDisplayable && thumbnailUrl ? (
           {thumbnailPreview}
           {item.type === "normal" && onRegenerateThumbnail ? (
             <ResultThumbnailWorkspace item={item} busy={isRegeneratingThumbnail}
-              onRender={(crop, styles, text, advance) => onRegenerateThumbnail(item, crop, styles, text, advance)} />
+              onRender={(crop, styles, text, advance, design) => onRegenerateThumbnail(item, crop, styles, text, advance, design)} />
           ) : null}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
             <span>title: {readableToken(item.titleSource)}</span>

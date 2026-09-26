@@ -276,6 +276,8 @@ export type JobStatusResponse = {
 };
 
 export type ResultExportItem = {
+  thumbnailDesign?: NormalThumbnailStyle["design"];
+  thumbnailCanUseCustomBackground?: boolean;
   thumbnailTextStyles?: ThumbnailTextStyles | null;
   thumbnailKicker?: string;
   thumbnailLine1?: string;
