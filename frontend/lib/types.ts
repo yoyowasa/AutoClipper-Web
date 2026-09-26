@@ -667,7 +667,7 @@ export type ClipPlanTranscriptSegment = {
 };
 
 export type NormalThumbnailStyle = {
-  design: "raden" | "plain" | "custom";
+  design: "raden" | "sopia" | "plain" | "custom";
   backgroundAssetId?: string | null;
   backgroundColor: string;
   titleColor: string;

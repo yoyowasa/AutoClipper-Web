@@ -44,7 +44,7 @@ class ThumbnailTextStyles(BaseModel):
 
 class NormalThumbnailStyle(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    design: Literal["raden", "plain", "custom"] = "plain"
+    design: Literal["raden", "sopia", "plain", "custom"] = "plain"
     background_asset_id: BannerAssetId | None = Field(default=None, alias="backgroundAssetId")
     background_color: str = Field(default="#20242B", pattern=r"^#[0-9A-Fa-f]{6}$", alias="backgroundColor")
     title_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", alias="titleColor")

@@ -10245,3 +10245,11 @@ pip check: pass
 - 検証: backend pytest 1164 passed・1 skipped、ruff成功。frontend typecheck・lint・build、追加したruntime profileとショートプレビュー時刻のテスト成功。Docker Compose設定検証成功、既存のbackend/frontend/worker/redis稼働とbackend healthyを確認。差分の空白・秘密値パターンを確認。
 - 範囲: 今回はGit履歴の整理とmain反映。実ジョブの追加レンダリング、稼働コンテナの再構築、字幕編集の新規実機操作は行っていない。各機能の個別実機確認は上記の該当作業記録に従う。
 - CI修正: 初回main push後、GitHubのbackend lintで`launcher/controller.py`内PowerShell文字列が140文字制限を超えて失敗。ローカル検査の対象にlauncherを含めていなかったため見逃した。WMIの引数マップを複数行へ整形し、処理内容は維持。修正後にbackendとlauncherのruff、関連launcherテスト、GitHub CIを再確認する。
+
+## 2026-09-27 JST 宙科そぴあ用の通常サムネイルテンプレ
+
+- 目的: らでん用サムネイルの二重枠・右側人物・左側文字の構図を参考に、キャラ別に保存できる宙科そぴあ用の通常動画テンプレを追加する。
+- 変更ファイル: `backend/app/assets/thumbnail_templates/sopia_normal_v1/`、`scripts/generate_sopia_thumbnail_background.py`、`backend/app/render/render_thumbnail.py`、`backend/app/thumbnail_style.py`、`backend/pyproject.toml`、`frontend/components/CharacterThumbnailSettings.tsx`、`frontend/lib/types.ts`、関連テスト、本ファイル。
+- 変更: 宇宙・科学をイメージした青系背景と枠色を新設。キャラ設定のサムネイル背景で「宙科そぴあ用」を選べるようにし、選択時に見出し・上下行・外縁の初期色を設定。設定は既存のキャラ保存経路に含まれる。らでん用テンプレの既定値は維持。
+- 検証: 合成フレームで1280×720の出力を生成し、文字・枠・人物の重なりを目視確認。宙科用とらでん用の枠色・背景の差を回帰テストで確認。backend全テスト1165 passed / 1 skipped、対象ruff、frontend typecheck・lint・webpack build成功。通常のTurbopack buildは検証worktreeの外部依存ディレクトリへのリンクを拒否したため、この環境ではwebpack buildで確認した。
+- 未確認: 実際の宙科素材を使ったサムネイル表示と、稼働中アプリへの反映。ショートのサムネイルは従来どおり完成動画から切り出す仕様。
