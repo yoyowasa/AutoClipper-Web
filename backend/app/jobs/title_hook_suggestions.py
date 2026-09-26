@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import unicodedata
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -47,6 +49,10 @@ TITLE_HOOK_GENERATION_CANCELLED_ERROR = (
     "subtitle review is no longer awaiting title/hook suggestions"
 )
 TitleHookSuggestionState = Literal["queued", "generating", "ready", "failed"]
+
+
+class RepeatedTitleSuggestionsError(RuntimeError):
+    pass
 
 
 def _utc_iso() -> str:
@@ -97,6 +103,9 @@ class TitleHookSuggestionInput(BaseModel):
     provider: Literal["codex", "openai"] = "openai"
     model: str = Field(min_length=1)
     segments: list[TitleHookSuggestionInputSegment] = Field(default_factory=list)
+    avoid_publication_titles: list[str] = Field(
+        default_factory=list, max_length=24, alias="avoidPublicationTitles"
+    )
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -116,6 +125,7 @@ class TitleHookSuggestionInput(BaseModel):
                 }
                 for item in self.segments
             ],
+            "previousPublicationTitles": self.avoid_publication_titles,
         }
 
 
@@ -144,6 +154,9 @@ class TitleHookSuggestionsDocument(BaseModel):
     )
     model: str
     suggestions: list[TitleHookSuggestion] = Field(default_factory=list)
+    avoid_publication_titles: list[str] = Field(
+        default_factory=list, max_length=24, alias="avoidPublicationTitles"
+    )
     recommended_suggestion_id: str | None = Field(
         default=None,
         alias="recommendedSuggestionId",
@@ -324,6 +337,7 @@ def queued_title_hook_suggestions(
         provider=request.provider,
         threadId=thread_id,
         model=request.model,
+        avoidPublicationTitles=request.avoid_publication_titles,
     )
 
 
@@ -339,6 +353,7 @@ def failed_title_hook_suggestions(
         revisionHash=request.revision_hash,
         provider=request.provider,
         model=request.model,
+        avoidPublicationTitles=request.avoid_publication_titles,
         error=error,
         generatedAt=_utc_iso(),
     )
@@ -362,6 +377,8 @@ SessionFactory = Callable[[], Session]
 
 
 def _safe_generation_error(exc: Exception) -> str:
+    if isinstance(exc, RepeatedTitleSuggestionsError):
+        return "別の公開タイトル案を生成できませんでした。字幕を確認して再試行するか、手入力してください。"
     if isinstance(exc, CodexTitleHookSuggestionError):
         return f"title/hook generation failed ({exc.code})"
     if isinstance(exc, RuntimeError) and str(exc) == "OPENAI_API_KEY is not configured":
@@ -406,6 +423,43 @@ def _validate_suggestion_evidence(
     unknown_ids = referenced_ids - allowed_ids
     if unknown_ids:
         raise ValueError("title/hook suggestion referenced an unknown subtitle segment")
+
+
+def publication_title_key(title: str) -> str:
+    """Ignore cosmetic spacing and punctuation when comparing regenerated titles."""
+    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", title)).casefold()
+
+
+def append_avoided_publication_titles(
+    previous: Sequence[str], suggestions: Sequence[TitleHookSuggestion]
+) -> list[str]:
+    titles = [*previous, *(item.publication_title for item in suggestions)]
+    seen: set[str] = set()
+    unique_reversed: list[str] = []
+    for title in reversed(titles):
+        key = publication_title_key(title)
+        if key and key not in seen:
+            seen.add(key)
+            unique_reversed.append(title)
+    return list(reversed(unique_reversed[:24]))
+
+
+def _all_publication_titles_repeated(
+    suggestions: Sequence[TitleHookSuggestion],
+    avoided_titles: Sequence[str],
+    *,
+    clip_type: str,
+    suffix: str,
+) -> bool:
+    avoided = {publication_title_key(title) for title in avoided_titles}
+    return bool(avoided) and all(
+        publication_title_key(
+            ensure_publication_title_suffix(
+                item.publication_title, clip_type=clip_type, suffix=suffix
+            )
+        ) in avoided
+        for item in suggestions
+    )
 
 
 def _same_generation_context(
@@ -733,6 +787,27 @@ def run_title_hook_suggestion_generation(
                     thread_id=generation_thread_id,
                 )
             result = active_generator.generate(request.prompt_payload(), frame_paths)
+            if _all_publication_titles_repeated(
+                result.suggestions,
+                request.avoid_publication_titles,
+                clip_type=request.clip_type,
+                suffix=request.normal_title_suffix,
+            ):
+                retry_payload = request.prompt_payload()
+                retry_payload["retryInstruction"] = (
+                    "前回までと同じ公開タイトルしか出ていません。字幕に忠実な別の切り口で"
+                    "新しい公開タイトルを少なくとも1件含む3案を作り直してください。"
+                )
+                result = active_generator.generate(retry_payload, frame_paths)
+                if _all_publication_titles_repeated(
+                    result.suggestions,
+                    request.avoid_publication_titles,
+                    clip_type=request.clip_type,
+                    suffix=request.normal_title_suffix,
+                ):
+                    raise RepeatedTitleSuggestionsError(
+                        "title/hook regeneration returned only previous titles"
+                    )
             generation_thread_id = getattr(
                 active_generator,
                 "last_thread_id",
@@ -763,6 +838,7 @@ def run_title_hook_suggestion_generation(
             provider=request.provider,
             threadId=generation_thread_id,
             model=request.model,
+            avoidPublicationTitles=request.avoid_publication_titles,
             suggestions=suggestions,
             recommendedSuggestionId=suggestions[recommended_index].id,
             youtubeDescription=result.youtube_description,

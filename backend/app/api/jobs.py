@@ -131,6 +131,7 @@ from app.jobs.subtitle_review_preview import (
 from app.jobs.title_hook_suggestions import (
     TitleHookDraftSegment,
     TitleHookSuggestionsDocument,
+    append_avoided_publication_titles,
     build_title_hook_suggestion_input,
     failed_title_hook_suggestions,
     load_title_hook_suggestion_input,
@@ -3187,7 +3188,20 @@ def create_title_hook_suggestions(
                 existing_artifact = load_title_hook_suggestions(state_path)
             except (OSError, ValueError, json.JSONDecodeError):
                 existing_artifact = None
-        previous_thread_id = existing_artifact.thread_id if existing_artifact is not None else None
+        if (
+            request.force_regenerate
+            and existing_artifact is not None
+            and existing_artifact.revision_hash == generation_input.revision_hash
+            and existing_artifact.draft_hash == generation_input.draft_hash
+        ):
+            generation_input = generation_input.model_copy(
+                update={
+                    "avoid_publication_titles": append_avoided_publication_titles(
+                        existing_artifact.avoid_publication_titles,
+                        existing_artifact.suggestions,
+                    )
+                }
+            )
         cached: TitleHookSuggestionsDocument | None = (
             None if request.force_regenerate else existing_artifact
         )
@@ -3207,7 +3221,9 @@ def create_title_hook_suggestions(
             write_title_hook_suggestion_input(generation_input, request_path)
             queued = queued_title_hook_suggestions(
                 generation_input,
-                thread_id=previous_thread_id,
+                # A fresh conversation prevents old answers from anchoring the model.
+                # Prior titles are supplied explicitly in the request instead.
+                thread_id=None,
             )
             write_title_hook_suggestions(queued, state_path)
 
