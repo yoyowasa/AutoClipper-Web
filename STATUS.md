@@ -10245,3 +10245,12 @@ pip check: pass
 - 検証: backend pytest 1164 passed・1 skipped、ruff成功。frontend typecheck・lint・build、追加したruntime profileとショートプレビュー時刻のテスト成功。Docker Compose設定検証成功、既存のbackend/frontend/worker/redis稼働とbackend healthyを確認。差分の空白・秘密値パターンを確認。
 - 範囲: 今回はGit履歴の整理とmain反映。実ジョブの追加レンダリング、稼働コンテナの再構築、字幕編集の新規実機操作は行っていない。各機能の個別実機確認は上記の該当作業記録に従う。
 - CI修正: 初回main push後、GitHubのbackend lintで`launcher/controller.py`内PowerShell文字列が140文字制限を超えて失敗。ローカル検査の対象にlauncherを含めていなかったため見逃した。WMIの引数マップを複数行へ整形し、処理内容は維持。修正後にbackendとlauncherのruff、関連launcherテスト、GitHub CIを再確認する。
+
+## 2026-09-27 JST タイトル案の再生成で同案が繰り返される問題を修正
+
+- 目的: 通常・ショートの「別案を再生成」で、同じ公開タイトル3案が返る状態を解消する。
+- 原因: 実jobの生成履歴で同一clipの連続2回の公開タイトル3案が完全一致した。再生成は同じ字幕・同じ指示文を以前のCodexスレッドへ送り、過去案を除外する入力も結果の重複判定もなかった。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/app/jobs/title_hook_suggestions.py`、`backend/app/scoring/title_hook_suggestions.py`、`backend/tests/test_title_hook_suggestions.py`、CI lintを通すための既存fixture注記2ファイル、本ファイル。
+- 修正: 同じ字幕での再生成時に直近最大24件の公開タイトルを除外リストとして保存・入力し、前回の会話を引き継がずに生成する。3案すべてが過去案と実質同じなら1回だけ再試行し、なお同じなら新案として表示せず明確な失敗を返す。字幕が変わった場合は除外リストを持ち越さない。prompt versionをv10に更新。
+- 検証: 通常・ショートの再生成入力、重複時の再試行を回帰テストで確認。backend全1167 passed・1 skipped、backendとlauncherのruff、frontend typecheck・lint・overlay fit・build、git diff --check成功。実ユーザーclipに対する新規Codex生成結果は未検証。
+- 稼働反映: ローカル稼働branchへコードを反映し、queue 0・実行中job 0を確認してbackend／GPU workerを再build・再作成。両containerでprompt version v10、backend healthyとhealth API HTTP 200、既存clipの案取得APIがready・3案を返すことを確認。既存clipの再生成操作は行っていない。
