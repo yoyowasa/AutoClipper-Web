@@ -12,10 +12,15 @@ from app.jobs.subtitle_review import apply_reviewed_text, build_subtitle_review,
 from app.main import app
 from app.models import Job
 from app.render.subtitles_ass import SubtitleLayout, build_ass_document, subtitle_events_for_candidate_output
-from app.jobs.subtitle_review_preview import load_subtitle_review_preview_inputs
+from app.jobs.subtitle_review_preview import current_subtitle_review_preview_spec, load_subtitle_review_preview_inputs
 from app.storage.paths import get_storage_paths
 from app.models import Video
-from app.render.render_exact_review_preview import build_subtitle_review_preview_spec, subtitle_review_preview_spec_hash
+from app.render.render_exact_review_preview import (
+    build_live_subtitle_review_preview_spec,
+    build_subtitle_review_preview_spec,
+    live_subtitle_review_preview_paths,
+    subtitle_review_preview_spec_hash,
+)
 
 
 def seed_structure(api):
@@ -156,6 +161,35 @@ def test_insert_at_paused_time_in_gap_reaches_preview_and_render(client):  # noq
         )
     assert any((segment.start, segment.end, segment.text) == (4.25, 5.75, "抜けた字幕")
                for segment in preview.transcript_segments)
+
+
+def test_split_keeps_playable_live_video_while_exact_preview_updates(client):  # noqa: F811
+    job_id, path, doc, _, _ = seed_structure(client)
+    paths = app.dependency_overrides[get_storage_paths]()
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        spec, _, _ = current_subtitle_review_preview_spec(
+            job=job, video=db.get(Video, job.video_id), document=doc,
+            paths=paths, clip_id="normal",
+        )
+    live_spec = build_live_subtitle_review_preview_spec(spec)
+    live_hash = subtitle_review_preview_spec_hash(live_spec)
+    artifact = live_subtitle_review_preview_paths(paths.job_outputs(job_id), "normal", live_hash)
+    artifact.video_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact.video_path.write_bytes(b"playable live video")
+    artifact.spec_path.write_text(json.dumps(live_spec, ensure_ascii=False), encoding="utf-8")
+
+    before = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
+    before_clip = next(clip for clip in before["clips"] if clip["id"] == "normal")
+    response = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/segment-structure",
+        json={"action": "split", "segments": items(doc.segments[0]), "splitOffset": 1, "splitTime": 1.5},
+    )
+    assert response.status_code == 200, response.text
+    after_clip = next(clip for clip in response.json()["clips"] if clip["id"] == "normal")
+    assert after_clip["previewSpecHash"] != before_clip["previewSpecHash"]
+    assert after_clip["livePreviewVideoUrl"] == before_clip["livePreviewVideoUrl"]
+    assert client.get(after_clip["livePreviewVideoUrl"]).content == b"playable live video"
 
 
 @pytest.mark.parametrize("start,end", [(1.5, 1.9), (3.5, 2.5), (9.9, 10.1), (3.5, 3.55)])

@@ -320,14 +320,17 @@ def build_live_subtitle_review_preview_spec(
         ):
             if key in settings:
                 visual_settings[key] = settings[key]
-    visual_segments = [
-        {
-            "start": segment["start"],
-            "end": segment["end"],
-        }
-        for segment in exact_spec.get("segments", [])
-        if isinstance(segment, Mapping)
-    ]
+    # Text-free video does not depend on subtitle boundaries unless the auto
+    # short layout uses dialogue windows to decide whom to follow.
+    visual_segments = (
+        [
+            {"start": segment["start"], "end": segment["end"]}
+            for segment in exact_spec.get("segments", [])
+            if isinstance(segment, Mapping)
+        ]
+        if clip.get("type") == "short" and settings.get("shortLayout") == "auto"
+        else []
+    )
     return _normalize_for_spec(
         {
             "rendererVersion": renderer_version,

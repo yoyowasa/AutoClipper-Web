@@ -324,6 +324,38 @@ def test_live_preview_spec_ignores_text_style_but_tracks_visual_layout() -> None
     )
 
 
+def test_subtitle_split_keeps_text_free_preview_for_normal_and_fixed_short_layout() -> None:
+    original = [TranscriptSegment(start=10.0, end=12.0, text="長い字幕")]
+    split = [
+        TranscriptSegment(start=10.0, end=11.0, text="長い"),
+        TranscriptSegment(start=11.0, end=12.0, text="字幕"),
+    ]
+    for clip_type, settings in (
+        ("normal", {}),
+        ("short", {"shortLayout": "center_crop"}),
+    ):
+        common = {
+            "candidate": make_candidate(f"{clip_type}_1", clip_type),
+            "settings": settings,
+            "source_fingerprint": "source-sha256",
+            "source_width": 1920,
+            "source_height": 1080,
+        }
+        before = build_subtitle_review_preview_spec(transcript_segments=original, **common)
+        after = build_subtitle_review_preview_spec(transcript_segments=split, **common)
+        assert subtitle_review_preview_spec_hash(before) != subtitle_review_preview_spec_hash(after)
+        assert subtitle_review_preview_spec_hash(
+            build_live_subtitle_review_preview_spec(before)
+        ) == subtitle_review_preview_spec_hash(build_live_subtitle_review_preview_spec(after))
+
+    auto_common = {**common, "settings": {"shortLayout": "auto"}}
+    auto_before = build_subtitle_review_preview_spec(transcript_segments=original, **auto_common)
+    auto_after = build_subtitle_review_preview_spec(transcript_segments=split, **auto_common)
+    assert subtitle_review_preview_spec_hash(
+        build_live_subtitle_review_preview_spec(auto_before)
+    ) != subtitle_review_preview_spec_hash(build_live_subtitle_review_preview_spec(auto_after))
+
+
 def test_normal_preview_hash_ignores_short_only_settings() -> None:
     candidate = make_candidate("normal_1", "normal")
     common = {

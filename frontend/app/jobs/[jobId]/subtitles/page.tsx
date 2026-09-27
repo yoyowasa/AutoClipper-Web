@@ -8,7 +8,7 @@ import { SubtitleSegmentActions } from "../../../../components/SubtitleSegmentAc
 import { editSubtitleStructure } from "../../../../lib/api";
 import type { SubtitleStructureRequest } from "../../../../lib/types";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
 import {
@@ -333,6 +333,8 @@ export default function SubtitleReviewPage() {
   const router = useRouter();
   const jobId = useMemo(() => readJobId(params.jobId), [params.jobId]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const currentPlayerMediaRef = useRef<{ clipId: string; key: string } | null>(null);
+  const pendingPlayerResumeRef = useRef<{ key: string; time: number; playing: boolean } | null>(null);
   const playerShellRef = useRef<HTMLDivElement | null>(null);
   const subtitleListRef = useRef<HTMLDivElement | null>(null);
   const segmentRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -984,6 +986,18 @@ export default function SubtitleReviewPage() {
     ? selectedLivePreviewVersion
     : selectedPreviewVersion;
   const selectedPlayerReady = Boolean(selectedPlayerVideoUrl);
+  const playerMediaKey = selectedClip && selectedPlayerVideoUrl
+    ? `${selectedClip.id}:${selectedPlayerVideoUrl}:${selectedPlayerPreviewVersion}`
+    : "";
+  useLayoutEffect(() => {
+    const previous = currentPlayerMediaRef.current;
+    if (previous?.clipId === selectedClipId && previous.key !== playerMediaKey && playerMediaKey) {
+      pendingPlayerResumeRef.current = { key: playerMediaKey, time: clipTime, playing: isPlaying };
+    } else if (previous?.clipId !== selectedClipId) {
+      pendingPlayerResumeRef.current = null;
+    }
+    currentPlayerMediaRef.current = playerMediaKey ? { clipId: selectedClipId, key: playerMediaKey } : null;
+  }, [clipTime, isPlaying, playerMediaKey, selectedClipId]);
   const selectedPreviewLoadFailed = Boolean(
     selectedClip && previewLoadFailedClipIds.has(selectedClip.id)
   );
@@ -1187,35 +1201,6 @@ export default function SubtitleReviewPage() {
   const showLiveSubtitle = Boolean(
     isShowingLivePreview && activePreviewSubtitleEvent?.text
   );
-
-  useEffect(() => {
-    const video = videoRef.current;
-
-    if (!video || !selectedPlayerReady) {
-      return;
-    }
-    video.pause();
-
-    const moveToClipStart = () => {
-      video.currentTime = 0;
-    };
-
-    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      moveToClipStart();
-      return;
-    }
-
-    video.addEventListener("loadedmetadata", moveToClipStart, { once: true });
-    video.load();
-    return () => {
-      video.removeEventListener("loadedmetadata", moveToClipStart);
-    };
-  }, [
-    selectedClipId,
-    selectedPlayerPreviewVersion,
-    selectedPlayerReady,
-    selectedPlayerVideoUrl
-  ]);
 
   useEffect(() => {
     if (isPlayerReady || !selectedClip || !selectedPlayerReady) {
@@ -2143,7 +2128,7 @@ export default function SubtitleReviewPage() {
     const scrollTop = subtitleListRef.current?.scrollTop ?? 0;
     const generation = beginReviewMutation();
     setIsSavingStructure(true);
-    videoRef.current?.pause();
+    setShowSavedPreview(false);
     setError(null);
     try {
       const updated = await editSubtitleStructure(jobId, request);
@@ -2613,7 +2598,7 @@ export default function SubtitleReviewPage() {
                       {selectedPlayerReady && selectedPlayerVideoUrl ? (
                         <video
                         className="h-full w-full cursor-pointer bg-black object-contain"
-                        key={`${selectedClip.id}:${selectedPlayerVideoUrl}:${selectedPlayerPreviewVersion}`}
+                        key={playerMediaKey}
                         playsInline
                         preload="metadata"
                         ref={videoRef}
@@ -2632,7 +2617,16 @@ export default function SubtitleReviewPage() {
                         }}
                         onClick={togglePlayback}
                         onError={handleVideoError}
-                        onLoadedMetadata={() => setIsPlayerReady(true)}
+                        onLoadedMetadata={(event) => {
+                          const resume = pendingPlayerResumeRef.current;
+                          if (resume?.key === playerMediaKey) {
+                            const video = event.currentTarget;
+                            video.currentTime = clamp(resume.time, 0, Math.max(0, video.duration - 0.05));
+                            pendingPlayerResumeRef.current = null;
+                            if (resume.playing) void video.play().catch(() => {});
+                          }
+                          setIsPlayerReady(true);
+                        }}
                         onLoadStart={() => {
                           setIsPlaying(false);
                           setIsPlayerReady(false);
