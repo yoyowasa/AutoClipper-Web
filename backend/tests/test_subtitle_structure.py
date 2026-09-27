@@ -128,6 +128,48 @@ def test_insert_empty_subtitle_row_then_edit_and_delete_it(client):  # noqa: F81
     ]
 
 
+def test_insert_at_paused_time_in_gap_reaches_preview_and_render(client):  # noqa: F811
+    job_id, path, doc, original, candidate = seed_structure(client)
+    response = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/segment-structure",
+        json={"action": "insert_at_time", "segments": [], "clipId": "normal", "start": 4.25, "end": 5.75, "text": "抜けた字幕"},
+    )
+    assert response.status_code == 200, response.text
+    updated = load_subtitle_review(path)
+    inserted = next(segment for segment in updated.segments if segment.text == "抜けた字幕")
+    assert (inserted.start, inserted.end, inserted.original_text, inserted.preserve_segmentation) == (4.25, 5.75, "", True)
+    assert set(inserted.affected_clip_ids) == {"normal", "short"}
+    assert inserted.id in updated.clips[0].segment_ids and inserted.id in updated.clips[2].segment_ids
+    assert updated.clips[0].confirmed is False and updated.clips[2].confirmed is False
+    assert updated.clips[1].confirmed is True
+    rendered = apply_reviewed_text(original, updated)
+    assert [(segment.start, segment.end, segment.text) for segment in rendered[:3]] == [
+        (1, 2, "前半"), (2, 3, "後半"), (4.25, 5.75, "抜けた字幕"),
+    ]
+    events, _ = subtitle_events_for_candidate_output(rendered, candidate, SubtitleLayout.normal())
+    assert any((event.start, event.end, event.text) == (4.25, 5.75, "抜けた字幕") for event in events)
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        preview = load_subtitle_review_preview_inputs(
+            job=job, video=db.get(Video, job.video_id), document=updated,
+            paths=app.dependency_overrides[get_storage_paths](), clip_id="normal",
+        )
+    assert any((segment.start, segment.end, segment.text) == (4.25, 5.75, "抜けた字幕")
+               for segment in preview.transcript_segments)
+
+
+@pytest.mark.parametrize("start,end", [(1.5, 1.9), (3.5, 2.5), (9.9, 10.1), (3.5, 3.55)])
+def test_insert_at_paused_time_rejects_overlap_or_invalid_range_without_writes(client, start, end):  # noqa: F811
+    job_id, path, _, _, _ = seed_structure(client)
+    before = path.read_bytes()
+    response = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/segment-structure",
+        json={"action": "insert_at_time", "segments": [], "clipId": "normal", "start": start, "end": end, "text": "追加"},
+    )
+    assert response.status_code == 422, response.text
+    assert path.read_bytes() == before
+
+
 def test_delete_subtitle_row_does_not_restore_original_text(client):  # noqa: F811
     job_id, path, doc, original, _ = seed_structure(client)
     response = client.post(

@@ -393,8 +393,12 @@ export type ThumbnailCopyState = {
 };
 
 export type SubtitleStructureRequest = {
-  action: "merge" | "split" | "insert" | "delete" | "line";
+  action: "merge" | "split" | "insert" | "insert_at_time" | "delete" | "line";
   segments: Array<{ segmentId: string; before: string; text: string }>;
+  clipId?: string;
+  start?: number;
+  end?: number;
+  text?: string;
   splitOffset?: number;
   splitTime?: number;
   insertPosition?: "before" | "after";

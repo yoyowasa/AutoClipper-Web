@@ -1,11 +1,47 @@
 from uuid import uuid4
 
 from app.candidates.merge_boundaries import SubtitleStyleOverride
-from app.jobs.subtitle_review import SubtitleReviewDocument, _refresh_counts
+from app.jobs.subtitle_review import SubtitleReviewDocument, SubtitleReviewSegment, _refresh_counts
 from app.schemas import SubtitleStructureRequest
 
 
 def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleStructureRequest) -> set[str]:
+    if request.action == "insert_at_time":
+        if request.segments or not request.clip_id or request.start is None or request.end is None:
+            raise ValueError("対象動画と字幕の開始・終了時刻を指定してください。")
+        clip = next((item for item in document.clips if item.id == request.clip_id), None)
+        if clip is None:
+            raise KeyError("対象動画が見つかりません。")
+        if request.end - request.start < 0.1 or request.start < clip.start or request.end > clip.end:
+            raise ValueError("字幕の時刻は対象動画内で0.1秒以上の範囲にしてください。")
+        content = (request.text or "").strip()
+        if not content:
+            raise ValueError("追加する字幕を入力してください。")
+        if any(segment.start < request.end - 0.001 and segment.end > request.start + 0.001 for segment in document.segments):
+            raise ValueError("既存字幕と時間が重なっています。開始・終了時刻を空白区間に合わせてください。")
+        if not document.segments:
+            raise ValueError("元の文字起こしがないため、字幕を追加できません。")
+        nearest = min(document.segments, key=lambda segment: min(abs(request.start - segment.end), abs(segment.start - request.end)))
+        affected = {
+            item.id for item in document.clips
+            if item.start < request.end and item.end > request.start
+        }
+        new_segment = SubtitleReviewSegment(
+            id=f"seg_{uuid4().hex}", index=nearest.index, start=request.start, end=request.end,
+            originalText="", text=content, edited=True,
+            affectedClipIds=sorted(affected), sourceIndices=nearest.source_indices or [nearest.index],
+            preserveSegmentation=True,
+        )
+        document.segments = sorted([*document.segments, new_segment], key=lambda segment: (segment.start, segment.end))
+        for item in document.clips:
+            if item.id in affected:
+                item.confirmed = False
+                item.segment_ids = [segment.id for segment in document.segments if item.id in segment.affected_clip_ids]
+        _refresh_counts(document)
+        return affected
+
+    if not request.segments:
+        raise ValueError("字幕を指定してください。")
     by_id = {s.id: s for s in document.segments}
     if len({item.segment_id for item in request.segments}) != len(request.segments):
         raise ValueError("字幕の指定が重複しています。")

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { subtitlePreviewEvents } from "../lib/subtitlePreview";
+import { sourceTimeAtPlayback } from "../lib/subtitlePauseInsert";
 
 const events = subtitlePreviewEvents({
   segments: [
@@ -14,4 +15,14 @@ assert.equal(events.length, 2);
 assert.deepEqual(events.map(({ start, end }) => [start, end]), [[3, 3.2], [3.2, 11]]);
 assert.ok(events.every(event => event.singleLine && event.preserveSegmentation));
 assert.equal(events[1].text, "後半".repeat(30));
+assert.equal(sourceTimeAtPlayback({ playbackTime: 12.35, clipStart: 100, clipEnd: 150,
+  hookSceneDuration: 0, suppressionEnd: 0 }), 112.35);
+assert.equal(sourceTimeAtPlayback({ playbackTime: 12.359, clipStart: 100, clipEnd: 150,
+  hookSceneDuration: 0, suppressionEnd: 0 }), 112.35);
+assert.equal(sourceTimeAtPlayback({ playbackTime: 12.35, clipStart: 100, clipEnd: 150,
+  hookSceneDuration: 3, suppressionEnd: 3 }), 109.35);
+assert.equal(sourceTimeAtPlayback({ playbackTime: 2.5, clipStart: 100, clipEnd: 150,
+  hookSceneDuration: 3, suppressionEnd: 3 }), null);
+assert.equal(sourceTimeAtPlayback({ playbackTime: 52.95, clipStart: 100, clipEnd: 150,
+  hookSceneDuration: 3, suppressionEnd: 3 }), null);
 console.log("Manual subtitle boundaries and one-line flags survive preview generation.");

@@ -625,8 +625,12 @@ class SubtitleReviewBatchUpdateRequest(BaseModel):
 
 
 class SubtitleStructureRequest(BaseModel):
-    action: Literal["merge", "split", "insert", "delete", "line"]
-    segments: list[SubtitleReviewBatchSegmentUpdate] = Field(min_length=1, max_length=2)
+    action: Literal["merge", "split", "insert", "insert_at_time", "delete", "line"]
+    segments: list[SubtitleReviewBatchSegmentUpdate] = Field(default_factory=list, max_length=2)
+    clip_id: str | None = Field(default=None, alias="clipId")
+    start: float | None = Field(default=None, ge=0)
+    end: float | None = Field(default=None, ge=0)
+    text: str | None = Field(default=None, max_length=4000)
     split_offset: int | None = Field(default=None, ge=1, alias="splitOffset")
     split_time: float | None = Field(default=None, ge=0, alias="splitTime")
     insert_position: Literal["before", "after"] | None = Field(default=None, alias="insertPosition")
