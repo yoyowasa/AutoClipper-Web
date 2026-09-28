@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { ThumbnailFontPreset, ThumbnailTextStyle, ThumbnailTextStyles } from "../lib/types";
+import type { ThumbnailFontPreset, ThumbnailTextRegion, ThumbnailTextRegions, ThumbnailTextStyle, ThumbnailTextStyles } from "../lib/types";
 import { THUMBNAIL_FONTS } from "../lib/thumbnailStyle";
 
 const ROWS = [["heading", "見出し", 96], ["upper", "上行", 180], ["lower", "下行", 180]] as const;
@@ -32,12 +32,17 @@ function OffsetInput({ label, value, limit, onChange }: { label: string; value: 
     onBlur={() => { if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) onChange(Math.max(-limit, Math.min(limit, Math.round(Number(draft))))); setDraft(null); }} />;
 }
 
-export function ThumbnailTextStyleEditor({ value, onChange, disabled, texts }: {
+export function ThumbnailTextStyleEditor({ value, onChange, disabled, texts, regions }: {
   value: ThumbnailTextStyles; onChange: (value: ThumbnailTextStyles) => void; disabled?: boolean;
   texts?: Partial<Record<keyof ThumbnailTextStyles, string>>;
+  regions?: ThumbnailTextRegions | null;
 }) {
   const update = (role: keyof ThumbnailTextStyles, patch: Partial<ThumbnailTextStyle>) =>
     onChange({ ...value, [role]: { ...value[role], ...patch } });
+  const center = (role: keyof ThumbnailTextStyles, region: ThumbnailTextRegion) => {
+    const offsetX = (value[role].offsetX ?? 0) + Math.round(region.targetCenterX - region.x - region.width / 2);
+    update(role, { offsetX: Math.max(-300, Math.min(300, offsetX)) });
+  };
   return <fieldset disabled={disabled} className="min-w-0 space-y-3">
     {ROWS.map(([role, label, maxSize]) => <div key={role} className="min-w-0 border border-neutral-300 bg-white p-2">
       <div className="mb-2 flex min-w-0 items-baseline gap-2">
@@ -56,6 +61,10 @@ export function ThumbnailTextStyleEditor({ value, onChange, disabled, texts }: {
             onChange={fontSize => update(role, { fontSize, autoFit: false })} />
         </label>
       </div>
+      {regions !== undefined && <button type="button" disabled={!regions?.[role]} onClick={() => regions?.[role] && center(role, regions[role])}
+        className="mt-2 min-h-8 border border-sky-700 bg-sky-50 px-2 text-xs font-semibold text-sky-900 disabled:border-neutral-300 disabled:text-neutral-400">
+        {label}を中央に揃える
+      </button>}
       <div className="mt-2 flex flex-wrap items-center gap-1">
         <label className="mr-1 flex items-center gap-1 text-xs">文字色
           <input aria-label={`サムネ ${label} 文字色`} type="color" className="h-7 w-9 cursor-pointer border bg-white p-0.5"
@@ -84,6 +93,6 @@ export function ThumbnailTextStyleEditor({ value, onChange, disabled, texts }: {
         <span className="text-neutral-500">{value[role].autoFit === false ? "指定サイズで表示" : "サイズは上限"}</span>
       </label>
     </div>)}
-    <p className="text-xs text-neutral-500">文字は中心を基準に拡大します。位置はプラスで右・下、マイナスで左・上に動きます。サイズ変更時は自動縮小を解除し、指定した大きさで表示します。</p>
+    <p className="text-xs text-neutral-500">{regions !== undefined && "左のプレビューで見出し・上行・下行をドラッグして位置を変更できます。"}数値でも微調整できます。サイズ変更時は自動縮小を解除し、指定した大きさで表示します。</p>
   </fieldset>;
 }

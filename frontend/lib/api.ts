@@ -62,12 +62,13 @@ export async function renderThumbnailPreview(exportId: string, draft: {
   frameKey: string; text: import("./types").ThumbnailCopyText; textStyles: import("./types").ThumbnailTextStyles;
   design: import("./types").NormalThumbnailStyle["design"];
   subjectPlacement: import("./types").ThumbnailSubjectPlacement;
-}, signal: AbortSignal): Promise<Blob> {
+}, signal: AbortSignal): Promise<{ blob: Blob; regions: import("./types").ThumbnailTextRegions }> {
   const response = await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/preview`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft), signal, cache: "no-store",
   });
   if (!response.ok) await parseJsonResponse(response);
-  return response.blob();
+  const regions = JSON.parse(response.headers.get("X-Thumbnail-Text-Regions") || "{}") as import("./types").ThumbnailTextRegions;
+  return { blob: await response.blob(), regions };
 }
 
 export async function editSubtitleStructure(

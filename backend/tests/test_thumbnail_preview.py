@@ -44,10 +44,15 @@ def test_live_preview_matches_saved_renderer_without_changing_exports_or_extract
         raise AssertionError("preview HTTP request must not process video")
 
     monkeypatch.setattr(renderer, "extract_thumbnail_frame", forbidden_extract)
-    response = client.post(ENDPOINT, json={"frameKey": key, "text": TEXT, "textStyles": TEXT_STYLES})
+    response = client.post(ENDPOINT, json={"frameKey": key, "text": TEXT, "textStyles": TEXT_STYLES},
+                           headers={"Origin": "http://localhost:3000"})
     assert response.status_code == 200, response.text
     assert response.headers["content-type"] == "image/jpeg"
     assert response.headers["cache-control"] == "no-store"
+    assert "x-thumbnail-text-regions" in response.headers["access-control-expose-headers"].lower()
+    regions = json.loads(response.headers["x-thumbnail-text-regions"])
+    assert set(regions) == {"heading", "upper", "lower"}
+    assert all(region["width"] > 0 and region["height"] > 0 for region in regions.values())
     assert response.content == expected.read_bytes()
     assert Image.open(BytesIO(response.content)).size == (1280, 720)
     changed = json.loads(json.dumps(TEXT_STYLES))
@@ -57,6 +62,30 @@ def test_live_preview_matches_saved_renderer_without_changing_exports_or_extract
     assert next_response.content != response.content
     assert [path.read_bytes() for path in (metadata, thumbnail, video)] == before
     assert len(queue) == 1
+
+
+def test_preview_text_regions_follow_saved_offsets_and_align_to_template(client):  # noqa: F811
+    _, _, _, _, _, _, key = prepare(client)
+    base = {"frameKey": key, "text": TEXT, "textStyles": TEXT_STYLES}
+    first = client.post(ENDPOINT, json=base)
+    assert first.status_code == 200, first.text
+    regions = json.loads(first.headers["x-thumbnail-text-regions"])
+    styles = json.loads(json.dumps(TEXT_STYLES))
+    styles["upper"]["offsetX"] += 27
+    styles["upper"]["offsetY"] -= 13
+    moved = client.post(ENDPOINT, json={**base, "textStyles": styles})
+    assert moved.status_code == 200, moved.text
+    changed = json.loads(moved.headers["x-thumbnail-text-regions"])
+    assert abs(changed["upper"]["x"] - regions["upper"]["x"] - 27) <= 1
+    assert abs(changed["upper"]["y"] - regions["upper"]["y"] + 13) <= 1
+    assert changed["lower"] == regions["lower"]
+    for design in ("raden", "sopia"):
+        path = renderer.DEFAULT_NORMAL_TEMPLATE_PATH if design == "raden" else renderer.SOPIA_NORMAL_TEMPLATE_PATH
+        template = renderer._load_template(path)
+        box = template["text"]["eyebrow_box"]
+        assert (box["x"], box["y"]) == (27, 27)
+        assert box["height"] == 118
+        assert regions["heading"]["targetCenterX"] == box["x"] + box["width"] // 2
 
 
 def test_template_switch_previews_immediately_without_saving(client):  # noqa: F811

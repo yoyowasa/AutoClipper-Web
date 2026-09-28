@@ -699,3 +699,5 @@ export type ThumbnailFontPreset = Extract<ClipTextFontPreset,
   "dela_gothic" | "corporate_logo">;
 export type ThumbnailTextStyle = { fontPreset: ThumbnailFontPreset; fontSize: number; color: string; autoFit?: boolean; offsetX?: number; offsetY?: number };
 export type ThumbnailTextStyles = { heading: ThumbnailTextStyle; upper: ThumbnailTextStyle; lower: ThumbnailTextStyle };
+export type ThumbnailTextRegion = { x: number; y: number; width: number; height: number; targetCenterX: number };
+export type ThumbnailTextRegions = Partial<Record<keyof ThumbnailTextStyles, ThumbnailTextRegion>>;

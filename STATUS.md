@@ -10353,3 +10353,11 @@ pip check: pass
 - 原因と修正: 従来はフォントごとの文字の上余白を描画位置へ反映せず、２行を最大文字高に連動させて配置していた。描画後の文字部分を切り出して各行の中心を固定し、上行と下行をテンプレート上の独立した位置に配置する。見出しも実際の描画領域を基準に中央配置し、３箇所それぞれに左右・上下位置の調整とリセットを追加。位置はキャラ設定と個別サムネ設定へ保存され、旧設定ではオフセット０として扱う。
 - 検証: backend全1206 passed・1 skipped、ruff、frontendのキャラ設定テスト・typecheck・lint・build成功。異なるフォントとサイズで文字中心が一定であること、上行の書体・サイズ変更で下行が移動しないこと、位置設定がAPI・worker・結果画面に保持されることを確認。ローカルDockerのbackend・GPU worker・frontendを再build・再作成し、backend healthy・結果画面HTTP 200を確認。実画面で位置入力を変更するとプレビューが自動更新されることを確認し、保存せず値を戻した。
 - 未確認: ユーザーが実際に使用する文字列・書体の組合せでの最終的な見た目。保存済みサムネは自動で描き直さない。
+
+## 2026-09-28 JST 通常サムネの枠線整合と文字の直接配置
+
+- 目的: 見出しの小枠と内側の枠線のずれを直し、書体に依存しない中央揃えと、見出し・上行・下行をプレビュー上で直接動かせるようにする。
+- 原因と変更: 見出し枠が内枠より左・上に7pxずれ、枠線の色・太さも異なっていた。両テンプレの枠座標を内枠に合わせ、線の描画も統一した。プレビュー生成と同じ描画処理から各文字の実際の描画範囲を返し、その範囲をドラッグ操作と中央揃えボタンに使う。ドラッグ中は位置を示し、離した時にプレビューへ反映する。確定は従来の保存ボタンで行う。
+- 変更ファイル: `backend/app/render/render_thumbnail.py`、`backend/app/jobs/thumbnail_preview.py`、`backend/app/api/exports.py`、`backend/app/main.py`、らでん・宙科テンプレ、`backend/tests/test_thumbnail_preview.py`、`frontend/components/LiveThumbnailPreview.tsx`、`frontend/components/ResultThumbnailWorkspace.tsx`、`frontend/components/ResultThumbnailEditor.tsx`、`frontend/components/ThumbnailTextStyleEditor.tsx`、`frontend/lib/api.ts`、`frontend/lib/types.ts`、本ファイル。
+- 検証: 描画範囲・オフセット・CORSの回帰テストを追加。backend全1207 passed・1 skipped、ruff、frontend typecheck・lint・build成功。実ジョブのブラウザ画面で上行・下行をドラッグして数値とプレビューが追従すること、上行の中央揃え後の描画中心が目標中心から約1px以内であることを確認。試した未保存値はリセットし、サムネの保存操作は行っていない。
+- 未確認: 他の書体・文字列での見た目の最終受入。既存の保存済みサムネは自動再生成していない。

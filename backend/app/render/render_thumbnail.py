@@ -510,6 +510,7 @@ def _compose_normal_thumbnail(
     background_image: Image.Image | None = None,
     text_styles: ThumbnailTextStyles | None = None,
     anime_subject: tuple[Face, Image.Image] | None = None,
+    text_regions: dict[str, dict[str, int]] | None = None,
 ) -> Image.Image:
     canvas_config = template["canvas"]
     frame_config = template["frame"]
@@ -595,8 +596,8 @@ def _compose_normal_thumbnail(
         draw.rectangle(
             (box_x, box_y, box_x + box_width, box_y + box_height),
             fill=_hex_rgba(colors["eyebrow_background"], 230),
-            outline=_hex_rgba(colors.get("frame", colors["gold"])),
-            width=5,
+            outline=_hex_rgba(colors.get("frame_light", colors["gold_light"]), 145),
+            width=2,
         )
         eyebrow_fit = _fit_text(
             eyebrow,
@@ -629,13 +630,15 @@ def _compose_normal_thumbnail(
             eyebrow_layer = eyebrow_layer.crop(ink_bounds)
         heading_offset_x = text_styles.heading.offset_x if text_styles else 0
         heading_offset_y = text_styles.heading.offset_y if text_styles else 0
-        canvas.alpha_composite(
-            eyebrow_layer,
-            (
-                int(text_config["eyebrow_x"]) + heading_offset_x,
-                box_y + (box_height - eyebrow_layer.height) // 2 - 5 + heading_offset_y,
-            ),
-        )
+        eyebrow_x = int(text_config["eyebrow_x"]) + heading_offset_x
+        eyebrow_y = box_y + (box_height - eyebrow_layer.height) // 2 - 5 + heading_offset_y
+        canvas.alpha_composite(eyebrow_layer, (eyebrow_x, eyebrow_y))
+        if text_regions is not None:
+            text_regions["heading"] = {
+                "x": eyebrow_x, "y": eyebrow_y,
+                "width": eyebrow_layer.width, "height": eyebrow_layer.height,
+                "targetCenterX": box_x + box_width // 2,
+            }
 
     if title_first_line.strip() or title_second_line.strip():
         max_width = int(text_config["title_max_width"])
@@ -651,10 +654,10 @@ def _compose_normal_thumbnail(
             title_y + 24 + first_height + int(text_config["line_gap"])
             + second_top + second_height / 2,
         )
-        for text, role, color, max_size, min_size, anchor_y in (
-            (title_first_line.strip(), text_styles.upper if text_styles else None, colors["title_first"], first_max_size,
+        for text, role_name, role, color, max_size, min_size, anchor_y in (
+            (title_first_line.strip(), "upper", text_styles.upper if text_styles else None, colors["title_first"], first_max_size,
              int(text_config.get("title_first_min_size", text_config["title_min_size"])), anchor_ys[0]),
-            (title_second_line.strip(), text_styles.lower if text_styles else None, colors["title_second"], second_max_size,
+            (title_second_line.strip(), "lower", text_styles.lower if text_styles else None, colors["title_second"], second_max_size,
              int(text_config.get("title_second_min_size", text_config["title_min_size"])), anchor_ys[1]),
         ):
             if not text:
@@ -671,9 +674,16 @@ def _compose_normal_thumbnail(
             offset_x = role.offset_x if role else 0
             offset_y = role.offset_y if role else 0
             center_x = int(text_config["title_x"]) + 48 + fit.width / 2 + offset_x
-            canvas.alpha_composite(
-                line, (round(center_x - line.width / 2), round(anchor_y + offset_y - line.height / 2)),
-            )
+            line_x = round(center_x - line.width / 2)
+            line_y = round(anchor_y + offset_y - line.height / 2)
+            canvas.alpha_composite(line, (line_x, line_y))
+            if text_regions is not None:
+                ink = line.getbbox() or (0, 0, line.width, line.height)
+                text_regions[role_name] = {
+                    "x": line_x + ink[0], "y": line_y + ink[1],
+                    "width": ink[2] - ink[0], "height": ink[3] - ink[1],
+                    "targetCenterX": int(text_config["title_x"]) + 48 + max_width // 2,
+                }
     draw = ImageDraw.Draw(canvas, "RGBA")
     draw.rectangle(
         (13, 13, width - 14, height - 14),
@@ -708,6 +718,7 @@ def render_normal_thumbnail(
     character_style: dict[str, Any] | None = None,
     text_styles: dict[str, Any] | None = None,
     source_frame_path: str | Path | None = None,
+    text_regions: dict[str, dict[str, int]] | None = None,
 ) -> ThumbnailRenderResult:
     """Render a 1280x720 normal thumbnail.
 
@@ -795,6 +806,7 @@ def render_normal_thumbnail(
                         background_image=source_background,
                         text_styles=resolved_text_styles,
                         anime_subject=anime_subject,
+                        text_regions=text_regions,
                     )
             else:
                 composed = _compose_normal_thumbnail(
@@ -812,6 +824,7 @@ def render_normal_thumbnail(
                     background_image=plain_background,
                     text_styles=resolved_text_styles,
                     anime_subject=anime_subject,
+                    text_regions=text_regions,
                 )
     composed.save(output, format="JPEG", quality=94, optimize=True, subsampling=0)
     return ThumbnailRenderResult(

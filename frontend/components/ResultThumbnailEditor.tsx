@@ -2,18 +2,19 @@
 
 import { useEffect, useRef, useState } from "react";
 import { thumbnailCopyRequest } from "../lib/api";
-import { thumbnailTextDefaults } from "../lib/thumbnailStyle";
-import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailCopyState, ThumbnailSubjectPlacement, ThumbnailTextStyles } from "../lib/types";
+import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailCopyState, ThumbnailSubjectPlacement, ThumbnailTextRegions, ThumbnailTextStyles } from "../lib/types";
 import { ThumbnailTextStyleEditor } from "./ThumbnailTextStyleEditor";
 import type { ThumbnailDraft } from "./LiveThumbnailPreview";
 
-export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange }: {
+export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, styles, setStyles, regions }: {
   item: ResultExportItem; busy?: boolean;
   onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"], selectWithCodex: boolean, placement: ThumbnailSubjectPlacement) => void;
   onDraftChange: (draft: ThumbnailDraft) => void;
+  styles: ThumbnailTextStyles;
+  setStyles: React.Dispatch<React.SetStateAction<ThumbnailTextStyles>>;
+  regions: ThumbnailTextRegions | null;
 }) {
   const [text, setText] = useState<ThumbnailCopyText>(() => ({ heading: item.thumbnailKicker ?? "", upper: item.thumbnailLine1 ?? "", lower: item.thumbnailLine2 ?? "" }));
-  const [styles, setStyles] = useState(() => item.thumbnailTextStyles ?? thumbnailTextDefaults());
   const [design, setDesign] = useState<NormalThumbnailStyle["design"]>(() => item.thumbnailDesign ?? "raden");
   const [placement, setPlacement] = useState<ThumbnailSubjectPlacement>(
     () => item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 }
@@ -141,7 +142,7 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange }: {
     </fieldset>
     <section aria-label="サムネの書式設定" className="min-w-0 border border-amber-300 bg-white p-3">
       <h4 className="text-sm font-semibold">書体・サイズ・色</h4>
-      <div className="mt-3"><ThumbnailTextStyleEditor value={styles} onChange={setStyles} disabled={locked} texts={text} /></div>
+      <div className="mt-3"><ThumbnailTextStyleEditor value={styles} onChange={setStyles} disabled={locked} texts={text} regions={regions} /></div>
     </section>
     <button type="button" disabled={locked} onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false, design, false, placement)}
       className="mt-3 min-h-11 w-full bg-sky-700 px-3 text-sm font-semibold text-white disabled:bg-neutral-300">

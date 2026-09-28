@@ -150,6 +150,7 @@ def render_thumbnail_preview(db, paths, export, request: ThumbnailPreviewRequest
         # The same renderer as the saved JPEG, using only a cached still image.
         with tempfile.TemporaryDirectory(dir=directory, prefix="draft-") as temp:
             output = Path(temp) / "preview.jpg"
+            text_regions: dict[str, dict[str, int]] = {}
             render_normal_thumbnail(
                 context["source"], output, source_frame_path=directory / "frame.jpg", frame_time=context["timestamp"],
                 eyebrow=request.text.heading.strip(), title_first_line=request.text.upper.strip(),
@@ -160,5 +161,6 @@ def render_thumbnail_preview(db, paths, export, request: ThumbnailPreviewRequest
                 subject_offset_y=request.subject_placement.offset_y,
                 character_style=resolve_export_thumbnail_style(context["characterStyle"], request.design),
                 text_styles=request.text_styles.model_dump(mode="json", by_alias=True),
+                text_regions=text_regions,
             )
-            return output.read_bytes()
+            return output.read_bytes(), text_regions

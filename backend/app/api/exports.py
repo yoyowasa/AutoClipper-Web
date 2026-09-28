@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from collections.abc import Callable
 
@@ -191,10 +192,12 @@ def preview_export_thumbnail(export_id: str, request: ThumbnailPreviewRequest, d
                              paths: StoragePaths = Depends(get_storage_paths)):
     export = _get_export_or_404(db, export_id, paths)
     try:
-        data = render_thumbnail_preview(db, paths, export, request)
+        data, text_regions = render_thumbnail_preview(db, paths, export, request)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(409, "プレビューを読み込み直してください。") from exc
-    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    return Response(data, media_type="image/jpeg", headers={
+        "Cache-Control": "no-store", "X-Thumbnail-Text-Regions": json.dumps(text_regions),
+    })
 
 
 @router.get("/{export_id}/thumbnail")
