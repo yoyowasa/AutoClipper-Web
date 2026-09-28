@@ -25,6 +25,7 @@ import {
   getSubtitleReview,
   getTitleHookSuggestions,
   requestTitleHookSuggestions,
+  reopenClipPlanForBoundaryReedit,
   retrySubtitleReviewPreview,
   toApiUrl,
   updateSubtitleReviewClipFraming,
@@ -369,6 +370,7 @@ export default function SubtitleReviewPage() {
   const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
   const [confirmingClipId, setConfirmingClipId] = useState<string | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [isReopeningBoundaries, setIsReopeningBoundaries] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
@@ -650,7 +652,8 @@ export default function SubtitleReviewPage() {
     confirmingClipId !== null ||
     isSavingShortBannerSettings ||
     savingShortFramingClipId !== null ||
-    isFinalizing;
+    isFinalizing ||
+    isReopeningBoundaries;
   const isEditable =
     review?.state === "awaiting_review" &&
     !hasReviewMutationInFlight;
@@ -2289,6 +2292,26 @@ export default function SubtitleReviewPage() {
     }
   }
 
+  async function returnToBoundaryEditor() {
+    if (dirtySegmentIds.size > 0 || hasDirtyClipContent || hasDirtyShortFraming) {
+      setError("未保存の字幕・タイトル・画角があります。各clipの変更を保存してから尺調整へ戻ってください。");
+      return;
+    }
+    if (!isEditable) return;
+    beginReviewMutation();
+    setIsReopeningBoundaries(true);
+    setError(null);
+    try {
+      await reopenClipPlanForBoundaryReedit(jobId);
+      router.push(`/jobs/${jobId}/clips`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "尺調整画面へ戻れませんでした");
+    } finally {
+      setIsReopeningBoundaries(false);
+      endReviewMutation();
+    }
+  }
+
   if (!review) {
     return (
       <main className="min-h-screen bg-[#f7f7f4] px-6 py-8 text-neutral-950">
@@ -2326,6 +2349,11 @@ export default function SubtitleReviewPage() {
                 ? hasReviewMutationInFlight ? "保存中" : "字幕確認中"
                 : "書き出し中"}
           </span>
+          {review.state === "awaiting_review" && <button type="button"
+            className="min-h-9 border border-sky-700 bg-white px-3 text-xs font-semibold text-sky-900 disabled:opacity-40 sm:text-sm"
+            disabled={!isEditable} onClick={() => void returnToBoundaryEditor()}>
+            {isReopeningBoundaries ? "尺調整を準備中…" : "尺調整へ戻る"}
+          </button>}
           <Link
             className="ml-auto inline-flex min-h-9 items-center border border-neutral-300 bg-white px-3 text-xs font-medium sm:text-sm"
             href={`/jobs/${jobId}`}

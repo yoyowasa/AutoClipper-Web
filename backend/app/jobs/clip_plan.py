@@ -85,6 +85,7 @@ class ClipPlanDocument(BaseModel):
     job_id: str = Field(alias="jobId")
     state: ClipPlanState = "preparing"
     revision: int = Field(default=1, ge=1)
+    boundary_reedit: bool = Field(default=False, alias="boundaryReedit")
     source_video_url: str = Field(alias="sourceVideoUrl")
     editor_video_url: str | None = Field(default=None, alias="editorVideoUrl")
     source_duration: float | None = Field(
@@ -233,6 +234,7 @@ def mark_clip_plan_awaiting_review(
 
 def mark_clip_plan_approved(document: ClipPlanDocument) -> ClipPlanDocument:
     document.state = "approved"
+    document.boundary_reedit = False
     document.updated_at = _utc_iso()
     return document
 

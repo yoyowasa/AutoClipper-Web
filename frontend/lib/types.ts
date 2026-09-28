@@ -629,6 +629,7 @@ export type ClipPlanDocument = {
   jobId: string;
   state: "preparing" | "manual_editing" | "awaiting_review" | "reselecting" | "approved";
   revision: number;
+  boundaryReedit?: boolean;
   sourceVideoUrl: string;
   editorVideoUrl?: string | null;
   sourceDuration: number | null;

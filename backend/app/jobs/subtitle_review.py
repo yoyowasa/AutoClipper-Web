@@ -737,6 +737,67 @@ def build_subtitle_review(
     return document
 
 
+def retain_review_after_boundary_reedit(
+    previous: SubtitleReviewDocument,
+    refreshed: SubtitleReviewDocument,
+) -> SubtitleReviewDocument:
+    """Carry saved subtitle edits and clip settings into a boundary-only revision."""
+    previous_clips = {clip.id: clip for clip in previous.clips}
+    if set(previous_clips) != {clip.id for clip in refreshed.clips} or any(
+        previous_clips[clip.id].type != clip.type for clip in refreshed.clips
+    ):
+        raise ValueError("boundary re-edit changed the selected clips")
+
+    retained = previous.model_copy(deep=True)
+    old_clips = {clip.id: clip for clip in retained.clips}
+    source_coverage = {
+        index for segment in retained.segments
+        for index in (segment.source_indices or [segment.index])
+    }
+    fresh_allowed: dict[int, set[str]] = {}
+    for segment in refreshed.segments:
+        for index in segment.source_indices or [segment.index]:
+            fresh_allowed.setdefault(index, set()).update(segment.affected_clip_ids)
+    retained.segments.extend(
+        segment.model_copy(deep=True)
+        for segment in refreshed.segments
+        if all(index not in source_coverage for index in (segment.source_indices or [segment.index]))
+    )
+    retained.segments.sort(key=lambda segment: (segment.start, segment.end, segment.id))
+    for segment in retained.segments:
+        allowed = set(segment.affected_clip_ids)
+        for index in segment.source_indices or [segment.index]:
+            allowed.update(fresh_allowed.get(index, set()))
+        segment.affected_clip_ids = [
+            clip.id for clip in refreshed.clips
+            if clip.id in allowed and segment.start < clip.end and segment.end > clip.start
+        ]
+
+    for fresh_clip in refreshed.clips:
+        clip = old_clips[fresh_clip.id]
+        boundary_changed = abs(clip.start - fresh_clip.start) > 0.001 or abs(clip.end - fresh_clip.end) > 0.001
+        previous_segment_ids = clip.segment_ids
+        if clip.thumbnail_frame_seconds is not None and boundary_changed:
+            original_frame = clip.start + clip.thumbnail_frame_seconds
+            clip.thumbnail_frame_seconds = (
+                round(original_frame - fresh_clip.start, 3)
+                if fresh_clip.start <= original_frame <= fresh_clip.end else None
+            )
+        clip.start = fresh_clip.start
+        clip.end = fresh_clip.end
+        clip.duration = fresh_clip.duration
+        clip.segment_ids = [segment.id for segment in retained.segments if clip.id in segment.affected_clip_ids]
+        if boundary_changed or clip.segment_ids != previous_segment_ids:
+            clip.confirmed = False
+            clip.preview_video_url = None
+            clip.preview_state = "queued"
+            clip.preview_spec_hash = None
+            clip.preview_error = None
+            clip.live_preview_video_url = None
+            clip.live_preview_spec_hash = None
+    return _refresh_counts(retained)
+
+
 def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | Path) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)

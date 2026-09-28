@@ -411,6 +411,13 @@ export async function approveClipPlan(jobId: string): Promise<ClipPlanActionResp
   return parseJsonResponse<ClipPlanActionResponse>(response);
 }
 
+export async function reopenClipPlanForBoundaryReedit(jobId: string): Promise<ClipPlanActionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/reopen-clip-plan`, {
+    method: "POST"
+  });
+  return parseJsonResponse<ClipPlanActionResponse>(response);
+}
+
 export async function getSubtitleReview(jobId: string): Promise<SubtitleReviewDocument> {
   const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review`, {
     cache: "no-store"

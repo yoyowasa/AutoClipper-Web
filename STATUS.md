@@ -10361,3 +10361,12 @@ pip check: pass
 - 変更ファイル: `backend/app/render/render_thumbnail.py`、`backend/app/jobs/thumbnail_preview.py`、`backend/app/api/exports.py`、`backend/app/main.py`、らでん・宙科テンプレ、`backend/tests/test_thumbnail_preview.py`、`frontend/components/LiveThumbnailPreview.tsx`、`frontend/components/ResultThumbnailWorkspace.tsx`、`frontend/components/ResultThumbnailEditor.tsx`、`frontend/components/ThumbnailTextStyleEditor.tsx`、`frontend/lib/api.ts`、`frontend/lib/types.ts`、本ファイル。
 - 検証: 描画範囲・オフセット・CORSの回帰テストを追加。backend全1207 passed・1 skipped、ruff、frontend typecheck・lint・build成功。実ジョブのブラウザ画面で上行・下行をドラッグして数値とプレビューが追従すること、上行の中央揃え後の描画中心が目標中心から約1px以内であることを確認。試した未保存値はリセットし、サムネの保存操作は行っていない。
 - 未確認: 他の書体・文字列での見た目の最終受入。既存の保存済みサムネは自動再生成していない。
+
+## 2026-09-28 JST 字幕編集から尺調整へ戻る導線を追加
+
+- 目的: 字幕修正を始めた後でも選定画面へ戻って切り抜きの開始・終了を調整し、保存済みの字幕・タイトル・書式を失わず編集を続けられるようにする。
+- 原因: 字幕確認中のジョブは切り抜き予定が承認済みとなり、尺調整APIを受け付けなかった。再承認時の字幕確認データも新規生成で上書きされるため、単純に戻すだけでは修正内容を失う。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/app/jobs/clip_plan.py`、`backend/app/jobs/subtitle_review.py`、`backend/tests/test_api_routes.py`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/lib/api.ts`、`frontend/lib/types.ts`、本ファイル。
+- 変更: 字幕画面に「尺調整へ戻る」を追加。未保存入力がある場合は移動を止める。戻った選定画面では開始・終了だけ変更でき、再選定や動画形式変更を抑止する。字幕編集へ戻る際は既存の字幕分割・修正、タイトル、フック、書式を保持し、新たに含まれた元字幕だけ追加する。尺が変わったclipの確認状態とプレビューを更新する。
+- 検証: 尺の延長・短縮、字幕分割・修正とタイトルの保持、変更clipだけ確認し直すAPI回帰テスト成功。backend全1208 passed・1 skipped、ruff、frontend typecheck・lint・build、git diff --check成功。キュー0件・実行中0件を確認しDBをバックアップ後、backend・GPU worker・frontendを再build・再作成。実ジョブの字幕画面で「尺調整へ戻る」ボタンが表示され、ジョブが字幕確認中・切り抜き予定が承認済みのままであることを確認した。
+- 未確認: 実ジョブでの尺変更から字幕編集への往復操作とプレビューの目視確認。既存ジョブの尺は変更していない。
