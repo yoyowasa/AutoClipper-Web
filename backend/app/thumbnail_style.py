@@ -40,6 +40,8 @@ class ThumbnailTextStyle(BaseModel):
     font_size: int = Field(ge=12, le=180, alias="fontSize")
     color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
     auto_fit: bool = Field(default=True, alias="autoFit")
+    offset_x: int = Field(default=0, ge=-300, le=300, alias="offsetX", exclude_if=lambda value: value == 0)
+    offset_y: int = Field(default=0, ge=-250, le=250, alias="offsetY", exclude_if=lambda value: value == 0)
 
 
 class ThumbnailTextStyles(BaseModel):

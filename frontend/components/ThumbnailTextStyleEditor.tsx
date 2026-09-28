@@ -20,6 +20,18 @@ function SizeInput({ label, value, max, onChange }: { label: string; value: numb
     onBlur={() => { if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) onChange(Math.max(12, Math.min(max, Math.round(Number(draft))))); setDraft(null); }} />;
 }
 
+function OffsetInput({ label, value, limit, onChange }: { label: string; value: number; limit: number; onChange: (value: number) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  return <input aria-label={label} type="number" min={-limit} max={limit} step={1}
+    className="min-h-9 min-w-0 w-full border border-neutral-300 px-2" value={draft ?? value}
+    onChange={event => {
+      const next = event.target.value;
+      setDraft(next);
+      if (next.trim() && Number.isFinite(Number(next)) && Math.abs(Number(next)) <= limit) onChange(Math.round(Number(next)));
+    }}
+    onBlur={() => { if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) onChange(Math.max(-limit, Math.min(limit, Math.round(Number(draft))))); setDraft(null); }} />;
+}
+
 export function ThumbnailTextStyleEditor({ value, onChange, disabled, texts }: {
   value: ThumbnailTextStyles; onChange: (value: ThumbnailTextStyles) => void; disabled?: boolean;
   texts?: Partial<Record<keyof ThumbnailTextStyles, string>>;
@@ -54,6 +66,17 @@ export function ThumbnailTextStyleEditor({ value, onChange, disabled, texts }: {
           className="h-6 w-6 border border-neutral-400 aria-pressed:outline aria-pressed:outline-2 aria-pressed:outline-sky-600"
           onClick={() => update(role, { color })} />)}
       </div>
+      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2">
+        <label className="grid min-w-0 gap-1 text-xs">左右位置（px）
+          <OffsetInput label={`サムネ ${label} 左右位置`} value={value[role].offsetX ?? 0} limit={300}
+            onChange={offsetX => update(role, { offsetX })} />
+        </label>
+        <label className="grid min-w-0 gap-1 text-xs">上下位置（px）
+          <OffsetInput label={`サムネ ${label} 上下位置`} value={value[role].offsetY ?? 0} limit={250}
+            onChange={offsetY => update(role, { offsetY })} />
+        </label>
+        <button type="button" className="min-h-9 border border-neutral-300 px-2 text-xs" onClick={() => update(role, { offsetX: 0, offsetY: 0 })}>位置を戻す</button>
+      </div>
       <label className="mt-2 flex items-center gap-2 text-xs">
         <input type="checkbox" aria-label={`サムネ ${label} 枠に収める`} checked={value[role].autoFit !== false}
           onChange={event => update(role, { autoFit: event.target.checked })} />
@@ -61,6 +84,6 @@ export function ThumbnailTextStyleEditor({ value, onChange, disabled, texts }: {
         <span className="text-neutral-500">{value[role].autoFit === false ? "指定サイズで表示" : "サイズは上限"}</span>
       </label>
     </div>)}
-    <p className="text-xs text-neutral-500">サイズ変更時は自動縮小を解除し、指定した大きさで表示します。文字がはみ出す場合は「枠に収める」をONにしてください。</p>
+    <p className="text-xs text-neutral-500">文字は中心を基準に拡大します。位置はプラスで右・下、マイナスで左・上に動きます。サイズ変更時は自動縮小を解除し、指定した大きさで表示します。</p>
   </fieldset>;
 }

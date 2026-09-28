@@ -697,5 +697,5 @@ export type ThumbnailFontPreset = Extract<ClipTextFontPreset,
   "chikara_yowaku" | "keifont" | "mushin" | "ankoku_zonji" | "tanuki_magic" |
   "genei_kiwami_go" | "genei_mono_go" | "genei_antique" | "gochi_kakutto" | "nikkyou_sans" |
   "dela_gothic" | "corporate_logo">;
-export type ThumbnailTextStyle = { fontPreset: ThumbnailFontPreset; fontSize: number; color: string; autoFit?: boolean };
+export type ThumbnailTextStyle = { fontPreset: ThumbnailFontPreset; fontSize: number; color: string; autoFit?: boolean; offsetX?: number; offsetY?: number };
 export type ThumbnailTextStyles = { heading: ThumbnailTextStyle; upper: ThumbnailTextStyle; lower: ThumbnailTextStyle };

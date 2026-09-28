@@ -10345,3 +10345,11 @@ pip check: pass
 - 変更: 通常・固定画角ショートの編集用動画を字幕区間変更後も再利用する。自動画角ショートでは会話区間が人物追従の画角へ影響するため再生成を維持。字幕区間保存時は再生を止めず、映像ソース切替時は元の再生位置と再生状態を引き継ぐ。完成表示プレビューの更新と最終書き出し前の準備は維持。
 - 検証: 区間分割後も通常clipの編集用動画URLと再生可能な内容が変わらず、完成表示用の仕様は更新されるAPI回帰テストを追加。backend全1204 passed・1 skipped、ruff、frontend typecheck・lint・build成功。ローカルDockerのbackend・GPU worker・frontendを更新し、各サービス起動、backend healthy・画面HTTP 200を確認。実ジョブを別タブで開き、編集用と保存済みプレビューの往復で5.0秒の再生位置が保持されることを確認した。実ジョブの字幕保存は行っていない。
 - 未確認: ユーザーが実際に連続して区間編集する際の体感速度。自動画角ショートの区間変更では画角再評価に伴い編集用動画の再生成が必要。
+
+## 2026-09-28 JST 通常サムネの文字位置をフォント・サイズから独立
+
+- 目的: 書体変更や文字拡大で見出し・上行・下行の位置がずれ、特に上行の拡大が下行を下枠へ押し出す問題を解消する。
+- 変更ファイル: `backend/app/render/render_thumbnail.py`、`backend/app/thumbnail_style.py`、`backend/tests/test_thumbnail_text_styles.py`、`frontend/components/ThumbnailTextStyleEditor.tsx`、`frontend/lib/types.ts`、`frontend/tests/thumbnailTextStyles.test.ts`、本ファイル。
+- 原因と修正: 従来はフォントごとの文字の上余白を描画位置へ反映せず、２行を最大文字高に連動させて配置していた。描画後の文字部分を切り出して各行の中心を固定し、上行と下行をテンプレート上の独立した位置に配置する。見出しも実際の描画領域を基準に中央配置し、３箇所それぞれに左右・上下位置の調整とリセットを追加。位置はキャラ設定と個別サムネ設定へ保存され、旧設定ではオフセット０として扱う。
+- 検証: backend全1206 passed・1 skipped、ruff、frontendのキャラ設定テスト・typecheck・lint・build成功。異なるフォントとサイズで文字中心が一定であること、上行の書体・サイズ変更で下行が移動しないこと、位置設定がAPI・worker・結果画面に保持されることを確認。ローカルDockerのbackend・GPU worker・frontendを再build・再作成し、backend healthy・結果画面HTTP 200を確認。実画面で位置入力を変更するとプレビューが自動更新されることを確認し、保存せず値を戻した。
+- 未確認: ユーザーが実際に使用する文字列・書体の組合せでの最終的な見た目。保存済みサムネは自動で描き直さない。

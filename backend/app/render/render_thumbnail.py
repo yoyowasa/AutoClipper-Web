@@ -44,6 +44,8 @@ class ThumbnailRenderResult:
 class _TextFit:
     font: ImageFont.FreeTypeFont
     stroke_width: int
+    left: int
+    top: int
     width: int
     height: int
 
@@ -406,6 +408,8 @@ def _fit_text(
         current_fit = _TextFit(
             font=font,
             stroke_width=stroke_width,
+            left=left,
+            top=top,
             width=width,
             height=bottom - top,
         )
@@ -446,91 +450,48 @@ def _draw_layered_text(
     )
 
 
-def _title_layer(
-    first_line: str,
-    second_line: str,
+@lru_cache(maxsize=16)
+def _title_reference_metrics(font_path: Path, size: int) -> tuple[int, int]:
+    font = ImageFont.truetype(str(font_path), size=size)
+    stroke_width = max(2, round(size * 0.075)) * 2
+    bounds = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox(
+        (0, 0), "あ", font=font, stroke_width=stroke_width,
+    )
+    return bounds[1], bounds[3] - bounds[1]
+
+
+def _title_line_layer(
+    text: str,
     *,
-    font_path: Path,
-    max_width: int,
-    first_max_size: int,
-    first_min_size: int,
-    second_max_size: int,
-    second_min_size: int,
-    line_gap: int,
+    fit: _TextFit,
+    color: str,
     colors: dict[str, str],
     rotation_degrees: float,
-    upper_font_path: Path | None = None,
-    lower_font_path: Path | None = None,
-    upper_auto_fit: bool = True,
-    lower_auto_fit: bool = True,
 ) -> Image.Image:
-    lines = [
-        (
-            first_line.strip(),
-            colors["title_first"],
-            first_max_size,
-            first_min_size,
-            upper_font_path or font_path,
-            upper_auto_fit,
-        ),
-        (
-            second_line.strip(),
-            colors["title_second"],
-            second_max_size,
-            second_min_size,
-            lower_font_path or font_path,
-            lower_auto_fit,
-        ),
-    ]
-    visible_lines = [line for line in lines if line[0]]
-    if not visible_lines:
-        return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
-    fitted_lines = [
-        (
-            text,
-            color,
-            _fit_text(
-                text,
-                selected_font,
-                max_width=max_width,
-                max_size=max_size,
-                min_size=min_size if auto_fit else max_size,
-            ),
-        )
-        for text, color, max_size, min_size, selected_font, auto_fit in visible_lines
-    ]
     padding = 24
-    line_height = max(fit.height for _, _, fit in fitted_lines)
-    natural_width = max(max_width, *(fit.width for _, _, fit in fitted_lines))
     layer = Image.new(
-        "RGBA",
-        (
-            natural_width + padding * 2,
-            line_height * len(fitted_lines)
-            + line_gap * max(0, len(fitted_lines) - 1)
-            + padding * 2,
-        ),
-        (0, 0, 0, 0),
+        "RGBA", (fit.width + padding * 2, fit.height + padding * 2), (0, 0, 0, 0),
     )
     draw = ImageDraw.Draw(layer, "RGBA")
-    inner = _hex_rgba(colors["title_inner_stroke"])
-    outer = _hex_rgba(colors["title_outer_stroke"])
-    for index, (text, color, fit) in enumerate(fitted_lines):
-        _draw_layered_text(
-            draw,
-            (padding, padding + index * (line_height + line_gap)),
-            text,
-            fit,
-            fill=_hex_rgba(color),
-            inner_stroke=inner,
-            outer_stroke=outer,
-        )
-    if natural_width > max_width and upper_auto_fit and lower_auto_fit:
-        layer = layer.resize(
-            (max_width + padding * 2, layer.height),
-            Image.Resampling.LANCZOS,
-        )
-    return layer.rotate(rotation_degrees, resample=Image.Resampling.BICUBIC, expand=True)
+    _draw_layered_text(
+        draw, (padding - fit.left, padding - fit.top), text, fit,
+        fill=_hex_rgba(color),
+        inner_stroke=_hex_rgba(colors["title_inner_stroke"]),
+        outer_stroke=_hex_rgba(colors["title_outer_stroke"]),
+    )
+    ink_bounds = layer.getbbox()
+    if ink_bounds is not None:
+        ink = layer.crop(ink_bounds)
+        layer = Image.new("RGBA", (ink.width + padding * 2, ink.height + padding * 2))
+        layer.alpha_composite(ink, (padding, padding))
+    rotated = layer.rotate(rotation_degrees, resample=Image.Resampling.BICUBIC, expand=True)
+    rotated_bounds = rotated.getbbox()
+    if rotated_bounds is None:
+        return rotated
+    ink = rotated.crop(rotated_bounds)
+    centered = Image.new("RGBA", (ink.width + padding * 2, ink.height + padding * 2))
+    centered.alpha_composite(ink, (padding, padding))
+    return centered
 
 
 def _compose_normal_thumbnail(
@@ -648,51 +609,71 @@ def _compose_normal_thumbnail(
                 else min(18, int(text_config["eyebrow_max_size"]))
             ),
         )
-        eyebrow_y = box_y + max(0, (box_height - eyebrow_fit.height) // 2 - 5)
-        draw.text(
-            (int(text_config["eyebrow_x"]), eyebrow_y),
-            eyebrow.strip(),
-            font=eyebrow_fit.font,
-            fill=_hex_rgba(colors["eyebrow"]),
-            stroke_width=max(1, eyebrow_fit.stroke_width // 2),
-            stroke_fill=_hex_rgba(colors["background"]),
+        eyebrow_stroke = max(1, eyebrow_fit.stroke_width // 2)
+        eyebrow_bounds = draw.textbbox(
+            (0, 0), eyebrow.strip(), font=eyebrow_fit.font, stroke_width=eyebrow_stroke,
+        )
+        eyebrow_padding = 8
+        eyebrow_layer = Image.new(
+            "RGBA",
+            (eyebrow_bounds[2] - eyebrow_bounds[0] + eyebrow_padding * 2,
+             eyebrow_bounds[3] - eyebrow_bounds[1] + eyebrow_padding * 2),
+        )
+        ImageDraw.Draw(eyebrow_layer).text(
+            (eyebrow_padding - eyebrow_bounds[0], eyebrow_padding - eyebrow_bounds[1]),
+            eyebrow.strip(), font=eyebrow_fit.font, fill=_hex_rgba(colors["eyebrow"]),
+            stroke_width=eyebrow_stroke, stroke_fill=_hex_rgba(colors["background"]),
+        )
+        ink_bounds = eyebrow_layer.getbbox()
+        if ink_bounds is not None:
+            eyebrow_layer = eyebrow_layer.crop(ink_bounds)
+        heading_offset_x = text_styles.heading.offset_x if text_styles else 0
+        heading_offset_y = text_styles.heading.offset_y if text_styles else 0
+        canvas.alpha_composite(
+            eyebrow_layer,
+            (
+                int(text_config["eyebrow_x"]) + heading_offset_x,
+                box_y + (box_height - eyebrow_layer.height) // 2 - 5 + heading_offset_y,
+            ),
         )
 
     if title_first_line.strip() or title_second_line.strip():
-        title = _title_layer(
-            title_first_line,
-            title_second_line,
-            font_path=font_path,
-            max_width=int(text_config["title_max_width"]),
-            first_max_size=int(
-                text_config.get("title_first_max_size", text_config["title_max_size"])
-            ),
-            first_min_size=int(
-                text_config.get("title_first_min_size", text_config["title_min_size"])
-            ),
-            second_max_size=int(
-                text_config.get("title_second_max_size", text_config["title_max_size"])
-            ),
-            second_min_size=int(
-                text_config.get("title_second_min_size", text_config["title_min_size"])
-            ),
-            line_gap=int(text_config["line_gap"]),
-            colors=colors,
-            rotation_degrees=float(text_config["rotation_degrees"]),
-            upper_font_path=thumbnail_font_path(text_styles.upper.font_preset, font_path) if text_styles else None,
-            lower_font_path=thumbnail_font_path(text_styles.lower.font_preset, font_path) if text_styles else None,
-            upper_auto_fit=text_styles.upper.auto_fit if text_styles else True,
-            lower_auto_fit=text_styles.lower.auto_fit if text_styles else True,
+        max_width = int(text_config["title_max_width"])
+        first_max_size = int(text_config.get("title_first_max_size", text_config["title_max_size"]))
+        second_max_size = int(text_config.get("title_second_max_size", text_config["title_max_size"]))
+        # Anchor both lines to the original template font. A different font or a
+        # larger upper line must not move the lower line toward the frame edge.
+        first_top, first_height = _title_reference_metrics(font_path, int(text_config.get("title_first_anchor_size", first_max_size)))
+        second_top, second_height = _title_reference_metrics(font_path, int(text_config.get("title_second_anchor_size", second_max_size)))
+        title_y = int(text_config["title_y"])
+        anchor_ys = (
+            title_y + 24 + first_top + first_height / 2,
+            title_y + 24 + first_height + int(text_config["line_gap"])
+            + second_top + second_height / 2,
         )
-        available_height = height - int(text_config["title_y"])
-        auto_fit_height = text_styles is None or (text_styles.upper.auto_fit and text_styles.lower.auto_fit)
-        if auto_fit_height and title.height > available_height > 0:
-            ratio = available_height / title.height
-            title = title.resize((max(1, round(title.width * ratio)), available_height), Image.Resampling.LANCZOS)
-        canvas.alpha_composite(
-            title,
-            (int(text_config["title_x"]), int(text_config["title_y"])),
-        )
+        for text, role, color, max_size, min_size, anchor_y in (
+            (title_first_line.strip(), text_styles.upper if text_styles else None, colors["title_first"], first_max_size,
+             int(text_config.get("title_first_min_size", text_config["title_min_size"])), anchor_ys[0]),
+            (title_second_line.strip(), text_styles.lower if text_styles else None, colors["title_second"], second_max_size,
+             int(text_config.get("title_second_min_size", text_config["title_min_size"])), anchor_ys[1]),
+        ):
+            if not text:
+                continue
+            fit = _fit_text(
+                text, thumbnail_font_path(role.font_preset, font_path) if role else font_path,
+                max_width=max_width, max_size=max_size,
+                min_size=min_size if role is None or role.auto_fit else max_size,
+            )
+            line = _title_line_layer(
+                text, fit=fit, color=color, colors=colors,
+                rotation_degrees=float(text_config["rotation_degrees"]),
+            )
+            offset_x = role.offset_x if role else 0
+            offset_y = role.offset_y if role else 0
+            center_x = int(text_config["title_x"]) + 48 + fit.width / 2 + offset_x
+            canvas.alpha_composite(
+                line, (round(center_x - line.width / 2), round(anchor_y + offset_y - line.height / 2)),
+            )
     draw = ImageDraw.Draw(canvas, "RGBA")
     draw.rectangle(
         (13, 13, width - 14, height - 14),
@@ -765,6 +746,10 @@ def render_normal_thumbnail(
             background_image_path = None
             plain_background = Image.new("RGBA", (1280, 720), style.background_color)
     if resolved_text_styles:
+        for name in ("first", "second"):
+            template["text"][f"title_{name}_anchor_size"] = int(
+                template["text"].get(f"title_{name}_max_size", template["text"]["title_max_size"])
+            )
         template["colors"].update({
             "eyebrow": resolved_text_styles.heading.color,
             "title_first": resolved_text_styles.upper.color,

@@ -18,9 +18,9 @@ from app.thumbnail_style import ThumbnailTextStyles
 
 
 TEXT_STYLES = {
-    "heading": {"fontPreset": "keifont", "fontSize": 38, "color": "#FF0000", "autoFit": True},
-    "upper": {"fontPreset": "dela_gothic", "fontSize": 108, "color": "#00FF00", "autoFit": False},
-    "lower": {"fontPreset": "mplus_rounded_extrabold", "fontSize": 72, "color": "#0000FF", "autoFit": True},
+    "heading": {"fontPreset": "keifont", "fontSize": 38, "color": "#FF0000", "autoFit": True, "offsetX": 5, "offsetY": -3},
+    "upper": {"fontPreset": "dela_gothic", "fontSize": 108, "color": "#00FF00", "autoFit": False, "offsetX": -10, "offsetY": 8},
+    "lower": {"fontPreset": "mplus_rounded_extrabold", "fontSize": 72, "color": "#0000FF", "autoFit": True, "offsetX": 12, "offsetY": -6},
 }
 
 
@@ -113,6 +113,48 @@ def test_three_roles_render_with_independent_fonts_sizes_colors(tmp_path, monkey
     assert image.size == (1280, 720)
     for channel in range(3):
         assert sum(pixel[channel] > 220 and all(pixel[c] < 45 for c in range(3) if c != channel) for pixel in image.getdata()) > 100
+
+
+def test_title_glyph_center_stays_fixed_across_fonts_and_sizes():
+    font_paths = [renderer.DEFAULT_NORMAL_FONT_PATH, thumbnail_font_path("keifont", renderer.DEFAULT_NORMAL_FONT_PATH)]
+    centers = []
+    for path in font_paths:
+        for size in (90, 150):
+            fit = renderer._fit_text("見出し", path, max_width=790, max_size=size, min_size=size)
+            layer = renderer._title_line_layer(
+                "見出し", fit=fit, color="#FFFFFF",
+                colors={"title_inner_stroke": "#000000", "title_outer_stroke": "#000000"},
+                rotation_degrees=3,
+            )
+            bounds = layer.getchannel("A").getbbox()
+            assert bounds is not None
+            centers.append(((bounds[0] + bounds[2]) / 2 - layer.width / 2,
+                            (bounds[1] + bounds[3]) / 2 - layer.height / 2))
+    assert all(abs(x) <= 2 and abs(y) <= 2 for x, y in centers)
+
+
+def test_lower_title_does_not_move_when_upper_font_or_size_changes():
+    template = renderer._load_template(renderer.DEFAULT_NORMAL_TEMPLATE_PATH)
+    template["colors"].update(title_first="#FF0000", title_second="#0000FF")
+    frame = Image.new("RGB", (1280, 720), "#555555")
+    background = Image.new("RGBA", (1280, 720), "#000000")
+    positions = []
+    for upper_font, upper_size in (("noto_black", 90), ("keifont", 150)):
+        styles = ThumbnailTextStyles()
+        styles.upper.font_preset = upper_font
+        styles.upper.font_size = upper_size
+        styles.upper.auto_fit = False
+        image = renderer._compose_normal_thumbnail(
+            frame, eyebrow="", title_first_line="上行", title_second_line="下行",
+            template=template, font_path=renderer.DEFAULT_NORMAL_FONT_PATH,
+            subject_anchor_x=None, background_image=background, text_styles=styles,
+        )
+        pixels = image.load()
+        blue_pixels = [(x, y) for y in range(350, 680) for x in range(0, 800)
+                       if pixels[x, y][2] > 220 and pixels[x, y][0] < 40 and pixels[x, y][1] < 40]
+        assert blue_pixels
+        positions.append((min(y for _, y in blue_pixels), max(y for _, y in blue_pixels)))
+    assert positions[0] == positions[1]
 
 
 @pytest.mark.parametrize(
