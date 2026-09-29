@@ -38,9 +38,7 @@ from app.jobs.clip_plan import (
     write_clip_plan,
 )
 from app.jobs.runner import (
-    AutoClipperPipelineDependencies,
     run_dummy_autoclipper_job,
-    run_subtitle_review_render,
 )
 from app.jobs.status import SUCCESS_STATUSES
 from app.jobs.subtitle_review import (
@@ -1088,11 +1086,9 @@ def test_apply_subtitle_review_clip_accepts_empty_overlay_title(
     assert clip["confirmed"] is True
 
 
-@pytest.mark.parametrize("action", ["apply", "confirm"])
 def test_auto_clip_acceptance_queues_render_without_confirming_auto_passed_sibling(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
-    action: str,
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     _write_reeditable_preview_inputs(job_id, candidate_id)
@@ -1140,20 +1136,15 @@ def test_auto_clip_acceptance_queues_render_without_confirming_auto_passed_sibli
         lambda queued_job_id, revision: queued.append((queued_job_id, revision))
     )
 
-    if action == "apply":
-        response = client.post(
-            f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
-            json={
-                "title": review["clips"][0]["title"],
-                "hookText": "",
-                "hookDurationSeconds": 3,
-                "segments": [],
-            },
-        )
-    else:
-        response = client.post(
-            f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/confirm"
-        )
+    response = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
+        json={
+            "title": review["clips"][0]["title"],
+            "hookText": "",
+            "hookDurationSeconds": 3,
+            "segments": [],
+        },
+    )
 
     assert response.status_code == 200
     payload = response.json()
@@ -1594,8 +1585,8 @@ def test_subtitle_review_get_poll_cannot_overwrite_concurrent_content_patch(
         )
         assert refresh_entered.wait(timeout=3)
         patch_future = executor.submit(
-            client.patch,
-            f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+            client.post,
+            f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
             json={
                 "title": "並行更新後のタイトル",
                 "hookText": "",
@@ -1985,351 +1976,6 @@ def test_clip_reedit_creates_one_clip_child_and_keeps_source_job_completed(
     assert child_results.json()["reeditSourceJobId"] == source_job_id
 
 
-def test_isolated_normal_reedit_can_convert_to_one_short(
-    client: TestClient,
-) -> None:
-    source_job_id, candidate_id, _rendered_bytes = _seed_reeditable_normal_export()
-    reedit = client.post(
-        f"/api/jobs/{source_job_id}/clips/{candidate_id}/reedit"
-    )
-    assert reedit.status_code == 201
-    child_job_id = reedit.json()["jobId"]
-
-    converted = client.post(
-        f"/api/jobs/{child_job_id}/subtitle-review/clips/{candidate_id}/convert-to-short",
-        json={},
-    )
-
-    assert converted.status_code == 200
-    assert converted.json()["clips"][0]["type"] == "short"
-    storage = app.dependency_overrides[get_storage_paths]()
-    selection = json.loads(
-        (storage.job_outputs(child_job_id) / "selected_clips.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert selection["normalClips"] == []
-    assert [clip["id"] for clip in selection["shorts"]] == [candidate_id]
-    summary = json.loads(
-        (storage.job_outputs(child_job_id) / "candidate_generation_summary.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert summary["normal_candidate_count"] == 0
-    assert summary["short_candidate_count"] == 1
-    assert summary["candidates_kept_by_type"] == {"normal": 0, "short": 1}
-    with next(app.dependency_overrides[get_db]()) as db:
-        child = db.get(Job, child_job_id)
-        source = db.get(Job, source_job_id)
-        assert child is not None
-        assert source is not None
-        assert child.settings_json["normalClipCount"] == 0
-        assert child.settings_json["shortCount"] == 1
-        assert child.settings_json["automationMode"] == "manual"
-        assert child.settings_json["initialSelectionProvider"] == "legacy"
-        assert source.status == "completed"
-
-
-def test_isolated_normal_reedit_rejects_short_conversion_over_limit(
-    client: TestClient,
-) -> None:
-    source_job_id, candidate_id, _rendered_bytes = _seed_reeditable_normal_export(
-        duration=80
-    )
-    reedit = client.post(
-        f"/api/jobs/{source_job_id}/clips/{candidate_id}/reedit"
-    )
-    child_job_id = reedit.json()["jobId"]
-
-    converted = client.post(
-        f"/api/jobs/{child_job_id}/subtitle-review/clips/{candidate_id}/convert-to-short",
-        json={},
-    )
-
-    assert converted.status_code == 422
-    assert "75 seconds" in converted.json()["detail"]
-    review = client.get(f"/api/jobs/{child_job_id}/subtitle-review").json()
-    assert review["clips"][0]["type"] == "normal"
-
-
-def test_isolated_normal_reedit_converts_relative_range_and_preserves_saved_content(
-    client: TestClient,
-) -> None:
-    source_job_id, candidate_id, _rendered_bytes = _seed_reeditable_normal_export(
-        duration=100,
-        start=120,
-        segments=[
-            (5, 7, "範囲外の前字幕"),
-            (30, 33, "修正前字幕"),
-            (90, 92, "範囲外の後字幕"),
-        ],
-    )
-    storage = app.dependency_overrides[get_storage_paths]()
-    source_output_dir = storage.job_outputs(source_job_id)
-    source_review = json.loads(
-        (source_output_dir / "subtitle_review.json").read_text(encoding="utf-8")
-    )
-    source_clip = source_review["clips"][0]
-    title_style = {
-        "fontPreset": "heavy",
-        "fontSize": 96,
-        "primaryColor": "#FFF200",
-        "outlineColor": "#000000",
-        "outlineWidth": 5,
-        "xPercent": 95,
-        "yPercent": 5,
-        "positionMode": "explicit",
-    }
-    hook_style = {
-        **title_style,
-        "fontPreset": "chikara",
-        "fontSize": 88,
-        "yPercent": 20,
-    }
-    subtitle_style = {
-        **title_style,
-        "fontPreset": "noto_black",
-        "fontSize": 72,
-        "yPercent": 80,
-    }
-    source_clip.update(
-        {
-            "title": "保存済みタイトル",
-            "publicationTitle": "保存済み公開タイトル",
-            "titleEdited": True,
-            "hookText": "保存済みフック",
-            "hookSceneStart": 125,
-            "hookSceneEnd": 127,
-            "titleStyle": title_style,
-            "hookStyle": hook_style,
-            "subtitleStyle": subtitle_style,
-        }
-    )
-    source_review["segments"][1].update(
-        {"text": "保存済み修正字幕", "edited": True}
-    )
-    (source_output_dir / "subtitle_review.json").write_text(
-        json.dumps(source_review, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    reedit = client.post(f"/api/jobs/{source_job_id}/clips/{candidate_id}/reedit")
-    assert reedit.status_code == 201
-    child_job_id = reedit.json()["jobId"]
-    assert reedit.json()["renderRevision"] == 2
-    assert reedit.json()["segments"][1]["text"] == "保存済み修正字幕"
-
-    converted = client.post(
-        f"/api/jobs/{child_job_id}/subtitle-review/clips/{candidate_id}/convert-to-short",
-        json={"startSeconds": 20, "endSeconds": 70},
-    )
-
-    assert converted.status_code == 200
-    payload = converted.json()
-    clip = payload["clips"][0]
-    assert (clip["start"], clip["end"], clip["duration"]) == (140.0, 190.0, 50.0)
-    assert clip["segmentIds"] == ["segment_00001"]
-    assert [segment["text"] for segment in payload["segments"]] == ["保存済み修正字幕"]
-    assert clip["title"] == "保存済みタイトル"
-    assert clip["publicationTitle"] == "保存済み公開タイトル"
-    assert clip["hookText"] == "保存済みフック"
-    assert clip["hookSceneStart"] is None
-    assert clip["hookSceneEnd"] is None
-    assert {key: clip["titleStyle"][key] for key in title_style} == title_style
-    assert {key: clip["hookStyle"][key] for key in hook_style} == hook_style
-    assert {key: clip["subtitleStyle"][key] for key in subtitle_style} == subtitle_style
-    assert (clip["previewWidth"], clip["previewHeight"]) == (1080, 1920)
-    assert clip["resolvedTitleStyle"]["xPercent"] == 95.0
-    assert clip["resolvedTitleStyle"]["yPercent"] == 5.0
-
-    child_output_dir = storage.job_outputs(child_job_id)
-    selection = json.loads(
-        (child_output_dir / "selected_clips.json").read_text(encoding="utf-8")
-    )
-    short = selection["shorts"][0]
-    assert (short["start"], short["end"], short["duration"]) == (140.0, 190.0, 50.0)
-    assert (short["segment_start_index"], short["segment_end_index"]) == (1, 1)
-    assert short["transcript_text"] == "保存済み修正字幕"
-    assert {key: short["title_style"][key] for key in title_style} == title_style
-    with next(app.dependency_overrides[get_db]()) as db:
-        child = db.get(Job, child_job_id)
-        assert child is not None
-        assert child.settings_json["shortClipTimeRanges"] == [
-            {"startSeconds": 140.0, "endSeconds": 190.0}
-        ]
-
-    unchanged_source = json.loads(
-        (source_output_dir / "subtitle_review.json").read_text(encoding="utf-8")
-    )
-    assert unchanged_source["clips"][0]["type"] == "normal"
-    assert (unchanged_source["clips"][0]["start"], unchanged_source["clips"][0]["end"]) == (
-        120,
-        220,
-    )
-
-
-def test_isolated_normal_reedit_rejects_partial_short_range(
-    client: TestClient,
-) -> None:
-    source_job_id, candidate_id, _rendered_bytes = _seed_reeditable_normal_export(
-        duration=100
-    )
-    reedit = client.post(f"/api/jobs/{source_job_id}/clips/{candidate_id}/reedit")
-    child_job_id = reedit.json()["jobId"]
-
-    converted = client.post(
-        f"/api/jobs/{child_job_id}/subtitle-review/clips/{candidate_id}/convert-to-short",
-        json={"startSeconds": 10},
-    )
-
-    assert converted.status_code == 422
-    review = client.get(f"/api/jobs/{child_job_id}/subtitle-review").json()
-    assert review["clips"][0]["type"] == "normal"
-
-
-def test_isolated_normal_reedit_counts_retained_hook_against_short_limit(
-    client: TestClient,
-) -> None:
-    source_job_id, candidate_id, _rendered_bytes = _seed_reeditable_normal_export(
-        duration=74
-    )
-    storage = app.dependency_overrides[get_storage_paths]()
-    source_review_path = storage.job_outputs(source_job_id) / "subtitle_review.json"
-    source_review = json.loads(source_review_path.read_text(encoding="utf-8"))
-    source_review["clips"][0].update(
-        {"hookSceneStart": 1, "hookSceneEnd": 3}
-    )
-    source_review_path.write_text(
-        json.dumps(source_review, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    reedit = client.post(f"/api/jobs/{source_job_id}/clips/{candidate_id}/reedit")
-    child_job_id = reedit.json()["jobId"]
-    endpoint = (
-        f"/api/jobs/{child_job_id}/subtitle-review/clips/{candidate_id}/convert-to-short"
-    )
-
-    omitted = client.post(endpoint, json={})
-    assert omitted.status_code == 422
-    assert "startSeconds and endSeconds are required" in omitted.json()["detail"]
-
-    converted = client.post(
-        endpoint,
-        json={"startSeconds": 0, "endSeconds": 72},
-    )
-    assert converted.status_code == 200
-    assert converted.json()["clips"][0]["hookSceneStart"] == 1.0
-    assert converted.json()["clips"][0]["hookSceneEnd"] == 3.0
-
-
-def test_isolated_normal_reedit_conversion_rolls_back_artifacts_and_settings(
-    client: TestClient,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    source_job_id, candidate_id, _rendered_bytes = _seed_reeditable_normal_export()
-    reedit = client.post(f"/api/jobs/{source_job_id}/clips/{candidate_id}/reedit")
-    child_job_id = reedit.json()["jobId"]
-    storage = app.dependency_overrides[get_storage_paths]()
-    output_dir = storage.job_outputs(child_job_id)
-    artifact_paths = [
-        output_dir / filename
-        for filename in jobs_api._SHORT_CONVERSION_ARTIFACT_FILENAMES
-    ]
-    before_artifacts = {
-        path: path.read_bytes() if path.is_file() else None for path in artifact_paths
-    }
-    with next(app.dependency_overrides[get_db]()) as db:
-        child = db.get(Job, child_job_id)
-        assert child is not None
-        before_settings = dict(child.settings_json or {})
-
-    def fail_review_write(_document: object, _paths: object) -> None:
-        raise RuntimeError("intentional conversion write failure")
-
-    monkeypatch.setattr(jobs_api, "_write_subtitle_review_unlocked", fail_review_write)
-    with pytest.raises(RuntimeError, match="intentional conversion write failure"):
-        client.post(
-            f"/api/jobs/{child_job_id}/subtitle-review/clips/{candidate_id}/convert-to-short",
-            json={},
-        )
-
-    after_artifacts = {
-        path: path.read_bytes() if path.is_file() else None for path in artifact_paths
-    }
-    assert after_artifacts == before_artifacts
-    with next(app.dependency_overrides[get_db]()) as db:
-        child = db.get(Job, child_job_id)
-        source = db.get(Job, source_job_id)
-        assert child is not None
-        assert source is not None
-        assert child.settings_json == before_settings
-        assert child.status == "awaiting_subtitle_review"
-        assert source.status == "completed"
-
-
-def test_converted_child_render_failure_returns_to_subtitle_review_without_exports(
-    client: TestClient,
-) -> None:
-    source_job_id, candidate_id, _rendered_bytes = _seed_reeditable_normal_export()
-    reedit = client.post(f"/api/jobs/{source_job_id}/clips/{candidate_id}/reedit")
-    child_job_id = reedit.json()["jobId"]
-    converted = client.post(
-        f"/api/jobs/{child_job_id}/subtitle-review/clips/{candidate_id}/convert-to-short",
-        json={},
-    )
-    assert converted.status_code == 200
-    assert converted.json()["renderRevision"] == 2
-
-    storage = app.dependency_overrides[get_storage_paths]()
-    review_path = storage.job_outputs(child_job_id) / "subtitle_review.json"
-    review = json.loads(review_path.read_text(encoding="utf-8"))
-    review["state"] = "render_queued"
-    review["clips"][0]["confirmed"] = True
-    review["confirmedClipCount"] = 1
-    review_path.write_text(
-        json.dumps(review, ensure_ascii=False),
-        encoding="utf-8",
-    )
-    with next(app.dependency_overrides[get_db]()) as db:
-        child = db.get(Job, child_job_id)
-        assert child is not None
-        child.status = "rendering_normal_clips"
-        db.commit()
-        assert db.scalars(select(ExportItem).where(ExportItem.job_id == child_job_id)).all() == []
-
-    def failing_render(
-        _input_path: str | Path,
-        _output_path: str | Path,
-        **_kwargs: object,
-    ) -> Path:
-        raise RuntimeError("intentional child render failure")
-
-    statuses = run_subtitle_review_render(
-        child_job_id,
-        render_revision=2,
-        session_factory=lambda: next(app.dependency_overrides[get_db]()),
-        paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
-            normal_renderer=failing_render,
-            short_renderer=failing_render,
-        ),
-    )
-
-    assert statuses == ["rendering_normal_clips", "rendering_shorts"]
-    restored = client.get(f"/api/jobs/{child_job_id}/subtitle-review").json()
-    assert restored["state"] == "awaiting_review"
-    assert restored["renderRevision"] == 2
-    with next(app.dependency_overrides[get_db]()) as db:
-        child = db.get(Job, child_job_id)
-        source = db.get(Job, source_job_id)
-        assert child is not None
-        assert source is not None
-        assert child.status == "awaiting_subtitle_review"
-        assert child.error_code == "no_usable_output"
-        assert source.status == "completed"
-        assert db.scalars(select(ExportItem).where(ExportItem.job_id == child_job_id)).all() == []
-
-
 def test_subtitle_review_banner_settings_are_strict_and_persisted(
     client: TestClient,
 ) -> None:
@@ -2627,8 +2273,8 @@ def test_subtitle_review_title_edit_recomputes_auto_title_expectation(
     reopened_artifact = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
     assert reopened_artifact["clips"][0]["overlayTitleExpected"] is False
 
-    edited = client.patch(
-        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+    edited = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
         json={"title": "手動で変更したタイトル"},
     )
 
@@ -2640,8 +2286,8 @@ def test_subtitle_review_title_edit_recomputes_auto_title_expectation(
     assert artifact["clips"][0]["overlayTitleExpected"] is True
     assert summary["overlay_title_expected_by_clip"] == {candidate_id: True}
 
-    restored = client.patch(
-        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+    restored = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
         json={"title": "完成したショート"},
     )
     assert restored.status_code == 200
@@ -2696,8 +2342,8 @@ def test_subtitle_review_clip_styles_are_saved_and_omission_preserves_them(
         "yPercent": 84,
     }
 
-    updated = client.patch(
-        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+    updated = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
         json={
             "title": "スタイル変更",
             "hookText": "冒頭フック",
@@ -2717,8 +2363,8 @@ def test_subtitle_review_clip_styles_are_saved_and_omission_preserves_them(
     assert clip["hookStyle"] is None
     assert {key: clip["subtitleStyle"][key] for key in subtitle_style} == subtitle_style
 
-    legacy_update = client.patch(
-        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+    legacy_update = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
         json={
             "title": "旧クライアント互換",
             "hookText": "冒頭フック",
@@ -2784,8 +2430,8 @@ def test_subtitle_review_hydrates_resolved_style_contract_and_preserves_custom_f
     assert persisted["renderMode"] == "low_cost"
     assert persisted["clips"][0]["resolvedSubtitleStyle"]["fontName"] == ("利用者の任意フォント")
 
-    updated = client.patch(
-        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+    updated = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
         json={
             "title": "手動編集タイトル",
             "subtitleStyle": {
@@ -2879,8 +2525,8 @@ def test_normal_resolved_twelve_pixel_style_round_trips_through_content_patch(
     assert clip["subtitleMaxDurationSeconds"] == 2.5
     assert clip["subtitleMinGapSeconds"] == 0.2
 
-    updated = client.patch(
-        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/content",
+    updated = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
         json={
             "title": clip["title"],
             "subtitleStyle": {

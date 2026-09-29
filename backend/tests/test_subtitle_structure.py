@@ -87,7 +87,8 @@ def test_merge_split_persist_and_reach_ass_without_automatic_regrouping(client):
     assert [(s.start, s.end, s.text) for s in preview.transcript_segments] == [(s.start, s.end, s.text) for s in rendered]
     # Subsequent ordinary text corrections still target the split IDs.
     first = split.segments[0]
-    assert client.patch(f"/api/jobs/{job_id}/subtitle-review/segments/{first.id}", json={"text": "修正前半"}).status_code == 200
+    assert client.patch(f"/api/jobs/{job_id}/subtitle-review/segments",
+        json={"segments": [{"segmentId": first.id, "before": first.text, "text": "修正前半"}]}).status_code == 200
     assert apply_reviewed_text(original, load_subtitle_review(path))[0].text == "修正前半"
 
 
@@ -113,8 +114,8 @@ def test_insert_empty_subtitle_row_then_edit_and_delete_it(client):  # noqa: F81
     ]
     blank = first_parts[1]
     assert client.patch(
-        f"/api/jobs/{job_id}/subtitle-review/segments/{blank.id}",
-        json={"text": "追加"},
+        f"/api/jobs/{job_id}/subtitle-review/segments",
+        json={"segments": [{"segmentId": blank.id, "before": blank.text, "text": "追加"}]},
     ).status_code == 200
     edited = load_subtitle_review(path)
     assert [(segment.start, segment.end, segment.text) for segment in apply_reviewed_text(original, edited)[:3]] == [

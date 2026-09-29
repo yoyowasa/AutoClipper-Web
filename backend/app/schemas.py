@@ -756,25 +756,6 @@ class SubtitleReviewClipApplyRequest(SubtitleReviewClipContentUpdateRequest):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
-class SubtitleReviewConvertToShortRequest(BaseModel):
-    start_seconds: float | None = Field(default=None, ge=0, alias="startSeconds")
-    end_seconds: float | None = Field(default=None, ge=0, alias="endSeconds")
-
-    @model_validator(mode="after")
-    def validate_range(self) -> "SubtitleReviewConvertToShortRequest":
-        if (self.start_seconds is None) != (self.end_seconds is None):
-            raise ValueError("startSeconds and endSeconds must be provided together")
-        if (
-            self.start_seconds is not None
-            and self.end_seconds is not None
-            and self.end_seconds <= self.start_seconds
-        ):
-            raise ValueError("endSeconds must be greater than startSeconds")
-        return self
-
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
-
-
 class TitleHookSuggestionRequest(BaseModel):
     segments: list[SubtitleReviewClipSegmentUpdate] = Field(
         default_factory=list,

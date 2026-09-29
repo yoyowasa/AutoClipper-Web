@@ -18,7 +18,6 @@ import type {
   StorageStatusResponse,
   SubtitleReviewDocument,
   SubtitleReviewClipFramingUpdateRequest,
-  SubtitleReviewConvertToShortRequest,
   SubtitleReviewFinalizeResponse,
   SubtitleReviewShortBannerSettings,
   ThumbnailRegenerationResponse,
@@ -437,50 +436,6 @@ export async function reopenSubtitleReview(
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
-export async function updateSubtitleReviewSegment(
-  jobId: string,
-  segmentId: string,
-  text: string
-): Promise<SubtitleReviewDocument> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/segments/${segmentId}`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ text })
-    }
-  );
-  return parseJsonResponse<SubtitleReviewDocument>(response);
-}
-
-export async function updateSubtitleReviewClipContent(
-  jobId: string,
-  clipId: string,
-  content: {
-    title: string;
-    hookText: string;
-    hookDurationSeconds: number;
-    titleStyle: ClipTextStyle | null;
-    hookStyle: ClipTextStyle | null;
-    subtitleStyle: ClipTextStyle | null;
-    subtitleStyles?: import("./types").SubtitleStyleOverride[];
-  }
-): Promise<SubtitleReviewDocument> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/content`,
-    {
-      method: "PATCH",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(content)
-    }
-  );
-  return parseJsonResponse<SubtitleReviewDocument>(response);
-}
-
 export async function getYouTubePostingProfile(): Promise<YouTubePostingProfileDocument> {
   const response = await fetch(
     `${API_BASE_URL}/api/preferences/youtube-posting-profile`,
@@ -528,24 +483,6 @@ export async function createClipReedit(
   const response = await fetch(
     `${API_BASE_URL}/api/jobs/${jobId}/clips/${clipId}/reedit`,
     { method: "POST" }
-  );
-  return parseJsonResponse<SubtitleReviewDocument>(response);
-}
-
-export async function convertSubtitleReviewClipToShort(
-  jobId: string,
-  clipId: string,
-  request: SubtitleReviewConvertToShortRequest
-): Promise<SubtitleReviewDocument> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/convert-to-short`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(request)
-    }
   );
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
@@ -753,19 +690,6 @@ export async function updateSubtitleReviewHookScene(
     }
   );
   return parseJsonResponse<ClipPlanActionResponse>(response);
-}
-
-export async function confirmSubtitleReviewClip(
-  jobId: string,
-  clipId: string
-): Promise<SubtitleReviewDocument> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/confirm`,
-    {
-      method: "POST"
-    }
-  );
-  return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
 export async function finalizeSubtitleReview(

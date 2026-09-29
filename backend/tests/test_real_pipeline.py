@@ -1689,6 +1689,16 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     stored_overlay_mode: str | None,
     expected_overlay_mode: str,
 ) -> None:
+    def apply_clip(clip: dict[str, Any]) -> Any:
+        return client.post(
+            f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/apply",
+            json={
+                "title": clip["title"],
+                "hookText": clip["hookText"],
+                "hookDurationSeconds": clip["hookDurationSeconds"],
+            },
+        )
+
     upload_response = client.post(
         "/api/videos/upload",
         files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
@@ -1834,8 +1844,8 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert live_preview_response.headers["content-type"].startswith("video/mp4")
     assert live_preview_response.content.startswith(b"rendered")
     short_clip = next(clip for clip in review["clips"] if clip["type"] == "short")
-    content_updated = client.patch(
-        f"/api/jobs/{created['jobId']}/subtitle-review/clips/{short_clip['id']}/content",
+    content_updated = client.post(
+        f"/api/jobs/{created['jobId']}/subtitle-review/clips/{short_clip['id']}/apply",
         json={
             "title": "魚は「耳石」で音を聞く？",
             "hookText": "魚の耳には、本当に「石」が入ってるらしい",
@@ -1851,8 +1861,12 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         review["segments"][0],
     )
     updated = client.patch(
-        f"/api/jobs/{created['jobId']}/subtitle-review/segments/{edited_segment['id']}",
-        json={"text": "ManualEdit"},
+        f"/api/jobs/{created['jobId']}/subtitle-review/segments",
+        json={"segments": [{
+            "segmentId": edited_segment["id"],
+            "before": edited_segment["text"],
+            "text": "ManualEdit",
+        }]},
     )
     assert updated.status_code == 200
     assert updated.json()["editedSegmentCount"] == 1
@@ -1862,12 +1876,13 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
 
     review = updated.json()
     queued_clip = next(clip for clip in review["clips"] if clip["previewState"] != "ready")
-    preview_blocked = client.post((f"/api/jobs/{created['jobId']}/subtitle-review/clips/{queued_clip['id']}/confirm"))
-    assert preview_blocked.status_code == 409
-    assert preview_blocked.json()["detail"]["code"] == ("subtitle_review_preview_not_ready")
-    review = render_queued_previews(review)
+    # The current apply flow accepts a clip while the exact preview is still queued.
+    accepted_while_queued = apply_clip(queued_clip)
+    assert accepted_while_queued.status_code == 200
+    assert next(clip for clip in accepted_while_queued.json()["clips"] if clip["id"] == queued_clip["id"])["confirmed"]
+    review = render_queued_previews(accepted_while_queued.json())
     for clip in review["clips"]:
-        response = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm")
+        response = apply_clip(clip)
         assert response.status_code == 200
         review = response.json()
     assert review["confirmedClipCount"] == review["totalClipCount"] == 2
@@ -1934,8 +1949,8 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == ("awaiting_subtitle_review")
 
     reopened_short = next(clip for clip in reopened_review["clips"] if clip["type"] == "short")
-    retitled = client.patch(
-        (f"/api/jobs/{created['jobId']}/subtitle-review/clips/{reopened_short['id']}/content"),
+    retitled = client.post(
+        (f"/api/jobs/{created['jobId']}/subtitle-review/clips/{reopened_short['id']}/apply"),
         json={
             "title": "完成後に変更したタイトル",
             "hookText": "完成後に変更したフック",
@@ -1982,7 +1997,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert updated_short["previewState"] == "ready"
 
     for clip in reopened_review["clips"]:
-        response = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm")
+        response = apply_clip(clip)
         assert response.status_code == 200
         reopened_review = response.json()
 
@@ -2020,7 +2035,8 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     reopened_again = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/reopen").json()
     reopened_again = render_queued_previews(reopened_again)
     for clip in reopened_again["clips"]:
-        client.post(f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/confirm")
+        response = apply_clip(clip)
+        assert response.status_code == 200
     client.post(f"/api/jobs/{created['jobId']}/subtitle-review/finalize")
 
     def failing_render(
