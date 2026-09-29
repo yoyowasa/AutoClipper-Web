@@ -37,10 +37,6 @@ from app.jobs.clip_plan import (
     update_clip_plan_boundary,
     write_clip_plan,
 )
-from app.jobs.runner import (
-    run_dummy_autoclipper_job,
-)
-from app.jobs.status import SUCCESS_STATUSES
 from app.jobs.subtitle_review import (
     build_subtitle_review,
     subtitle_review_preview_path,
@@ -4105,45 +4101,6 @@ def test_rollback_failed_publication_stays_blocked_during_hook_updates(
     assert rerender_publication_is_unresolved(output_dir)
     assert client.get("/api/exports/exp_reedit_upload/download").status_code == 409
     assert client.get(f"/api/jobs/{job_id}/download.zip").status_code == 409
-
-
-def test_dummy_job_completes_and_results_are_downloadable(client: TestClient) -> None:
-    upload = client.post(
-        "/api/videos/upload",
-        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
-    ).json()
-    created = client.post(
-        "/api/jobs",
-        json={"videoId": upload["videoId"], "settings": {}},
-    ).json()
-
-    storage = app.dependency_overrides[get_storage_paths]()
-    visited_statuses = run_dummy_autoclipper_job(
-        created["jobId"],
-        session_factory=lambda: next(app.dependency_overrides[get_db]()),
-        paths=storage,
-    )
-
-    assert visited_statuses == SUCCESS_STATUSES
-
-    status_response = client.get(f"/api/jobs/{created['jobId']}")
-    assert status_response.status_code == 200
-    assert status_response.json()["status"] == "completed"
-    assert status_response.json()["progress"] == 100
-
-    results_response = client.get(f"/api/jobs/{created['jobId']}/results")
-    assert results_response.status_code == 200
-    results = results_response.json()
-    assert len(results["normalClips"]) == 2
-    assert len(results["shorts"]) == 3
-
-    zip_response = client.get(results["zipDownloadUrl"])
-    assert zip_response.status_code == 200
-    assert zip_response.content
-
-    normal_download = client.get(results["normalClips"][0]["downloadUrl"])
-    assert normal_download.status_code == 200
-    assert normal_download.content.startswith(b"AutoClipper dummy MP4")
 
 
 def test_create_job_rejects_missing_video(client: TestClient) -> None:

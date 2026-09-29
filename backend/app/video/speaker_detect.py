@@ -91,10 +91,6 @@ def _face_area(face: FaceDetection) -> float:
     return max(face.width, 0.0) * max(face.height, 0.0)
 
 
-def _region_area(region: SpeakerRegion) -> float:
-    return max(region.width, 0.0) * max(region.height, 0.0)
-
-
 def _primary_face_region(detections: Sequence[FaceDetection]) -> tuple[SpeakerRegion | None, bool, int]:
     candidates = [face for face in detections if _face_area(face) >= MIN_FACE_AREA and face.height >= MIN_REGION_HEIGHT]
     if not candidates:

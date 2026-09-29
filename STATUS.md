@@ -10457,3 +10457,12 @@ pip check: pass
 - 内容: Composeのキー受け渡しとlauncherの未設定警告を削除。キー検出結果とログの伏せ字処理は保持。タイトル・フック案の新規依頼はCodex固定で、保存済みOpenAI文書からの再生成でもproviderを引き継がないことを回帰テストで確認。READMEに既定構成の方針を明記した。
 - 検証: 通常・GPU両方の `docker compose config` でbackend・workerのenvironmentに `OPENAI_API_KEY` が無い。対象テスト101 passed、`ruff check . ../launcher` 成功、backend全1199 passed・1 skipped、frontend lint・typecheck・build、`git diff --check` 成功。
 - 未確認: 稼働中コンテナへの反映と実動画での動作。古いqueued状態のOpenAI依頼は保存済み入力から再投入され得るが、新構成ではキーが無いためAPI呼び出し前に失敗する。画面からの新規作成はOpenAI採点・字幕校正を無効にする一方、旧jobの再選定では保存済みの採点設定が使われ得る。
+
+## 2026-09-29 JST 未使用コードを整理（task-161）
+
+- 目的: 現行経路から参照されないbackend・frontendの補助処理と、ダミージョブ専用処理を削除する。
+- 変更ファイル: `backend/app/candidates/generate_heatmap_candidates.py`、`backend/app/jobs/runner.py`、`backend/app/audio/{silence_detect,volume_features}.py`、`backend/app/video/{black_screen,scene_detect,speaker_detect}.py`、`backend/app/candidates/codex_initial_selection.py`、`backend/app/jobs/subtitle_review_preview.py`、`backend/app/render/render_thumbnail.py`、`backend/app/schemas.py`、`backend/app/scoring/openai_score.py`、`backend/tests/{test_api_routes,test_openai_score}.py`、`frontend/components/{SubtitleStylePreview,JobProgress}.tsx`、`frontend/lib/{clipTextStyle,manualClipRanges,shortBanners,api}.ts`、本ファイル。
+- 内容: 各対象を `git grep -w` で確認し、削除対象内の相互呼び出し・指定テスト以外にコード参照がないことを確認して削除。OpenAI batch採点テストは本体関数を直接呼ぶ形に変更。YouTube投稿プロフィールのbackend GETは保持。STATUS.mdの過去の記録は保持。
+- 判断（task-159指示3）: 既存書き出しの差し替え・巻き戻し処理は、子jobの公開途中の失敗から再試行するときにも使うため残す。子jobの書き出しは子job側に新しく作られ、元jobの書き出しは差し替えない。
+- 検証: 関連121 passed、`ruff check . ../launcher` 成功、backend全1198 passed・1 skipped、frontend lint・typecheck・build成功、`git diff --check` 成功。削除対象名のコード・テスト内参照なし。
+- 未確認: 稼働中Dockerへの反映と実動画での動作。参照調査は追跡ファイルの静的検索であり、外部からの直接importの有無は確認していない。

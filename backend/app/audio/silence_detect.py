@@ -118,21 +118,3 @@ def detect_silence(
     )
     result = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return parse_silence_detect_log(result.stderr, audio_duration=audio_duration)
-
-
-def detect_silence_to_json(
-    input_path: str | Path,
-    output_dir: str | Path,
-    audio_duration: float | None = None,
-    noise_db: int = -35,
-    min_duration: float = 0.5,
-    ffmpeg_bin: str = "ffmpeg",
-) -> Path:
-    segments = detect_silence(
-        input_path,
-        audio_duration=audio_duration,
-        noise_db=noise_db,
-        min_duration=min_duration,
-        ffmpeg_bin=ffmpeg_bin,
-    )
-    return write_silence_segments(segments, silence_output_path(output_dir))

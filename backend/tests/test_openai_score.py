@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 from app.audio.volume_features import AudioFeatures
 from app.candidates.merge_boundaries import Candidate
-from app.jobs.runner import score_candidate_batch_for_worker
 from app.scoring.openai_score import (
     OpenAICandidateScorer,
     OpenAIScoreCache,
@@ -368,11 +367,11 @@ def test_batch_scoring_for_worker_use() -> None:
     assert len(client.responses.calls) == 2
 
 
-def test_worker_runner_can_score_candidate_batch() -> None:
+def test_score_candidate_batch_accepts_serialized_features() -> None:
     client = FakeClient([{**VALID_SCORE, "title": "Worker scored"}])
     scorer = OpenAICandidateScorer(client=client)
 
-    scored = score_candidate_batch_for_worker(
+    scored = score_candidate_batch(
         [make_candidate("cand_worker", "why this automation fix matters")],
         audio_features=make_audio_features().model_dump(),
         visual_features=make_visual_features().model_dump(),

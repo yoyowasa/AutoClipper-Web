@@ -84,12 +84,3 @@ def detect_scenes(input_path: str | Path, threshold: float = 27.0) -> list[Scene
             )
         )
     return segments
-
-
-def detect_scenes_to_json(
-    input_path: str | Path,
-    output_dir: str | Path,
-    threshold: float = 27.0,
-) -> Path:
-    segments = detect_scenes(input_path, threshold=threshold)
-    return write_scene_segments(segments, scene_output_path(output_dir))

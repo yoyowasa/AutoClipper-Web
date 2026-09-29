@@ -523,31 +523,3 @@ def refresh_subtitle_review_preview_states(
             1 for clip in document.clips if clip.confirmed
         )
     return document, queued, changed
-
-
-def current_preview_is_ready(
-    *,
-    job: Job,
-    video: Video,
-    document: SubtitleReviewDocument,
-    paths: StoragePaths,
-    clip_id: str,
-) -> bool:
-    clip = next((item for item in document.clips if item.id == clip_id), None)
-    if clip is None:
-        raise KeyError(clip_id)
-    _spec, spec_hash, _inputs = current_subtitle_review_preview_spec(
-        job=job,
-        video=video,
-        document=document,
-        paths=paths,
-        clip_id=clip_id,
-    )
-    if clip.preview_state != "ready" or clip.preview_spec_hash != spec_hash:
-        return False
-    artifacts = exact_subtitle_review_preview_paths(
-        paths.job_outputs(job.id),
-        clip_id,
-        spec_hash,
-    )
-    return exact_subtitle_review_preview_is_ready(artifacts, spec_hash)

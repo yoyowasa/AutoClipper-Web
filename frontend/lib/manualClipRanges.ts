@@ -124,13 +124,3 @@ export function manualRangeValidationError(settings: ClipSettings): string | nul
   }
   return null;
 }
-
-export function allRequestedOutputsUseManualTime(settings: ClipSettings): boolean {
-  const requestedTypes = (["normal", "short"] as const).filter(
-    (type) => requestedCount(settings, type) > 0
-  );
-  return (
-    requestedTypes.length > 0 &&
-    requestedTypes.every((type) => isManualTimeMode(settings, type))
-  );
-}

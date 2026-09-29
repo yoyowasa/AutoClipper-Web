@@ -241,12 +241,6 @@ def _extract_response_text(response: Any) -> str:
     raise ValueError("OpenAI response did not include output text")
 
 
-def parse_openai_score_response(response: Any) -> ClipCandidateScore:
-    text = _extract_response_text(response)
-    payload = json.loads(text)
-    return ClipCandidateScore.model_validate(payload)
-
-
 def _is_transient_api_error(exc: Exception) -> bool:
     status_code = getattr(exc, "status_code", None)
     if status_code in TRANSIENT_STATUS_CODES:

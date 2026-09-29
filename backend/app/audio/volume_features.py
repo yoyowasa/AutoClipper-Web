@@ -130,13 +130,3 @@ def write_audio_features(features: AudioFeatures, output_path: str | Path) -> Pa
         encoding="utf-8",
     )
     return path
-
-
-def compute_audio_features_to_json(
-    wav_path: str | Path,
-    output_dir: str | Path,
-    duration: float,
-    silence_segments: Sequence[SilenceSegment],
-) -> Path:
-    features = compute_audio_features(wav_path, duration, silence_segments)
-    return write_audio_features(features, audio_features_output_path(output_dir))

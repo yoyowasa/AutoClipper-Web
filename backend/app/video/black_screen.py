@@ -147,21 +147,3 @@ def detect_black_screen(
     )
     result = subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     return parse_blackdetect_log(result.stderr)
-
-
-def detect_black_screen_to_json(
-    input_path: str | Path,
-    output_dir: str | Path,
-    duration: float,
-    min_duration: float = 0.5,
-    pixel_threshold: float = 0.10,
-    ffmpeg_bin: str = "ffmpeg",
-) -> Path:
-    segments = detect_black_screen(
-        input_path,
-        min_duration=min_duration,
-        pixel_threshold=pixel_threshold,
-        ffmpeg_bin=ffmpeg_bin,
-    )
-    visual_quality = build_visual_quality(duration, segments)
-    return write_visual_quality(visual_quality, visual_quality_output_path(output_dir))

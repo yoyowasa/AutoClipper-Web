@@ -145,28 +145,6 @@ def _hex_rgba(value: str, alpha: int = 255) -> tuple[int, int, int, int]:
     )
 
 
-def _cover_frame(
-    image: Image.Image,
-    width: int,
-    height: int,
-    *,
-    anchor_x: float,
-) -> Image.Image:
-    source = image.convert("RGB")
-    target_ratio = width / height
-    source_ratio = source.width / source.height
-    if source_ratio > target_ratio:
-        crop_width = max(1, round(source.height * target_ratio))
-        available = source.width - crop_width
-        left = round(available * min(1.0, max(0.0, anchor_x)))
-        source = source.crop((left, 0, left + crop_width, source.height))
-    elif source_ratio < target_ratio:
-        crop_height = max(1, round(source.width / target_ratio))
-        top = max(0, (source.height - crop_height) // 2)
-        source = source.crop((0, top, source.width, top + crop_height))
-    return source.resize((width, height), Image.Resampling.LANCZOS)
-
-
 def _select_primary_face(
     faces: list[tuple[float, float, float, float]],
 ) -> tuple[float, float, float, float] | None:

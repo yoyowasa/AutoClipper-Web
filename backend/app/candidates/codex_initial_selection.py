@@ -2068,23 +2068,6 @@ def _proposal_candidate(
     )
 
 
-def _validate_overlap(
-    candidates: Sequence[Candidate],
-    *,
-    max_overlap_ratio: float,
-    cross_type_overlap_dedupe: bool,
-) -> None:
-    for index, left in enumerate(candidates):
-        for right in candidates[index + 1 :]:
-            if left.type != right.type and not cross_type_overlap_dedupe:
-                continue
-            if time_overlap_ratio(left, right) >= max_overlap_ratio:
-                raise CodexInitialSelectionError(
-                    "codex_initial_selection_high_overlap",
-                    "Codex初期選定の区間が重複上限を超えています。",
-                )
-
-
 def find_duplicate_short_moment_keys(
     proposals: Sequence[CodexClipProposal],
 ) -> list[str]:

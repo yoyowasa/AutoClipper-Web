@@ -8,8 +8,6 @@ const errorLabels: Record<string, string> = {
   audio_extraction_failed: "動画の音声を読み込めません",
   transcript_unusable: "文字起こし結果を利用できません",
   transcription_quality_fallback_failed: "文字起こしの再試行に失敗しました",
-  heatmap_interval_mode_unavailable: "人気度JSONを参照できません",
-  heatmap_interval_mode_no_candidates: "字幕内容から候補を作成できません",
   codex_initial_selection_failed: "Codex初期選定に失敗しました",
   codex_initial_selection_unavailable: "Codex初期選定を開始できません",
   no_usable_selection: "選定基準を満たす候補がありません",
