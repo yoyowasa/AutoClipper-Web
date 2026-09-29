@@ -276,11 +276,14 @@ export type JobStatusResponse = {
 };
 
 export type ResultExportItem = {
+  thumbnailDesign?: NormalThumbnailStyle["design"];
+  thumbnailCanUseCustomBackground?: boolean;
   thumbnailTextStyles?: ThumbnailTextStyles | null;
   thumbnailKicker?: string;
   thumbnailLine1?: string;
   thumbnailLine2?: string;
   thumbnailCropMode?: "standard" | "close";
+  thumbnailSubjectPlacement?: ThumbnailSubjectPlacement;
   id: string;
   type: ExportType;
   candidateId: string | null;
@@ -327,6 +330,7 @@ export type ResultExportItem = {
   thumbnailUrl: string | null;
   thumbnailDownloadUrl: string | null;
   thumbnailStatus: "not_generated" | "generating" | "ready" | "failed" | null;
+  thumbnailErrorCode?: string | null;
   thumbnailFilename: string | null;
   thumbnailFrameSeconds: number | null;
   thumbnailSubjectAnchorX: number | null;
@@ -337,6 +341,12 @@ export type ThumbnailRegenerationResponse = {
   exportId: string;
   status: "generating";
   revision: number;
+};
+
+export type ThumbnailSubjectPlacement = {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
 };
 
 export type JobAuditSummary = {
@@ -383,8 +393,12 @@ export type ThumbnailCopyState = {
 };
 
 export type SubtitleStructureRequest = {
-  action: "merge" | "split" | "insert" | "delete" | "line";
+  action: "merge" | "split" | "insert" | "insert_at_time" | "delete" | "line";
   segments: Array<{ segmentId: string; before: string; text: string }>;
+  clipId?: string;
+  start?: number;
+  end?: number;
+  text?: string;
   splitOffset?: number;
   splitTime?: number;
   insertPosition?: "before" | "after";
@@ -393,6 +407,8 @@ export type SubtitleStructureRequest = {
 
 export type ClipTextFontPreset =
   | "chikara_yowaku" | "keifont" | "mushin" | "ankoku_zonji" | "killgo_nb" | "tanuki_magic"
+  | "genei_kiwami_go" | "genei_mono_go" | "genei_antique"
+  | "gochi_kakutto" | "nikkyou_sans"
   | "sans"
   | "sans_bold"
   | "noto_black"
@@ -613,6 +629,7 @@ export type ClipPlanDocument = {
   jobId: string;
   state: "preparing" | "manual_editing" | "awaiting_review" | "reselecting" | "approved";
   revision: number;
+  boundaryReedit?: boolean;
   sourceVideoUrl: string;
   editorVideoUrl?: string | null;
   sourceDuration: number | null;
@@ -667,7 +684,7 @@ export type ClipPlanTranscriptSegment = {
 };
 
 export type NormalThumbnailStyle = {
-  design: "raden" | "plain" | "custom";
+  design: "raden" | "sopia" | "plain" | "custom";
   backgroundAssetId?: string | null;
   backgroundColor: string;
   titleColor: string;
@@ -678,6 +695,10 @@ export type NormalThumbnailStyle = {
 
 export type ThumbnailFontPreset = Extract<ClipTextFontPreset,
   "noto_black" | "heavy" | "mplus_extrabold" | "mplus_rounded_extrabold" | "chikara" |
-  "chikara_yowaku" | "keifont" | "mushin" | "ankoku_zonji" | "tanuki_magic" | "dela_gothic" | "corporate_logo">;
-export type ThumbnailTextStyle = { fontPreset: ThumbnailFontPreset; fontSize: number; color: string; autoFit?: boolean };
+  "chikara_yowaku" | "keifont" | "mushin" | "ankoku_zonji" | "tanuki_magic" |
+  "genei_kiwami_go" | "genei_mono_go" | "genei_antique" | "gochi_kakutto" | "nikkyou_sans" |
+  "dela_gothic" | "corporate_logo">;
+export type ThumbnailTextStyle = { fontPreset: ThumbnailFontPreset; fontSize: number; color: string; autoFit?: boolean; offsetX?: number; offsetY?: number };
 export type ThumbnailTextStyles = { heading: ThumbnailTextStyle; upper: ThumbnailTextStyle; lower: ThumbnailTextStyle };
+export type ThumbnailTextRegion = { x: number; y: number; width: number; height: number; targetCenterX: number };
+export type ThumbnailTextRegions = Partial<Record<keyof ThumbnailTextStyles, ThumbnailTextRegion>>;

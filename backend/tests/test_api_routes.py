@@ -31,7 +31,10 @@ from app.jobs.publication_state import (
 from app.jobs.clip_plan import (
     build_clip_plan,
     clip_plan_output_path,
+    load_clip_plan,
+    mark_clip_plan_approved,
     mark_clip_plan_awaiting_review,
+    update_clip_plan_boundary,
     write_clip_plan,
 )
 from app.jobs.runner import (
@@ -40,7 +43,11 @@ from app.jobs.runner import (
     run_subtitle_review_render,
 )
 from app.jobs.status import SUCCESS_STATUSES
-from app.jobs.subtitle_review import subtitle_review_preview_path
+from app.jobs.subtitle_review import (
+    build_subtitle_review,
+    subtitle_review_preview_path,
+    write_subtitle_review,
+)
 from app.main import app
 from app.models import AppPreference, ExportItem, Job, Video, utc_now
 from app.jobs.subtitle_review_preview import write_subtitle_review_preview_error
@@ -320,6 +327,109 @@ def test_clip_plan_converts_only_selected_short_to_normal(client: TestClient) ->
     invalid_state_response = client.patch(endpoint, json={"type": "normal"})
     assert invalid_state_response.status_code == 409
 
+
+def test_subtitle_review_can_return_to_boundaries_and_keep_saved_edits(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job_id = "job_boundary_reedit"
+    video_id = "vid_boundary_reedit"
+    first = Candidate(id="first", type="normal", start=10, end=30, duration=20,
+                      transcript_text="前半", title="最初", boundary_refined=False)
+    second = Candidate(id="second", type="normal", start=60, end=70, duration=10,
+                       transcript_text="後半", title="次", boundary_refined=False)
+    selection = CandidateSelection(normalClips=[first, second], shorts=[],
+                                   requestedNormalCount=2, requestedShortCount=0,
+                                   unfilledRequestedCounts={"normal": 0, "short": 0})
+    transcript_payload = [
+        {"start": 10, "end": 20, "text": "最初の字幕", "confidence": 0.9},
+        {"start": 20, "end": 30, "text": "直す字幕", "confidence": 0.9},
+        {"start": 30, "end": 40, "text": "追加される字幕", "confidence": 0.9},
+        {"start": 60, "end": 70, "text": "別の動画", "confidence": 0.9},
+    ]
+    from app.audio.transcribe_faster_whisper import TranscriptSegment
+    transcript = [TranscriptSegment.model_validate(item) for item in transcript_payload]
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
+    source_path = storage.uploads / f"{video_id}.mp4"
+    source_path.write_bytes(b"source video")
+    settings = {"normalClipCount": 2, "shortCount": 0, "requireClipPlanReview": True,
+                "requireSubtitleReview": True}
+    plan = mark_clip_plan_approved(build_clip_plan(job_id, selection, settings, source_duration=90))
+    write_clip_plan(plan, clip_plan_output_path(output_dir))
+    write_selected_clips(selection, output_dir / "selected_clips.json")
+    (output_dir / "transcript_segments.json").write_text(json.dumps(transcript_payload), encoding="utf-8")
+    review = build_subtitle_review(job_id, selection, transcript)
+    edited = next(segment for segment in review.segments if segment.index == 1)
+    first_half = edited.model_copy(deep=True, update={
+        "id": "edited_first_half", "end": 25, "text": "修正済み", "edited": True,
+        "source_indices": [1], "preserve_segmentation": True,
+    })
+    second_half = edited.model_copy(deep=True, update={
+        "id": "edited_second_half", "start": 25, "text": "字幕", "edited": True,
+        "source_indices": [1], "preserve_segmentation": True,
+    })
+    review.segments = [
+        segment for segment in review.segments if segment.id != edited.id
+    ] + [first_half, second_half]
+    review.clips[0].segment_ids = ["segment_00000", first_half.id, second_half.id]
+    edited_title = f"手で直したタイトル{review.clips[0].normal_title_suffix}"
+    review.clips[0].publication_title = edited_title
+    review.clips[0].confirmed = True
+    review.clips[1].confirmed = True
+    write_subtitle_review(review, output_dir / "subtitle_review.json")
+    with next(app.dependency_overrides[get_db]()) as db:
+        db.add_all([
+            Video(id=video_id, original_filename="source.mp4", stored_path=str(source_path),
+                  duration=90, width=1920, height=1080, has_audio=True),
+            Job(id=job_id, video_id=video_id, status="awaiting_subtitle_review", progress=85,
+                current_step="字幕確認", settings_json=settings),
+        ])
+        db.commit()
+
+    reopen = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen-clip-plan")
+    assert reopen.status_code == 200, reopen.text
+    assert reopen.json()["status"] == "awaiting_clip_review"
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen-clip-plan").status_code == 409
+    reopened_plan = client.get(f"/api/jobs/{job_id}/clip-plan").json()
+    assert reopened_plan["boundaryReedit"] is True
+    assert client.patch(f"/api/jobs/{job_id}/clip-plan/clips/first/type", json={"type": "short"}).status_code == 409
+    assert "修正済み" in (output_dir / "subtitle_review.json").read_text(encoding="utf-8")
+
+    # The worker updates the plan and selected candidate after the preview is rendered.
+    plan = load_clip_plan(clip_plan_output_path(output_dir))
+    plan = update_clip_plan_boundary(plan, "first", start=10, end=40, transcript_excerpt="前半")
+    write_clip_plan(plan, clip_plan_output_path(output_dir))
+    selection.normal_clips[0] = first.model_copy(update={"end": 40, "duration": 30})
+    write_selected_clips(selection, output_dir / "selected_clips.json")
+    monkeypatch.setattr(jobs_api, "_refresh_subtitle_review_previews_unlocked",
+                        lambda **kwargs: (kwargs["document"], []))
+    approve = client.post(f"/api/jobs/{job_id}/clip-plan/approve")
+    assert approve.status_code == 200, approve.text
+    assert approve.json()["status"] == "awaiting_subtitle_review"
+    updated = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
+    first_clip, second_clip = updated["clips"]
+    assert (first_clip["start"], first_clip["end"], first_clip["duration"]) == (10, 40, 30)
+    assert first_clip["publicationTitle"] == edited_title
+    assert first_clip["confirmed"] is False
+    assert second_clip["confirmed"] is True
+    assert [segment["text"] for segment in updated["segments"] if segment["id"] in first_clip["segmentIds"]] == [
+        "最初の字幕", "修正済み", "字幕", "追加される字幕",
+    ]
+    assert client.get(f"/api/jobs/{job_id}/clip-plan").json()["boundaryReedit"] is False
+
+    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen-clip-plan").status_code == 200
+    plan = load_clip_plan(clip_plan_output_path(output_dir))
+    update_clip_plan_boundary(plan, "first", start=20, end=40, transcript_excerpt="後半")
+    write_clip_plan(plan, clip_plan_output_path(output_dir))
+    selection.normal_clips[0] = first.model_copy(update={"start": 20, "end": 40, "duration": 20})
+    write_selected_clips(selection, output_dir / "selected_clips.json")
+    assert client.post(f"/api/jobs/{job_id}/clip-plan/approve").status_code == 200
+    shortened = json.loads((output_dir / "subtitle_review.json").read_text(encoding="utf-8"))
+    assert [segment["text"] for segment in shortened["segments"]
+            if segment["id"] in shortened["clips"][0]["segmentIds"]] == [
+        "修正済み", "字幕", "追加される字幕",
+    ]
+    assert shortened["clips"][1]["confirmed"] is True
 
 def test_upload_video_accepts_unavailable_heatmap_for_existing_fallback(
     client: TestClient,

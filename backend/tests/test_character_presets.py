@@ -41,7 +41,7 @@ def test_character_presets_migration_switch_and_job_snapshot(client: TestClient)
             "channelName": "別チャンネル",
             "youtubePostingProfile": {"performerName": "キャラB", "baseHashtags": ["#キャラB"], "vspoPermissionNumber": "TEST-0123"},
             "normalTitleSuffix": "【キャラB切り抜き】",
-            "normalThumbnailStyle": {"design": "plain", "backgroundColor": "#123456"},
+            "normalThumbnailStyle": {"design": "sopia", "backgroundColor": "#123456"},
             "shortTopBannerEnabled": False,
             "shortBottomBannerEnabled": False,
         },
@@ -62,6 +62,7 @@ def test_character_presets_migration_switch_and_job_snapshot(client: TestClient)
     assert job["settings"]["youtubePostingProfile"]["performerName"] == "キャラB"
     assert job["settings"]["normalTitleSuffix"] == "【キャラB切り抜き】"
     assert job["settings"]["normalThumbnailStyle"]["backgroundColor"] == "#123456"
+    assert job["settings"]["normalThumbnailStyle"]["design"] == "sopia"
     assert job["settings"]["shortTopBannerEnabled"] is False
     assert client.put("/api/preferences/character-presets", json={"presets": [other, other]}).status_code == 422
     unsafe = {"name": "bad", "settings": {"youtubeSourceUrl": "https://example.com/video"}}

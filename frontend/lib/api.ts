@@ -60,12 +60,15 @@ export async function prepareThumbnailPreview(exportId: string, signal: AbortSig
 
 export async function renderThumbnailPreview(exportId: string, draft: {
   frameKey: string; text: import("./types").ThumbnailCopyText; textStyles: import("./types").ThumbnailTextStyles;
-}, signal: AbortSignal): Promise<Blob> {
+  design: import("./types").NormalThumbnailStyle["design"];
+  subjectPlacement: import("./types").ThumbnailSubjectPlacement;
+}, signal: AbortSignal): Promise<{ blob: Blob; regions: import("./types").ThumbnailTextRegions }> {
   const response = await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/preview`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft), signal, cache: "no-store",
   });
   if (!response.ok) await parseJsonResponse(response);
-  return response.blob();
+  const regions = JSON.parse(response.headers.get("X-Thumbnail-Text-Regions") || "{}") as import("./types").ThumbnailTextRegions;
+  return { blob: await response.blob(), regions };
 }
 
 export async function editSubtitleStructure(
@@ -408,6 +411,13 @@ export async function approveClipPlan(jobId: string): Promise<ClipPlanActionResp
   return parseJsonResponse<ClipPlanActionResponse>(response);
 }
 
+export async function reopenClipPlanForBoundaryReedit(jobId: string): Promise<ClipPlanActionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/reopen-clip-plan`, {
+    method: "POST"
+  });
+  return parseJsonResponse<ClipPlanActionResponse>(response);
+}
+
 export async function getSubtitleReview(jobId: string): Promise<SubtitleReviewDocument> {
   const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review`, {
     cache: "no-store"
@@ -646,9 +656,12 @@ export async function regenerateExportThumbnail(
     frameSeconds: number;
     subjectAnchorX: number;
     advanceFrame?: boolean;
+    selectWithCodex?: boolean;
     cropMode?: "standard" | "close";
     textStyles?: import("./types").ThumbnailTextStyles;
     text?: import("./types").ThumbnailCopyText;
+    design?: import("./types").NormalThumbnailStyle["design"];
+    subjectPlacement?: import("./types").ThumbnailSubjectPlacement;
   }
 ): Promise<ThumbnailRegenerationResponse> {
   const response = await fetch(

@@ -148,7 +148,9 @@ export default function ResultsPage() {
   async function regenerateThumbnail(
     item: ResultExportItem,
     cropMode: "standard" | "close",
-    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean
+    textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean,
+    design?: import("../../../lib/types").NormalThumbnailStyle["design"], selectWithCodex?: boolean,
+    placement?: import("../../../lib/types").ThumbnailSubjectPlacement
   ) {
     const frameSeconds = Math.min(
       item.duration,
@@ -162,7 +164,10 @@ export default function ResultsPage() {
         frameSeconds,
         subjectAnchorX,
         advanceFrame: advanceFrame ?? !textStyles,
+        selectWithCodex: Boolean(selectWithCodex),
         cropMode,
+        subjectPlacement: placement ?? item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 },
+        ...(design ? { design } : {}),
         ...(textStyles ? { textStyles } : {}),
         ...(text ? { text } : {})
       });
@@ -175,7 +180,9 @@ export default function ResultsPage() {
                   ? {
                       ...clip,
                       thumbnailSubjectAnchorX: subjectAnchorX,
+                      thumbnailSubjectPlacement: placement ?? clip.thumbnailSubjectPlacement,
                       ...(textStyles ? { thumbnailTextStyles: textStyles } : {}),
+                      ...(design ? { thumbnailDesign: design } : {}),
                       thumbnailStatus: "generating"
                     }
                   : clip

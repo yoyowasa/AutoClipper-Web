@@ -664,7 +664,9 @@ export default function ClipPlanReviewPage() {
             <p className="mt-1 text-sm text-neutral-600">
               {isManualWorkflow
                 ? "元動画を再生し、通常切り抜きとショートの開始・終了を指定します。"
-                : "字幕作成・焼き込み前です。選ばれた範囲だけを軽量動画で確認できます。"}
+                : plan.boundaryReedit
+                  ? "字幕編集から戻りました。開始・終了だけ調整できます。保存済みの字幕修正は保持します。"
+                  : "字幕作成・焼き込み前です。選ばれた範囲だけを軽量動画で確認できます。"}
             </p>
           </div>
           <Link
@@ -710,6 +712,10 @@ export default function ClipPlanReviewPage() {
           </div>
         </div>
       ) : null}
+
+      {plan.boundaryReedit && <p className="mx-5 mt-3 border border-sky-300 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+        尺を調整してプレビューを確認したら、下の「字幕編集へ戻る」を押してください。保存済みの字幕・タイトル・書式は引き継がれます。
+      </p>}
 
       {isManualWorkflow ? (
         <ManualClipPlanEditor
@@ -780,12 +786,12 @@ export default function ClipPlanReviewPage() {
                     {formatTime(clip.duration)}
                   </span>
                 </button>
-                <label className="flex items-center gap-2 border-b border-neutral-300 bg-sky-50 px-4 py-2 text-xs font-semibold">
+                {!plan.boundaryReedit && <label className="flex items-center gap-2 border-b border-neutral-300 bg-sky-50 px-4 py-2 text-xs font-semibold">
                   <input type="checkbox" checked={keptClipIds.includes(clip.id)} disabled={controlsDisabled}
                     onChange={event => setKeptClipIds(current => event.target.checked
                       ? [...current, clip.id] : current.filter(id => id !== clip.id))} />
                   この候補をキープ
-                </label>
+                </label>}
                 </div>
               );
             })}
@@ -826,7 +832,7 @@ export default function ClipPlanReviewPage() {
                           : `ショートへ変更できます。上限${plan.settings.shortMaxDuration ?? 75}秒を超える場合は範囲を調整してください。`}
                       </p>
                     </div>
-                    {!isManualWorkflow ? (
+                    {!isManualWorkflow && !plan.boundaryReedit ? (
                       <button
                         className="min-h-9 border border-neutral-900 bg-white px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
                         disabled={controlsDisabled}
@@ -849,7 +855,7 @@ export default function ClipPlanReviewPage() {
                     }
                   />
 
-                  {selectedClip.type === "short" ? (
+                  {selectedClip.type === "short" && !plan.boundaryReedit ? (
                     <>
                     <ClipHookSceneEditor
                       clip={selectedClip}
@@ -934,7 +940,7 @@ export default function ClipPlanReviewPage() {
         </ClipTranscriptPanel>
 
         <section className="border-b border-neutral-300 bg-[#f7f7f4] px-5 py-5 lg:col-start-2 lg:row-start-2 lg:border-r">
-          <details>
+          {!plan.boundaryReedit && <details>
             <summary className="cursor-pointer text-sm font-semibold text-neutral-700">
               再選定（別の場面を選び直す）
             </summary>
@@ -1034,15 +1040,17 @@ export default function ClipPlanReviewPage() {
                 ? job?.currentStep || "再選定中"
                 : `キープ以外の${remainingReselectionCount}本を再選定`}
             </button>
-          </details>
+          </details>}
 
           <div className="my-5 border-t border-neutral-300" />
 
           <p className="text-sm font-semibold text-neutral-900">
-            この予定で問題なければ次へ
+            {plan.boundaryReedit ? "尺を確認したら字幕編集へ" : "この予定で問題なければ次へ"}
           </p>
           <p className="mt-1 text-xs leading-5 text-neutral-600">
-            次の画面でclipごとの字幕を再生しながら修正します。まだ最終レンダリングは始まりません。
+            {plan.boundaryReedit
+              ? "保存済みの字幕修正を保持し、変更した尺だけ確認し直します。"
+              : "次の画面でclipごとの字幕を再生しながら修正します。まだ最終レンダリングは始まりません。"}
           </p>
           <button
             className="mt-4 min-h-12 w-full bg-blue-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
@@ -1050,7 +1058,7 @@ export default function ClipPlanReviewPage() {
             type="button"
             onClick={() => void handleApprove()}
           >
-            {isApproving ? "字幕確認を準備中" : "この切り抜き予定で字幕確認へ"}
+            {isApproving ? "字幕確認を準備中" : plan.boundaryReedit ? "字幕編集へ戻る" : "この切り抜き予定で字幕確認へ"}
           </button>
         </section>
       </div>

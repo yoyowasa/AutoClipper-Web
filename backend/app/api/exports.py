@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from collections.abc import Callable
 
@@ -191,10 +192,12 @@ def preview_export_thumbnail(export_id: str, request: ThumbnailPreviewRequest, d
                              paths: StoragePaths = Depends(get_storage_paths)):
     export = _get_export_or_404(db, export_id, paths)
     try:
-        data = render_thumbnail_preview(db, paths, export, request)
+        data, text_regions = render_thumbnail_preview(db, paths, export, request)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(409, "プレビューを読み込み直してください。") from exc
-    return Response(data, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+    return Response(data, media_type="image/jpeg", headers={
+        "Cache-Control": "no-store", "X-Thumbnail-Text-Regions": json.dumps(text_regions),
+    })
 
 
 @router.get("/{export_id}/thumbnail")
@@ -278,8 +281,8 @@ def regenerate_export_thumbnail(
     except (TypeError, ValueError):
         previous_variant_index = -1
     variant_index = (
-        (previous_variant_index + 1) % 6
-        if request.advance_frame
+        (previous_variant_index + 1) % (8 if request.select_with_codex else 6)
+        if request.advance_frame or request.select_with_codex
         else max(0, previous_variant_index)
     )
     pending = {
@@ -288,11 +291,26 @@ def regenerate_export_thumbnail(
         "thumbnail_frame_seconds": round(request.frame_seconds, 3),
         "thumbnail_subject_anchor_x": round(request.subject_anchor_x, 3),
         "thumbnail_advance_frame": request.advance_frame,
+        "thumbnail_select_with_codex": request.select_with_codex,
         "thumbnail_variant_index": variant_index,
         "thumbnail_crop_mode": request.crop_mode,
         "thumbnail_request_revision": revision,
         "thumbnail_error_code": None,
     }
+    if request.subject_placement is not None:
+        pending["thumbnail_subject_placement"] = request.subject_placement.model_dump(mode="json", by_alias=True)
+    if request.design is not None:
+        from app.models import Job
+        from app.thumbnail_style import resolve_export_thumbnail_style
+        job = db.get(Job, export.job_id)
+        try:
+            resolve_export_thumbnail_style(
+                (job.settings_json or {}).get("normalThumbnailStyle") if job else None,
+                request.design,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
+        pending["thumbnail_design"] = request.design
     if request.text is not None:
         pending.update({"thumbnail_kicker": request.text.heading.strip(),
                         "thumbnail_line1": request.text.upper.strip(), "thumbnail_line2": request.text.lower.strip()})

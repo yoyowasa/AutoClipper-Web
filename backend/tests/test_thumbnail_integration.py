@@ -189,6 +189,40 @@ def test_normal_thumbnail_empty_fields_match_preview_and_auto_frame(tmp_path: Pa
     assert received["title_second_line"] == ""
 
 
+def test_initial_thumbnail_replaces_blank_ai_frame_with_detected_person(tmp_path: Path) -> None:
+    output_dir = tmp_path / "outputs" / "job_thumbnail"
+    source_path = tmp_path / "source.mp4"
+    source_path.write_bytes(b"source mp4")
+    candidate = _candidate(
+        candidate_id="cand_person_late", candidate_type="normal",
+        start=100, duration=200, thumbnail_frame_seconds=60,
+    )
+    export = _export(
+        output_dir, export_id="exp_person_late", candidate_id=candidate.id,
+        export_type="normal", duration=candidate.duration,
+    )
+
+    def fake_renderer(_source, output, **kwargs):
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_bytes(b"jpeg")
+        return ThumbnailRenderResult(
+            path=Path(output), kind="normal", source_timestamp=kwargs["frame_time"],
+            width=1280, height=720,
+        )
+
+    result = generate_export_thumbnails(
+        exports=[export], selection=CandidateSelection(normalClips=[candidate]),
+        input_path=source_path, job_output_dir=output_dir,
+        normal_renderer=fake_renderer,
+        normal_frame_selector=lambda *_args, **_kwargs: 190.0,
+    )
+    metadata = json.loads(Path(export.metadata_path).read_text(encoding="utf-8"))
+    assert result.failures == []
+    assert metadata["thumbnail_source_time"] == 290
+    assert metadata["thumbnail_frame_seconds"] == 190
+    assert metadata["thumbnail_frame_selection_source"] == "face"
+
+
 def test_short_thumbnail_uses_completed_mp4_and_hook_interval(tmp_path: Path) -> None:
     output_dir = tmp_path / "outputs" / "job_thumbnail"
     candidate = _candidate(

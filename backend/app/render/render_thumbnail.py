@@ -5,11 +5,13 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
 from PIL import Image, ImageDraw, ImageFont
 
+from app.render.anime_subject import Face, anime_character_mask, anime_matte_path, detect_anime_face
 from app.thumbnail_style import NormalThumbnailStyle, ThumbnailTextStyles
 from app.render.thumbnail_fonts import thumbnail_font_path
 from app.short_banners import banner_asset_path
@@ -22,6 +24,7 @@ THUMBNAIL_TEMPLATE_DIR = (
     / "raden_normal_v1"
 )
 DEFAULT_NORMAL_TEMPLATE_PATH = THUMBNAIL_TEMPLATE_DIR / "template.json"
+SOPIA_NORMAL_TEMPLATE_PATH = THUMBNAIL_TEMPLATE_DIR.parent / "sopia_normal_v1" / "template.json"
 DEFAULT_NORMAL_FONT_PATH = THUMBNAIL_TEMPLATE_DIR / "NotoSansJP-Black.ttf"
 
 ThumbnailKind = Literal["normal", "short"]
@@ -41,6 +44,8 @@ class ThumbnailRenderResult:
 class _TextFit:
     font: ImageFont.FreeTypeFont
     stroke_width: int
+    left: int
+    top: int
     width: int
     height: int
 
@@ -168,8 +173,7 @@ def _select_primary_face(
     usable = [
         face
         for face in faces
-        if face[0] >= 0.46
-        and 0.20 <= face[1] <= 0.72
+        if 0.20 <= face[1] <= 0.72
         and face[2] >= 0.04
         and face[3] >= 0.07
     ]
@@ -179,7 +183,10 @@ def _select_primary_face(
 
 
 def _primary_face(image: Image.Image) -> tuple[float, float, float, float] | None:
-    """Detect the upper-most usable face in the right half of one source frame."""
+    """Detect an anime character first, then use the existing face fallback."""
+    anime_face = detect_anime_face(image)
+    if anime_face is not None:
+        return anime_face
     try:
         import cv2
         import numpy as np
@@ -215,6 +222,34 @@ def _primary_face(image: Image.Image) -> tuple[float, float, float, float] | Non
     return _select_primary_face(normalized_faces)
 
 
+@lru_cache(maxsize=8)
+def _cached_anime_subject(
+    frame_path: str, frame_mtime: int, frame_size: int,
+    model_path: str, model_mtime: int, model_size: int,
+) -> tuple[Face, Image.Image] | None:
+    # The stat values are cache keys: a new frame or newly installed model is re-detected.
+    del frame_mtime, frame_size, model_mtime, model_size
+    with Image.open(frame_path) as source:
+        image = source.convert("RGB")
+    face = detect_anime_face(image)
+    if face is None:
+        return None
+    mask = anime_character_mask(image, face, model_path=Path(model_path))
+    return (face, mask) if mask is not None else None
+
+
+def _anime_subject_for_frame(frame_path: Path) -> tuple[Face, Image.Image] | None:
+    model = anime_matte_path()
+    if not model.is_file():
+        return None
+    frame_stat = frame_path.stat()
+    model_stat = model.stat()
+    return _cached_anime_subject(
+        str(frame_path.resolve()), frame_stat.st_mtime_ns, frame_stat.st_size,
+        str(model.resolve()), model_stat.st_mtime_ns, model_stat.st_size,
+    )
+
+
 def _portrait_frame(
     image: Image.Image,
     width: int,
@@ -223,6 +258,9 @@ def _portrait_frame(
     frame_config: dict[str, Any],
     anchor_x: float,
     face_height_ratio: float | None = None,
+    subject_scale: float = 1.0,
+    subject_offset_x: int = 0,
+    subject_offset_y: int = 0,
 ) -> Image.Image:
     source = image.convert("RGB")
     face = _primary_face(source)
@@ -241,49 +279,44 @@ def _portrait_frame(
         ) * 0.25
         fallback_center_x = min(0.95, max(0.05, fallback_center_x))
         fallback_center_y = float(frame_config.get("fallback_center_y", 0.68))
-        left = fallback_center_x * source.width - crop_width * target_x
-        top = fallback_center_y * source.height - crop_height * target_y
-        left = min(max(0.0, left), max(0.0, source.width - crop_width))
-        top = min(max(0.0, top), max(0.0, source.height - crop_height))
-        crop = source.crop(
-            (
-                round(left),
-                round(top),
-                round(left + crop_width),
-                round(top + crop_height),
-            )
-        )
-        return crop.resize((width, height), Image.Resampling.LANCZOS)
-
-    center_x, center_y, _face_width, face_height = face
-    target_face_height = min(
-        0.5,
-        max(
-            0.05,
-            float(
-                frame_config.get("face_height_ratio", 0.25)
-                if face_height_ratio is None
-                else face_height_ratio
+        center_x, center_y = fallback_center_x, fallback_center_y
+    else:
+        center_x, center_y, _face_width, face_height = face
+        target_face_height = min(
+            0.5,
+            max(
+                0.05,
+                float(
+                    frame_config.get("face_height_ratio", 0.25)
+                    if face_height_ratio is None
+                    else face_height_ratio
+                ),
             ),
-        ),
-    )
-    crop_height = source.height * face_height / target_face_height
-    crop_height = min(
-        source.height * float(frame_config.get("max_crop_height_ratio", 0.72)),
-        max(
-            source.height * float(frame_config.get("min_crop_height_ratio", 0.44)),
-            crop_height,
-        ),
-    )
+        )
+        crop_height = source.height * face_height / target_face_height
+        crop_height = min(
+            source.height * float(frame_config.get("max_crop_height_ratio", 0.72)),
+            max(
+                source.height * float(frame_config.get("min_crop_height_ratio", 0.44)),
+                crop_height,
+            ),
+        )
+        crop_width = crop_height * width / height
+        if crop_width > source.width:
+            crop_width = float(source.width)
+            crop_height = crop_width * height / width
+        target_x = min(0.9, max(0.1, float(frame_config.get("face_target_x", 0.68))))
+        target_y = min(0.75, max(0.1, float(frame_config.get("face_target_y", 0.27))))
+
+    # Move the viewport over the *original* pixels. Translating a previously
+    # clipped rectangle could never reveal the missing side of a character.
+    crop_height = min(source.height, crop_height / subject_scale)
     crop_width = crop_height * width / height
     if crop_width > source.width:
         crop_width = float(source.width)
         crop_height = crop_width * height / width
-
-    target_x = min(0.9, max(0.1, float(frame_config.get("face_target_x", 0.68))))
-    target_y = min(0.75, max(0.1, float(frame_config.get("face_target_y", 0.27))))
-    left = center_x * source.width - crop_width * target_x
-    top = center_y * source.height - crop_height * target_y
+    left = center_x * source.width - crop_width * target_x - subject_offset_x * crop_width / width
+    top = center_y * source.height - crop_height * target_y - subject_offset_y * crop_height / height
     left = min(max(0.0, left), max(0.0, source.width - crop_width))
     top = min(max(0.0, top), max(0.0, source.height - crop_height))
     crop = source.crop(
@@ -301,10 +334,16 @@ def _feather_mask(width: int, height: int, frame_config: dict[str, Any]) -> Imag
     mask = Image.new("L", (width, height), 255)
     pixels = mask.load()
     left_width = min(width, max(0, int(frame_config.get("feather_left", 0))))
+    right_width = min(width, max(0, int(frame_config.get("feather_right", 0))))
     top_height = min(height, max(0, int(frame_config.get("feather_top", 0))))
     bottom_height = min(height, max(0, int(frame_config.get("feather_bottom", 0))))
     for x in range(left_width):
         alpha = round(255 * (x / max(1, left_width - 1)) ** 1.5)
+        for y in range(height):
+            pixels[x, y] = min(pixels[x, y], alpha)
+    for offset in range(right_width):
+        x = width - 1 - offset
+        alpha = round(255 * offset / max(1, right_width - 1))
         for y in range(height):
             pixels[x, y] = min(pixels[x, y], alpha)
     for y in range(top_height):
@@ -369,6 +408,8 @@ def _fit_text(
         current_fit = _TextFit(
             font=font,
             stroke_width=stroke_width,
+            left=left,
+            top=top,
             width=width,
             height=bottom - top,
         )
@@ -409,91 +450,48 @@ def _draw_layered_text(
     )
 
 
-def _title_layer(
-    first_line: str,
-    second_line: str,
+@lru_cache(maxsize=16)
+def _title_reference_metrics(font_path: Path, size: int) -> tuple[int, int]:
+    font = ImageFont.truetype(str(font_path), size=size)
+    stroke_width = max(2, round(size * 0.075)) * 2
+    bounds = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox(
+        (0, 0), "あ", font=font, stroke_width=stroke_width,
+    )
+    return bounds[1], bounds[3] - bounds[1]
+
+
+def _title_line_layer(
+    text: str,
     *,
-    font_path: Path,
-    max_width: int,
-    first_max_size: int,
-    first_min_size: int,
-    second_max_size: int,
-    second_min_size: int,
-    line_gap: int,
+    fit: _TextFit,
+    color: str,
     colors: dict[str, str],
     rotation_degrees: float,
-    upper_font_path: Path | None = None,
-    lower_font_path: Path | None = None,
-    upper_auto_fit: bool = True,
-    lower_auto_fit: bool = True,
 ) -> Image.Image:
-    lines = [
-        (
-            first_line.strip(),
-            colors["title_first"],
-            first_max_size,
-            first_min_size,
-            upper_font_path or font_path,
-            upper_auto_fit,
-        ),
-        (
-            second_line.strip(),
-            colors["title_second"],
-            second_max_size,
-            second_min_size,
-            lower_font_path or font_path,
-            lower_auto_fit,
-        ),
-    ]
-    visible_lines = [line for line in lines if line[0]]
-    if not visible_lines:
-        return Image.new("RGBA", (1, 1), (0, 0, 0, 0))
-    fitted_lines = [
-        (
-            text,
-            color,
-            _fit_text(
-                text,
-                selected_font,
-                max_width=max_width,
-                max_size=max_size,
-                min_size=min_size if auto_fit else max_size,
-            ),
-        )
-        for text, color, max_size, min_size, selected_font, auto_fit in visible_lines
-    ]
     padding = 24
-    line_height = max(fit.height for _, _, fit in fitted_lines)
-    natural_width = max(max_width, *(fit.width for _, _, fit in fitted_lines))
     layer = Image.new(
-        "RGBA",
-        (
-            natural_width + padding * 2,
-            line_height * len(fitted_lines)
-            + line_gap * max(0, len(fitted_lines) - 1)
-            + padding * 2,
-        ),
-        (0, 0, 0, 0),
+        "RGBA", (fit.width + padding * 2, fit.height + padding * 2), (0, 0, 0, 0),
     )
     draw = ImageDraw.Draw(layer, "RGBA")
-    inner = _hex_rgba(colors["title_inner_stroke"])
-    outer = _hex_rgba(colors["title_outer_stroke"])
-    for index, (text, color, fit) in enumerate(fitted_lines):
-        _draw_layered_text(
-            draw,
-            (padding, padding + index * (line_height + line_gap)),
-            text,
-            fit,
-            fill=_hex_rgba(color),
-            inner_stroke=inner,
-            outer_stroke=outer,
-        )
-    if natural_width > max_width and upper_auto_fit and lower_auto_fit:
-        layer = layer.resize(
-            (max_width + padding * 2, layer.height),
-            Image.Resampling.LANCZOS,
-        )
-    return layer.rotate(rotation_degrees, resample=Image.Resampling.BICUBIC, expand=True)
+    _draw_layered_text(
+        draw, (padding - fit.left, padding - fit.top), text, fit,
+        fill=_hex_rgba(color),
+        inner_stroke=_hex_rgba(colors["title_inner_stroke"]),
+        outer_stroke=_hex_rgba(colors["title_outer_stroke"]),
+    )
+    ink_bounds = layer.getbbox()
+    if ink_bounds is not None:
+        ink = layer.crop(ink_bounds)
+        layer = Image.new("RGBA", (ink.width + padding * 2, ink.height + padding * 2))
+        layer.alpha_composite(ink, (padding, padding))
+    rotated = layer.rotate(rotation_degrees, resample=Image.Resampling.BICUBIC, expand=True)
+    rotated_bounds = rotated.getbbox()
+    if rotated_bounds is None:
+        return rotated
+    ink = rotated.crop(rotated_bounds)
+    centered = Image.new("RGBA", (ink.width + padding * 2, ink.height + padding * 2))
+    centered.alpha_composite(ink, (padding, padding))
+    return centered
 
 
 def _compose_normal_thumbnail(
@@ -506,8 +504,13 @@ def _compose_normal_thumbnail(
     font_path: Path,
     subject_anchor_x: float | None,
     face_height_ratio: float | None = None,
+    subject_scale: float = 1.0,
+    subject_offset_x: int = 0,
+    subject_offset_y: int = 0,
     background_image: Image.Image | None = None,
     text_styles: ThumbnailTextStyles | None = None,
+    anime_subject: tuple[Face, Image.Image] | None = None,
+    text_regions: dict[str, dict[str, int]] | None = None,
 ) -> Image.Image:
     canvas_config = template["canvas"]
     frame_config = template["frame"]
@@ -542,16 +545,46 @@ def _compose_normal_thumbnail(
         if subject_anchor_x is None
         else min(1.0, max(0.0, float(subject_anchor_x)))
     )
-    fitted_frame = _portrait_frame(
-        frame,
-        frame_width,
-        frame_height,
-        frame_config=frame_config,
-        anchor_x=anchor_x,
-        face_height_ratio=face_height_ratio,
-    ).convert("RGBA")
-    fitted_frame.putalpha(_feather_mask(frame_width, frame_height, frame_config))
-    canvas.alpha_composite(fitted_frame, (frame_x, frame_y))
+    if anime_subject is not None:
+        face, subject_mask = anime_subject
+        bounds = subject_mask.getbbox()
+        if bounds is not None:
+            portrait = frame.convert("RGBA").crop(bounds)
+            portrait.putalpha(subject_mask.crop(bounds))
+            portrait_width, portrait_height = portrait.size
+            fit = min(frame_width / portrait_width, frame_height / portrait_height) * 0.96 * subject_scale
+            portrait = portrait.resize(
+                (max(1, round(portrait_width * fit)), max(1, round(portrait_height * fit))),
+                Image.Resampling.LANCZOS,
+            )
+            face_x, face_y, _face_width, _face_height = face
+            desired_x = frame_width * float(frame_config.get("face_target_x", 0.5))
+            desired_y = frame_height * float(frame_config.get("face_target_y", 0.45))
+            x = round(desired_x - (face_x * frame.width - bounds[0]) * fit + subject_offset_x)
+            y = round(
+                (frame_height - portrait.height if subject_scale <= 1 else
+                 desired_y - (face_y * frame.height - bounds[1]) * fit) + subject_offset_y
+            )
+            # The default fit keeps the complete detected character in frame.
+            if subject_scale <= 1 and not subject_offset_x:
+                x = min(max(x, 0), max(0, frame_width - portrait.width))
+            placement = Image.new("RGBA", (frame_width, frame_height))
+            placement.alpha_composite(portrait, (x, y))
+            canvas.alpha_composite(placement, (frame_x, frame_y))
+    else:
+        fitted_frame = _portrait_frame(
+            frame,
+            frame_width,
+            frame_height,
+            frame_config=frame_config,
+            anchor_x=anchor_x,
+            face_height_ratio=face_height_ratio,
+            subject_scale=subject_scale,
+            subject_offset_x=subject_offset_x,
+            subject_offset_y=subject_offset_y,
+        ).convert("RGBA")
+        fitted_frame.putalpha(_feather_mask(frame_width, frame_height, frame_config))
+        canvas.alpha_composite(fitted_frame, (frame_x, frame_y))
 
     draw = ImageDraw.Draw(canvas, "RGBA")
     if eyebrow.strip():
@@ -563,8 +596,8 @@ def _compose_normal_thumbnail(
         draw.rectangle(
             (box_x, box_y, box_x + box_width, box_y + box_height),
             fill=_hex_rgba(colors["eyebrow_background"], 230),
-            outline=_hex_rgba(colors["gold"]),
-            width=5,
+            outline=_hex_rgba(colors.get("frame_light", colors["gold_light"]), 145),
+            width=2,
         )
         eyebrow_fit = _fit_text(
             eyebrow,
@@ -577,60 +610,89 @@ def _compose_normal_thumbnail(
                 else min(18, int(text_config["eyebrow_max_size"]))
             ),
         )
-        eyebrow_y = box_y + max(0, (box_height - eyebrow_fit.height) // 2 - 5)
-        draw.text(
-            (int(text_config["eyebrow_x"]), eyebrow_y),
-            eyebrow.strip(),
-            font=eyebrow_fit.font,
-            fill=_hex_rgba(colors["eyebrow"]),
-            stroke_width=max(1, eyebrow_fit.stroke_width // 2),
-            stroke_fill=_hex_rgba(colors["background"]),
+        eyebrow_stroke = max(1, eyebrow_fit.stroke_width // 2)
+        eyebrow_bounds = draw.textbbox(
+            (0, 0), eyebrow.strip(), font=eyebrow_fit.font, stroke_width=eyebrow_stroke,
         )
+        eyebrow_padding = 8
+        eyebrow_layer = Image.new(
+            "RGBA",
+            (eyebrow_bounds[2] - eyebrow_bounds[0] + eyebrow_padding * 2,
+             eyebrow_bounds[3] - eyebrow_bounds[1] + eyebrow_padding * 2),
+        )
+        ImageDraw.Draw(eyebrow_layer).text(
+            (eyebrow_padding - eyebrow_bounds[0], eyebrow_padding - eyebrow_bounds[1]),
+            eyebrow.strip(), font=eyebrow_fit.font, fill=_hex_rgba(colors["eyebrow"]),
+            stroke_width=eyebrow_stroke, stroke_fill=_hex_rgba(colors["background"]),
+        )
+        ink_bounds = eyebrow_layer.getbbox()
+        if ink_bounds is not None:
+            eyebrow_layer = eyebrow_layer.crop(ink_bounds)
+        heading_offset_x = text_styles.heading.offset_x if text_styles else 0
+        heading_offset_y = text_styles.heading.offset_y if text_styles else 0
+        eyebrow_x = int(text_config["eyebrow_x"]) + heading_offset_x
+        eyebrow_y = box_y + (box_height - eyebrow_layer.height) // 2 - 5 + heading_offset_y
+        canvas.alpha_composite(eyebrow_layer, (eyebrow_x, eyebrow_y))
+        if text_regions is not None:
+            text_regions["heading"] = {
+                "x": eyebrow_x, "y": eyebrow_y,
+                "width": eyebrow_layer.width, "height": eyebrow_layer.height,
+                "targetCenterX": box_x + box_width // 2,
+            }
 
     if title_first_line.strip() or title_second_line.strip():
-        title = _title_layer(
-            title_first_line,
-            title_second_line,
-            font_path=font_path,
-            max_width=int(text_config["title_max_width"]),
-            first_max_size=int(
-                text_config.get("title_first_max_size", text_config["title_max_size"])
-            ),
-            first_min_size=int(
-                text_config.get("title_first_min_size", text_config["title_min_size"])
-            ),
-            second_max_size=int(
-                text_config.get("title_second_max_size", text_config["title_max_size"])
-            ),
-            second_min_size=int(
-                text_config.get("title_second_min_size", text_config["title_min_size"])
-            ),
-            line_gap=int(text_config["line_gap"]),
-            colors=colors,
-            rotation_degrees=float(text_config["rotation_degrees"]),
-            upper_font_path=thumbnail_font_path(text_styles.upper.font_preset, font_path) if text_styles else None,
-            lower_font_path=thumbnail_font_path(text_styles.lower.font_preset, font_path) if text_styles else None,
-            upper_auto_fit=text_styles.upper.auto_fit if text_styles else True,
-            lower_auto_fit=text_styles.lower.auto_fit if text_styles else True,
+        max_width = int(text_config["title_max_width"])
+        first_max_size = int(text_config.get("title_first_max_size", text_config["title_max_size"]))
+        second_max_size = int(text_config.get("title_second_max_size", text_config["title_max_size"]))
+        # Anchor both lines to the original template font. A different font or a
+        # larger upper line must not move the lower line toward the frame edge.
+        first_top, first_height = _title_reference_metrics(font_path, int(text_config.get("title_first_anchor_size", first_max_size)))
+        second_top, second_height = _title_reference_metrics(font_path, int(text_config.get("title_second_anchor_size", second_max_size)))
+        title_y = int(text_config["title_y"])
+        anchor_ys = (
+            title_y + 24 + first_top + first_height / 2,
+            title_y + 24 + first_height + int(text_config["line_gap"])
+            + second_top + second_height / 2,
         )
-        available_height = height - int(text_config["title_y"])
-        auto_fit_height = text_styles is None or (text_styles.upper.auto_fit and text_styles.lower.auto_fit)
-        if auto_fit_height and title.height > available_height > 0:
-            ratio = available_height / title.height
-            title = title.resize((max(1, round(title.width * ratio)), available_height), Image.Resampling.LANCZOS)
-        canvas.alpha_composite(
-            title,
-            (int(text_config["title_x"]), int(text_config["title_y"])),
-        )
+        for text, role_name, role, color, max_size, min_size, anchor_y in (
+            (title_first_line.strip(), "upper", text_styles.upper if text_styles else None, colors["title_first"], first_max_size,
+             int(text_config.get("title_first_min_size", text_config["title_min_size"])), anchor_ys[0]),
+            (title_second_line.strip(), "lower", text_styles.lower if text_styles else None, colors["title_second"], second_max_size,
+             int(text_config.get("title_second_min_size", text_config["title_min_size"])), anchor_ys[1]),
+        ):
+            if not text:
+                continue
+            fit = _fit_text(
+                text, thumbnail_font_path(role.font_preset, font_path) if role else font_path,
+                max_width=max_width, max_size=max_size,
+                min_size=min_size if role is None or role.auto_fit else max_size,
+            )
+            line = _title_line_layer(
+                text, fit=fit, color=color, colors=colors,
+                rotation_degrees=float(text_config["rotation_degrees"]),
+            )
+            offset_x = role.offset_x if role else 0
+            offset_y = role.offset_y if role else 0
+            center_x = int(text_config["title_x"]) + 48 + fit.width / 2 + offset_x
+            line_x = round(center_x - line.width / 2)
+            line_y = round(anchor_y + offset_y - line.height / 2)
+            canvas.alpha_composite(line, (line_x, line_y))
+            if text_regions is not None:
+                ink = line.getbbox() or (0, 0, line.width, line.height)
+                text_regions[role_name] = {
+                    "x": line_x + ink[0], "y": line_y + ink[1],
+                    "width": ink[2] - ink[0], "height": ink[3] - ink[1],
+                    "targetCenterX": int(text_config["title_x"]) + 48 + max_width // 2,
+                }
     draw = ImageDraw.Draw(canvas, "RGBA")
     draw.rectangle(
         (13, 13, width - 14, height - 14),
-        outline=_hex_rgba(colors["gold"]),
+        outline=_hex_rgba(colors.get("frame", colors["gold"])),
         width=5,
     )
     draw.rectangle(
         (27, 27, width - 28, height - 28),
-        outline=_hex_rgba(colors["gold_light"], 145),
+        outline=_hex_rgba(colors.get("frame_light", colors["gold_light"]), 145),
         width=2,
     )
     return canvas.convert("RGB")
@@ -650,9 +712,13 @@ def render_normal_thumbnail(
     command_runner: ThumbnailCommandRunner = _run_command,
     subject_anchor_x: float | None = None,
     face_height_ratio: float | None = None,
+    subject_scale: float = 1.0,
+    subject_offset_x: int = 0,
+    subject_offset_y: int = 0,
     character_style: dict[str, Any] | None = None,
     text_styles: dict[str, Any] | None = None,
     source_frame_path: str | Path | None = None,
+    text_regions: dict[str, dict[str, int]] | None = None,
 ) -> ThumbnailRenderResult:
     """Render a 1280x720 normal thumbnail.
 
@@ -661,6 +727,11 @@ def render_normal_thumbnail(
     """
     output = _validate_jpeg_path(output_path)
     timestamp = _validate_timestamp(frame_time)
+    if not 0.5 <= subject_scale <= 1.5 or not -300 <= subject_offset_x <= 300 or not -250 <= subject_offset_y <= 250:
+        raise ValueError("thumbnail subject placement is out of range")
+    style = NormalThumbnailStyle.model_validate(character_style) if character_style is not None else None
+    if style and style.design == "sopia" and Path(template_path) == DEFAULT_NORMAL_TEMPLATE_PATH:
+        template_path = SOPIA_NORMAL_TEMPLATE_PATH
     template = _load_template(template_path)
     background_image_path = (
         Path(template_path).parent / str(template["background_image"])
@@ -673,8 +744,7 @@ def render_normal_thumbnail(
         )
     plain_background = None
     resolved_text_styles = ThumbnailTextStyles.model_validate(text_styles) if text_styles is not None else None
-    if character_style is not None:
-        style = NormalThumbnailStyle.model_validate(character_style)
+    if style is not None:
         resolved_text_styles = resolved_text_styles or style.text_styles
         template["colors"].update({
             "title_first": style.title_color,
@@ -687,6 +757,10 @@ def render_normal_thumbnail(
             background_image_path = None
             plain_background = Image.new("RGBA", (1280, 720), style.background_color)
     if resolved_text_styles:
+        for name in ("first", "second"):
+            template["text"][f"title_{name}_anchor_size"] = int(
+                template["text"].get(f"title_{name}_max_size", template["text"]["title_max_size"])
+            )
         template["colors"].update({
             "eyebrow": resolved_text_styles.heading.color,
             "title_first": resolved_text_styles.upper.color,
@@ -713,6 +787,7 @@ def render_normal_thumbnail(
                 ffmpeg_bin=ffmpeg_bin,
                 command_runner=command_runner,
             )
+        anime_subject = _anime_subject_for_frame(frame_path) if template.get("subject_mode") == "anime_cutout" else None
         with Image.open(frame_path) as source_frame:
             if background_image_path is not None:
                 with Image.open(background_image_path) as source_background:
@@ -725,8 +800,13 @@ def render_normal_thumbnail(
                         font_path=selected_font,
                         subject_anchor_x=subject_anchor_x,
                         face_height_ratio=face_height_ratio,
+                        subject_scale=subject_scale,
+                        subject_offset_x=subject_offset_x,
+                        subject_offset_y=subject_offset_y,
                         background_image=source_background,
                         text_styles=resolved_text_styles,
+                        anime_subject=anime_subject,
+                        text_regions=text_regions,
                     )
             else:
                 composed = _compose_normal_thumbnail(
@@ -738,8 +818,13 @@ def render_normal_thumbnail(
                     font_path=selected_font,
                     subject_anchor_x=subject_anchor_x,
                     face_height_ratio=face_height_ratio,
+                    subject_scale=subject_scale,
+                    subject_offset_x=subject_offset_x,
+                    subject_offset_y=subject_offset_y,
                     background_image=plain_background,
                     text_styles=resolved_text_styles,
+                    anime_subject=anime_subject,
+                    text_regions=text_regions,
                 )
     composed.save(output, format="JPEG", quality=94, optimize=True, subsampling=0)
     return ThumbnailRenderResult(

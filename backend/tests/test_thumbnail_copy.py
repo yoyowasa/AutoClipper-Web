@@ -17,7 +17,7 @@ from app.models import ExportItem, Job
 from app.scoring.thumbnail_copy import ThumbnailCopyResult, THUMBNAIL_COPY_SCHEMA, CodexThumbnailCopyGenerator
 
 
-def seed(client):
+def seed(client):  # noqa: F811 - imported pytest fixture is passed to this helper
     storage, factory, metadata_path, image, video = seed_thumbnail(client)
     selection = CandidateSelection(
         normalClips=[

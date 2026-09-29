@@ -13,15 +13,19 @@ from app.jobs.thumbnails import (
     write_export_metadata,
 )
 from app.jobs.thumbnail_frame_selection import select_thumbnail_frame_seconds
+from app.jobs.codex_thumbnail_frame_selection import select_codex_thumbnail_frame_seconds
 from app.models import ExportItem, Video
 from app.render.render_thumbnail import ThumbnailRenderResult, render_normal_thumbnail
-from app.thumbnail_style import resolve_thumbnail_text_styles
+from app.thumbnail_style import (
+    ThumbnailSubjectPlacement, resolve_export_thumbnail_style, resolve_thumbnail_text_styles,
+)
 from app.storage.paths import StoragePaths, get_storage_paths
 
 
 SessionFactory = Callable[[], Session]
 NormalThumbnailRenderer = Callable[..., ThumbnailRenderResult]
 ThumbnailFrameSelector = Callable[..., float]
+CodexThumbnailFrameSelector = Callable[..., float]
 THUMBNAIL_FACE_HEIGHT_RATIOS = {
     "standard": 0.25,
     "close": 0.34,
@@ -83,6 +87,7 @@ def run_export_thumbnail_regeneration(
     paths: StoragePaths | None = None,
     normal_renderer: NormalThumbnailRenderer = render_normal_thumbnail,
     frame_selector: ThumbnailFrameSelector = select_thumbnail_frame_seconds,
+    codex_frame_selector: CodexThumbnailFrameSelector = select_codex_thumbnail_frame_seconds,
 ) -> None:
     """Rebuild one normal thumbnail without re-rendering its completed video."""
     storage = paths or get_storage_paths()
@@ -108,7 +113,33 @@ def run_export_thumbnail_regeneration(
             source_path = _source_path(video, storage)
             frame_seconds = float(payload.get("thumbnail_frame_seconds", 0.0))
             variant_index = max(0, int(payload.get("thumbnail_variant_index", 0)))
-            if bool(payload.get("thumbnail_advance_frame")):
+            if bool(payload.get("thumbnail_select_with_codex")):
+                from app.jobs.thumbnail_copy import build_copy_input
+                from app.models import Job
+                job = db.get(Job, export.job_id)
+                job_style = ((job.settings_json or {}).get("normalThumbnailStyle") or {}) if job else {}
+                try:
+                    segments = build_copy_input(db, storage, export)["payload"]["segments"]
+                except (KeyError, OSError, ValueError):
+                    segments = []
+                source_start = float(payload.get("start", 0.0))
+                frame_seconds = codex_frame_selector(
+                    source_path,
+                    clip_start=source_start,
+                    clip_end=source_start + float(export.duration),
+                    current_frame_seconds=frame_seconds,
+                    variant_index=variant_index,
+                    storage_root=storage.root,
+                    temp_root=storage.temp,
+                    job_id=export.job_id,
+                    export_id=export.id,
+                    text={"heading": str(payload.get("thumbnail_kicker") or ""),
+                          "upper": str(payload.get("thumbnail_line1") or ""),
+                          "lower": str(payload.get("thumbnail_line2") or "")},
+                    design=str(payload.get("thumbnail_design") or job_style.get("design") or "raden"),
+                    segments=segments,
+                )
+            elif bool(payload.get("thumbnail_advance_frame")):
                 source_start = float(payload.get("start", 0.0))
                 frame_seconds = frame_selector(
                     source_path,
@@ -124,6 +155,9 @@ def run_export_thumbnail_regeneration(
             crop_mode = str(payload.get("thumbnail_crop_mode") or "standard")
             if crop_mode not in THUMBNAIL_FACE_HEIGHT_RATIOS:
                 crop_mode = "standard"
+            subject_placement = ThumbnailSubjectPlacement.model_validate(
+                payload.get("thumbnail_subject_placement") or {}
+            )
             output_path = thumbnail_output_path(storage.job_outputs(export.job_id), export)
             output_path.resolve(strict=False).relative_to(
                 storage.job_outputs(export.job_id).resolve(strict=False)
@@ -133,7 +167,10 @@ def run_export_thumbnail_regeneration(
             )
             from app.models import Job
             job = db.get(Job, export.job_id)
-            character_style = (job.settings_json or {}).get("normalThumbnailStyle") if job else None
+            character_style = resolve_export_thumbnail_style(
+                (job.settings_json or {}).get("normalThumbnailStyle") if job else None,
+                payload.get("thumbnail_design"),
+            )
             result = normal_renderer(
                 source_path,
                 temp_output,
@@ -145,6 +182,9 @@ def run_export_thumbnail_regeneration(
                 title_second_line=str(payload.get("thumbnail_line2") or "").strip(),
                 subject_anchor_x=min(1.0, max(0.0, subject_anchor_x)),
                 face_height_ratio=THUMBNAIL_FACE_HEIGHT_RATIOS[crop_mode],
+                subject_scale=subject_placement.scale,
+                subject_offset_x=subject_placement.offset_x,
+                subject_offset_y=subject_placement.offset_y,
             )
             if result.path.resolve() != temp_output.resolve() or not temp_output.is_file():
                 raise RuntimeError("thumbnail renderer returned an unpublished path")
@@ -173,6 +213,12 @@ def run_export_thumbnail_regeneration(
                     "thumbnail_variant_index": variant_index,
                     "thumbnail_crop_mode": crop_mode,
                     "thumbnail_advance_frame": False,
+                    "thumbnail_select_with_codex": False,
+                    "thumbnail_frame_selection_source": (
+                        "codex" if payload.get("thumbnail_select_with_codex")
+                        else "face" if payload.get("thumbnail_advance_frame")
+                        else latest.get("thumbnail_frame_selection_source")
+                    ),
                     "thumbnail_render_revision": revision,
                     "thumbnail_error_code": None,
                     "thumbnail_text_styles": resolve_thumbnail_text_styles(
@@ -188,5 +234,5 @@ def run_export_thumbnail_regeneration(
                     export,
                     metadata_path,
                     revision=revision,
-                    error_code=exc.__class__.__name__,
+                    error_code=str(getattr(exc, "code", exc.__class__.__name__)),
                 )

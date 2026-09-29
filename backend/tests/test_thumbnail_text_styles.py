@@ -12,14 +12,15 @@ from app.jobs.thumbnail_regeneration import run_export_thumbnail_regeneration
 from app.main import app
 from app.models import ExportItem, Job, Video
 from app.render import render_thumbnail as renderer
+from app.render.thumbnail_fonts import thumbnail_font_path
 from app.storage.paths import get_storage_paths
 from app.thumbnail_style import ThumbnailTextStyles
 
 
 TEXT_STYLES = {
-    "heading": {"fontPreset": "keifont", "fontSize": 38, "color": "#FF0000", "autoFit": True},
-    "upper": {"fontPreset": "dela_gothic", "fontSize": 108, "color": "#00FF00", "autoFit": False},
-    "lower": {"fontPreset": "mplus_rounded_extrabold", "fontSize": 72, "color": "#0000FF", "autoFit": True},
+    "heading": {"fontPreset": "keifont", "fontSize": 38, "color": "#FF0000", "autoFit": True, "offsetX": 5, "offsetY": -3},
+    "upper": {"fontPreset": "dela_gothic", "fontSize": 108, "color": "#00FF00", "autoFit": False, "offsetX": -10, "offsetY": 8},
+    "lower": {"fontPreset": "mplus_rounded_extrabold", "fontSize": 72, "color": "#0000FF", "autoFit": True, "offsetX": 12, "offsetY": -6},
 }
 
 
@@ -114,6 +115,71 @@ def test_three_roles_render_with_independent_fonts_sizes_colors(tmp_path, monkey
         assert sum(pixel[channel] > 220 and all(pixel[c] < 45 for c in range(3) if c != channel) for pixel in image.getdata()) > 100
 
 
+def test_title_glyph_center_stays_fixed_across_fonts_and_sizes():
+    font_paths = [renderer.DEFAULT_NORMAL_FONT_PATH, thumbnail_font_path("keifont", renderer.DEFAULT_NORMAL_FONT_PATH)]
+    centers = []
+    for path in font_paths:
+        for size in (90, 150):
+            fit = renderer._fit_text("見出し", path, max_width=790, max_size=size, min_size=size)
+            layer = renderer._title_line_layer(
+                "見出し", fit=fit, color="#FFFFFF",
+                colors={"title_inner_stroke": "#000000", "title_outer_stroke": "#000000"},
+                rotation_degrees=3,
+            )
+            bounds = layer.getchannel("A").getbbox()
+            assert bounds is not None
+            centers.append(((bounds[0] + bounds[2]) / 2 - layer.width / 2,
+                            (bounds[1] + bounds[3]) / 2 - layer.height / 2))
+    assert all(abs(x) <= 2 and abs(y) <= 2 for x, y in centers)
+
+
+def test_lower_title_does_not_move_when_upper_font_or_size_changes():
+    template = renderer._load_template(renderer.DEFAULT_NORMAL_TEMPLATE_PATH)
+    template["colors"].update(title_first="#FF0000", title_second="#0000FF")
+    frame = Image.new("RGB", (1280, 720), "#555555")
+    background = Image.new("RGBA", (1280, 720), "#000000")
+    positions = []
+    for upper_font, upper_size in (("noto_black", 90), ("keifont", 150)):
+        styles = ThumbnailTextStyles()
+        styles.upper.font_preset = upper_font
+        styles.upper.font_size = upper_size
+        styles.upper.auto_fit = False
+        image = renderer._compose_normal_thumbnail(
+            frame, eyebrow="", title_first_line="上行", title_second_line="下行",
+            template=template, font_path=renderer.DEFAULT_NORMAL_FONT_PATH,
+            subject_anchor_x=None, background_image=background, text_styles=styles,
+        )
+        pixels = image.load()
+        blue_pixels = [(x, y) for y in range(350, 680) for x in range(0, 800)
+                       if pixels[x, y][2] > 220 and pixels[x, y][0] < 40 and pixels[x, y][1] < 40]
+        assert blue_pixels
+        positions.append((min(y for _, y in blue_pixels), max(y for _, y in blue_pixels)))
+    assert positions[0] == positions[1]
+
+
+@pytest.mark.parametrize(
+    "preset,filename",
+    [
+        ("genei_kiwami_go", "GenEiKiwamiGo.ttf"),
+        ("genei_mono_go", "GenEiMonoGothic-Bold.ttf"),
+        ("genei_antique", "GenEiAntiqueNv6-M.ttf"),
+        ("gochi_kakutto", "851Gkktt_005.ttf"),
+    ],
+)
+def test_added_fonts_render_normal_thumbnails(tmp_path, preset, filename):
+    styles = ThumbnailTextStyles().model_dump(by_alias=True)
+    styles["heading"]["fontPreset"] = preset
+    validated = ThumbnailTextStyles.model_validate(styles)
+    assert thumbnail_font_path(preset, tmp_path / "default.ttf").name == filename
+
+    output = tmp_path / f"{preset}.jpg"
+    real_test_renderer(
+        "source", output, frame_time=4, eyebrow="日本語の見出し",
+        title_first_line="", title_second_line="", text_styles=validated.model_dump(by_alias=True),
+    )
+    assert Image.open(output).size == (1280, 720)
+
+
 @pytest.mark.parametrize("role,sizes", [("heading", (60, 70)), ("upper", (120, 140)), ("lower", (120, 140))])
 def test_manual_sizes_change_long_text_instead_of_hitting_auto_fit_ceiling(tmp_path, monkeypatch, role, sizes):
     text = "長い文言でも指定したサイズで表示"
@@ -178,6 +244,82 @@ def test_saved_role_settings_flow_through_api_worker_and_results(client):  # noq
         *queued[-1], session_factory=factory, paths=storage, normal_renderer=capture_renderer, frame_selector=lambda *args, **kwargs: 6
     )
     assert seen["text_styles"] == TEXT_STYLES
+    assert video_path.read_bytes() == b"completed video unchanged"
+
+
+def test_per_video_template_is_saved_without_changing_character_preset(client):  # noqa: F811
+    storage, factory, metadata_path, _, video_path = seed_thumbnail(client)
+    queued = []
+    app.dependency_overrides[get_enqueue_thumbnail_regeneration] = lambda: lambda *args: queued.append(args)
+    endpoint = "/api/exports/exp_thumbnail_style/thumbnail/regenerate"
+    assert client.post(endpoint, json={"frameSeconds": 4, "design": "custom"}).status_code == 422
+    assert "thumbnail_design" not in json.loads(metadata_path.read_text(encoding="utf-8"))
+    response = client.post(endpoint, json={"frameSeconds": 4, "design": "sopia"})
+    assert response.status_code == 202, response.text
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["thumbnail_design"] == "sopia"
+    run_export_thumbnail_regeneration(*queued[-1], session_factory=factory, paths=storage, normal_renderer=real_test_renderer)
+    result = client.get("/api/jobs/job_thumbnail_style/results").json()["normalClips"][0]
+    assert result["thumbnailDesign"] == "sopia"
+    assert result["thumbnailCanUseCustomBackground"] is False
+    assert video_path.read_bytes() == b"completed video unchanged"
+    with factory() as db:
+        assert db.get(Job, "job_thumbnail_style").settings_json == {}
+
+
+def test_subject_placement_is_saved_and_used_for_only_this_thumbnail(client):  # noqa: F811
+    storage, factory, metadata_path, _, video_path = seed_thumbnail(client)
+    queued = []
+    app.dependency_overrides[get_enqueue_thumbnail_regeneration] = lambda: lambda *args: queued.append(args)
+    placement = {"scale": 0.7, "offsetX": -65, "offsetY": 25}
+    response = client.post("/api/exports/exp_thumbnail_style/thumbnail/regenerate", json={
+        "frameSeconds": 4, "subjectPlacement": placement,
+    })
+    assert response.status_code == 202, response.text
+    seen = {}
+
+    def capture(*args, **kwargs):
+        seen.update(kwargs)
+        return real_test_renderer(*args, **kwargs)
+
+    run_export_thumbnail_regeneration(
+        *queued[-1], session_factory=factory, paths=storage, normal_renderer=capture,
+    )
+    assert (seen["subject_scale"], seen["subject_offset_x"], seen["subject_offset_y"]) == (0.7, -65, 25)
+    assert json.loads(metadata_path.read_text(encoding="utf-8"))["thumbnail_subject_placement"] == placement
+    assert client.get("/api/jobs/job_thumbnail_style/results").json()["normalClips"][0]["thumbnailSubjectPlacement"] == placement
+    assert video_path.read_bytes() == b"completed video unchanged"
+
+
+def test_codex_frame_selection_runs_only_in_worker_and_saves_selected_frame(client):  # noqa: F811
+    storage, factory, metadata_path, _, video_path = seed_thumbnail(client)
+    queued = []
+    calls = []
+    app.dependency_overrides[get_enqueue_thumbnail_regeneration] = lambda: lambda *args: queued.append(args)
+    endpoint = "/api/exports/exp_thumbnail_style/thumbnail/regenerate"
+    response = client.post(endpoint, json={
+        "frameSeconds": 4, "design": "sopia", "selectWithCodex": True,
+        "text": {"heading": "見出し", "upper": "人物の話", "lower": ""},
+    })
+    assert response.status_code == 202, response.text
+    assert not calls
+
+    def choose(_video_path, **kwargs):
+        calls.append(kwargs)
+        return 8.5
+
+    run_export_thumbnail_regeneration(
+        *queued[-1], session_factory=factory, paths=storage,
+        normal_renderer=real_test_renderer, codex_frame_selector=choose,
+    )
+    assert len(calls) == 1
+    assert calls[0]["text"]["upper"] == "人物の話"
+    assert calls[0]["design"] == "sopia"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["thumbnail_status"] == "ready"
+    assert metadata["thumbnail_frame_seconds"] == pytest.approx(8.5)
+    assert metadata["thumbnail_source_time"] == pytest.approx(18.5)
+    assert metadata["thumbnail_frame_selection_source"] == "codex"
+    assert metadata["thumbnail_select_with_codex"] is False
     assert video_path.read_bytes() == b"completed video unchanged"
 
 

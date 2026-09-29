@@ -39,6 +39,24 @@ Unmodified font binaries; backend ASS and browser CSS use the same files and Win
 | 暗黒ゾン字 | `Zomzi.ttf` | https://www.ankokukoubou.com/font/ankokuzonji.htm ; author explicitly permits redistribution on current page (lines 38–42), superseding old archive readme |
 | たぬき油性マジック 1.22 | `TanukiMagic.ttf` | https://tanukifont.com/tanuki-permanent-marker/ ; LICENSE-TanukiMagic.txt |
 
+## 2026-09-25: GenEi fonts
+
+Original, unmodified TTFs from [御琥祢屋](https://okoneya.jp/font/download.html). Each archive's original SIL OFL 1.1 notice is preserved alongside the font. The three presets are available for clip text and normal thumbnails.
+
+| UI label | File | SHA-256 | Official page | License |
+| --- | --- | --- | --- | --- |
+| 源暎きわみゴ | `GenEiKiwamiGo.ttf` | `BF87353ADFC6D1CCE8F6DCE2297CFD2B3BCCC75A4F3DD039506AB27E54A31613` | [源暎きわみゴ](https://okoneya.jp/font/genei-kiwamigo.html) | `LICENSE-GenEiKiwamiGo.txt` |
+| 源暎モノゴ Bold | `GenEiMonoGothic-Bold.ttf` | `9DE1A9FFF00A4BC8D9E5148C1B148A18F0DFD9F7FC58812A4AC6609C00D4088D` | [源暎モノゴ](https://okoneya.jp/font/genei-mono-go.html) | `LICENSE-GenEiMonoGothic.txt` |
+| 源暎アンチック v6 | `GenEiAntiqueNv6-M.ttf` | `A04B166A260E67635BFF99512355A14DE459620DF6451D1EE72B4D072370DF55` | [源暎アンチック](https://okoneya.jp/font/genei-antique.html) | `LICENSE-GenEiAntique.txt` |
+
+## 2026-09-25: Additional display fonts
+
+| UI label | File | Official source / terms |
+| --- | --- | --- |
+| 851ゴチカクット | `851Gkktt_005.ttf` | [Author's download page](https://pm85122.onamae.jp/851Gkktt.html), [terms](https://pm85122.onamae.jp/851fontTerm.html); commercial video use and redistribution permitted, no standalone sale or false authorship (`LICENSE-851Gkktt.txt`) |
+
+Nikkyou Sans is available as a **local-only** preset because the [author's FontSpace listing](https://www.fontspace.com/nikkyou-sans-font-f31053) permits video use but the archive only says `Freeware`, without explicit redistribution terms. Download it from the author listing and place the original `NikkyouSans-mLKax.ttf` at `frontend/public/fonts/NikkyouSans-mLKax.ttf` on each machine. That filename is gitignored; do not commit or publish it. The font has limited kanji coverage, so missing glyphs may fall back to another font.
+
 ### Local-only font
 
 キルゴUかなNB: official author package `GN-KillGothic_U.zip`, available via

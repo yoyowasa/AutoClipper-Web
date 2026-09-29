@@ -19,7 +19,9 @@ from app.models import ExportItem, Job, Video
 from app.render.render_thumbnail import extract_thumbnail_frame, render_normal_thumbnail
 from app.scoring.thumbnail_copy import ThumbnailCopyText
 from app.storage.paths import get_storage_paths
-from app.thumbnail_style import ThumbnailTextStyles
+from app.thumbnail_style import (
+    ThumbnailDesign, ThumbnailSubjectPlacement, ThumbnailTextStyles, resolve_export_thumbnail_style,
+)
 
 
 class ThumbnailPreviewState(BaseModel):
@@ -34,6 +36,10 @@ class ThumbnailPreviewRequest(BaseModel):
     frame_key: str = Field(alias="frameKey", pattern=r"^[0-9a-f]{64}$")
     text: ThumbnailCopyText
     text_styles: ThumbnailTextStyles = Field(alias="textStyles")
+    design: ThumbnailDesign | None = None
+    subject_placement: ThumbnailSubjectPlacement = Field(
+        default_factory=ThumbnailSubjectPlacement, alias="subjectPlacement"
+    )
 
 
 def preview_cache_dir(paths, export):
@@ -144,11 +150,17 @@ def render_thumbnail_preview(db, paths, export, request: ThumbnailPreviewRequest
         # The same renderer as the saved JPEG, using only a cached still image.
         with tempfile.TemporaryDirectory(dir=directory, prefix="draft-") as temp:
             output = Path(temp) / "preview.jpg"
+            text_regions: dict[str, dict[str, int]] = {}
             render_normal_thumbnail(
                 context["source"], output, source_frame_path=directory / "frame.jpg", frame_time=context["timestamp"],
                 eyebrow=request.text.heading.strip(), title_first_line=request.text.upper.strip(),
                 title_second_line=request.text.lower.strip(),
-                subject_anchor_x=context["anchor"], face_height_ratio=context["faceRatio"], character_style=context["characterStyle"],
+                subject_anchor_x=context["anchor"], face_height_ratio=context["faceRatio"],
+                subject_scale=request.subject_placement.scale,
+                subject_offset_x=request.subject_placement.offset_x,
+                subject_offset_y=request.subject_placement.offset_y,
+                character_style=resolve_export_thumbnail_style(context["characterStyle"], request.design),
                 text_styles=request.text_styles.model_dump(mode="json", by_alias=True),
+                text_regions=text_regions,
             )
-            return output.read_bytes()
+            return output.read_bytes(), text_regions

@@ -8,7 +8,7 @@ import { SubtitleSegmentActions } from "../../../../components/SubtitleSegmentAc
 import { editSubtitleStructure } from "../../../../lib/api";
 import type { SubtitleStructureRequest } from "../../../../lib/types";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
 import {
@@ -25,6 +25,7 @@ import {
   getSubtitleReview,
   getTitleHookSuggestions,
   requestTitleHookSuggestions,
+  reopenClipPlanForBoundaryReedit,
   retrySubtitleReviewPreview,
   toApiUrl,
   updateSubtitleReviewClipFraming,
@@ -34,6 +35,7 @@ import {
 } from "../../../../lib/api";
 import { type ClipTextTarget } from "../../../../lib/clipTextStyle";
 import { subtitlePreviewEvents } from "../../../../lib/subtitlePreview";
+import { sourceTimeAtPlayback } from "../../../../lib/subtitlePauseInsert";
 import type {
   ClipTextStyle,
   ExportType,
@@ -332,6 +334,8 @@ export default function SubtitleReviewPage() {
   const router = useRouter();
   const jobId = useMemo(() => readJobId(params.jobId), [params.jobId]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const currentPlayerMediaRef = useRef<{ clipId: string; key: string } | null>(null);
+  const pendingPlayerResumeRef = useRef<{ key: string; time: number; playing: boolean } | null>(null);
   const playerShellRef = useRef<HTMLDivElement | null>(null);
   const subtitleListRef = useRef<HTMLDivElement | null>(null);
   const segmentRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -366,6 +370,7 @@ export default function SubtitleReviewPage() {
   const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
   const [confirmingClipId, setConfirmingClipId] = useState<string | null>(null);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const [isReopeningBoundaries, setIsReopeningBoundaries] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
   const [isPlayerReady, setIsPlayerReady] = useState(false);
@@ -374,6 +379,9 @@ export default function SubtitleReviewPage() {
     new Set()
   );
   const [clipTime, setClipTime] = useState(0);
+  const [pausedSubtitleDraft, setPausedSubtitleDraft] = useState<{
+    clipId: string; start: number; end: number; text: string;
+  } | null>(null);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
@@ -644,7 +652,8 @@ export default function SubtitleReviewPage() {
     confirmingClipId !== null ||
     isSavingShortBannerSettings ||
     savingShortFramingClipId !== null ||
-    isFinalizing;
+    isFinalizing ||
+    isReopeningBoundaries;
   const isEditable =
     review?.state === "awaiting_review" &&
     !hasReviewMutationInFlight;
@@ -980,6 +989,18 @@ export default function SubtitleReviewPage() {
     ? selectedLivePreviewVersion
     : selectedPreviewVersion;
   const selectedPlayerReady = Boolean(selectedPlayerVideoUrl);
+  const playerMediaKey = selectedClip && selectedPlayerVideoUrl
+    ? `${selectedClip.id}:${selectedPlayerVideoUrl}:${selectedPlayerPreviewVersion}`
+    : "";
+  useLayoutEffect(() => {
+    const previous = currentPlayerMediaRef.current;
+    if (previous?.clipId === selectedClipId && previous.key !== playerMediaKey && playerMediaKey) {
+      pendingPlayerResumeRef.current = { key: playerMediaKey, time: clipTime, playing: isPlaying };
+    } else if (previous?.clipId !== selectedClipId) {
+      pendingPlayerResumeRef.current = null;
+    }
+    currentPlayerMediaRef.current = playerMediaKey ? { clipId: selectedClipId, key: playerMediaKey } : null;
+  }, [clipTime, isPlaying, playerMediaKey, selectedClipId]);
   const selectedPreviewLoadFailed = Boolean(
     selectedClip && previewLoadFailedClipIds.has(selectedClip.id)
   );
@@ -1108,8 +1129,15 @@ export default function SubtitleReviewPage() {
     if (!selectedClip) {
       return [];
     }
+    const previewAddedSubtitle = pausedSubtitleDraft?.clipId === selectedClip.id &&
+      pausedSubtitleDraft.text.trim() && pausedSubtitleDraft.end - pausedSubtitleDraft.start >= 0.1 &&
+      !selectedSegments.some((segment) =>
+        segment.start < pausedSubtitleDraft.end - 0.001 && segment.end > pausedSubtitleDraft.start + 0.001
+      )
+      ? [{ start: pausedSubtitleDraft.start, end: pausedSubtitleDraft.end,
+          text: pausedSubtitleDraft.text, preserveSegmentation: true }] : [];
     return subtitlePreviewEvents({
-      segments: selectedSegments.map((segment) => ({
+      segments: [...selectedSegments.map((segment) => ({
         start: segment.start,
         end: segment.end,
         text: drafts[segment.id] ?? segment.text,
@@ -1118,7 +1146,7 @@ export default function SubtitleReviewPage() {
         style: selectedClipContentDraft?.subtitleStyles.find(
           (item) => item.start === segment.start && item.end === segment.end
         )?.style
-      })),
+      })), ...previewAddedSubtitle],
       candidateStart: selectedClip.start,
       candidateEnd: selectedClip.end,
       hookSceneDuration,
@@ -1137,6 +1165,7 @@ export default function SubtitleReviewPage() {
     hookSuppressionEnd,
     selectedClip,
     selectedSegments,
+    pausedSubtitleDraft,
     selectedClipContentDraft?.subtitleStyles
   ]);
   const activePreviewSubtitleEvent = useMemo(
@@ -1175,35 +1204,6 @@ export default function SubtitleReviewPage() {
   const showLiveSubtitle = Boolean(
     isShowingLivePreview && activePreviewSubtitleEvent?.text
   );
-
-  useEffect(() => {
-    const video = videoRef.current;
-
-    if (!video || !selectedPlayerReady) {
-      return;
-    }
-    video.pause();
-
-    const moveToClipStart = () => {
-      video.currentTime = 0;
-    };
-
-    if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      moveToClipStart();
-      return;
-    }
-
-    video.addEventListener("loadedmetadata", moveToClipStart, { once: true });
-    video.load();
-    return () => {
-      video.removeEventListener("loadedmetadata", moveToClipStart);
-    };
-  }, [
-    selectedClipId,
-    selectedPlayerPreviewVersion,
-    selectedPlayerReady,
-    selectedPlayerVideoUrl
-  ]);
 
   useEffect(() => {
     if (isPlayerReady || !selectedClip || !selectedPlayerReady) {
@@ -1271,6 +1271,7 @@ export default function SubtitleReviewPage() {
 
   function selectClip(clip: SubtitleReviewClip) {
     setStyledSegmentId(null);
+    setPausedSubtitleDraft(null);
     videoRef.current?.pause();
     suggestionPlaybackEndRef.current = null;
     setPreviewingSuggestionId(null);
@@ -1366,6 +1367,61 @@ export default function SubtitleReviewPage() {
 
   function skipBy(seconds: number) {
     seekToClipTime(clipTime + seconds);
+  }
+
+  function currentSourceTime(): number | null {
+    const video = videoRef.current;
+    if (!video || !selectedClip) return null;
+    video.pause();
+    const playbackTime = video.currentTime;
+    setClipTime(playbackTime);
+    return sourceTimeAtPlayback({
+      playbackTime, clipStart: selectedClip.start, clipEnd: selectedClip.end,
+      hookSceneDuration, suppressionEnd: hookSuppressionEnd,
+    });
+  }
+
+  function openPausedSubtitleDraft() {
+    const video = videoRef.current;
+    if (!video || !selectedClip) return;
+    const start = currentSourceTime();
+    if (start === null) {
+      setError("冒頭フック以外の動画内で、終了位置より前に停止してください。");
+      return;
+    }
+    const nextStart = selectedSegments.find((segment) => segment.start > start + 0.01)?.start ?? selectedClip.end;
+    setPausedSubtitleDraft({
+      clipId: selectedClip.id, start,
+      end: Math.floor(Math.min(selectedClip.end, nextStart, start + 2) * 100 + 0.000001) / 100,
+      text: "",
+    });
+    setError(null);
+  }
+
+  async function savePausedSubtitleDraft() {
+    if (!selectedClip || !pausedSubtitleDraft || pausedSubtitleDraft.clipId !== selectedClip.id) return;
+    if (!pausedSubtitleDraft.text.trim()) {
+      setError("追加する字幕を入力してください。");
+      return;
+    }
+    if (pausedSubtitleDraft.start < selectedClip.start + hookSuppressionEnd - hookSceneDuration ||
+      pausedSubtitleDraft.end > selectedClip.end ||
+      pausedSubtitleDraft.end - pausedSubtitleDraft.start < 0.1) {
+      setError("冒頭の字幕非表示区間を避け、動画内の0.1秒以上の範囲にしてください。");
+      return;
+    }
+    if (review?.segments.some((segment) =>
+      segment.start < pausedSubtitleDraft.end - 0.001 && segment.end > pausedSubtitleDraft.start + 0.001
+    )) {
+      setError("既存字幕と時間が重なっています。空白区間に合わせてください。");
+      return;
+    }
+    const saved = await saveSubtitleStructure({
+      action: "insert_at_time", segments: [], clipId: selectedClip.id,
+      start: pausedSubtitleDraft.start, end: pausedSubtitleDraft.end,
+      text: pausedSubtitleDraft.text,
+    });
+    if (saved) setPausedSubtitleDraft(null);
   }
 
   function handleVideoTimeUpdate() {
@@ -2064,22 +2120,22 @@ export default function SubtitleReviewPage() {
     }
   }
 
-  async function saveSubtitleStructure(request: SubtitleStructureRequest) {
-    if (!review || !isEditable) return;
+  async function saveSubtitleStructure(request: SubtitleStructureRequest): Promise<boolean> {
+    if (!review || !isEditable) return false;
     const oldDocument = review;
     const targets = new Set(request.segments.map(item => item.segmentId));
     const sourceSegments = oldDocument.segments.filter(segment => targets.has(segment.id));
-    const affected = new Set(sourceSegments.flatMap(segment => segment.affectedClipIds));
+    const affected = new Set([...sourceSegments.flatMap(segment => segment.affectedClipIds), ...(request.clipId ? [request.clipId] : [])]);
     const first = sourceSegments[0];
     const oldIds = new Set(oldDocument.segments.map(segment => segment.id));
     const scrollTop = subtitleListRef.current?.scrollTop ?? 0;
     const generation = beginReviewMutation();
     setIsSavingStructure(true);
-    videoRef.current?.pause();
+    setShowSavedPreview(false);
     setError(null);
     try {
       const updated = await editSubtitleStructure(jobId, request);
-      if (!isCurrentReviewMutation(generation)) return;
+      if (!isCurrentReviewMutation(generation)) return false;
       setReview(updated);
       setDrafts(current => Object.fromEntries(updated.segments.map(segment => [segment.id,
         targets.has(segment.id) || !oldIds.has(segment.id) ? segment.text : current[segment.id] ?? segment.text])));
@@ -2090,7 +2146,7 @@ export default function SubtitleReviewPage() {
         for (const clip of updated.clips) {
           if (!affected.has(clip.id) || !next[clip.id]) continue;
           const draft = next[clip.id];
-          const firstStyle = draft.subtitleStyles.find(item => item.start === first.start && item.end === first.end)?.style;
+          const firstStyle = first && draft.subtitleStyles.find(item => item.start === first.start && item.end === first.end)?.style;
           const keptStyles = draft.subtitleStyles.filter(item => !sourceSegments.some(segment => segment.start === item.start && segment.end === item.end));
           next[clip.id] = { ...draft, subtitleStyles: [...keptStyles, ...(firstStyle ? replacementSegments.map(segment =>
             ({ start: segment.start, end: segment.end, style: firstStyle })) : [])] };
@@ -2100,9 +2156,18 @@ export default function SubtitleReviewPage() {
       setStyledSegmentId(null);
       setSegmentCursor(null);
       setBulkCorrectionSelection(null);
-      requestAnimationFrame(() => subtitleListRef.current?.scrollTo({ top: scrollTop }));
+      const inserted = request.action === "insert_at_time"
+        ? updated.segments.find(segment => !oldIds.has(segment.id)) : null;
+      requestAnimationFrame(() => {
+        const list = subtitleListRef.current;
+        if (!list) return;
+        const row = inserted ? segmentRowRefs.current[inserted.id] : null;
+        list.scrollTo({ top: row ? row.offsetTop - list.offsetTop - list.clientHeight / 3 : scrollTop });
+      });
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "字幕区間を変更できませんでした");
+      return false;
     } finally {
       setIsSavingStructure(false);
       endReviewMutation();
@@ -2227,6 +2292,26 @@ export default function SubtitleReviewPage() {
     }
   }
 
+  async function returnToBoundaryEditor() {
+    if (dirtySegmentIds.size > 0 || hasDirtyClipContent || hasDirtyShortFraming) {
+      setError("未保存の字幕・タイトル・画角があります。各clipの変更を保存してから尺調整へ戻ってください。");
+      return;
+    }
+    if (!isEditable) return;
+    beginReviewMutation();
+    setIsReopeningBoundaries(true);
+    setError(null);
+    try {
+      await reopenClipPlanForBoundaryReedit(jobId);
+      router.push(`/jobs/${jobId}/clips`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "尺調整画面へ戻れませんでした");
+    } finally {
+      setIsReopeningBoundaries(false);
+      endReviewMutation();
+    }
+  }
+
   if (!review) {
     return (
       <main className="min-h-screen bg-[#f7f7f4] px-6 py-8 text-neutral-950">
@@ -2264,6 +2349,11 @@ export default function SubtitleReviewPage() {
                 ? hasReviewMutationInFlight ? "保存中" : "字幕確認中"
                 : "書き出し中"}
           </span>
+          {review.state === "awaiting_review" && <button type="button"
+            className="min-h-9 border border-sky-700 bg-white px-3 text-xs font-semibold text-sky-900 disabled:opacity-40 sm:text-sm"
+            disabled={!isEditable} onClick={() => void returnToBoundaryEditor()}>
+            {isReopeningBoundaries ? "尺調整を準備中…" : "尺調整へ戻る"}
+          </button>}
           <Link
             className="ml-auto inline-flex min-h-9 items-center border border-neutral-300 bg-white px-3 text-xs font-medium sm:text-sm"
             href={`/jobs/${jobId}`}
@@ -2536,7 +2626,7 @@ export default function SubtitleReviewPage() {
                       {selectedPlayerReady && selectedPlayerVideoUrl ? (
                         <video
                         className="h-full w-full cursor-pointer bg-black object-contain"
-                        key={`${selectedClip.id}:${selectedPlayerVideoUrl}:${selectedPlayerPreviewVersion}`}
+                        key={playerMediaKey}
                         playsInline
                         preload="metadata"
                         ref={videoRef}
@@ -2555,7 +2645,16 @@ export default function SubtitleReviewPage() {
                         }}
                         onClick={togglePlayback}
                         onError={handleVideoError}
-                        onLoadedMetadata={() => setIsPlayerReady(true)}
+                        onLoadedMetadata={(event) => {
+                          const resume = pendingPlayerResumeRef.current;
+                          if (resume?.key === playerMediaKey) {
+                            const video = event.currentTarget;
+                            video.currentTime = clamp(resume.time, 0, Math.max(0, video.duration - 0.05));
+                            pendingPlayerResumeRef.current = null;
+                            if (resume.playing) void video.play().catch(() => {});
+                          }
+                          setIsPlayerReady(true);
+                        }}
                         onLoadStart={() => {
                           setIsPlaying(false);
                           setIsPlayerReady(false);
@@ -2692,12 +2791,22 @@ export default function SubtitleReviewPage() {
                     <div className="shrink-0 border-t border-neutral-700 bg-neutral-900 px-3 py-2">
                       <div className="mb-2 flex items-center justify-between gap-2 text-xs">
                         <span>{isShowingLivePreview ? "編集プレビュー" : "保存済みプレビュー"}</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="border border-sky-400 px-2 py-1 font-semibold text-sky-100 disabled:opacity-50"
+                            disabled={!isEditable}
+                            onClick={openPausedSubtitleDraft}
+                            type="button"
+                          >
+                            停止位置に字幕を追加
+                          </button>
                         {livePreviewReady && selectedPreviewReady ? (
                           <button className="border border-neutral-600 px-2 py-1" type="button"
                             onClick={() => setShowSavedPreview((current) => !current)}>
                             {isShowingLivePreview ? (selectedClip.previewFraming ? "変更前の画角を見る" : "保存済みを見る") : "編集プレビューへ戻る"}
                           </button>
                         ) : null}
+                        </div>
                       </div>
                       <input
                         aria-label="clip再生位置"
@@ -3259,6 +3368,60 @@ export default function SubtitleReviewPage() {
                   </div>
                 </div>
 
+                {pausedSubtitleDraft?.clipId === selectedClip.id ? (
+                  <div className="border-b border-sky-300 bg-sky-50 px-3 py-3 text-sm">
+                    <p className="font-semibold">プレビューの停止位置から字幕を追加</p>
+                    <p className="mt-1 text-xs text-neutral-600">開始・終了は動画内の秒数です。再生位置を動かして各時刻を取り直せます。</p>
+                    <textarea
+                      aria-label="追加する字幕"
+                      className="mt-2 min-h-16 w-full border border-neutral-300 bg-white p-2"
+                      maxLength={4000}
+                      placeholder="抜けている字幕を入力"
+                      value={pausedSubtitleDraft.text}
+                      onChange={(event) => setPausedSubtitleDraft((current) => current ? { ...current, text: event.target.value } : current)}
+                    />
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {(["start", "end"] as const).map((field) => (
+                        <div key={field}>
+                          <label className="block text-xs font-medium" htmlFor={`paused-subtitle-${field}`}>
+                            {field === "start" ? "開始" : "終了"}（秒）
+                          </label>
+                          <input
+                            id={`paused-subtitle-${field}`}
+                            className="mt-1 w-full border border-neutral-300 bg-white p-2 tabular-nums"
+                            min={hookSuppressionEnd}
+                            max={clipDuration}
+                            step={0.05}
+                            type="number"
+                            value={Math.round((pausedSubtitleDraft[field] - selectedClip.start + hookSceneDuration) * 100) / 100}
+                            onChange={(event) => setPausedSubtitleDraft((current) => current ? {
+                              ...current, [field]: Math.round((selectedClip.start + Number(event.target.value) - hookSceneDuration) * 100) / 100,
+                            } : current)}
+                          />
+                          <button
+                            className="mt-1 text-xs font-medium text-sky-800 underline"
+                            type="button"
+                            onClick={() => {
+                              const time = currentSourceTime();
+                              if (time !== null) setPausedSubtitleDraft((current) => current ? { ...current, [field]: time } : current);
+                            }}
+                          >
+                            今の再生位置を{field === "start" ? "開始" : "終了"}にする
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-2 flex gap-2">
+                      <button className="min-h-9 flex-1 bg-sky-700 px-2 font-semibold text-white disabled:opacity-50"
+                        disabled={!isEditable || isSavingStructure} type="button" onClick={() => void savePausedSubtitleDraft()}>
+                        この時刻で字幕を保存
+                      </button>
+                      <button className="min-h-9 border border-neutral-300 bg-white px-3" type="button"
+                        onClick={() => setPausedSubtitleDraft(null)}>閉じる</button>
+                    </div>
+                  </div>
+                ) : null}
+
                 <SubtitleBulkCorrection
                   selection={bulkCorrectionSelection} onSelection={setBulkCorrectionSelection}
                   segments={review.segments} drafts={drafts} disabled={!isEditable}
@@ -3353,7 +3516,7 @@ export default function SubtitleReviewPage() {
                             nextText={selectedSegments[segmentIndex + 1] ? drafts[selectedSegments[segmentIndex + 1].id] ?? selectedSegments[segmentIndex + 1].text : ""}
                             cursor={segmentCursor?.id === segment.id ? segmentCursor.offset : null}
                             origin={selectedClip.start - hookSceneDuration} playhead={absolutePlaybackTime}
-                            disabled={!isEditable} onEdit={saveSubtitleStructure} />
+                            disabled={!isEditable} onEdit={async (request) => { await saveSubtitleStructure(request); }} />
                           <div className="mt-2 flex items-center justify-between gap-3">
                             <span className="text-[11px] text-neutral-400">
                               元動画 {formatTime(segment.start)}

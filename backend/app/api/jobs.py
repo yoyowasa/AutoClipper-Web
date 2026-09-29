@@ -108,6 +108,7 @@ from app.jobs.subtitle_review import (
     queue_auto_review_render,
     queue_review_render,
     refresh_review_render_contract,
+    retain_review_after_boundary_reedit,
     reopen_completed_review,
     subtitle_review_output_path,
     subtitle_review_preview_path,
@@ -131,6 +132,7 @@ from app.jobs.subtitle_review_preview import (
 from app.jobs.title_hook_suggestions import (
     TitleHookDraftSegment,
     TitleHookSuggestionsDocument,
+    append_avoided_publication_titles,
     build_title_hook_suggestion_input,
     failed_title_hook_suggestions,
     load_title_hook_suggestion_input,
@@ -726,12 +728,16 @@ def _result_item(
     if resolution is None and (metadata.get("width") is not None or metadata.get("height") is not None):
         resolution = {"width": metadata.get("width"), "height": metadata.get("height")}
     return ResultExportItem(
+        thumbnailDesign=(metadata.get("thumbnail_design") or (thumbnail_style or {}).get("design") or "raden")
+        if export.type == "normal" else "raden",
+        thumbnailCanUseCustomBackground=bool((thumbnail_style or {}).get("backgroundAssetId")) if export.type == "normal" else False,
         thumbnailTextStyles=resolve_thumbnail_text_styles(thumbnail_style, metadata.get("thumbnail_text_styles"))
         if export.type == "normal" else None,
         thumbnailKicker=str(_first_value(metadata.get("thumbnail_kicker"), selected.get("thumbnail_kicker"), "")),
         thumbnailLine1=str(_first_value(metadata.get("thumbnail_line1"), selected.get("thumbnail_line1"), "")),
         thumbnailLine2=str(_first_value(metadata.get("thumbnail_line2"), selected.get("thumbnail_line2"), "")),
         thumbnailCropMode="close" if metadata.get("thumbnail_crop_mode") == "close" else "standard",
+        thumbnailSubjectPlacement=metadata.get("thumbnail_subject_placement") or {},
         id=export.id,
         type=export.type,
         candidateId=export.candidate_id,
@@ -827,6 +833,7 @@ def _result_item(
         thumbnailUrl=thumbnail_url,
         thumbnailDownloadUrl=thumbnail_download_url,
         thumbnailStatus=thumbnail_status,
+        thumbnailErrorCode=metadata.get("thumbnail_error_code") if thumbnail_status == "failed" else None,
         thumbnailFilename=thumbnail_filename,
         thumbnailFrameSeconds=_number_or_none(
             _first_value(
@@ -2385,6 +2392,8 @@ def update_clip_plan_clip_type(
             detail="clip plan is not awaiting type adjustment",
         )
     document = _get_clip_plan_or_404(job_id, paths)
+    if document.boundary_reedit:
+        raise HTTPException(status.HTTP_409_CONFLICT, "字幕編集から戻った場合は尺だけ変更できます。")
     if document.state != "awaiting_review":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2628,6 +2637,8 @@ def update_clip_plan_hook_scene(
             detail="clip plan is not awaiting hook scene adjustment",
         )
     document = _get_clip_plan_or_404(job_id, paths)
+    if document.boundary_reedit:
+        raise HTTPException(status.HTTP_409_CONFLICT, "字幕編集から戻った場合は尺だけ変更できます。")
     expected_state = "manual_editing" if manual_edit else "awaiting_review"
     if document.state != expected_state:
         raise HTTPException(
@@ -2750,6 +2761,8 @@ def reselect_clip_plan(
             detail="clip plan is not awaiting reselection",
         )
     document = _get_clip_plan_or_404(job_id, paths)
+    if document.boundary_reedit:
+        raise HTTPException(status.HTTP_409_CONFLICT, "字幕編集から戻った場合は再選定できません。")
     previous_settings = dict(job.settings_json or {})
     keep_ids = set(request.kept_clip_ids)
     if not keep_ids.issubset({clip.id for clip in document.clips}):
@@ -2802,6 +2815,51 @@ def reselect_clip_plan(
             detail="could not queue clip plan reselection",
         ) from exc
 
+    return ClipPlanActionResponse(jobId=job.id, status=job.status)
+
+
+@router.post(
+    "/{job_id}/subtitle-review/reopen-clip-plan",
+    response_model=ClipPlanActionResponse,
+)
+def reopen_clip_plan_for_boundary_reedit(
+    job_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> ClipPlanActionResponse:
+    job = _get_job_or_404(db, job_id)
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        if job.status != "awaiting_subtitle_review" or is_manual_workflow(dict(job.settings_json or {})):
+            raise HTTPException(status.HTTP_409_CONFLICT, "字幕確認中の自動選定ジョブだけ尺を再調整できます。")
+        review = _get_subtitle_review_or_404(job_id, paths)
+        plan = _get_clip_plan_or_404(job_id, paths)
+        if review.state != "awaiting_review" or plan.state != "approved":
+            raise HTTPException(status.HTTP_409_CONFLICT, "字幕または切り抜き予定が編集中ではありません。")
+        review_clips = {clip.id: clip for clip in review.clips}
+        if {clip.id for clip in plan.clips} != set(review_clips) or any(
+            clip.type != review_clips[clip.id].type for clip in plan.clips
+        ):
+            raise HTTPException(status.HTTP_409_CONFLICT, "切り抜き予定と字幕の対象が一致しません。")
+        original_plan = plan.model_copy(deep=True)
+        for clip in plan.clips:
+            reviewed = review_clips[clip.id]
+            clip.hook_scene_start = reviewed.hook_scene_start
+            clip.hook_scene_end = reviewed.hook_scene_end
+        plan.state = "awaiting_review"
+        plan.boundary_reedit = True
+        write_clip_plan(plan, clip_plan_output_path(output_dir))
+        job.status = "awaiting_clip_review"
+        job.progress = PROGRESS_MAP["awaiting_clip_review"]
+        job.current_step = "尺を再調整してください。保存済み字幕は保持しています"
+        job.updated_at = utc_now()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            write_clip_plan(original_plan, clip_plan_output_path(output_dir))
+            raise
     return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
 
@@ -2921,11 +2979,20 @@ def approve_clip_plan(
         source_width=video.width,
         source_height=video.height,
     )
+    if document.boundary_reedit:
+        previous_review = _get_subtitle_review_or_404(job.id, paths)
+        if previous_review.state != "awaiting_review":
+            raise HTTPException(status.HTTP_409_CONFLICT, "保存済み字幕が編集可能な状態ではありません。")
+        try:
+            review_document = retain_review_after_boundary_reedit(previous_review, review_document)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     planned_titles = {clip.id: clip.title for clip in document.clips}
-    for clip in review_document.clips:
-        if clip.id in planned_titles:
-            clip.title = planned_titles[clip.id]
-            clip.original_title = planned_titles[clip.id]
+    if not document.boundary_reedit:
+        for clip in review_document.clips:
+            if clip.id in planned_titles:
+                clip.title = planned_titles[clip.id]
+                clip.original_title = planned_titles[clip.id]
     _persist_subtitle_review(review_document, paths)
     write_clip_plan(
         mark_clip_plan_approved(document),
@@ -3187,7 +3254,20 @@ def create_title_hook_suggestions(
                 existing_artifact = load_title_hook_suggestions(state_path)
             except (OSError, ValueError, json.JSONDecodeError):
                 existing_artifact = None
-        previous_thread_id = existing_artifact.thread_id if existing_artifact is not None else None
+        if (
+            request.force_regenerate
+            and existing_artifact is not None
+            and existing_artifact.revision_hash == generation_input.revision_hash
+            and existing_artifact.draft_hash == generation_input.draft_hash
+        ):
+            generation_input = generation_input.model_copy(
+                update={
+                    "avoid_publication_titles": append_avoided_publication_titles(
+                        existing_artifact.avoid_publication_titles,
+                        existing_artifact.suggestions,
+                    )
+                }
+            )
         cached: TitleHookSuggestionsDocument | None = (
             None if request.force_regenerate else existing_artifact
         )
@@ -3207,7 +3287,9 @@ def create_title_hook_suggestions(
             write_title_hook_suggestion_input(generation_input, request_path)
             queued = queued_title_hook_suggestions(
                 generation_input,
-                thread_id=previous_thread_id,
+                # A fresh conversation prevents old answers from anchoring the model.
+                # Prior titles are supplied explicitly in the request instead.
+                thread_id=None,
             )
             write_title_hook_suggestions(queued, state_path)
 

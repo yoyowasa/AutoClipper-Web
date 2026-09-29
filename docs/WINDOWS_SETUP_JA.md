@@ -100,6 +100,16 @@ ChatGPTでのログインが未完了なら、`codex`を起動して「Sign in w
 
 「GPU必須で起動」は対応するNVIDIA環境向けです。Intel内蔵GPUのPCでは選びません。
 
+### 宙科テンプレの人物切り抜きサムネイル
+
+宙科テンプレで元動画の人物を背景から切り抜く場合は、アプリのフォルダーで一度だけ実行します。
+
+```powershell
+py -3.11 scripts/install_anime_thumbnail_model.py
+```
+
+約176 MBの[anime-segmentationモデル](https://github.com/SkyTNT/anime-segmentation)を取得し、公開済みのチェックサムを照合して`storage/models/isnet-anime.onnx`へ保存します。動画や設定は変更しません。モデル未導入時は従来の元映像切り抜き表示になり、人物だけの移動・縮小はできません。保存済みサムネイルには自動で反映されないため、結果画面でプレビューを確認してから「サムネを保存・更新」を押してください。
+
 ### 最初の動作確認
 
 1. まず短い動画（例: 5分程度）を選びます。

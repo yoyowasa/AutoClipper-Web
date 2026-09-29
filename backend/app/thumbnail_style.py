@@ -16,9 +16,22 @@ ThumbnailFontPreset = Literal[
     "mushin",
     "ankoku_zonji",
     "tanuki_magic",
+    "genei_kiwami_go",
+    "genei_mono_go",
+    "genei_antique",
+    "gochi_kakutto",
+    "nikkyou_sans",
     "dela_gothic",
     "corporate_logo",
 ]
+ThumbnailDesign = Literal["raden", "sopia", "plain", "custom"]
+
+
+class ThumbnailSubjectPlacement(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    scale: float = Field(default=1.0, ge=0.5, le=1.5)
+    offset_x: int = Field(default=0, ge=-300, le=300, alias="offsetX")
+    offset_y: int = Field(default=0, ge=-250, le=250, alias="offsetY")
 
 
 class ThumbnailTextStyle(BaseModel):
@@ -27,6 +40,8 @@ class ThumbnailTextStyle(BaseModel):
     font_size: int = Field(ge=12, le=180, alias="fontSize")
     color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
     auto_fit: bool = Field(default=True, alias="autoFit")
+    offset_x: int = Field(default=0, ge=-300, le=300, alias="offsetX", exclude_if=lambda value: value == 0)
+    offset_y: int = Field(default=0, ge=-250, le=250, alias="offsetY", exclude_if=lambda value: value == 0)
 
 
 class ThumbnailTextStyles(BaseModel):
@@ -44,7 +59,7 @@ class ThumbnailTextStyles(BaseModel):
 
 class NormalThumbnailStyle(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
-    design: Literal["raden", "plain", "custom"] = "plain"
+    design: ThumbnailDesign = "plain"
     background_asset_id: BannerAssetId | None = Field(default=None, alias="backgroundAssetId")
     background_color: str = Field(default="#20242B", pattern=r"^#[0-9A-Fa-f]{6}$", alias="backgroundColor")
     title_color: str = Field(default="#FFFFFF", pattern=r"^#[0-9A-Fa-f]{6}$", alias="titleColor")
@@ -70,3 +85,17 @@ def resolve_thumbnail_text_styles(character_style: dict | None, override: dict |
         result.upper.color = style.title_color
         result.lower.color = style.second_title_color
     return result
+
+
+def resolve_export_thumbnail_style(
+    character_style: dict | None, design: ThumbnailDesign | None = None,
+) -> dict | None:
+    """Apply a per-export template without changing the job/character preset."""
+    if design is None:
+        return character_style
+    settings = dict(character_style or {})
+    settings["design"] = design
+    if design == "custom" and not settings.get("backgroundAssetId"):
+        raise ValueError("このキャラにはカスタム背景が登録されていません。")
+    NormalThumbnailStyle.model_validate(settings)
+    return settings

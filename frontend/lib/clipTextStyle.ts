@@ -28,7 +28,12 @@ export const CLIP_TEXT_FONT_GROUPS: ReadonlyArray<ClipTextFontGroup> = [
       { value: "mushin", label: "無心（むしん）", fontName: "Mushin", fontWeight: 400 },
       { value: "ankoku_zonji", label: "暗黒ゾン字", fontName: "AnkokuZombic", fontWeight: 400 },
       { value: "killgo_nb", label: "キルゴUかなNB（ローカル導入）", fontName: "GN-KMBFont-UB-NewstyleKanaB", fontWeight: 400 },
-      { value: "tanuki_magic", label: "たぬき油性マジック", fontName: "Tanuki Permanent Marker", fontWeight: 400 }
+      { value: "tanuki_magic", label: "たぬき油性マジック", fontName: "Tanuki Permanent Marker", fontWeight: 400 },
+      { value: "genei_kiwami_go", label: "源暎きわみゴ", fontName: "GenEi Kiwami Gothic Ultra", fontWeight: 400 },
+      { value: "genei_mono_go", label: "源暎モノゴ Bold", fontName: "GenEi Mono Gothic", fontWeight: 700 },
+      { value: "genei_antique", label: "源暎アンチック v6", fontName: "GenEi Antique v6", fontWeight: 400 },
+      { value: "gochi_kakutto", label: "851ゴチカクット", fontName: "851Gkktt", fontWeight: 400 },
+      { value: "nikkyou_sans", label: "Nikkyou Sans（ローカル導入・漢字少）", fontName: "Nikkyou Sans", fontWeight: 400 }
     ]
   },
   {
@@ -152,6 +157,11 @@ const ASS_PREVIEW_FONT_METRICS = new Map<string, AssPreviewFontMetrics>([
   ["AnkokuZombic", { fontSizeScale: 1, lineHeight: 1 }],
   ["GN-KMBFont-UB-NewstyleKanaB", { fontSizeScale: 1024 / 1230, lineHeight: 1230 / 1024 }],
   ["Tanuki Permanent Marker", { fontSizeScale: 1, lineHeight: 1 }],
+  ["GenEi Kiwami Gothic Ultra", { fontSizeScale: 1000 / 1200, lineHeight: 1200 / 1000 }],
+  ["GenEi Mono Gothic", { fontSizeScale: 1024 / 1224, lineHeight: 1224 / 1024 }],
+  ["GenEi Antique v6", { fontSizeScale: 1024 / 1280, lineHeight: 1280 / 1024 }],
+  ["851Gkktt", { fontSizeScale: 1024 / 1000, lineHeight: 1000 / 1024 }],
+  ["Nikkyou Sans", { fontSizeScale: 2048 / 2590, lineHeight: 2590 / 2048 }],
   ["Noto Sans CJK JP", DEFAULT_ASS_PREVIEW_FONT_METRICS],
   ["Noto Sans Mono CJK JP", DEFAULT_ASS_PREVIEW_FONT_METRICS],
   ["Noto Sans JP Black", DEFAULT_ASS_PREVIEW_FONT_METRICS],

@@ -10245,3 +10245,128 @@ pip check: pass
 - 検証: backend pytest 1164 passed・1 skipped、ruff成功。frontend typecheck・lint・build、追加したruntime profileとショートプレビュー時刻のテスト成功。Docker Compose設定検証成功、既存のbackend/frontend/worker/redis稼働とbackend healthyを確認。差分の空白・秘密値パターンを確認。
 - 範囲: 今回はGit履歴の整理とmain反映。実ジョブの追加レンダリング、稼働コンテナの再構築、字幕編集の新規実機操作は行っていない。各機能の個別実機確認は上記の該当作業記録に従う。
 - CI修正: 初回main push後、GitHubのbackend lintで`launcher/controller.py`内PowerShell文字列が140文字制限を超えて失敗。ローカル検査の対象にlauncherを含めていなかったため見逃した。WMIの引数マップを複数行へ整形し、処理内容は維持。修正後にbackendとlauncherのruff、関連launcherテスト、GitHub CIを再確認する。
+
+## 2026-09-25 JST 源暎フォント3書体を追加
+
+- 目的: 指定された源暎きわみゴ、源暎モノゴ、源暎アンチックを字幕・動画内タイトル／フックと通常サムネイルの書体として選べるようにする。
+- 変更ファイル: `frontend/public/fonts` の3書体TTF・各公式ライセンス文書・README、`frontend/lib/clipTextStyle.ts`、`frontend/lib/thumbnailStyle.ts`、`frontend/lib/types.ts`、`frontend/app/globals.css`、`backend/app/candidates/merge_boundaries.py`、`backend/app/render/subtitles_ass.py`、`backend/app/render/thumbnail_fonts.py`、`backend/app/thumbnail_style.py`、関連テスト、本ファイル。
+- 変更: 公式配布のTTFを無改変で同梱し、3書体を共有の選択肢・ブラウザプレビュー・ASS字幕描画・サムネイル描画に登録。元ZIPのSIL OFL 1.1文書をそれぞれ保持した。源暎きわみゴは内部family名を「GenEi Kiwami Gothic Ultra」に合わせた。
+- 検証: backend全テスト1167 passed・1 skipped、対象テスト再実行49 passed、ruff、frontend typecheck・lint・build、関連TSテスト、git diff --check成功。Pillowで3書体を使うサムネイルをそれぞれ生成。稼働中backendのFFmpeg/libassで3書体の日本語字幕を描画し、各指定書体が実際に選択されるログを確認した。
+- 稼働反映: backend／GPU worker／frontendを再build・再作成。backend healthy、frontendの源暎TTF配信HTTP 200、backend health HTTP 200、backendとGPU workerの書体登録を確認。更新前のworkerは待機中、queue 0を確認した。
+- 未確認: 実ユーザーjobでの書体選択・保存・再レンダリング操作は行っていない。既存jobの編集内容は変更していない。
+
+## 2026-09-25 JST 851ゴチカクットとNikkyou Sansを追加
+
+- 目的: 指定された追加書体を通常・ショートの字幕／動画内文字と通常サムネイルで選べるようにする。
+- 変更ファイル: `frontend/public/fonts/851Gkktt_005.ttf`、同書体の権利表記とREADME、`.gitignore`、`.dockerignore`、書体選択・プレビュー・ASS描画・サムネイル描画のfrontend/backend実装、関連テスト、本ファイル。
+- 変更: 851ゴチカクットは作者の再配布条件を確認して同梱。Nikkyou Sansは動画利用は許可されているがフォント再配布の明示がないため、このPCへのローカル導入に限定し、GitとDocker配布から除外した。漢字の収録範囲が狭いことをUIにも表示。
+- 検証: backend全テスト1168 passed・1 skipped、ruff、frontend typecheck・lint・build、関連TSテスト成功。Pillowで851ゴチカクットの通常サムネイルを描画。FFmpeg/libassで両書体の指定familyが選択されることを確認。backend／GPU worker／frontendを再build・再作成し、backend healthy、書体配信HTTP 200を確認。
+- 未解決: 指定された源直ゴシックは公式の無料ファイルにBOOTHログインが必要で、取得・組込み・実描画は未実施。実ユーザーjobでの書体選択・保存・再レンダリングも未確認。
+
+## 2026-09-26 JST 話題選定のブロックID混入による全件仮選定を修正
+
+- 症状: job `job_78bbdc1cc21b4cb9ae06eb55de943e91` はCodexの話題選定応答を受信したが、`codex_topic_selection_block_unknown`で全件ローカル仮選定へ切り替わった。
+- 原因: 応答7候補のうち1件だけ、存在するブロックIDの後ろにCodexの余計な英文が混入した。検証処理はその候補を含む応答全体を不合格とし、他の正常な6件も失っていた。直近のフォント追加は選定処理を変更していない。
+- 変更ファイル: `backend/app/candidates/codex_initial_selection.py`、`backend/tests/test_codex_initial_selection.py`、本ファイル。入力に実在するIDの後ろに明らかな余計な文章が続く場合だけIDを復元。複数IDが紛れた曖昧な値や未知IDは採用しない。不正候補だけを除外し、正常候補がある場合は選定を継続。全候補が不正なら従来どおりエラーにする。
+- 検証: 問題の保存済み応答を読み取り専用で再投入し、通常2件・ショート5件の正規IDが次段階の入力へ渡ることを確認。回帰テストを追加し対象44 passed、backend全体1167 passed・1 skipped、backend/launcher ruff成功。
+- 稼働反映: backend／GPU workerを再build・再作成。両containerで保存済み応答を再投入して通常2件・ショート5件の正規IDと境界調整入力7件を確認。実行コードのSHA-256は作業ツリーと一致。backend healthyとhealth API HTTP 200を確認。GitHub CIのbackend／frontendも成功。
+- 未確認: ユーザーjob自体の再選定実行、修正後のCodexモデルとの実通信、実動画の候補確定は未実施。
+
+## 2026-09-27 JST 宙科そぴあ用の通常サムネイルテンプレ
+
+- 目的: らでん用サムネイルの二重枠・右側人物・左側文字の構図を参考に、キャラ別に保存できる宙科そぴあ用の通常動画テンプレを追加する。
+- 変更ファイル: `backend/app/assets/thumbnail_templates/sopia_normal_v1/`、`scripts/generate_sopia_thumbnail_background.py`、`backend/app/render/render_thumbnail.py`、`backend/app/thumbnail_style.py`、`backend/pyproject.toml`、`frontend/components/CharacterThumbnailSettings.tsx`、`frontend/lib/types.ts`、関連テスト、本ファイル。
+- 変更: 宇宙・科学をイメージした青系背景と枠色を新設。キャラ設定のサムネイル背景で「宙科そぴあ用」を選べるようにし、選択時に見出し・上下行・外縁の初期色を設定。設定は既存のキャラ保存経路に含まれる。らでん用テンプレの既定値は維持。
+- 検証: 合成フレームで1280×720の出力を生成し、文字・枠・人物の重なりを目視確認。宙科用とらでん用の枠色・背景の差を回帰テストで確認。backend全テスト1165 passed / 1 skipped、対象ruff、frontend typecheck・lint・webpack build成功。通常のTurbopack buildは検証worktreeの外部依存ディレクトリへのリンクを拒否したため、この環境ではwebpack buildで確認した。
+- 未確認: 実際の宙科素材を使ったサムネイル表示と、稼働中アプリへの反映。ショートのサムネイルは従来どおり完成動画から切り出す仕様。
+
+## 2026-09-27 JST 宙科サムネ背景を明るいロケット案へ変更
+
+- 目的: 暗い宇宙背景を、参考画像のような明るい白・水色の背景に変更し、星と一機のロケット、その斜めの噴射を追加する。
+- 変更ファイル: `backend/app/assets/thumbnail_templates/sopia_normal_v1/background.png`、同`template.json`、`backend/tests/test_thumbnail_rendering.py`、本ファイル。旧背景の再生成スクリプトは現在の画像と食い違うため削除した。
+- 変更: imagegenで参考画像を配色・雰囲気の参照として背景を制作。左下から右上への噴射と金色の枠を配置し、人物画像が重なる右側と大きな文字の視認性を確保。顔が上で切れないよう宙科用テンプレの顔検出なし時の切り取り範囲を調整した。らでん用テンプレは変更していない。
+- 検証: 合成素材と参考画像をフレームとしてそれぞれ1280×720の出力を生成し、文字・ロケット・人物顔・枠の重なりを目視確認。関連テスト17 passed、対象ruff、差分チェック成功。PR #86の更新後CIでbackend/frontendとも成功。
+- 未確認: 実動画のフレームでの切り取りと稼働中アプリでの表示。
+
+## 2026-09-27 JST 完成動画ごとの通常サムネテンプレ切り替え
+
+- 目的: キャラ設定の既定テンプレを維持したまま、完成した通常動画ごとにサムネの背景テンプレを選べるようにする。
+- 変更ファイル: `backend/app/thumbnail_style.py`、`backend/app/schemas.py`、`backend/app/api/exports.py`、`backend/app/api/jobs.py`、`backend/app/jobs/thumbnail_preview.py`、`backend/app/jobs/thumbnail_regeneration.py`、結果画面のサムネ編集コンポーネント・API型、関連テスト、本ファイル。
+- 変更: らでん・宙科・単色・登録済みカスタム背景を動画ごとに選択。選択直後のプレビューと保存後の再生成に同じテンプレを使い、選択は各動画のメタデータに保存。キャラ共通設定は変更しない。背景未登録の場合はカスタム選択を許可しない。
+- 検証: 対象のプレビュー・保存・書式テスト16 passed、backend全テスト1167 passed / 1 skipped、対象ruff、frontend typecheck・lint・webpack build成功。
+- 未確認: 稼働中アプリへの反映と実動画のサムネ表示。宙科テンプレの親PR #86が未統合のため、この変更はそのブランチを基点にする。
+
+## 2026-09-27 JST Codexによる通常サムネの人物・場面選別
+
+- 目的: 顔検出と固定時刻だけでは選びにくいVTuberの表情を、サムネ文言・近くの確定字幕・テンプレに合わせて選び直せるようにする。画像生成APIは使用しない。
+- 変更ファイル: `backend/app/jobs/codex_thumbnail_frame_selection.py`、`backend/app/scoring/thumbnail_frame_rank.py`、Codexブリッジの契約、サムネ再生成APIとworker、結果画面の操作、関連テスト、本ファイル。
+- 変更: 完成通常動画の元映像から８コマを抽出し、２枚の一覧画像としてホストCodexへ渡す。Codexの順位を検証し、現在の場面と異なる上位候補を選んで既存テンプレに合成する。「Codexで文言に合う人物・場面を選び直す」を明示操作として追加。従来の別場面ボタンは維持。
+- 検証: 対象90 passed、backend全テスト1175 passed / 1 skipped、対象ruff、frontend typecheck・lint・webpack build成功。ChatGPTログイン済みCodexブリッジを独立した作業ツリーで起動し、合成された８候補の画像入力から有効な順位JSONを取得した。APIキーなしでのブリッジ動作を確認。
+- 未確認: 実際の配信動画での人物選別品質と稼働中アプリでの表示。Codexが起動していない場合は再生成失敗として表示する。親PR #87を基点にする。
+
+## 2026-09-27 JST 宙科サムネの人物が画角から切れる問題を修正
+
+- 症状と原因: 完成通常動画の宙科サムネで、元フレームには頭と上半身が写っているのに、顔検出後の最小切り抜き幅が狭く、右側の髪や体が枠外で切れていた。同じ場面の人物サイズ・位置を調整する操作も結果画面になかった。
+- 変更ファイル: 宙科テンプレの配置設定、通常サムネの合成処理、プレビュー・保存APIとworker、結果画面の人物配置UI、関連テスト、本ファイル。
+- 修正: 宙科テンプレの顔周辺切り抜きを広げ、人物の右端を含める。結果画面の通常サムネ編集へ大きさ・左右・上下の即時プレビュー操作と「小さく収める」プリセットを追加。配置は動画ごとのサムネメタデータに保存し、プレビューと保存済み画像で同じ合成処理を使う。既存のらでんテンプレと既存動画・ショートの既定値は維持。
+- 検証: 実際の宙科素材の同一フレームで修正前後を描画し、修正後に頭と上半身が枠内に入ることを目視確認。右端の人物を使った切り抜き回帰テスト、プレビュー・保存時の配置一致テスト、関連36 passed、backend全1188 passed・1 skipped、ruff、frontend typecheck・lint・webpack build成功。
+- 未確認: 稼働中アプリへの反映後のブラウザ操作、ユーザーが選ぶ別場面での人物配置。画像の元フレーム自体に写っていない部位は復元できない。
+
+## 2026-09-27 JST 宙科サムネの人物検出と切り抜き配置を修正
+
+- 目的: 元映像の中央にいる人物を背景と誤判定して端の場面を選ぶ問題と、配置操作で背景ごと動いて人物の見切れを直せない問題を解消する。
+- 変更ファイル: `backend/app/render/anime_subject.py`、`backend/app/render/render_thumbnail.py`、`backend/app/jobs/thumbnail_frame_selection.py`、`backend/app/scoring/thumbnail_frame_rank.py`、宙科テンプレ設定とアニメ顔検出器、モデル導入スクリプト、結果画面の説明、Windows導入手順、関連テスト、本ファイル。
+- 修正: アニメ顔検出を優先し、中央の顔を候補に含めて場面を評価。宙科テンプレでは顔を起点に人物を背景から切り出し、固定したロケット背景へ配置する。縮小・左右上下の操作は人物だけに適用する。モデルが使えない場合も、元フレーム上の切り抜き範囲を動かす。モデルファイルは保存領域へ別途導入し、Gitには含めない。
+- 検証: 実際の宙科元フレームで従来の検出が右側背景を顔と誤認し、アニメ顔検出では中央の顔を検出することを確認。ローカルの結果画面が利用するプレビューAPIで通常サムネ２通りを生成し、人物の縮小・左移動時も背景のロケットと星が動かないことを目視確認。保存済みサムネ・MP4は更新していない。関連22 passed、backend全1193 passed・1 skipped、ruff、frontend typecheck・lint・build、Compose設定チェック成功。backend healthy、結果URLとhealth APIはHTTP 200、既存ジョブcompleted・通常３本／ショート５本を確認。
+- 未確認: ユーザーが選ぶ各フレームでの切り抜き品質と、保存ボタンによる完成JPEGの個別受入。元フレームに写っていない部位は復元できない。新しいPCでは`python scripts/install_anime_thumbnail_model.py`を一度実行する必要がある。
+
+## 2026-09-27 JST 通常サムネの人物が出る時刻を動画全体から探索
+
+- 目的: 動画前半に人物がいないと、後半に人物が出てもサムネの自動選定や再選定で頭だけ・背景だけの場面が選ばれる問題を、動画固有の時刻固定なしで修正する。
+- 変更ファイル: `backend/app/jobs/thumbnail_frame_selection.py`、`backend/app/jobs/codex_thumbnail_frame_selection.py`、`backend/app/jobs/thumbnails.py`、関連テスト、本ファイル。
+- 原因と修正: 初回生成はAI指定の１時刻を顔確認せず採用し、Codex再選定は動画全体の等間隔８コマだけを評価していた。別場面選定も粗い顔サンプルと部分的な頭の誤検出を使い得た。共通探索でまず全区間を調べ、検出がない場合は間隔を細かくし、検出が少ない区間は周辺を追加確認する。アニメ顔を優先し、顔が画面下で切れた候補を除外。初回生成は顔のないAI指定時刻を顔の見える時刻へ変更し、Codexには顔を確認した８コマを渡す。非アニメ映像の通常顔検出はアニメ顔探索後の代替として維持。
+- 検証: 実動画の約226秒の通常clipでは保存済み時刻89.332秒に頭だけが写り、顔は主に終盤に登場。更新後の共通探索は初回生成候補211.575秒、別場面候補207.545秒、Codex用８候補207.545～216.948秒を返し、211.575秒のサムネ合成で顔と上半身を目視確認。backend全1197 passed・1 skipped、ruff、差分チェック成功。キュー・実行中各０件を確認してDBをローカル無視対象領域へバックアップし、backendとworkerを再build・再作成。両サービス起動、backend healthy、稼働workerでも同じ候補時刻を確認。既存ジョブcompleted・書き出し８本は維持。
+- 未確認: 別の実動画で人物が極端に短時間しか映らない場合の検出率。既存の保存済みサムネは自動更新しておらず、再選定して保存する必要がある。人物が一度も映らない動画は従来どおり時間分散の候補を使う。
+
+## 2026-09-28 JST 再生停止位置から字幕の欠落行を追加
+
+- 目的: 字幕編集で抜けた発話を、動画の停止位置に合わせて追加できるようにする。
+- 原因: 従来の「空の字幕行を追加」は既存字幕の内側を分割するだけで、字幕のない時間帯へ行を作れず、時刻入力も再生位置と結びついていなかった。
+- 変更ファイル: `backend/app/schemas.py`、`backend/app/jobs/subtitle_structure.py`、`backend/tests/test_subtitle_structure.py`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/lib/types.ts`、`frontend/lib/subtitlePauseInsert.ts`、`frontend/tests/subtitleStructure.test.ts`、本ファイル。
+- 変更: プレビューの停止位置で字幕追加フォームを開き、開始・終了を現在の再生位置から取り直せるようにした。保存前の文言を編集プレビューに即時表示。空白区間へ追加した字幕は対象となる通常・ショートclipの字幕一覧と書き出し用文字起こしに反映し、既存字幕と重なる時刻は拒否する。従来の行分割・結合操作は維持。
+- 検証: 空白区間への追加、共有clipへの反映、プレビュー・書き出し、重複と無効時刻の拒否をAPIテストで確認。backend全1202 passed・1 skipped、ruff、frontendの字幕時刻テスト・typecheck・lint・build成功。Dockerのbackend・frontendを再build・再作成し両サービス起動、backend healthy・画面HTTP 200を確認。実ジョブを別タブで開き、1:27付近で停止位置が開始時刻へ入ること、文字入力時に保存前プレビューへ字幕が即時表示されることを確認。実ジョブの字幕保存は行っていない。
+- 未確認: ユーザーが選ぶ実際の欠落箇所での文言とタイミングの最終受入。既存字幕の内側に新しい行を重ねて保存する操作は対象外で、その場合は従来の区間分割を使う。
+
+## 2026-09-28 JST 字幕編集時のプレビュー更新による作業中断を軽減
+
+- 目的: 字幕の分割・追加中にプレビューが再読み込みされ、再生位置が先頭へ戻ったり編集を待たされたりする状態を解消する。
+- 原因: 字幕を書き込まない編集用動画のキャッシュキーに字幕区間が入っていたため、通常clipと固定画角ショートでも区間編集のたびに動画を作り直していた。字幕区間保存時の強制停止と、メディア切替時に先頭へ戻す処理も作業を中断させていた。
+- 変更ファイル: `backend/app/render/render_exact_review_preview.py`、`backend/tests/test_render_exact_review_preview.py`、`backend/tests/test_subtitle_structure.py`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、本ファイル。
+- 変更: 通常・固定画角ショートの編集用動画を字幕区間変更後も再利用する。自動画角ショートでは会話区間が人物追従の画角へ影響するため再生成を維持。字幕区間保存時は再生を止めず、映像ソース切替時は元の再生位置と再生状態を引き継ぐ。完成表示プレビューの更新と最終書き出し前の準備は維持。
+- 検証: 区間分割後も通常clipの編集用動画URLと再生可能な内容が変わらず、完成表示用の仕様は更新されるAPI回帰テストを追加。backend全1204 passed・1 skipped、ruff、frontend typecheck・lint・build成功。ローカルDockerのbackend・GPU worker・frontendを更新し、各サービス起動、backend healthy・画面HTTP 200を確認。実ジョブを別タブで開き、編集用と保存済みプレビューの往復で5.0秒の再生位置が保持されることを確認した。実ジョブの字幕保存は行っていない。
+- 未確認: ユーザーが実際に連続して区間編集する際の体感速度。自動画角ショートの区間変更では画角再評価に伴い編集用動画の再生成が必要。
+
+## 2026-09-28 JST 通常サムネの文字位置をフォント・サイズから独立
+
+- 目的: 書体変更や文字拡大で見出し・上行・下行の位置がずれ、特に上行の拡大が下行を下枠へ押し出す問題を解消する。
+- 変更ファイル: `backend/app/render/render_thumbnail.py`、`backend/app/thumbnail_style.py`、`backend/tests/test_thumbnail_text_styles.py`、`frontend/components/ThumbnailTextStyleEditor.tsx`、`frontend/lib/types.ts`、`frontend/tests/thumbnailTextStyles.test.ts`、本ファイル。
+- 原因と修正: 従来はフォントごとの文字の上余白を描画位置へ反映せず、２行を最大文字高に連動させて配置していた。描画後の文字部分を切り出して各行の中心を固定し、上行と下行をテンプレート上の独立した位置に配置する。見出しも実際の描画領域を基準に中央配置し、３箇所それぞれに左右・上下位置の調整とリセットを追加。位置はキャラ設定と個別サムネ設定へ保存され、旧設定ではオフセット０として扱う。
+- 検証: backend全1206 passed・1 skipped、ruff、frontendのキャラ設定テスト・typecheck・lint・build成功。異なるフォントとサイズで文字中心が一定であること、上行の書体・サイズ変更で下行が移動しないこと、位置設定がAPI・worker・結果画面に保持されることを確認。ローカルDockerのbackend・GPU worker・frontendを再build・再作成し、backend healthy・結果画面HTTP 200を確認。実画面で位置入力を変更するとプレビューが自動更新されることを確認し、保存せず値を戻した。
+- 未確認: ユーザーが実際に使用する文字列・書体の組合せでの最終的な見た目。保存済みサムネは自動で描き直さない。
+
+## 2026-09-28 JST 通常サムネの枠線整合と文字の直接配置
+
+- 目的: 見出しの小枠と内側の枠線のずれを直し、書体に依存しない中央揃えと、見出し・上行・下行をプレビュー上で直接動かせるようにする。
+- 原因と変更: 見出し枠が内枠より左・上に7pxずれ、枠線の色・太さも異なっていた。両テンプレの枠座標を内枠に合わせ、線の描画も統一した。プレビュー生成と同じ描画処理から各文字の実際の描画範囲を返し、その範囲をドラッグ操作と中央揃えボタンに使う。ドラッグ中は位置を示し、離した時にプレビューへ反映する。確定は従来の保存ボタンで行う。
+- 変更ファイル: `backend/app/render/render_thumbnail.py`、`backend/app/jobs/thumbnail_preview.py`、`backend/app/api/exports.py`、`backend/app/main.py`、らでん・宙科テンプレ、`backend/tests/test_thumbnail_preview.py`、`frontend/components/LiveThumbnailPreview.tsx`、`frontend/components/ResultThumbnailWorkspace.tsx`、`frontend/components/ResultThumbnailEditor.tsx`、`frontend/components/ThumbnailTextStyleEditor.tsx`、`frontend/lib/api.ts`、`frontend/lib/types.ts`、本ファイル。
+- 検証: 描画範囲・オフセット・CORSの回帰テストを追加。backend全1207 passed・1 skipped、ruff、frontend typecheck・lint・build成功。実ジョブのブラウザ画面で上行・下行をドラッグして数値とプレビューが追従すること、上行の中央揃え後の描画中心が目標中心から約1px以内であることを確認。試した未保存値はリセットし、サムネの保存操作は行っていない。
+- 未確認: 他の書体・文字列での見た目の最終受入。既存の保存済みサムネは自動再生成していない。
+
+## 2026-09-28 JST 字幕編集から尺調整へ戻る導線を追加
+
+- 目的: 字幕修正を始めた後でも選定画面へ戻って切り抜きの開始・終了を調整し、保存済みの字幕・タイトル・書式を失わず編集を続けられるようにする。
+- 原因: 字幕確認中のジョブは切り抜き予定が承認済みとなり、尺調整APIを受け付けなかった。再承認時の字幕確認データも新規生成で上書きされるため、単純に戻すだけでは修正内容を失う。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/app/jobs/clip_plan.py`、`backend/app/jobs/subtitle_review.py`、`backend/tests/test_api_routes.py`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/app/jobs/[jobId]/subtitles/page.tsx`、`frontend/lib/api.ts`、`frontend/lib/types.ts`、本ファイル。
+- 変更: 字幕画面に「尺調整へ戻る」を追加。未保存入力がある場合は移動を止める。戻った選定画面では開始・終了だけ変更でき、再選定や動画形式変更を抑止する。字幕編集へ戻る際は既存の字幕分割・修正、タイトル、フック、書式を保持し、新たに含まれた元字幕だけ追加する。尺が変わったclipの確認状態とプレビューを更新する。
+- 検証: 尺の延長・短縮、字幕分割・修正とタイトルの保持、変更clipだけ確認し直すAPI回帰テスト成功。backend全1208 passed・1 skipped、ruff、frontend typecheck・lint・build、git diff --check成功。キュー0件・実行中0件を確認しDBをバックアップ後、backend・GPU worker・frontendを再build・再作成。実ジョブの字幕画面で「尺調整へ戻る」ボタンが表示され、ジョブが字幕確認中・切り抜き予定が承認済みのままであることを確認した。
+- 未確認: 実ジョブでの尺変更から字幕編集への往復操作とプレビューの目視確認。既存ジョブの尺は変更していない。
