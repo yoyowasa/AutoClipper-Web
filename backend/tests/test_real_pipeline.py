@@ -1689,6 +1689,25 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     stored_overlay_mode: str | None,
     expected_overlay_mode: str,
 ) -> None:
+    def prepare_existing_export_rerender() -> dict[str, Any]:
+        # Exercise publication replacement on a job that already has exports.
+        # This persisted state can remain from a backend version with full-job reopen.
+        review_path = storage.job_outputs(created["jobId"]) / "subtitle_review.json"
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+        review["state"] = "awaiting_review"
+        review["renderRevision"] += 1
+        review["reopenedAt"] = "2026-01-01T00:00:00+00:00"
+        review["confirmedClipCount"] = 0
+        for clip in review["clips"]:
+            clip["confirmed"] = False
+        review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+        with next(app.dependency_overrides[get_db]()) as db:
+            job = db.get(Job, created["jobId"])
+            assert job is not None
+            job.status = "awaiting_subtitle_review"
+            db.commit()
+        return client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
+
     def apply_clip(clip: dict[str, Any]) -> Any:
         return client.post(
             f"/api/jobs/{created['jobId']}/subtitle-review/clips/{clip['id']}/apply",
@@ -1939,9 +1958,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert len(first_results["normalClips"]) == 1
     assert len(first_results["shorts"]) == 1
 
-    reopened = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/reopen")
-    assert reopened.status_code == 200
-    reopened_review = reopened.json()
+    reopened_review = prepare_existing_export_rerender()
     assert reopened_review["state"] == "awaiting_review"
     assert reopened_review["renderRevision"] == 2
     assert reopened_review["confirmedClipCount"] == 0
@@ -2032,7 +2049,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         / ".rerender_publication_unresolved"
     ).exists()
 
-    reopened_again = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/reopen").json()
+    reopened_again = prepare_existing_export_rerender()
     reopened_again = render_queued_previews(reopened_again)
     for clip in reopened_again["clips"]:
         response = apply_clip(clip)

@@ -108,7 +108,6 @@ from app.jobs.subtitle_review import (
     queue_review_render,
     refresh_review_render_contract,
     retain_review_after_boundary_reedit,
-    reopen_completed_review,
     subtitle_review_output_path,
     subtitle_review_preview_path,
     subtitle_review_summary_path,
@@ -498,51 +497,6 @@ def _can_reopen_subtitle_review(
     paths: StoragePaths,
 ) -> bool:
     return job.status == "completed" and _reedit_artifacts_available(job.id, video, paths)
-
-
-def _reopen_job_subtitle_review(
-    job: Job,
-    video: Video,
-    paths: StoragePaths,
-) -> SubtitleReviewDocument:
-    output_dir = paths.job_outputs(job.id)
-    with subtitle_review_document_lock(output_dir):
-        document = _get_subtitle_review_or_404(job.id, paths)
-        document.short_max_duration = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
-        document, _settings_changed = _hydrate_subtitle_review_render_settings(
-            document,
-            job,
-            video,
-        )
-        if job.status == "awaiting_subtitle_review" and document.state == "awaiting_review":
-            if not _reedit_artifacts_available(job.id, video, paths):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="source artifacts are unavailable",
-                )
-            _write_subtitle_review_unlocked(document, paths)
-            return document
-        if not _can_reopen_subtitle_review(job, video, paths):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=("completed job cannot be reopened because source artifacts are unavailable"),
-            )
-        try:
-            document = reopen_completed_review(document)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=str(exc),
-            ) from exc
-
-        _write_subtitle_review_unlocked(document, paths)
-        job.status = "awaiting_subtitle_review"
-        job.progress = PROGRESS_MAP["awaiting_subtitle_review"]
-        job.current_step = CURRENT_STEP_MAP["awaiting_subtitle_review"]
-        job.error_code = None
-        job.error_message = None
-        job.updated_at = utc_now()
-        return document
 
 
 def _selected_clips_by_candidate(output_dir: Path) -> dict[str, dict[str, Any]]:
@@ -3390,27 +3344,6 @@ def update_subtitle_review_settings(
         paths=paths,
         enqueue_preview=enqueue_preview,
     )
-
-
-@router.post(
-    "/{job_id}/subtitle-review/reopen",
-    response_model=SubtitleReviewDocument,
-)
-def reopen_subtitle_review(
-    job_id: str,
-    db: Session = Depends(get_db),
-    paths: StoragePaths = Depends(get_storage_paths),
-) -> SubtitleReviewDocument:
-    job = _get_job_or_404(db, job_id)
-    video = db.get(Video, job.video_id)
-    if video is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="source video record is unavailable",
-        )
-    document = _reopen_job_subtitle_review(job, video, paths)
-    db.commit()
-    return document
 
 
 @router.get("/{job_id}/subtitle-review/clips/{clip_id}/preview-video")

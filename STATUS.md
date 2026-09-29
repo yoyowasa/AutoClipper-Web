@@ -10378,3 +10378,11 @@ pip check: pass
 - 内容: 4窓口とショート変換専用の補助処理・型・未使用画面部品を削除。旧APIで準備していたテストを現行の一括字幕保存とclip適用に変更。現行applyは完成プレビュー前に確定できる仕様を維持。共通リクエスト親クラス、再編集済みjobの判定、全job reopenは保持。
 - 検証: 作業worktreeをimportする `python -m pytest -q` で1200 passed・1 skipped。対象3ファイル165 passed。 `ruff check . ../launcher`、frontend lint・typecheck・build、`docker compose config --quiet`、`git diff --check` 成功。
 - 未確認: 実画面での手操作、Docker起動による実動作、稼働中backendへの外部クライアントの有無。全job reopenの削除と再レンダリングテストの組み直しはtask-157で扱う。
+
+## 2026-09-29 JST 未使用の全job字幕確認reopenを整理（task-157）
+
+- 目的: 現行画面で使わない完成job全体の字幕確認reopen APIを削除し、再編集と既存書き出しの保護に関する検証を維持する。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/app/jobs/subtitle_review.py`、`backend/tests/test_api_routes.py`、`backend/tests/test_real_pipeline.py`、`backend/tests/test_subtitle_review.py`、`frontend/lib/api.ts`、本ファイル。
+- 内容: 全job reopen窓口・専用補助処理・未使用フロント関数を削除。通常の再編集テストは現行の子job作成経路へ移行。保存済み旧reopen状態からの子job再編集と、既存書き出しを持つ同一jobの差し替え・失敗時巻き戻しは、テスト内で保存状態を用意して引き続き検証する。既存の `reopened_at` 判定とfield、`reopen-clip-plan` は保持。
+- 検証: 作業worktreeの `python -m pytest -q` で1199 passed・1 skipped。`tests/test_api_routes.py` は105 passed、実パイプラインの既存書き出し再レンダリングは3 passed。`ruff check . ../launcher`、frontend lint・typecheck・build、`git diff --check` 成功。FastAPI登録経路で旧reopenがなく、`reopen-clip-plan` と `apply` は残ることを確認。隔離したテストDBとダミー動画を使うローカル画面で、結果画面から子jobへの1本再編集、字幕とclipの一括適用、一括字幕修正の保存を確認。一括修正後の字幕「字幕修正」と確認解除を画面・backend GETの両方で確認。別名・別ポートのDocker Composeでbackend・frontend・Redis・workerを起動し、backendのhealthとfrontendトップがHTTP 200、旧reopen経路がなく現行経路があることを確認して停止した。
+- 未確認: 実動画の再生・プレビュー品質、稼働中backendへの外部クライアントの有無。稼働中Composeは別checkoutを使っており変更していない。
