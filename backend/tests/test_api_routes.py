@@ -55,6 +55,7 @@ from app.render.render_short import (
 )
 from app.render.render_exact_review_preview import subtitle_review_preview_spec_hash
 from app.storage.paths import StoragePaths, get_storage_paths
+from review_state_helpers import seed_legacy_reopened_review
 
 
 @pytest.fixture()
@@ -964,23 +965,6 @@ def _seed_reeditable_normal_export(
     return job_id, candidate_id, rendered_bytes
 
 
-def _seed_persisted_legacy_reopen(job_id: str) -> None:
-    """Model a job already reopened by an older backend, without the retired route."""
-    storage = app.dependency_overrides[get_storage_paths]()
-    review_path = storage.job_outputs(job_id) / "subtitle_review.json"
-    review = json.loads(review_path.read_text(encoding="utf-8"))
-    review.update({"state": "awaiting_review", "renderRevision": 2, "reopenedAt": "2026-01-01T00:00:00+00:00"})
-    review["confirmedClipCount"] = 0
-    for clip in review["clips"]:
-        clip["confirmed"] = False
-    review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
-    with next(app.dependency_overrides[get_db]()) as db:
-        job = db.get(Job, job_id)
-        assert job is not None
-        job.status = "awaiting_subtitle_review"
-        db.commit()
-
-
 def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
     client: TestClient,
 ) -> None:
@@ -1870,8 +1854,9 @@ def test_completed_mp4_upload_creates_one_clip_child_from_legacy_open_review(
     source_job_id, candidate_id, rendered_bytes = _seed_reeditable_export()
     _write_reeditable_preview_inputs(source_job_id, candidate_id)
 
-    _seed_persisted_legacy_reopen(source_job_id)
     storage = app.dependency_overrides[get_storage_paths]()
+    with next(app.dependency_overrides[get_db]()) as db:
+        seed_legacy_reopened_review(storage, db, source_job_id)
     source_review_path = storage.job_outputs(source_job_id) / "subtitle_review.json"
     source_review_before = source_review_path.read_bytes()
     with next(app.dependency_overrides[get_db]()) as db:
@@ -4068,7 +4053,8 @@ def test_rollback_failed_publication_stays_blocked_during_hook_updates(
     storage = app.dependency_overrides[get_storage_paths]()
     output_dir = storage.job_outputs(job_id)
     storage.zip_path(job_id).write_bytes(b"possibly mixed zip")
-    _seed_persisted_legacy_reopen(job_id)
+    with next(app.dependency_overrides[get_db]()) as db:
+        seed_legacy_reopened_review(storage, db, job_id)
     mark_rerender_publication_unresolved(
         output_dir,
         job_id=job_id,
@@ -4248,7 +4234,8 @@ def test_framing_and_layout_save_preserves_preview_and_other_clips(
     monkeypatch.setattr("app.jobs.subtitle_review_preview.live_subtitle_review_preview_is_ready", lambda *args: True)
     job_id, candidate_id, _ = _seed_reeditable_export()
     _write_reeditable_preview_inputs(job_id, candidate_id)
-    output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
+    storage = app.dependency_overrides[get_storage_paths]()
+    output_dir = storage.job_outputs(job_id)
     review_file = output_dir / "subtitle_review.json"
     review = json.loads(review_file.read_text(encoding="utf-8"))
     selection_file = output_dir / "selected_clips.json"
@@ -4263,7 +4250,8 @@ def test_framing_and_layout_save_preserves_preview_and_other_clips(
     app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
         lambda *args: queued.append(args)
     )
-    _seed_persisted_legacy_reopen(job_id)
+    with next(app.dependency_overrides[get_db]()) as db:
+        seed_legacy_reopened_review(storage, db, job_id)
     before = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
     for sibling in before["clips"]:
         if sibling["id"] != candidate_id:

@@ -10440,3 +10440,12 @@ pip check: pass
 - 内容: main更新後に保留中の変更を復元し、9月28日の文字起こし記録をtask-156・157より前に配置。両方の追記と資料本文を保持した。アプリコード・設定・Docker稼働環境は変更していない。
 - 検証: 資料2件のGit登録内容が退避した内容と一致。HyperFrames資料のGit登録内容は上記のSHA-256と一致。差分が本ファイルと資料2件だけで、競合記号が残っていないことを確認。
 - 未確認: 資料にある構想の採用判断や実動画での検証は行っていない。
+
+## 2026-09-29 JST 旧reopen状態のテスト準備を共通化（task-159）
+
+- 目的: 廃止した全job reopen経路が残した保存状態を、APIと実パイプラインのテストで同じ方法で再現する。
+- 判断: 字幕clipの `apply` はプレビュー完成前でも確定できる。プレビュー完成の確認は書き出し開始の `finalize` が行う。根拠は `backend/tests/test_api_routes.py` の `test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once`（queuedのまま確定）と、`backend/tests/test_real_pipeline.py` の `test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation`（未完成時のfinalizeは409）。
+- 変更ファイル: `backend/tests/review_state_helpers.py`、`backend/tests/test_api_routes.py`、`backend/tests/test_real_pipeline.py`、本ファイル。アプリ本体・frontend・launcherは変更していない。
+- 内容: 保存済み旧reopen状態の作成を共通ヘルパーに移し、APIテストの3呼び出しと実パイプラインの2呼び出しで使用。API側の元データはすべてrevision 1。実パイプラインでは1回目が1→2、2回目が2→3なので、現在値を1増やす。
+- 検証: `ruff check . ../launcher` 成功、関連8 passed、`python -m pytest` で1199 passed・1 skipped。直接の `pytest.exe` はPCのアプリケーション制御で起動を拒否されたため、同じpytestをモジュール実行した。
+- 未確認: 実動画の再生・プレビュー品質と、現行storageにない旧reopen保存状態での実運用は確認していない。
