@@ -10483,3 +10483,11 @@ pip check: pass
 - 内容: 保存ごとに固有の一時ファイルへ従来と同じ書式で書き、`os.replace` で公開して一時ファイルを後片付けする。Windowsでは同一パスへのスレッド間の同時置換で `PermissionError` が出たため、置換部分だけをロックで順番に実行する。Codex初期選定の `allow_nan=False` と、Codexタイトル案の圧縮JSON書式を維持。
 - 検証: 一時ファイルの後片付け、置換失敗時の元ファイル保持、同一パスへの2スレッド書き込みをテスト。並行書き込みテストはWindowsで20回連続成功。`ruff check . ../launcher ../scripts` 成功、backend全1201 passed・1 skipped。frontend全16テスト・lint・typecheck・build成功。独立worktreeのfrontend buildにはそのworktree内で `npm ci` を実行した。
 - 未確認: 別プロセス間の同時置換と、稼働中Dockerでの実動作。Dockerの稼働環境は変更していない。
+
+## 2026-09-29 JST clip plan操作のjob状態を先に確保（task-164）
+
+- 目的: 境界、冒頭フック、再選定、種類変更の同時リクエストが、古いjob状態を読んで二重に処理を進めることを防ぐ。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/tests/test_clip_plan_job_claim.py`、本ファイル。frontendは変更していない。
+- 内容: job状態の条件付きUPDATEとrowcount確認を共通化。4窓口でclip planの書き込み前に状態を確保し、競合時は409を返す。種類変更は同期処理の終了後に編集可能な状態へ戻す。JSON保存やキュー登録に失敗した際の状態復元を維持する。手動編集の同期経路は変更していない。
+- 検証: 4窓口で状態確保中の2回目の呼び出しが409、キューを使う3窓口で登録が各1回、種類変更で登録なしを確認。古いjob状態を保持した別DBセッションの条件付きUPDATEも409。関連50 passed、backend全1206 passed・1 skipped、`ruff check . ../launcher ../scripts`、frontend全16テスト・lint・typecheck・build成功。
+- 未確認: 稼働中Dockerへの反映、実動画での動作、PRのCI結果。ほかのjob状態変更窓口は今回修正していない。

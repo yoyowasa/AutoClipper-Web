@@ -273,6 +273,33 @@ def _get_clip_plan_or_404(
         ) from exc
 
 
+def _claim_job_status(
+    db: Session,
+    job: Job,
+    *,
+    expected: str,
+    new_status: str,
+    current_step: str,
+) -> None:
+    result = db.execute(
+        update(Job)
+        .where(Job.id == job.id, Job.status == expected)
+        .values(
+            status=new_status,
+            progress=PROGRESS_MAP[new_status],
+            current_step=current_step,
+            error_code=None,
+            error_message=None,
+            updated_at=utc_now(),
+        )
+    )
+    if result.rowcount != 1:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "job state changed; reload")
+    db.commit()
+    db.refresh(job)
+
+
 def _get_manual_edit_context(
     db: Session,
     job_id: str,
@@ -2386,6 +2413,13 @@ def update_clip_plan_clip_type(
         plan_path: plan_path.read_bytes(),
     }
     previous_settings = dict(job.settings_json or {})
+    _claim_job_status(
+        db,
+        job,
+        expected="awaiting_clip_review",
+        new_status="preparing_clip_review",
+        current_step="切り抜きの種類を変更中",
+    )
     try:
         _write_json_payload(
             selected_path,
@@ -2396,16 +2430,24 @@ def update_clip_plan_clip_type(
             document.model_dump(by_alias=True, mode="json"),
         )
         job.settings_json = next_settings
+        job.status = "awaiting_clip_review"
+        job.progress = PROGRESS_MAP["awaiting_clip_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
         job.updated_at = utc_now()
         db.commit()
         db.refresh(job)
     except Exception as exc:
         db.rollback()
         job.settings_json = previous_settings
+        job.status = "awaiting_clip_review"
+        job.progress = PROGRESS_MAP["awaiting_clip_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
+        job.updated_at = utc_now()
         for path, payload in artifact_snapshot.items():
             temporary_path = path.with_suffix(f"{path.suffix}.rollback")
             temporary_path.write_bytes(payload)
             temporary_path.replace(path)
+        db.commit()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="could not update clip type",
@@ -2493,21 +2535,24 @@ def update_clip_plan_clip_boundary(
         )
         return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
-    job.status = "preparing_clip_review"
-    job.progress = PROGRESS_MAP["preparing_clip_review"]
-    job.current_step = "調整した範囲の確認動画を準備中"
-    job.error_code = None
-    job.error_message = None
-    job.updated_at = utc_now()
+    _claim_job_status(
+        db,
+        job,
+        expected="awaiting_clip_review",
+        new_status="preparing_clip_review",
+        current_step="調整した範囲の確認動画を準備中",
+    )
     document.state = "preparing"
     document.source_duration = source_duration
-    write_clip_plan(
-        document,
-        clip_plan_output_path(paths.job_outputs(job_id)),
-    )
-    db.commit()
-    db.refresh(job)
-
+    try:
+        write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+    except Exception:
+        job.status = "awaiting_clip_review"
+        job.progress = PROGRESS_MAP["awaiting_clip_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
+        job.updated_at = utc_now()
+        db.commit()
+        raise
     try:
         enqueue_boundary_update(
             job.id,
@@ -2622,20 +2667,23 @@ def update_clip_plan_hook_scene(
         )
         return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
-    job.status = "preparing_clip_review"
-    job.progress = PROGRESS_MAP["preparing_clip_review"]
-    job.current_step = "冒頭フック映像の確認動画を準備中"
-    job.error_code = None
-    job.error_message = None
-    job.updated_at = utc_now()
-    document.state = "preparing"
-    write_clip_plan(
-        document,
-        clip_plan_output_path(paths.job_outputs(job_id)),
+    _claim_job_status(
+        db,
+        job,
+        expected="awaiting_clip_review",
+        new_status="preparing_clip_review",
+        current_step="冒頭フック映像の確認動画を準備中",
     )
-    db.commit()
-    db.refresh(job)
-
+    document.state = "preparing"
+    try:
+        write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+    except Exception:
+        job.status = "awaiting_clip_review"
+        job.progress = PROGRESS_MAP["awaiting_clip_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
+        job.updated_at = utc_now()
+        db.commit()
+        raise
     try:
         enqueue_hook_scene_update(
             job.id,
@@ -2698,24 +2746,27 @@ def reselect_clip_plan(
         )
     )
     validated_settings = _validated_persisted_job_settings(settings_payload)
-    job.settings_json = validated_settings.model_dump(
-        by_alias=True,
-        mode="json",
+    _claim_job_status(
+        db,
+        job,
+        expected="awaiting_clip_review",
+        new_status="reselecting_clips",
+        current_step=CURRENT_STEP_MAP["reselecting_clips"],
     )
-    job.status = "reselecting_clips"
-    job.progress = PROGRESS_MAP["reselecting_clips"]
-    job.current_step = CURRENT_STEP_MAP["reselecting_clips"]
-    job.error_code = None
-    job.error_message = None
-    job.updated_at = utc_now()
+    job.settings_json = validated_settings.model_dump(by_alias=True, mode="json")
     document.state = "reselecting"
-    write_clip_plan(
-        document,
-        clip_plan_output_path(paths.job_outputs(job_id)),
-    )
+    try:
+        write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+    except Exception:
+        db.rollback()
+        db.refresh(job)
+        job.status = "awaiting_clip_review"
+        job.progress = PROGRESS_MAP["awaiting_clip_review"]
+        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
+        job.updated_at = utc_now()
+        db.commit()
+        raise
     db.commit()
-    db.refresh(job)
-
     try:
         enqueue_reselection(job.id)
     except Exception as exc:
