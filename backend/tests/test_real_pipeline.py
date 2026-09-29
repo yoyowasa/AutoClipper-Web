@@ -54,6 +54,7 @@ from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.black_screen import BlackScreenSegment, VisualQuality
 from app.video.probe import VideoMetadata
 from app.video.scene_detect import SceneSegment
+from review_state_helpers import seed_legacy_reopened_review
 
 
 SUMMARY_FILENAMES = [
@@ -1692,20 +1693,8 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     def prepare_existing_export_rerender() -> dict[str, Any]:
         # Exercise publication replacement on a job that already has exports.
         # This persisted state can remain from a backend version with full-job reopen.
-        review_path = storage.job_outputs(created["jobId"]) / "subtitle_review.json"
-        review = json.loads(review_path.read_text(encoding="utf-8"))
-        review["state"] = "awaiting_review"
-        review["renderRevision"] += 1
-        review["reopenedAt"] = "2026-01-01T00:00:00+00:00"
-        review["confirmedClipCount"] = 0
-        for clip in review["clips"]:
-            clip["confirmed"] = False
-        review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
         with next(app.dependency_overrides[get_db]()) as db:
-            job = db.get(Job, created["jobId"])
-            assert job is not None
-            job.status = "awaiting_subtitle_review"
-            db.commit()
+            seed_legacy_reopened_review(storage, db, created["jobId"])
         return client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
 
     def apply_clip(clip: dict[str, Any]) -> Any:
