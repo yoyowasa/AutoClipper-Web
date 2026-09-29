@@ -10370,3 +10370,11 @@ pip check: pass
 - 変更: 字幕画面に「尺調整へ戻る」を追加。未保存入力がある場合は移動を止める。戻った選定画面では開始・終了だけ変更でき、再選定や動画形式変更を抑止する。字幕編集へ戻る際は既存の字幕分割・修正、タイトル、フック、書式を保持し、新たに含まれた元字幕だけ追加する。尺が変わったclipの確認状態とプレビューを更新する。
 - 検証: 尺の延長・短縮、字幕分割・修正とタイトルの保持、変更clipだけ確認し直すAPI回帰テスト成功。backend全1208 passed・1 skipped、ruff、frontend typecheck・lint・build、git diff --check成功。キュー0件・実行中0件を確認しDBをバックアップ後、backend・GPU worker・frontendを再build・再作成。実ジョブの字幕画面で「尺調整へ戻る」ボタンが表示され、ジョブが字幕確認中・切り抜き予定が承認済みのままであることを確認した。
 - 未確認: 実ジョブでの尺変更から字幕編集への往復操作とプレビューの目視確認。既存ジョブの尺は変更していない。
+
+## 2026-09-29 JST 未使用の字幕確認APIを整理（task-156）
+
+- 目的: 現行画面が呼ばない個別content保存、個別字幕保存、個別confirm、再編集後の通常→Short変換の4窓口を削除する。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/app/jobs/subtitle_review.py`、`backend/app/schemas.py`、関連テスト、`frontend/lib/api.ts`、`frontend/lib/types.ts`、`frontend/components/ShortConversionEditor.tsx`。
+- 内容: 4窓口とショート変換専用の補助処理・型・未使用画面部品を削除。旧APIで準備していたテストを現行の一括字幕保存とclip適用に変更。現行applyは完成プレビュー前に確定できる仕様を維持。共通リクエスト親クラス、再編集済みjobの判定、全job reopenは保持。
+- 検証: 作業worktreeをimportする `python -m pytest -q` で1200 passed・1 skipped。対象3ファイル165 passed。 `ruff check . ../launcher`、frontend lint・typecheck・build、`docker compose config --quiet`、`git diff --check` 成功。
+- 未確認: 実画面での手操作、Docker起動による実動作、稼働中backendへの外部クライアントの有無。全job reopenの削除と再レンダリングテストの組み直しはtask-157で扱う。

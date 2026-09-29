@@ -16,7 +16,6 @@ from app.posting_metadata import (
     PostMetadataSource,
     YouTubeTitleCandidate,
     ensure_publication_title_suffix,
-    strip_normal_publication_title_suffix,
 )
 from app.render.subtitles_ass import (
     DEFAULT_NORMAL_HEIGHT,
@@ -1238,107 +1237,6 @@ def reopen_completed_review(document: SubtitleReviewDocument) -> SubtitleReviewD
     document.reopened_at = _utc_iso()
     for clip in document.clips:
         clip.confirmed = False
-    return _refresh_counts(document)
-
-
-def convert_review_clip_to_short(
-    document: SubtitleReviewDocument,
-    clip_id: str,
-    *,
-    start: float,
-    end: float,
-) -> SubtitleReviewDocument:
-    """Convert the only clip in an isolated re-edit job to a short draft."""
-    if document.reedit_source_job_id is None:
-        raise ValueError("clip conversion is available only in an isolated re-edit job")
-    if len(document.clips) != 1:
-        raise ValueError("isolated re-edit job must contain exactly one clip")
-    clip = next((item for item in document.clips if item.id == clip_id), None)
-    if clip is None:
-        raise KeyError(clip_id)
-    if clip.type != "normal":
-        raise ValueError("only a normal clip can be converted to a short")
-    if start < clip.start - 0.001 or end > clip.end + 0.001 or end <= start:
-        raise ValueError("short range must stay within the source normal clip")
-
-    retained_hook = bool(
-        clip.hook_scene_start is not None
-        and clip.hook_scene_end is not None
-        and clip.hook_scene_start >= start - 0.001
-        and clip.hook_scene_end <= end + 0.001
-    )
-    hook_duration = 0.0
-    if retained_hook and clip.hook_scene_start is not None and clip.hook_scene_end is not None:
-        hook_duration = clip.hook_scene_end - clip.hook_scene_start
-    if end - start + hook_duration > document.short_max_duration + 0.001:
-        raise ValueError(
-            f"short duration must not exceed {document.short_max_duration:g} seconds"
-        )
-
-    clip.type = "short"
-    clip.thumbnail_kicker = ""
-    clip.thumbnail_line1 = ""
-    clip.thumbnail_line2 = ""
-    clip.thumbnail_frame_seconds = None
-    if clip.publication_title:
-        clip.publication_title = strip_normal_publication_title_suffix(
-            clip.publication_title, suffix=clip.normal_title_suffix
-        )
-    clip.start = start
-    clip.end = end
-    clip.duration = end - start
-    if not retained_hook:
-        clip.hook_scene_start = None
-        clip.hook_scene_end = None
-
-    retained_segments = sorted(
-        (
-            segment
-            for segment in document.segments
-            if segment.end > start and segment.start < end
-        ),
-        key=lambda segment: segment.index,
-    )
-    for segment in retained_segments:
-        segment.affected_clip_ids = [clip_id]
-    document.segments = retained_segments
-    clip.segment_ids = [segment.id for segment in retained_segments]
-
-    had_post_metadata = bool(
-        clip.title_candidates
-        or clip.recommended_title_id
-        or clip.selected_title_id
-        or clip.youtube_description
-        or clip.youtube_hashtags
-        or clip.description_evidence_segment_ids
-        or clip.post_metadata_source
-        or clip.post_metadata_revision_hash
-    )
-    clip.title_candidates = []
-    clip.recommended_title_id = None
-    clip.selected_title_id = None
-    clip.youtube_description = ""
-    clip.youtube_hashtags = []
-    clip.youtube_tags = []
-    clip.description_evidence_segment_ids = []
-    clip.post_metadata_revision_hash = None
-    if had_post_metadata:
-        clip.post_metadata_source = "manual"
-
-    # Keep the user's saved text styles. Only resolved values are rebuilt for 9:16.
-    clip.resolved_title_style = None
-    clip.resolved_hook_style = None
-    clip.resolved_subtitle_style = None
-    clip.resolved_default_title_style = None
-    clip.resolved_default_hook_style = None
-    clip.resolved_default_subtitle_style = None
-    clip.preview_state = "queued"
-    clip.preview_spec_hash = None
-    clip.preview_error = None
-    clip.preview_video_url = None
-    clip.live_preview_spec_hash = None
-    clip.live_preview_video_url = None
-    clip.confirmed = False
     return _refresh_counts(document)
 
 

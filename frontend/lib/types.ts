@@ -563,11 +563,6 @@ export type SubtitleReviewFinalizeResponse = {
   status: JobStatus;
 };
 
-export type SubtitleReviewConvertToShortRequest = {
-  startSeconds?: number;
-  endSeconds?: number;
-};
-
 export type TitleHookSuggestion = {
   id: string;
   intent: PostTitleIntent;
