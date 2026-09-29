@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.audio.transcript_postprocess import repair_known_transcript_artifact_text
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
+from app.storage.json_io import write_json_atomic
 
 
 CLIP_PLAN_FILENAME = "clip_plan.json"
@@ -298,20 +299,10 @@ def update_clip_plan_hook_scene(
 
 
 def write_clip_plan(document: ClipPlanDocument, output_path: str | Path) -> Path:
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
-    temporary_path.write_text(
-        json.dumps(
-            document.model_dump(by_alias=True, mode="json"),
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
+    return write_json_atomic(
+        Path(output_path),
+        document.model_dump(by_alias=True, mode="json"),
     )
-    temporary_path.replace(path)
-    return path
 
 
 def load_clip_plan(path: str | Path) -> ClipPlanDocument:

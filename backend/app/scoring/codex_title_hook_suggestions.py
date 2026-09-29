@@ -16,6 +16,7 @@ from app.scoring.title_hook_suggestions import (
     GeneratedTitleHookSuggestionResult,
     TitleHookSuggestionResult,
 )
+from app.storage.json_io import write_json_atomic
 
 
 BRIDGE_DIRNAME = "codex_bridge"
@@ -106,17 +107,6 @@ class _BridgeStatus(BaseModel):
         if self.request_state == "processing" and not self.request_id:
             raise ValueError("processing bridge status requires requestId")
         return self
-
-
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(f"{path.suffix}.{uuid4().hex}.tmp")
-    temporary_path.write_text(
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n",
-        encoding="utf-8",
-    )
-    temporary_path.replace(path)
-    return path
 
 
 class CodexTitleHookSuggestionGenerator:
@@ -295,9 +285,11 @@ class CodexTitleHookSuggestionGenerator:
             threadId=self.thread_id,
             threadScope=f"{self.job_id}:{self.clip_id}",
         )
-        _write_json_atomic(
+        write_json_atomic(
             self.request_path(request_id),
             envelope.model_dump(by_alias=True, mode="json", exclude_none=True),
+            indent=None,
+            separators=(",", ":"),
         )
 
         started_at = self.monotonic_func()
