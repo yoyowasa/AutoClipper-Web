@@ -73,7 +73,8 @@ export function initialSelectionStatusDisplay(
   const retrying =
     rawStatus === "retrying" ||
     rawStatus === "restarting" ||
-    (typeof currentStep === "string" && currentStep.includes("再試行")) ||
+    ((jobStatus === "selecting_clips" || jobStatus === "reselecting_clips") &&
+      typeof currentStep === "string" && currentStep.includes("再試行中")) ||
     (retryCount !== null &&
       retryCount > 1 &&
       (rawStatus === "queued" || rawStatus === "running" || rawStatus === "selecting"));

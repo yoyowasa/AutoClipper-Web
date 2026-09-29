@@ -3726,6 +3726,8 @@ def test_openapi_exposes_optional_boolean_heatmap_mode_for_clip_reselection(
         {"type": "null"},
     ]
     assert "heatmapIntervalMode" not in schema["required"]
+    assert "normalMinDuration" not in schema["required"]
+    assert "normalMaxDuration" not in schema["required"]
 
 
 def test_job_creation_rejects_unsupported_transcription_profile(client: TestClient) -> None:

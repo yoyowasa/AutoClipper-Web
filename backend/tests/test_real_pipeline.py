@@ -1053,6 +1053,8 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
 
     def reselection_payload(mode: bool | str) -> dict[str, Any]:
         return {
+            "normalMinDuration": 90,
+            "normalMaxDuration": 120,
             "normalClipSelectionPreset": "auto",
             "shortClipSelectionPreset": "auto",
             "normalClipGuidance": "",
@@ -1071,6 +1073,13 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
     assert invalid_response.status_code == 422
     assert queued_reselections == []
 
+    invalid_duration_response = client.post(
+        f"/api/jobs/{created['jobId']}/clip-plan/reselect",
+        json={**reselection_payload(False), "normalMinDuration": 121},
+    )
+    assert invalid_duration_response.status_code == 422
+    assert queued_reselections == []
+
     first_reselect_response = client.post(
         f"/api/jobs/{created['jobId']}/clip-plan/reselect",
         json=reselection_payload(False),
@@ -1080,6 +1089,8 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
         stored_job = db.get(Job, created["jobId"])
         assert stored_job is not None
         assert stored_job.settings_json["heatmapIntervalMode"] is False
+        assert stored_job.settings_json["normalMinDuration"] == 90
+        assert stored_job.settings_json["normalMaxDuration"] == 120
         assert stored_job.settings_json["shortTopBannerEnabled"] is False
         assert stored_job.settings_json["shortBottomBannerEnabled"] is False
         assert stored_job.settings_json["shortSubtitleYPercent"] is None
@@ -1151,6 +1162,7 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
     revised_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
     assert revised_plan["revision"] == 2
     assert revised_plan["settings"]["heatmapIntervalMode"] is False
+    assert revised_plan["settings"]["normalMaxDuration"] == 120
     with next(app.dependency_overrides[get_db]()) as db:
         stored_job = db.get(Job, created["jobId"])
         assert stored_job is not None
@@ -3105,6 +3117,36 @@ def test_codex_normal_pool_is_refined_and_reselected_by_quality(
         "normal-initial",
         "normal-retained-long",
     }
+
+
+def test_codex_reselection_does_not_reuse_almost_identical_normal_proposal() -> None:
+    repeated = Candidate(
+        id="normal-repeated", type="normal", start=11122.41, end=11461.73,
+        duration=339.32, transcript_text="前とほぼ同じ場面です。", final_score=99,
+        should_use=True, topic_key="repeated-topic", selection_reason="codex_direct",
+    )
+    different = Candidate(
+        id="normal-different", type="normal", start=9600, end=9960,
+        duration=360, transcript_text="別の場面です。", final_score=90,
+        should_use=True, topic_key="different-topic", selection_reason="codex_direct",
+    )
+    result = CodexInitialSelectionResult(
+        selection=CandidateSelection(
+            normalClips=[repeated], selectionPolicy="strict_quality",
+            requestedNormalCount=1,
+        ),
+        candidates=[repeated, different], summary={},
+    )
+    selection, _, _ = _codex_selection_with_diverse_refined_shorts(
+        result, transcript_segments=[], silence_segments=[], scene_segments=[],
+        settings={
+            "enableBoundaryRefinement": False, "normalClipCount": 1,
+            "shortCount": 0, "selectionPolicy": "strict_quality",
+            "_previousProposedRanges": [(11122.41, 11452.19)],
+        },
+        timeline_duration=12202,
+    )
+    assert [candidate.id for candidate in selection.normal_clips] == ["normal-different"]
 
 
 def test_codex_normal_pool_keeps_topic_overlap_and_quality_gates_when_fill_requested() -> None:

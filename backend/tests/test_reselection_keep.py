@@ -1,10 +1,12 @@
 import pytest
+from types import SimpleNamespace
 
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.candidates.select_candidates import CandidateSelection
 from app.candidates.used_ranges import used_ranges
-from app.jobs.clip_plan import build_clip_plan
+from app.jobs.clip_plan import build_clip_plan, clip_plan_output_path, load_clip_plan
 from app.jobs.reselection_keep import merge_kept_candidates, prepare_kept_candidates
+from app.jobs.runner import _restore_clip_plan_after_reselection_failure
 
 
 def candidate(index, kind="short"):
@@ -66,3 +68,28 @@ def test_four_kept_out_of_five_requested_can_reselect_one(existing_count):
     assert merged.shorts[:4] == previous.shorts[:4]
     assert merged.shorts[4].id == "clip_10"
     assert merged.unfilled_requested_counts["short"] == 0
+
+
+def test_failed_reselection_keeps_new_checkbox_choices(tmp_path):
+    previous = CandidateSelection(shorts=[candidate(0), candidate(1)])
+    plan = build_clip_plan(
+        job_id="test", selection=previous, settings={"keptClipIds": ["clip_0"]}
+    )
+    job = SimpleNamespace(settings_json={"keptClipIds": ["clip_0", "clip_1", "missing"]})
+
+    class SessionStub:
+        def commit(self):
+            pass
+
+        def refresh(self, _job):
+            pass
+
+    _restore_clip_plan_after_reselection_failure(
+        SessionStub(), job, job_dir=tmp_path, previous_plan=plan,
+        previous_artifacts={}, code="reselection_no_alternatives", message="候補なし",
+    )
+
+    restored = load_clip_plan(clip_plan_output_path(tmp_path))
+    assert restored.state == "awaiting_review"
+    assert restored.settings["keptClipIds"] == ["clip_0", "clip_1"]
+    assert job.settings_json["keptClipIds"] == ["clip_0", "clip_1"]

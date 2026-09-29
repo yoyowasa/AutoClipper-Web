@@ -16,7 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType, build_candidate
-from app.candidates.used_ranges import overlaps_used, unused_items, used_ranges
+from app.candidates.used_ranges import (
+    PREVIOUS_PROPOSALS_SETTING,
+    overlaps_used,
+    unused_items,
+    used_ranges,
+)
 from app.candidates.select_candidates import CandidateSelection, SelectionPolicy
 from app.scoring.clip_preferences import ClipSelectionPreset
 from app.scoring.heatmap import candidate_heatmap_features
@@ -296,14 +301,13 @@ class CodexSelectionConstraints(_StrictModel):
     def validate_requested_count(self) -> CodexSelectionConstraints:
         if self.normal.requested_count + self.short.requested_count <= 0:
             raise ValueError("at least one normal clip or short must be requested")
-        expected_normal_candidate_count = min(
-            self.normal.requested_count * len(self.normal.duration_bands),
-            MAX_NORMAL_CANDIDATE_COUNT,
-        )
-        if self.normal_candidate_count != expected_normal_candidate_count:
+        allowed_normal_candidate_counts = {
+            min(self.normal.requested_count * band_count, MAX_NORMAL_CANDIDATE_COUNT)
+            for band_count in (len(self.normal.duration_bands), max(3, len(self.normal.duration_bands)))
+        }
+        if self.normal_candidate_count not in allowed_normal_candidate_counts:
             raise ValueError(
-                "normalCandidateCount must equal "
-                "min(normal requestedCount * durationBands count, 24)"
+                "normalCandidateCount must use the duration bands or the expanded reselection pool"
             )
         expected_short_candidate_count = min(
             self.short.requested_count * SHORT_CANDIDATE_MULTIPLIER,
@@ -911,7 +915,11 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
             durationBands=short_duration_bands,
         ),
         normalCandidateCount=min(
-            normal_requested_count * len(normal_duration_bands),
+            normal_requested_count * (
+                max(3, len(normal_duration_bands))
+                if settings.get(PREVIOUS_PROPOSALS_SETTING) and not settings.get("excludePreviousSelection")
+                else len(normal_duration_bands)
+            ),
             MAX_NORMAL_CANDIDATE_COUNT,
         ),
         shortCandidateCount=min(
@@ -976,6 +984,23 @@ def build_codex_initial_selection_request(
                 "guidance": (guidance + "\n" + getattr(constraints, clip_type).guidance)[:1000],
             })
             for clip_type in ("normal", "short")
+        })
+    previous_ranges = settings.get(PREVIOUS_PROPOSALS_SETTING, [])
+    if previous_ranges and not settings.get("excludePreviousSelection"):
+        intervals = ", ".join(
+            f"{int(start)}-{int(end)}"
+            for start, end in previous_ranges
+        )
+        guidance = (
+            "過去の提案範囲（元動画の秒）: " + intervals
+            + "。ほぼ同じ区間の再提案を避け、別の話題を探してください。"
+            "重なる素材でも構成を大きく変える長い切り出しは可能です。"
+        )
+        normal = constraints.normal
+        constraints = constraints.model_copy(update={
+            "normal": normal.model_copy(update={
+                "guidance": (normal.guidance + "\n" + guidance).strip()[:1000],
+            }),
         })
     request = CodexInitialSelectionRequest(
         jobId=job_id,
