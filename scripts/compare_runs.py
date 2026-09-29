@@ -464,7 +464,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## Selected Clip Comparison",
             "",
-            "| Type | High Quality Clip | HQ Range | Low Cost Match | LC Range | Overlap | HQ final | LC final | AI source | Fallback | Backfill | Title |",
+            "| Type | High Quality Clip | HQ Range | Low Cost Match | LC Range | Overlap | "
+            "HQ final | LC final | AI source | Fallback | Backfill | Title |",
             "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | --- | --- |",
         ]
     )

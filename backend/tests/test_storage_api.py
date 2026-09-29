@@ -1,5 +1,5 @@
 from collections.abc import Generator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -54,7 +54,7 @@ def _seed_expired_job(
     session_factory: sessionmaker[Session],
     paths: StoragePaths,
 ) -> tuple[str, Path]:
-    old = datetime.utcnow() - timedelta(days=8)
+    old = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=8)
     video_id = "vid_expired"
     job_id = "job_expired"
     upload = paths.uploads / f"{video_id}.mp4"

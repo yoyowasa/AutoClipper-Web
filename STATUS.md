@@ -10466,3 +10466,12 @@ pip check: pass
 - 判断（task-159指示3）: 既存書き出しの差し替え・巻き戻し処理は、子jobの公開途中の失敗から再試行するときにも使うため残す。子jobの書き出しは子job側に新しく作られ、元jobの書き出しは差し替えない。
 - 検証: 関連121 passed、`ruff check . ../launcher` 成功、backend全1198 passed・1 skipped、frontend lint・typecheck・build成功、`git diff --check` 成功。削除対象名のコード・テスト内参照なし。
 - 未確認: 稼働中Dockerへの反映と実動画での動作。参照調査は追跡ファイルの静的検索であり、外部からの直接importの有無は確認していない。
+
+## 2026-09-29 JST CIのPythonとfrontendテスト範囲を拡大（task-162）
+
+- 目的: CIでfrontendの全16テストとbackendのPython 3.11・3.12を確認し、scriptsのlintも対象に含める。
+- 変更ファイル: `frontend/package.json`、`.github/workflows/ci.yml`、`scripts/compare_runs.py`、`backend/app/models.py`、`backend/tests/test_storage_api.py`、`backend/tests/test_source_clip_history.py`、本ファイル。
+- 内容: frontendに全 `.ts` テストを順次実行する `test` を追加し、CIで実行。backend CIをPython 3.11・3.12のmatrixにし、ruffへ `../scripts` を追加。scriptsのE501を修正し、`utc_now` とテスト内の旧UTC時刻生成を `datetime.now(UTC).replace(tzinfo=None)` に変更。DBには従来どおりタイムゾーン無しで保存する。`backend/pyproject.toml` の3.11対応は維持。
+- 環境判断: 開発PCはPython 3.11、DockerはPython 3.12。CIで両方を確認する。
+- 検証: 開発PCのPython 3.11.9で `python -m pytest` は1198 passed・1 skipped、関連26 passed。`utc_now` がUTC相当のタイムゾーン無し時刻を返すことを直接確認。`ruff check . ../launcher ../scripts` と `--no-cache` の再確認、frontendの全16テスト・lint・typecheck・build、`git diff --check` が成功。
+- 未確認: PRのCIでのPython 3.11・3.12とfrontend全テストの結果。稼働中Dockerへの反映と実動画での動作は行っていない。
