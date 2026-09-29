@@ -410,13 +410,13 @@ def test_preflight_reports_compose_unavailable(tmp_path: Path) -> None:
     assert any("docker compose" in error for error in report.errors)
 
 
-def test_preflight_reports_missing_openai_key_without_exposing_a_value(tmp_path: Path) -> None:
+def test_preflight_does_not_warn_about_missing_openai_key(tmp_path: Path) -> None:
     controller = make_controller(make_project(tmp_path, env_text="OPENAI_API_KEY=\n"), FakeRunner())
 
     report = controller.preflight()
 
     assert report.openai_key_configured is False
-    assert any("OPENAI_API_KEY未設定" in warning for warning in report.warnings)
+    assert not any("OPENAI_API_KEY未設定" in warning for warning in report.warnings)
     assert all("sk-" not in warning for warning in report.warnings)
 
 

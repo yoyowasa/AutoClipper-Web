@@ -10449,3 +10449,11 @@ pip check: pass
 - 内容: 保存済み旧reopen状態の作成を共通ヘルパーに移し、APIテストの3呼び出しと実パイプラインの2呼び出しで使用。API側の元データはすべてrevision 1。実パイプラインでは1回目が1→2、2回目が2→3なので、現在値を1増やす。
 - 検証: `ruff check . ../launcher` 成功、関連8 passed、`python -m pytest` で1199 passed・1 skipped。直接の `pytest.exe` はPCのアプリケーション制御で起動を拒否されたため、同じpytestをモジュール実行した。
 - 未確認: 実動画の再生・プレビュー品質と、現行storageにない旧reopen保存状態での実運用は確認していない。
+
+## 2026-09-29 JST OpenAIキーの既定Compose受け渡しを停止（task-160）
+
+- 目的: 有料OpenAI APIを原則使わない構成にし、キーをbackend・workerコンテナへ渡さない。
+- 変更ファイル: `docker-compose.yml`、`launcher/controller.py`、`backend/tests/test_windows_launcher.py`、`backend/tests/test_title_hook_suggestions.py`、`README.md`、本ファイル。`docker-compose.gpu.yml` にキー設定はなかった。
+- 内容: Composeのキー受け渡しとlauncherの未設定警告を削除。キー検出結果とログの伏せ字処理は保持。タイトル・フック案の新規依頼はCodex固定で、保存済みOpenAI文書からの再生成でもproviderを引き継がないことを回帰テストで確認。READMEに既定構成の方針を明記した。
+- 検証: 通常・GPU両方の `docker compose config` でbackend・workerのenvironmentに `OPENAI_API_KEY` が無い。対象テスト101 passed、`ruff check . ../launcher` 成功、backend全1199 passed・1 skipped、frontend lint・typecheck・build、`git diff --check` 成功。
+- 未確認: 稼働中コンテナへの反映と実動画での動作。古いqueued状態のOpenAI依頼は保存済み入力から再投入され得るが、新構成ではキーが無いためAPI呼び出し前に失敗する。画面からの新規作成はOpenAI採点・字幕校正を無効にする一方、旧jobの再選定では保存済みの採点設定が使われ得る。

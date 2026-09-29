@@ -310,7 +310,12 @@ def test_force_regeneration_excludes_previous_titles_for_both_clip_types(
     )
     result = _suggestion_result()
     ready = load_title_hook_suggestions(state_path).model_copy(
-        update={"state": "ready", "suggestions": result.suggestions, "thread_id": "old-thread"}
+        update={
+            "state": "ready",
+            "provider": "openai",
+            "suggestions": result.suggestions,
+            "thread_id": "old-thread",
+        }
     )
     write_title_hook_suggestions(ready, state_path)
 
@@ -323,6 +328,8 @@ def test_force_regeneration_excludes_previous_titles_for_both_clip_types(
     generation_input = load_title_hook_suggestion_input(input_path)
     assert forced.status_code == 200
     assert forced.json()["state"] == "queued"
+    assert forced.json()["provider"] == "codex"
+    assert generation_input.provider == "codex"
     assert forced.json()["threadId"] is None
     assert forced.json()["inputHash"] == first.json()["inputHash"]
     assert generation_input.prompt_payload()["previousPublicationTitles"] == [
