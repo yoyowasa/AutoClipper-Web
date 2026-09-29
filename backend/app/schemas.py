@@ -78,20 +78,6 @@ SubtitleCorrectionReasoningEffort = Literal[
 ]
 
 
-class VideoRead(BaseModel):
-    id: str
-    original_filename: str
-    stored_path: str
-    duration: float | None
-    width: int | None
-    height: int | None
-    fps: float | None
-    has_audio: bool | None
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
-
-
 class VideoUploadResponse(BaseModel):
     video_id: str = Field(alias="videoId")
     filename: str
@@ -902,23 +888,6 @@ class JobStatusResponse(BaseModel):
     current_step: str = Field(alias="currentStep")
     details: dict[str, Any] = Field(default_factory=dict)
     error: JobError | None
-
-
-class ExportItemRead(BaseModel):
-    id: str
-    job_id: str
-    video_id: str
-    candidate_id: str | None
-    type: ExportType
-    title: str
-    duration: float
-    score: float
-    video_path: str
-    subtitle_path: str | None
-    metadata_path: str | None
-    created_at: datetime
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class ResultExportItem(BaseModel):

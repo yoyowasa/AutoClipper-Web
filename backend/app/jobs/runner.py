@@ -152,7 +152,7 @@ from app.candidates.short_diversity import (
     select_diverse_shorts,
 )
 from app.jobs.summaries import write_generation_summaries
-from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP, SUCCESS_STATUSES
+from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP
 from app.jobs.subtitle_review import (
     SubtitleReviewDocument,
     apply_reviewed_clip_content,
@@ -2402,111 +2402,6 @@ def _create_zip(zip_path: Path, exports: Sequence[ExportItem], metadata_files: S
         for metadata_file in metadata_files or []:
             if metadata_file.is_file():
                 archive.write(metadata_file, arcname=f"metadata/{metadata_file.name}")
-
-
-def _write_placeholder_mp4(path: Path, label: str) -> None:
-    path.write_bytes(f"AutoClipper dummy MP4: {label}\n".encode("utf-8"))
-
-
-def _create_export(
-    db: Session,
-    job: Job,
-    output_dir: Path,
-    export_type: str,
-    index: int,
-    duration: float,
-    score: float,
-) -> ExportItem:
-    title_prefix = "Normal Clip" if export_type == "normal" else "Short"
-    title = f"{title_prefix} {index:02d}"
-    export_id = make_id("exp")
-    video_path = output_dir / f"{export_type}_{index:02d}.mp4"
-    metadata_path = output_dir / f"{export_type}_{index:02d}.json"
-    _write_placeholder_mp4(video_path, title)
-    _write_json(
-        metadata_path,
-        {
-            "id": export_id,
-            "type": export_type,
-            "title": title,
-            "title_source": "deterministic_fallback",
-        },
-    )
-
-    export = ExportItem(
-        id=export_id,
-        job_id=job.id,
-        video_id=job.video_id,
-        candidate_id=None,
-        type=export_type,
-        title=title,
-        duration=duration,
-        score=score,
-        video_path=str(video_path),
-        subtitle_path=None,
-        metadata_path=str(metadata_path),
-    )
-    db.add(export)
-    return export
-
-
-def _create_dummy_exports(db: Session, job: Job, output_dir: Path) -> list[ExportItem]:
-    exports = [
-        _create_export(db, job, output_dir, "normal", 1, 180.0, 84.0),
-        _create_export(db, job, output_dir, "normal", 2, 240.0, 81.0),
-        _create_export(db, job, output_dir, "short", 1, 42.0, 88.0),
-        _create_export(db, job, output_dir, "short", 2, 36.0, 86.0),
-        _create_export(db, job, output_dir, "short", 3, 58.0, 83.0),
-    ]
-    db.commit()
-    return exports
-
-
-def run_dummy_autoclipper_job(
-    job_id: str,
-    session_factory: SessionFactory = SessionLocal,
-    paths: StoragePaths | None = None,
-) -> list[str]:
-    storage_paths = paths or get_storage_paths()
-    output_dir = storage_paths.job_outputs(job_id)
-    visited_statuses: list[str] = []
-
-    with session_factory() as db:
-        job = db.get(Job, job_id)
-        if job is None:
-            raise ValueError(f"job not found: {job_id}")
-
-        try:
-            for next_status in SUCCESS_STATUSES[:-1]:
-                _set_status(db, job, next_status)
-                visited_statuses.append(next_status)
-
-            exports = _create_dummy_exports(db, job, output_dir)
-            summary_files = write_generation_summaries(output_dir, exports=exports)
-            _create_zip(storage_paths.zip_path(job.id), exports, metadata_files=summary_files)
-
-            _set_status(db, job, "completed")
-            visited_statuses.append("completed")
-        except Exception as exc:
-            _fail_job(db, job_id, "dummy_job_failed", str(exc))
-            raise
-
-    return visited_statuses
-
-
-def score_candidate_batch_for_worker(
-    candidates: Sequence[Candidate],
-    audio_features: AudioFeatures | dict[str, Any] | None = None,
-    visual_features: VisualQuality | dict[str, Any] | None = None,
-    scorer: OpenAICandidateScorer | None = None,
-) -> list[Candidate]:
-    active_scorer = scorer or OpenAICandidateScorer()
-    return score_candidate_batch(
-        candidates,
-        scorer=active_scorer,
-        audio_features=audio_features,
-        visual_features=visual_features,
-    )
 
 
 def _render_selected_outputs(

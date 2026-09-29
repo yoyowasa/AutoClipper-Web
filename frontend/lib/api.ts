@@ -424,14 +424,6 @@ export async function getSubtitleReview(jobId: string): Promise<SubtitleReviewDo
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
-export async function getYouTubePostingProfile(): Promise<YouTubePostingProfileDocument> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/preferences/youtube-posting-profile`,
-    { cache: "no-store" }
-  );
-  return parseJsonResponse<YouTubePostingProfileDocument>(response);
-}
-
 export async function saveYouTubePostingProfile(
   profile: YouTubePostingProfile
 ): Promise<YouTubePostingProfileDocument> {

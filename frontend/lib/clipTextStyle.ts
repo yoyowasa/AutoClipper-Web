@@ -127,16 +127,6 @@ const CLIP_TEXT_FONT_BY_PRESET = new Map(
   CLIP_TEXT_FONT_OPTIONS.map((option) => [option.value, option])
 );
 
-export const SUBTITLE_FONT_GROUPS = CLIP_TEXT_FONT_GROUPS.map((group) => ({
-  label: group.label,
-  options: group.options
-    .filter((option) => option.value !== "sans")
-    .map((option) => ({
-      value: option.fontName,
-      label: option.label
-    }))
-}));
-
 export type AssPreviewFontMetrics = {
   fontSizeScale: number;
   lineHeight: number;
@@ -340,11 +330,6 @@ export function resolvedClipTextStyle(
 
 export function clipTextFontName(fontPreset: ClipTextFontPreset): string {
   return CLIP_TEXT_FONT_BY_PRESET.get(fontPreset)?.fontName ?? "Noto Sans CJK JP";
-}
-
-export function clipTextFontFamily(fontPreset: ClipTextFontPreset): string {
-  const option = CLIP_TEXT_FONT_BY_PRESET.get(fontPreset);
-  return subtitleFontFamily(option?.fontName);
 }
 
 export function clipTextFontWeight(fontPreset: ClipTextFontPreset): number {
