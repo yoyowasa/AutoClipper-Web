@@ -10312,6 +10312,44 @@ pip check: pass
 - 検証: 実際の宙科素材の同一フレームで修正前後を描画し、修正後に頭と上半身が枠内に入ることを目視確認。右端の人物を使った切り抜き回帰テスト、プレビュー・保存時の配置一致テスト、関連36 passed、backend全1188 passed・1 skipped、ruff、frontend typecheck・lint・webpack build成功。
 - 未確認: 稼働中アプリへの反映後のブラウザ操作、ユーザーが選ぶ別場面での人物配置。画像の元フレーム自体に写っていない部位は復元できない。
 
+## 2026-09-26 JST HyperFrames検討チェックリストを保存
+
+- 目的: ユーザー指定のMarkdown資料をworkspace内へ保管する。
+- 変更ファイル: `docs/AUTOCLIPPER_HYPERFRAMES_ASSESSMENT_AND_DESIGN_CHECKLIST_2026-09-26.md`、本ファイル。
+- 内容: 添付原文を変更せず保存。文書内の人の介入方針や設計案は、保存だけで現行・到達仕様へ採用した扱いにはしない。
+- 検証: 保存元と保存先のSHA-256一致（`EFCE11513A3AE7A9ACD7817560B72CC3C720AA03ABD4994812C0BB2B1F0B503C`）。コード・設定・DB・runtime・既存jobは変更していない。
+- 未確認: 文書内の外部仕様・採用判断の再検証、実動画による比較試験。
+
+## 2026-09-27 JST タイトル案の再生成で同案が繰り返される問題を修正
+
+- 目的: 通常・ショートの「別案を再生成」で、同じ公開タイトル3案が返る状態を解消する。
+- 原因: 実jobの生成履歴で同一clipの連続2回の公開タイトル3案が完全一致した。再生成は同じ字幕・同じ指示文を以前のCodexスレッドへ送り、過去案を除外する入力も結果の重複判定もなかった。
+- 変更ファイル: `backend/app/api/jobs.py`、`backend/app/jobs/title_hook_suggestions.py`、`backend/app/scoring/title_hook_suggestions.py`、`backend/tests/test_title_hook_suggestions.py`、CI lintを通すための既存fixture注記2ファイル、本ファイル。
+- 修正: 同じ字幕での再生成時に直近最大24件の公開タイトルを除外リストとして保存・入力し、前回の会話を引き継がずに生成する。3案すべてが過去案と実質同じなら1回だけ再試行し、なお同じなら新案として表示せず明確な失敗を返す。字幕が変わった場合は除外リストを持ち越さない。prompt versionをv10に更新。
+- 検証: 通常・ショートの再生成入力、重複時の再試行を回帰テストで確認。backend全1167 passed・1 skipped、backendとlauncherのruff、frontend typecheck・lint・overlay fit・build、git diff --check、PR #85のbackend／frontend CI成功。実ユーザーclipに対する新規Codex生成結果は未検証。
+- 稼働反映: ローカル稼働branchへコードを反映し、queue 0・実行中job 0を確認してbackend／GPU workerを再build・再作成。両containerでprompt version v10、backend healthyとhealth API HTTP 200、既存clipの案取得APIがready・3案を返すことを確認。既存clipの再生成操作は行っていない。
+
+## 2026-09-27 JST 選定・本数・尺の確定事項を別文書に保存
+
+- 目的: 完全自動化へ向けた初期運用のユーザー確定事項を、従来の到達構想と区別して記録する。
+- 変更ファイル: `docs/AUTOCLIPPER_SELECTION_AND_DURATION_DECISIONS_2026-09-27.md`、本ファイル。
+- 内容: A方式の人による初期採否、4種類の不採用理由と理由未指定、理由別の再選定、ユーザー指定本数とAIによる通常／Shorts振り分け・別動画補完、同場面併用、Shorts上限75秒・通常90秒～10分を確定事項として記載。補完経路や完全自動への移行条件は未決定と明示。
+- 検証: 文書の項目とユーザー発言を照合し、Markdown・リンク・差分を確認。コード、設定、DB、runtime、既存jobは変更していない。新仕様の実装・実動画受入は未実施。
+
+## 2026-09-27 JST 通常サムネ新機能をローカル稼働環境へ反映
+
+- 目的: 最終工程にある既存ジョブを維持したまま、宙科テンプレ・完成動画ごとの切替・Codexによる場面選別を結果画面で使えるようにする。
+- 変更: 稼働ブランチに機能ブランチを統合（`0ebe607`）。既存のタイトル再生成修正・フォント追加と、未コミットの運用記録・文書を保持。backend、GPU worker、frontendを再build・再作成し、ホストCodexブリッジを新しい契約で再起動した。
+- 検証: 統合版でbackend全テスト1185 passed・1 skipped、ruff、frontend typecheck・lint・webpack build、Compose設定確認に成功。更新前にキュー0件・実行中0件を確認し、SQLiteをローカルの無視対象領域へバックアップ。更新後はbackend healthy、health APIと結果URLがHTTP 200、Codexブリッジreadyを確認。既存ジョブはcompleted・進捗100のまま、通常3本とショート5本の動画・字幕・メタデータ各8ファイルが存在する。Chromeの結果画面で8本が表示され、通常サムネ編集に宙科テンプレ切替とCodex場面選別ボタンが現れ、宙科切替時にプレビューが更新された。保存操作は行っていない。
+- 未確認: 実動画に対するCodexの場面選別結果と、選別後のサムネ保存品質。既存MP4の再レンダリングは行っていない。
+
+## 2026-09-27 JST サムネ人物画角修正のローカル稼働反映
+
+- 目的: 宙科サムネの人物が枠から切れる修正を、完成済みジョブを維持したまま利用可能にする。
+- 変更: 稼働ブランチを `97811d0` に進め、backend・GPU worker・frontendを再build・再作成。ユーザーの未コミット運用記録と文書は保持した。
+- 検証: 更新前のキュー0件・実行中0件を確認。更新後のbackend healthy、health API・結果URL HTTP 200、既存ジョブcompleted・書き出し8本を確認。Chromeの通常サムネ編集画面で「人物の画角・位置」が表示され、同じ実場面の大きさ・左右位置を変えるとプレビューが更新された。対象通常動画1本を80%・左45pxで保存し、status ready・保存済み配置と完成JPEGの見た目がプレビューどおりで、人物が枠内に収まることを確認。既存MP4の再レンダリングは行っていない。
+- 未確認: 別のフレームでの最適な配置はプレビューで個別確認が必要。元フレーム自体に写っていない部位は復元できない。
+
 ## 2026-09-27 JST 宙科サムネの人物検出と切り抜き配置を修正
 
 - 目的: 元映像の中央にいる人物を背景と誤判定して端の場面を選ぶ問題と、配置操作で背景ごと動いて人物の見切れを直せない問題を解消する。
@@ -10371,6 +10409,14 @@ pip check: pass
 - 検証: 尺の延長・短縮、字幕分割・修正とタイトルの保持、変更clipだけ確認し直すAPI回帰テスト成功。backend全1208 passed・1 skipped、ruff、frontend typecheck・lint・build、git diff --check成功。キュー0件・実行中0件を確認しDBをバックアップ後、backend・GPU worker・frontendを再build・再作成。実ジョブの字幕画面で「尺調整へ戻る」ボタンが表示され、ジョブが字幕確認中・切り抜き予定が承認済みのままであることを確認した。
 - 未確認: 実ジョブでの尺変更から字幕編集への往復操作とプレビューの目視確認。既存ジョブの尺は変更していない。
 
+## 2026-09-28 JST 添付プレビュー動画の文字起こし
+
+- 目的: ユーザー指定の `live-preview-video (1).mp4` をこちらで文字起こしする。
+- 成果物: `storage/transcripts/live-preview-20260928/` に時刻付きTXT、本文TXT、字幕用SRT、区間JSON、認識原文と検証記録を保存。アプリコード・既存ジョブの字幕・設定は変更していない。
+- 実施: ローカルのfaster-whisper smallとlarge-v3-turboで全編を処理し、不確かな区間をlarge-v3でも照合。映像の名前とグラフ表記を確認し、明らかな誤変換と句読点を補正した。
+- 検証: 音声436.373秒、113区間、最終発話区間436.260秒。時刻の順序・範囲内・非重複、TXT/SRTのUTF-8再読込を確認。
+- 未確認: 全文の耳による校正は未実施。判別しきれない7区間は要確認または聞き取り不明として明記。字幕の時刻は自動認識による目安。
+
 ## 2026-09-29 JST 未使用の字幕確認APIを整理（task-156）
 
 - 目的: 現行画面が呼ばない個別content保存、個別字幕保存、個別confirm、再編集後の通常→Short変換の4窓口を削除する。
@@ -10386,3 +10432,11 @@ pip check: pass
 - 内容: 全job reopen窓口・専用補助処理・未使用フロント関数を削除。通常の再編集テストは現行の子job作成経路へ移行。保存済み旧reopen状態からの子job再編集と、既存書き出しを持つ同一jobの差し替え・失敗時巻き戻しは、テスト内で保存状態を用意して引き続き検証する。既存の `reopened_at` 判定とfield、`reopen-clip-plan` は保持。
 - 検証: 作業worktreeの `python -m pytest -q` で1199 passed・1 skipped。`tests/test_api_routes.py` は105 passed、実パイプラインの既存書き出し再レンダリングは3 passed。`ruff check . ../launcher`、frontend lint・typecheck・build、`git diff --check` 成功。FastAPI登録経路で旧reopenがなく、`reopen-clip-plan` と `apply` は残ることを確認。隔離したテストDBとダミー動画を使うローカル画面で、結果画面から子jobへの1本再編集、字幕とclipの一括適用、一括字幕修正の保存を確認。一括修正後の字幕「字幕修正」と確認解除を画面・backend GETの両方で確認。別名・別ポートのDocker Composeでbackend・frontend・Redis・workerを起動し、backendのhealthとfrontendトップがHTTP 200、旧reopen経路がなく現行経路があることを確認して停止した。
 - 未確認: 実動画の再生・プレビュー品質、稼働中backendへの外部クライアントの有無。稼働中Composeは別checkoutを使っており変更していない。
+
+## 2026-09-29 JST 保留中の記録と資料をmainへ整理（task-158）
+
+- 目的: task-155までのローカル運用記録と、未コミットの設計資料2件をmainの履歴に残す。
+- 変更ファイル: 本ファイル、`docs/AUTOCLIPPER_HYPERFRAMES_ASSESSMENT_AND_DESIGN_CHECKLIST_2026-09-26.md`、`docs/AUTOCLIPPER_SELECTION_AND_DURATION_DECISIONS_2026-09-27.md`。
+- 内容: main更新後に保留中の変更を復元し、9月28日の文字起こし記録をtask-156・157より前に配置。両方の追記と資料本文を保持した。アプリコード・設定・Docker稼働環境は変更していない。
+- 検証: 資料2件のGit登録内容が退避した内容と一致。HyperFrames資料のGit登録内容は上記のSHA-256と一致。差分が本ファイルと資料2件だけで、競合記号が残っていないことを確認。
+- 未確認: 資料にある構想の採用判断や実動画での検証は行っていない。
