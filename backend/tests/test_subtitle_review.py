@@ -683,7 +683,7 @@ def test_review_artifact_round_trip(tmp_path: Path) -> None:
     restored = load_subtitle_review(output_path)
 
     assert restored == review
-    assert not output_path.with_suffix(".json.tmp").exists()
+    assert not list(output_path.parent.glob(f".{output_path.name}.*.tmp"))
 
 
 def test_review_preview_path_is_stable_and_not_derived_from_raw_clip_id(

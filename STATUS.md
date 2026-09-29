@@ -10475,3 +10475,11 @@ pip check: pass
 - 環境判断: 開発PCはPython 3.11、DockerはPython 3.12。CIで両方を確認する。
 - 検証: 開発PCのPython 3.11.9で `python -m pytest` は1198 passed・1 skipped、関連26 passed。`utc_now` がUTC相当のタイムゾーン無し時刻を返すことを直接確認。`ruff check . ../launcher ../scripts` と `--no-cache` の再確認、frontendの全16テスト・lint・typecheck・build、`git diff --check` が成功。PR #96のCI run `36530852479` ではbackend 3.11・3.12とfrontendの全ジョブ、frontendの `Test frontend` 手順が成功。
 - 未確認: 稼働中Dockerへの反映と実動画での動作は行っていない。
+
+## 2026-09-29 JST JSON保存を共通の原子的書き込みへ変更（task-163）
+
+- 目的: clip planと字幕確認の固定名一時ファイルが同時保存で衝突する問題をなくし、JSON保存処理を共通化する。
+- 変更ファイル: `backend/app/storage/json_io.py`、`backend/app/jobs/clip_plan.py`、`backend/app/jobs/subtitle_review.py`、`backend/app/candidates/codex_initial_selection.py`、`backend/app/jobs/title_hook_suggestions.py`、`backend/app/scoring/codex_title_hook_suggestions.py`、`backend/tests/test_json_io.py`、`backend/tests/test_subtitle_review.py`、本ファイル。
+- 内容: 保存ごとに固有の一時ファイルへ従来と同じ書式で書き、`os.replace` で公開して一時ファイルを後片付けする。Windowsでは同一パスへのスレッド間の同時置換で `PermissionError` が出たため、置換部分だけをロックで順番に実行する。Codex初期選定の `allow_nan=False` と、Codexタイトル案の圧縮JSON書式を維持。
+- 検証: 一時ファイルの後片付け、置換失敗時の元ファイル保持、同一パスへの2スレッド書き込みをテスト。並行書き込みテストはWindowsで20回連続成功。`ruff check . ../launcher ../scripts` 成功、backend全1201 passed・1 skipped。frontend全16テスト・lint・typecheck・build成功。独立worktreeのfrontend buildにはそのworktree内で `npm ci` を実行した。
+- 未確認: 別プロセス間の同時置換と、稼働中Dockerでの実動作。Dockerの稼働環境は変更していない。

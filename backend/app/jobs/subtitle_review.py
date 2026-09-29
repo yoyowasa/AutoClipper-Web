@@ -28,6 +28,7 @@ from app.render.subtitles_ass import (
 )
 from app.render.title_policy import short_overlay_title_expected
 from app.schemas import ShortLayout, ShortOverlayTitleMode
+from app.storage.json_io import write_json_atomic
 
 
 SUBTITLE_REVIEW_FILENAME = "subtitle_review.json"
@@ -798,15 +799,10 @@ def retain_review_after_boundary_reedit(
 
 
 def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | Path) -> Path:
-    path = Path(output_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
-    temporary_path.write_text(
-        json.dumps(document.model_dump(by_alias=True, mode="json"), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
+    return write_json_atomic(
+        Path(output_path),
+        document.model_dump(by_alias=True, mode="json"),
     )
-    temporary_path.replace(path)
-    return path
 
 
 def load_subtitle_review(path: str | Path) -> SubtitleReviewDocument:

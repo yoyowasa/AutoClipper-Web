@@ -8,7 +8,6 @@ from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal, Protocol
-from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
@@ -42,6 +41,7 @@ from app.scoring.title_hook_suggestions import (
     normalize_title_hook_suggestions,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
+from app.storage.json_io import write_json_atomic
 
 
 TITLE_HOOK_SUGGESTIONS_DIRNAME = "title_hook_suggestions"
@@ -190,22 +190,11 @@ def title_hook_suggestion_input_path(output_dir: str | Path, clip_id: str) -> Pa
     return Path(output_dir) / TITLE_HOOK_SUGGESTIONS_DIRNAME / f"{_clip_digest(clip_id)}.input.json"
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(f"{path.suffix}.{uuid4().hex}.tmp")
-    temporary_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary_path.replace(path)
-    return path
-
-
 def write_title_hook_suggestions(
     document: TitleHookSuggestionsDocument,
     path: str | Path,
 ) -> Path:
-    return _write_json_atomic(
+    return write_json_atomic(
         Path(path),
         document.model_dump(by_alias=True, mode="json"),
     )
@@ -219,7 +208,7 @@ def write_title_hook_suggestion_input(
     request: TitleHookSuggestionInput,
     path: str | Path,
 ) -> Path:
-    return _write_json_atomic(
+    return write_json_atomic(
         Path(path),
         request.model_dump(by_alias=True, mode="json"),
     )

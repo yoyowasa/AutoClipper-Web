@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from collections.abc import Callable, Sequence
@@ -21,6 +20,7 @@ from app.candidates.used_ranges import overlaps_used, unused_items, used_ranges
 from app.candidates.select_candidates import CandidateSelection, SelectionPolicy
 from app.scoring.clip_preferences import ClipSelectionPreset
 from app.scoring.heatmap import candidate_heatmap_features
+from app.storage.json_io import write_json_atomic
 from app.video.heatmap import HeatmapSegment
 
 
@@ -750,28 +750,15 @@ def codex_reselection_summary_output_path(output_dir: str | Path) -> Path:
     return Path(output_dir) / CODEX_RESELECTION_SUMMARY_FILENAME
 
 
-def _write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    try:
-        temporary_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary_path, path)
-    finally:
-        temporary_path.unlink(missing_ok=True)
-    return path
-
-
 def write_codex_initial_selection_summary(
     summary: CodexInitialSelectionSummary | dict[str, Any],
     path: str | Path,
 ) -> Path:
     validated = CodexInitialSelectionSummary.model_validate(summary)
-    return _write_json_atomic(
+    return write_json_atomic(
         Path(path),
         validated.model_dump(by_alias=True, mode="json"),
+        allow_nan=False,
     )
 
 
@@ -1560,7 +1547,7 @@ class CodexInitialSelectionSharedFileBridge:
         thread_id: str | None = None,
         attempt: int = 1,
     ) -> Path:
-        path = _write_json_atomic(
+        path = write_json_atomic(
             self.request_path(request.request_id),
             _bridge_envelope(
                 request,
@@ -1570,6 +1557,7 @@ class CodexInitialSelectionSharedFileBridge:
                 by_alias=True,
                 mode="json",
             ),
+            allow_nan=False,
         )
         self._request_created_at[request.request_id] = self.wall_time_func()
         self._request_attempts[request.request_id] = attempt
@@ -1582,13 +1570,14 @@ class CodexInitialSelectionSharedFileBridge:
         thread_id: str | None = None,
         attempt: int = 1,
     ) -> Path:
-        path = _write_json_atomic(
+        path = write_json_atomic(
             self.request_path(request.request_id),
             _topic_bridge_envelope(
                 request,
                 thread_id=thread_id,
                 attempt=attempt,
             ).model_dump(by_alias=True, mode="json"),
+            allow_nan=False,
         )
         self._request_created_at[request.request_id] = self.wall_time_func()
         self._request_attempts[request.request_id] = attempt
