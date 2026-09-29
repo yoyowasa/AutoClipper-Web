@@ -964,6 +964,23 @@ def _seed_reeditable_normal_export(
     return job_id, candidate_id, rendered_bytes
 
 
+def _seed_persisted_legacy_reopen(job_id: str) -> None:
+    """Model a job already reopened by an older backend, without the retired route."""
+    storage = app.dependency_overrides[get_storage_paths]()
+    review_path = storage.job_outputs(job_id) / "subtitle_review.json"
+    review = json.loads(review_path.read_text(encoding="utf-8"))
+    review.update({"state": "awaiting_review", "renderRevision": 2, "reopenedAt": "2026-01-01T00:00:00+00:00"})
+    review["confirmedClipCount"] = 0
+    for clip in review["clips"]:
+        clip["confirmed"] = False
+    review_path.write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, job_id)
+        assert job is not None
+        job.status = "awaiting_subtitle_review"
+        db.commit()
+
+
 def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
     client: TestClient,
 ) -> None:
@@ -973,8 +990,9 @@ def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
     app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
         lambda queued_job_id, clip_id, spec_hash: queued.append((queued_job_id, clip_id, spec_hash))
     )
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
     segment_id = reopened.json()["clips"][0]["segmentIds"][0]
     queued.clear()
 
@@ -1038,8 +1056,9 @@ def test_apply_subtitle_review_clip_allows_edited_short_past_duration_target(
         lambda _job_id, _clip_id, _spec_hash: None
     )
 
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
     applied = client.post(
         f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
         json={
@@ -1064,8 +1083,9 @@ def test_apply_subtitle_review_clip_accepts_empty_overlay_title(
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     _write_reeditable_preview_inputs(job_id, candidate_id)
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
 
     applied = client.post(
         f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
@@ -1092,8 +1112,9 @@ def test_auto_clip_acceptance_queues_render_without_confirming_auto_passed_sibli
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     _write_reeditable_preview_inputs(job_id, candidate_id)
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
     output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
     review_path = output_dir / "subtitle_review.json"
     review = json.loads(review_path.read_text(encoding="utf-8"))
@@ -1174,8 +1195,9 @@ def test_patch_subtitle_review_clip_framing_persists_without_reencoding(
             (queued_job_id, clip_id, spec_hash)
         )
     )
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
     baseline_hash = client.get(f"/api/jobs/{job_id}/subtitle-review").json()["clips"][0]["previewSpecHash"]
     queued.clear()
 
@@ -1214,8 +1236,9 @@ def test_apply_subtitle_review_clip_rejects_segment_from_another_clip(
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     _write_reeditable_preview_inputs(job_id, candidate_id)
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
 
     rejected = client.post(
         f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
@@ -1232,7 +1255,7 @@ def test_apply_subtitle_review_clip_rejects_segment_from_another_clip(
 def test_get_subtitle_review_hydrates_banner_settings_from_job(
     client: TestClient,
 ) -> None:
-    job_id, _candidate_id, _rendered_bytes = _seed_reeditable_export()
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, job_id)
         assert job is not None
@@ -1243,7 +1266,9 @@ def test_get_subtitle_review_hydrates_banner_settings_from_job(
         }
         db.commit()
 
-    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    reedit = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reedit.status_code == 201
+    job_id = reedit.json()["jobId"]
     response = client.get(f"/api/jobs/{job_id}/subtitle-review")
 
     assert response.status_code == 200
@@ -1268,7 +1293,7 @@ def test_get_subtitle_review_hydrates_banner_settings_from_job(
 def test_get_subtitle_review_preserves_explicit_never_mode(
     client: TestClient,
 ) -> None:
-    job_id, _candidate_id, _rendered_bytes = _seed_reeditable_export()
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     storage = app.dependency_overrides[get_storage_paths]()
     artifact_path = storage.job_outputs(job_id) / "subtitle_review.json"
     artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
@@ -1286,7 +1311,10 @@ def test_get_subtitle_review_preserves_explicit_never_mode(
         }
         db.commit()
 
-    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    reedit = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reedit.status_code == 201
+    job_id = reedit.json()["jobId"]
+    artifact_path = storage.job_outputs(job_id) / "subtitle_review.json"
     response = client.get(f"/api/jobs/{job_id}/subtitle-review")
 
     assert response.status_code == 200
@@ -1300,7 +1328,7 @@ def test_get_subtitle_review_preserves_explicit_never_mode(
 def test_get_subtitle_review_persists_missing_false_title_expectation(
     client: TestClient,
 ) -> None:
-    job_id, _candidate_id, _rendered_bytes = _seed_reeditable_export()
+    job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, job_id)
         assert job is not None
@@ -1312,7 +1340,9 @@ def test_get_subtitle_review_persists_missing_false_title_expectation(
         }
         db.commit()
 
-    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    reedit = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reedit.status_code == 201
+    job_id = reedit.json()["jobId"]
     response = client.get(f"/api/jobs/{job_id}/subtitle-review")
 
     assert response.status_code == 200
@@ -1369,8 +1399,10 @@ def test_get_subtitle_review_does_not_requeue_failed_current_spec(
     app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
         lambda queued_job_id, clip_id, spec_hash: queued.append((queued_job_id, clip_id, spec_hash))
     )
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
+    output_dir = storage.job_outputs(job_id)
 
     first = client.get(f"/api/jobs/{job_id}/subtitle-review")
 
@@ -1402,7 +1434,9 @@ def test_failed_subtitle_review_preview_can_be_retried_once(
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     _write_reeditable_preview_inputs(job_id, candidate_id)
-    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    reedit = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reedit.status_code == 201
+    job_id = reedit.json()["jobId"]
     queued: list[tuple[str, str, str]] = []
     app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
         lambda queued_job_id, clip_id, spec_hash: queued.append((queued_job_id, clip_id, spec_hash))
@@ -1461,7 +1495,7 @@ def test_completed_subtitle_review_get_preserves_confirmation_without_preview_qu
     assert persisted["clips"][0].get("previewSpecHash") is None
 
 
-def test_completed_legacy_preview_is_transiently_playable_until_reopen(
+def test_completed_legacy_preview_remains_playable_after_isolated_reedit(
     client: TestClient,
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
@@ -1492,14 +1526,18 @@ def test_completed_legacy_preview_is_transiently_playable_until_reopen(
     assert queued == []
 
     _write_reeditable_preview_inputs(job_id, candidate_id)
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reedit = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reedit.status_code == 201
+    source_job_id = job_id
+    job_id = reedit.json()["jobId"]
     active = client.get(f"/api/jobs/{job_id}/subtitle-review")
     active_clip = active.json()["clips"][0]
     assert active_clip["previewState"] == "queued"
     assert active_clip["previewSpecHash"] is not None
     assert active_clip["previewVideoUrl"] is None
     assert queued == [(job_id, candidate_id, active_clip["previewSpecHash"])]
+    assert artifact_path.read_bytes() == stored_before
+    assert client.get(f"/api/jobs/{source_job_id}/subtitle-review").json()["clips"][0]["previewState"] == "ready"
 
 
 def test_retained_live_preview_revision_remains_playable_while_current_is_queued(
@@ -1508,8 +1546,9 @@ def test_retained_live_preview_revision_remains_playable_while_current_is_queued
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
     _write_reeditable_preview_inputs(job_id, candidate_id)
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
 
     output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
     review_path = output_dir / "subtitle_review.json"
@@ -1557,7 +1596,9 @@ def test_subtitle_review_get_poll_cannot_overwrite_concurrent_content_patch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
-    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    reedit = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reedit.status_code == 201
+    job_id = reedit.json()["jobId"]
     refresh_entered = Event()
     release_refresh = Event()
     original_refresh = jobs_api.refresh_subtitle_review_preview_states
@@ -1611,7 +1652,9 @@ def test_hook_scene_status_transition_blocks_concurrent_settings_patch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
-    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    reedit = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reedit.status_code == 201
+    job_id = reedit.json()["jobId"]
     app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = lambda: lambda job_id, clip_id, start, end: None
     validation_entered = Event()
     release_validation = Event()
@@ -1660,7 +1703,9 @@ def test_subtitle_review_poll_refreshes_job_status_after_waiting_for_hook_lock(
     poll_target: str,
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
-    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    reedit = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reedit.status_code == 201
+    job_id = reedit.json()["jobId"]
     app.dependency_overrides[get_enqueue_subtitle_review_hook_scene_update] = lambda: lambda job_id, clip_id, start, end: None
     poll_waiting = Event()
     release_poll = Event()
@@ -1825,10 +1870,7 @@ def test_completed_mp4_upload_creates_one_clip_child_from_legacy_open_review(
     source_job_id, candidate_id, rendered_bytes = _seed_reeditable_export()
     _write_reeditable_preview_inputs(source_job_id, candidate_id)
 
-    reopened = client.post(f"/api/jobs/{source_job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
-    assert reopened.json()["state"] == "awaiting_review"
-
+    _seed_persisted_legacy_reopen(source_job_id)
     storage = app.dependency_overrides[get_storage_paths]()
     source_review_path = storage.job_outputs(source_job_id) / "subtitle_review.json"
     source_review_before = source_review_path.read_bytes()
@@ -2424,8 +2466,10 @@ def test_subtitle_review_hydrates_resolved_style_contract_and_preserves_custom_f
     assert completed_clip["resolvedHookStyle"]["fontName"] == ("利用者の任意タイトルフォント")
     assert "resolvedSubtitleStyle" not in json.loads(artifact_path.read_text(encoding="utf-8"))["clips"][0]
 
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
+    artifact_path = storage.job_outputs(job_id) / "subtitle_review.json"
     persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert persisted["renderMode"] == "low_cost"
     assert persisted["clips"][0]["resolvedSubtitleStyle"]["fontName"] == ("利用者の任意フォント")
@@ -2512,8 +2556,9 @@ def test_normal_resolved_twelve_pixel_style_round_trips_through_content_patch(
         }
         db.commit()
 
-    reopened = client.post(f"/api/jobs/{job_id}/subtitle-review/reopen")
-    assert reopened.status_code == 200
+    reopened = client.post(f"/api/jobs/{job_id}/clips/{candidate_id}/reedit")
+    assert reopened.status_code == 201
+    job_id = reopened.json()["jobId"]
     clip = reopened.json()["clips"][0]
     resolved = clip["resolvedSubtitleStyle"]
     assert resolved["fontName"] == "12px任意フォント"
@@ -4023,7 +4068,7 @@ def test_rollback_failed_publication_stays_blocked_during_hook_updates(
     storage = app.dependency_overrides[get_storage_paths]()
     output_dir = storage.job_outputs(job_id)
     storage.zip_path(job_id).write_bytes(b"possibly mixed zip")
-    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    _seed_persisted_legacy_reopen(job_id)
     mark_rerender_publication_unresolved(
         output_dir,
         job_id=job_id,
@@ -4218,7 +4263,7 @@ def test_framing_and_layout_save_preserves_preview_and_other_clips(
     app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: (
         lambda *args: queued.append(args)
     )
-    assert client.post(f"/api/jobs/{job_id}/subtitle-review/reopen").status_code == 200
+    _seed_persisted_legacy_reopen(job_id)
     before = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
     for sibling in before["clips"]:
         if sibling["id"] != candidate_id:

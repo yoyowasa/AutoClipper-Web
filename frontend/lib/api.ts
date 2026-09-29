@@ -424,18 +424,6 @@ export async function getSubtitleReview(jobId: string): Promise<SubtitleReviewDo
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
-export async function reopenSubtitleReview(
-  jobId: string
-): Promise<SubtitleReviewDocument> {
-  const response = await fetch(
-    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/reopen`,
-    {
-      method: "POST"
-    }
-  );
-  return parseJsonResponse<SubtitleReviewDocument>(response);
-}
-
 export async function getYouTubePostingProfile(): Promise<YouTubePostingProfileDocument> {
   const response = await fetch(
     `${API_BASE_URL}/api/preferences/youtube-posting-profile`,

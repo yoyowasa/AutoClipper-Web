@@ -1229,17 +1229,6 @@ def mark_review_completed(document: SubtitleReviewDocument) -> SubtitleReviewDoc
     return _refresh_counts(document)
 
 
-def reopen_completed_review(document: SubtitleReviewDocument) -> SubtitleReviewDocument:
-    if document.state != "completed":
-        raise ValueError("subtitle review is not completed")
-    document.state = "awaiting_review"
-    document.render_revision += 1
-    document.reopened_at = _utc_iso()
-    for clip in document.clips:
-        clip.confirmed = False
-    return _refresh_counts(document)
-
-
 def restore_review_after_render_failure(
     document: SubtitleReviewDocument,
 ) -> SubtitleReviewDocument:
