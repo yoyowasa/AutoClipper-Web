@@ -846,10 +846,6 @@ class LauncherController:
                 ".envがありません。low_costは利用できますが、環境設定を確認してください。"
             )
         openai_key_configured = bool(self._configured_openai_keys())
-        if not openai_key_configured:
-            warnings.append(
-                "OPENAI_API_KEY未設定: high_qualityはrule score fallbackまたは設定エラーになります。"
-            )
 
         disk_free_gb = shutil.disk_usage(self.project_root).free / (1024**3)
         if disk_free_gb < MIN_FREE_DISK_GB:

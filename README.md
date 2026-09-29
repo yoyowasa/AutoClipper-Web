@@ -577,6 +577,8 @@ optional OpenAI correction on important material.
 
 ### OpenAI subtitle correction
 
+既定の構成ではキーをコンテナへ渡さない。OpenAI機能は使わない前提。
+
 OpenAI subtitle correction is optional and disabled by default. It sends deterministic transcript text, nearby text context, confidence, and preferred terms only. It does not send audio, video, or rendered files. Segment count, order, and timestamps are preserved.
 
 Set `OPENAI_API_KEY` in `.env`, rebuild the services, then enable correction from the Upload UI or the E2E script:
