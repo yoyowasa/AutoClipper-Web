@@ -8,18 +8,21 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install backend dependencies
         run: cd backend && python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
 
       - name: Lint backend
-        run: cd backend && ruff check . ../launcher
+        run: cd backend && ruff check . ../launcher ../scripts
 
       - name: Test backend
         run: cd backend && pytest
@@ -44,8 +47,8 @@ jobs:
       - name: Typecheck frontend
         run: npm --workspace frontend run typecheck
 
-      - name: Test overlay fit contract
-        run: npm --workspace frontend run test:overlay-fit
+      - name: Test frontend
+        run: npm --workspace frontend run test
 
       - name: Build frontend
         run: npm --workspace frontend run build

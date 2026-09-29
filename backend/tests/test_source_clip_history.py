@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
@@ -35,7 +35,7 @@ def context(tmp_path):
 
 
 def add_export(db, paths, *, job_id="old", status="completed", clip_type="normal", start=30, end=90):
-    old = datetime.utcnow() - timedelta(days=30)
+    old = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=30)
     video = Video(id=f"v_{job_id}", original_filename="配信 [s481oYpPtKg].mp4",
                   stored_path=str(paths.uploads / f"{job_id}.mp4"), duration=300, created_at=old)
     job = Job(id=job_id, video=video, status=status, settings_json={}, created_at=old, updated_at=old)
