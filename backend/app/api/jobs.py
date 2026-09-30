@@ -11,6 +11,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -2745,7 +2746,13 @@ def reselect_clip_plan(
             exclude_none=True,
         )
     )
-    validated_settings = _validated_persisted_job_settings(settings_payload)
+    try:
+        validated_settings = _validated_persisted_job_settings(settings_payload)
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="再選定の尺・設定を確認してください。",
+        ) from exc
     _claim_job_status(
         db,
         job,

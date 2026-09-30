@@ -199,7 +199,13 @@ from app.jobs.title_hook_suggestions import (
     title_hook_suggestions_path,
 )
 from app.models import ExportItem, Job, Video, utc_now
-from app.candidates.used_ranges import overlaps_used, unused_items, used_ranges, with_reselection_exclusions
+from app.candidates.used_ranges import (
+    near_duplicate_of_previous,
+    overlaps_used,
+    unused_items,
+    used_ranges,
+    with_reselection_exclusions,
+)
 from app.source_clip_history import (
     SourceTimelineChanged,
     record_completed_exports,
@@ -712,6 +718,15 @@ def _unused_candidates(candidates: Sequence[Candidate], settings: dict[str, Any]
         if candidate.selection_reason == MANUAL_SELECTION_REASON
         or not overlaps_used(candidate.start, candidate.end, ranges)
     ]
+
+
+def _is_repeated_normal_proposal(candidate: Candidate, settings: dict[str, Any]) -> bool:
+    return (
+        candidate.type == "normal"
+        and candidate.selection_reason != MANUAL_SELECTION_REASON
+        and not _bool_setting(settings, "excludePreviousSelection", False)
+        and near_duplicate_of_previous(candidate.start, candidate.end, settings)
+    )
 
 
 def _filter_selection_history(
@@ -1965,7 +1980,11 @@ def _codex_selection_with_diverse_refined_shorts(
             score = candidate.ai_score
         return (-(score if score is not None else 0.0), candidate.id)
 
-    candidate_pool = _unused_candidates(result.candidates, settings)
+    candidate_pool = [
+        candidate
+        for candidate in _unused_candidates(result.candidates, settings)
+        if not _is_repeated_normal_proposal(candidate, settings)
+    ]
     normal_pool = sorted(
         (candidate for candidate in candidate_pool if candidate.type == "normal"),
         key=rank_key,
@@ -2000,11 +2019,21 @@ def _codex_selection_with_diverse_refined_shorts(
         for candidate in refined_pool_selection.normal_clips
         if not (candidate.topic_key or "").strip()
     ]
+    previous_duplicate_rejections = [
+        CandidateRejection(
+            candidateId=candidate.id,
+            type="normal",
+            reasons=["near_duplicate_previous_proposal"],
+        )
+        for candidate in refined_pool_selection.normal_clips
+        if _is_repeated_normal_proposal(candidate, settings)
+    ]
     normal_selection = select_candidates(
         [
             candidate
             for candidate in refined_pool_selection.normal_clips
             if (candidate.topic_key or "").strip()
+            and not _is_repeated_normal_proposal(candidate, settings)
         ],
         settings=parsed_settings.model_copy(
             update={
@@ -2018,6 +2047,7 @@ def _codex_selection_with_diverse_refined_shorts(
     selected_normals = normal_selection.normal_clips
     normal_pool_rejections = [
         *missing_topic_rejections,
+        *previous_duplicate_rejections,
         *normal_selection.rejected_candidates,
     ]
     for candidate in refined_pool_selection.shorts:
@@ -4909,6 +4939,13 @@ def _restore_clip_plan_after_reselection_failure(
             path.write_bytes(payload)
     if previous_plan is not None:
         previous_plan.state = "awaiting_review"
+        requested_keep_ids = (job.settings_json or {}).get("keptClipIds")
+        if isinstance(requested_keep_ids, list):
+            valid_clip_ids = {clip.id for clip in previous_plan.clips}
+            previous_plan.settings["keptClipIds"] = [
+                clip_id for clip_id in requested_keep_ids
+                if isinstance(clip_id, str) and clip_id in valid_clip_ids
+            ]
         write_clip_plan(previous_plan, clip_plan_output_path(job_dir))
         job.settings_json = dict(previous_plan.settings)
     job.status = "awaiting_clip_review"
@@ -5691,7 +5728,11 @@ def run_clip_plan_reselection(
                     f"Could not generate clip candidates: {exc}",
                 ) from exc
 
-            normal_candidates = _unused_candidates(normal_candidates, settings)
+            normal_candidates = [
+                candidate
+                for candidate in _unused_candidates(normal_candidates, settings)
+                if not _is_repeated_normal_proposal(candidate, settings)
+            ]
             short_candidates = _unused_candidates(short_candidates, settings)
             write_candidates(normal_candidates, job_dir / "normal_candidates.json")
             write_candidates(short_candidates, job_dir / "short_candidates.json")

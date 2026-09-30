@@ -72,6 +72,8 @@ function reselectionPayload(settings: ClipSettings, excludePreviousSelection: bo
     shortClipSelectionPreset: settings.shortClipSelectionPreset,
     normalClipGuidance: settings.normalClipGuidance,
     shortClipGuidance: settings.shortClipGuidance,
+    normalMinDuration: settings.normalMinDuration,
+    normalMaxDuration: settings.normalMaxDuration,
     excludeIntroOutro: settings.excludeIntroOutro,
     excludePromotionalContent: settings.excludePromotionalContent,
     selectionPolicy: settings.selectionPolicy,
@@ -119,6 +121,7 @@ export default function ClipPlanReviewPage() {
     const document = await getClipPlan(jobId);
     setPlan(document);
     setDraftSettings(document.settings);
+    setExcludePreviousSelection(document.settings.excludePreviousSelection ?? true);
     const nextSelectedClipId = document.clips.some(
       (clip) => clip.id === selectedClipId
     )
@@ -168,6 +171,7 @@ export default function ClipPlanReviewPage() {
           return;
         }
         setPlan(document);
+        setExcludePreviousSelection(document.settings.excludePreviousSelection ?? true);
         setKeptClipIds(Array.isArray(document.settings.keptClipIds)
           ? document.settings.keptClipIds.filter((id: unknown): id is string => typeof id === "string" && document.clips.some(clip => clip.id === id)) : []);
         setDraftSettings(document.settings);
@@ -695,7 +699,7 @@ export default function ClipPlanReviewPage() {
         </div>
       </div>
 
-      {!isManualWorkflow && job ? (
+      {!isManualWorkflow && job && !job.error ? (
         <div className="sticky top-0 z-20 w-full bg-[#f7f7f4] px-5 pt-4">
           <InitialSelectionStatusBanner
             currentStep={job.currentStep}
@@ -1020,6 +1024,32 @@ export default function ClipPlanReviewPage() {
               />
             </div>
 
+            <div className="mt-3 border border-neutral-300 bg-white px-4 py-3">
+              <p className="text-sm font-semibold text-neutral-900">通常切り抜きの候補尺</p>
+              <p className="mt-1 text-xs text-neutral-600">
+                「10分前後」を探す場合は、例えば最低480秒・最長600秒に設定します。条件に合う場面がなければ短い候補で埋めません。
+              </p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="flex flex-col gap-1 text-xs font-medium text-neutral-700">
+                  最低（秒）
+                  <input className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                    disabled={controlsDisabled} min={1} step={1} type="number"
+                    value={draftSettings.normalMinDuration}
+                    onChange={event => setDraftSettings(current => current ? { ...current, normalMinDuration: Number(event.target.value) } : current)} />
+                </label>
+                <label className="flex flex-col gap-1 text-xs font-medium text-neutral-700">
+                  最長（秒）
+                  <input className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
+                    disabled={controlsDisabled} min={1} step={1} type="number"
+                    value={draftSettings.normalMaxDuration}
+                    onChange={event => setDraftSettings(current => current ? { ...current, normalMaxDuration: Number(event.target.value) } : current)} />
+                </label>
+              </div>
+              {draftSettings.normalMinDuration > draftSettings.normalMaxDuration ? (
+                <p className="mt-2 text-xs text-red-700">最低尺は最長尺以下にしてください。</p>
+              ) : null}
+            </div>
+
             {draftSettings.useOpenAIScoring ? (
               <p className="mt-3 border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                 AI文脈判定を有効にすると、再選定でもOpenAI APIを使用します。
@@ -1032,7 +1062,10 @@ export default function ClipPlanReviewPage() {
 
             <button
               className="mt-4 min-h-11 w-full border border-neutral-950 bg-white px-4 text-sm font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={controlsDisabled || remainingReselectionCount === 0}
+              disabled={controlsDisabled || remainingReselectionCount === 0 ||
+                !Number.isFinite(draftSettings.normalMinDuration) || !Number.isFinite(draftSettings.normalMaxDuration) ||
+                draftSettings.normalMinDuration <= 0 || draftSettings.normalMaxDuration <= 0 ||
+                draftSettings.normalMinDuration > draftSettings.normalMaxDuration}
               type="button"
               onClick={() => void handleReselect()}
             >

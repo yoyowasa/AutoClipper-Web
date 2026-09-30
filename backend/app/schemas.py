@@ -777,6 +777,8 @@ class SubtitleReviewSettingsUpdateRequest(BaseModel):
 class ClipPlanReselectionRequest(BaseModel):
     kept_clip_ids: list[str] = Field(default_factory=list, max_length=36, alias="keptClipIds")
     exclude_previous_selection: bool = Field(default=False, alias="excludePreviousSelection", strict=True)
+    normal_min_duration: float | None = Field(default=None, gt=0, alias="normalMinDuration")
+    normal_max_duration: float | None = Field(default=None, gt=0, alias="normalMaxDuration")
     normal_clip_selection_preset: ClipSelectionPreset = Field(alias="normalClipSelectionPreset")
     short_clip_selection_preset: ClipSelectionPreset = Field(alias="shortClipSelectionPreset")
     normal_clip_guidance: str = Field(max_length=1000, alias="normalClipGuidance")

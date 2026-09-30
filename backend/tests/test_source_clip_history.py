@@ -194,5 +194,5 @@ def test_codex_input_omits_used_transcript_without_shifting_timestamps():
         settings={USED_RANGES_SETTING: [(10, 100)]},
     )
     assert [(item.start, item.end) for item in request.transcript] == [(0, 10), (100, 110), (110, 120)]
-    assert "過去に使用した場面" in request.constraints.normal.guidance
-    assert "過去に使用した場面" in request.constraints.short.guidance
+    assert "過去に使用した場面" in request.constraints.normal.context_guidance
+    assert "過去に使用した場面" in request.constraints.short.context_guidance

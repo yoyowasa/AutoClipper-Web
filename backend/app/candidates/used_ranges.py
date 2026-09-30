@@ -3,6 +3,7 @@ from typing import Any, Protocol, TypeVar
 
 
 USED_RANGES_SETTING = "_usedSourceRanges"
+PREVIOUS_PROPOSALS_SETTING = "_previousProposedRanges"
 
 
 class TimedItem(Protocol):
@@ -40,15 +41,38 @@ def merge_ranges(ranges: Sequence[tuple[float, float]]) -> list[tuple[float, flo
 
 def with_reselection_exclusions(settings: dict[str, Any], previous_plan: Any) -> dict[str, Any]:
     """Avoid earlier proposals in this job without marking them as exported footage."""
-    if not settings.get("excludePreviousSelection") or previous_plan is None:
+    if previous_plan is None:
         return settings
-    previous = previous_plan.settings.get("_reselectionExcludedRanges", [])
-    ranges = merge_ranges([
+    previous = [
+        *previous_plan.settings.get(PREVIOUS_PROPOSALS_SETTING, []),
+        *previous_plan.settings.get("_reselectionExcludedRanges", []),
+    ]
+    ranges = sorted(set([
         *[tuple(item) for item in previous],
         *[(clip.start, clip.end) for clip in previous_plan.clips if clip.end > clip.start],
-    ])
+    ]))
+    if not settings.get("excludePreviousSelection"):
+        # OFF allows overlapping old material for a longer edit, but the old
+        # proposals remain available for near-duplicate prevention.
+        return {**settings, PREVIOUS_PROPOSALS_SETTING: ranges}
     return {
         **settings,
-        "_reselectionExcludedRanges": ranges,
+        PREVIOUS_PROPOSALS_SETTING: ranges,
+        "_reselectionExcludedRanges": merge_ranges(ranges),
         USED_RANGES_SETTING: merge_ranges([*used_ranges(settings), *ranges]),
     }
+
+
+def near_duplicate_of_previous(
+    start: float, end: float, settings: dict[str, Any], *, threshold: float = 0.9,
+) -> bool:
+    """Reject almost unchanged proposals while allowing substantially longer edits."""
+    duration = end - start
+    if duration <= 0:
+        return False
+    for old_start, old_end in settings.get(PREVIOUS_PROPOSALS_SETTING, []):
+        old_duration = old_end - old_start
+        overlap = max(0.0, min(end, old_end) - max(start, old_start))
+        if old_duration > 0 and overlap / max(duration, old_duration) >= threshold:
+            return True
+    return False

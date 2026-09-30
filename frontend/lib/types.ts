@@ -71,6 +71,7 @@ export type ClipTimeRange = {
 
 export type ClipSettings = {
   keptClipIds?: string[];
+  excludePreviousSelection?: boolean;
   characterPresetName?: string;
   channelName?: string;
   normalTitleSuffix?: string | null;
@@ -641,6 +642,8 @@ export type ClipPlanReselectionRequest = Pick<
   | "shortClipSelectionPreset"
   | "normalClipGuidance"
   | "shortClipGuidance"
+  | "normalMinDuration"
+  | "normalMaxDuration"
   | "excludeIntroOutro"
   | "excludePromotionalContent"
   | "selectionPolicy"

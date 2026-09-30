@@ -10491,3 +10491,38 @@ pip check: pass
 - 内容: job状態の条件付きUPDATEとrowcount確認を共通化。4窓口でclip planの書き込み前に状態を確保し、競合時は409を返す。種類変更は同期処理の終了後に編集可能な状態へ戻す。JSON保存やキュー登録に失敗した際の状態復元を維持する。手動編集の同期経路は変更していない。
 - 検証: 4窓口で状態確保中の2回目の呼び出しが409、キューを使う3窓口で登録が各1回、種類変更で登録なしを確認。古いjob状態を保持した別DBセッションの条件付きUPDATEも409。関連50 passed、backend全1206 passed・1 skipped、`ruff check . ../launcher ../scripts`、frontend全16テスト・lint・typecheck・build成功。
 - 未確認: 稼働中Dockerへの反映、実動画での動作、PRのCI結果。ほかのjob状態変更窓口は今回修正していない。
+## 2026-09-29 JST 再選定の過去候補除外OFFと通常候補8〜10分の再生成
+
+- 目的: 直近ジョブで短い通常候補が続く状態に対し、選定品質ロジックの変更はせず、過去候補の除外をOFFにして既存の尺制約で長い候補を再生成する。
+- 変更ファイル: `backend/app/schemas.py`、`backend/app/api/jobs.py`、`frontend/lib/types.ts`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`backend/tests/test_real_pipeline.py`、`backend/tests/test_api_routes.py`、本ファイル。
+- 内容: 再選定APIと画面から通常候補の最低・最長尺を変更可能にし、無効な組合せは422で返す。画面の「これまでの候補を避ける」は保存済み設定を再読込時に反映する。既存のキープ6本を維持し、対象ジョブの除外をOFF、通常候補尺を480〜600秒として再選定した。選定方針・視覚評価・不採用理由の実装は変更していない。
+- 検証: 関連backendテスト145 passed、ruff、frontend lint・typecheck、GPU Composeのbackend・worker・frontend buildと起動、backend healthを確認。実ジョブは `awaiting_clip_review`、revision 17、通常3本・Shorts5本。新規通常候補は494.08秒と600秒で、両プレビューのRange GETはHTTP 206。Codex再選定はfallbackなしで通常2/2本を選定。
+- 未確認: 新規候補の内容・映像の良し悪しは人のレビュー待ち。キープ済み通常1本（427秒）は今回の480秒最低尺より短いが既存選定として維持。長尺に合う候補がない別動画での動作は未確認。
+- 追補: ユーザーが第17案から再度1本を8〜10分・過去候補除外OFFで探したところ、`reselection_no_alternatives` となり、既存の第17案へ復帰した。これはページ/ジョブの404ではない。失敗時に保存済みCodex要約とエラー文中の「再試行」から接続再試行中と誤表示する問題を修正し、失敗時のキープ選択を旧planへ戻す際に最新の有効なキープIDを保持するよう変更。今回の失敗以前に巻き戻されたキープ状態は自動で推定復元していない。
+- 追補検証: backend関連151 passed、frontend全16テスト・lint・typecheck、ruff、GPU Compose再build/再起動。現在の画面で誤った「Codex接続を再試行中」表示が消え、第17案8本が表示されることを確認。実動画での新規候補追加は行っていない。
+
+## 2026-09-29 JST 長尺再選定でほぼ同じ場面を再提示する問題
+
+- 目的: 3時間超の元動画で、過去候補除外OFFの再選定がほぼ同じ通常場面を再提示する問題を抑える。
+- 根拠: 対象ジョブの元動画は12202秒。最新の通常候補11122.41〜11461.73秒は、過去提示済み11122.41〜11452.19秒とほぼ一致。OFFでは過去候補がAI入力にも候補選択にも残り、通常1本・尺300〜600秒の条件ではAIへの通常候補要求数も1件だった。保存済みの過去提示区間は39範囲・合計約156分で、完全除外ONは長尺探索可能域を大きく削る。
+- 変更ファイル: `backend/app/candidates/used_ranges.py`、`backend/app/candidates/codex_initial_selection.py`、`backend/app/jobs/runner.py`、`backend/tests/test_reselection_exclusions.py`、`backend/tests/test_codex_initial_selection.py`、`backend/tests/test_real_pipeline.py`、本ファイル。
+- 内容: OFFでも過去の提案範囲を記録し、Codexへ別話題優先を伝える。通常候補が過去提案と90%以上同じ区間なら再提示しないが、構成が大きく変わる長尺拡張は許す。OFFの再選定で尺帯が1つのときも通常1本につき最大3候補を探索する。手動指定候補にはこの重複制限を適用しない。
+- 検証: 関連backend 199 passed、ruff、`git diff --check` 成功。元の重複区間は新判定で除外、330秒から600秒への拡張は許可されることを回帰テストと稼働worker内で確認。GPU Composeのbackend・workerをbuild/再作成し、backend healthy・worker running、対象ジョブはrevision 19・確認待ち・キープ7本のままであることを確認。
+- 未確認: 対象の実動画を新ロジックで再選定した結果は未確認。ユーザーのキープ状態を守るためジョブは自動で再実行していない。別話題の良質な候補が必ず見つかることや映像面の良し悪しは未検証。
+
+## 2026-09-30 JST 添付ショート動画の全文文字起こし
+
+- 目的: 今回指定された `live-preview-video (2).mp4`（約55秒）を文字起こしする。同名の以前の動画とはサイズ・更新日時・尺が異なることを確認。
+- 成果物: `storage/transcripts/live-preview-2-20260930/文字起こし.txt` と認識原文・確認用フレーム。
+- 検証: ローカルのfaster-whisper small・large-v3-turbo・large-v3で全編を処理し、映像とも照合。UTF-8の保存・再読込を確認。
+- 未確定: 15〜20秒の一部と30秒台の動詞は注記を残した。同系列モデルの一致だけで確定とは扱わない。全文の耳による校正は未実施。アプリコードや既存ジョブの字幕は変更していない。
+
+## 2026-09-30 JST 長尺再選定の過去提案重複防止を完成（task-165）
+
+- 目的: 過去候補除外OFFでほぼ同じ通常場面を再提示する問題を防ぎ、退避済みWIPをmain向けPRにまとめる。
+- 変更ファイル: `backend/app/{api/jobs.py,candidates/codex_initial_selection.py,candidates/used_ranges.py,jobs/runner.py,schemas.py}`、`backend/tests/{test_api_routes.py,test_real_pipeline.py,test_reselection_exclusions.py,test_reselection_keep.py,test_source_clip_history.py}`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/lib/{initialSelectionStatus.ts,types.ts}`、`frontend/tests/initialSelectionStatus.test.ts`、本ファイル。既存WIPの尺設定・過去候補除外・キープ復元・失敗時表示の変更と、許可された文字起こし記録を含む。
+- 内容: 過去提案範囲を結合し、長い順に最大15件と省略件数をCodexへ渡す。ユーザー指示が1000文字でも保持できるよう、`guidance` と自動補足の `contextGuidance` を別欄にし、それぞれ1000文字以内で検証する。重複判定に使う `_previousProposedRanges` は個々の全範囲を保持し、結合は指示の要約と完全除外用だけで行う。設定から決めた拡張フラグを制約文書へ保存し、通常候補数を単一の期待値と照合する。除外OFFの90%以上重複する自動通常候補をCodexと字幕候補へのfallbackで除外し、330秒→600秒の拡張、ショート、手動指定は許す。失敗時は最新の有効なキープIDを保持する。
+- 検証: 関連131 passed。39範囲を15件＋「ほか24件」にまとめること、1000文字のユーザー指示の保持、文字数上限、再選定を繰り返した場合の個々の全範囲保持、候補数不一致の拒否、重複除外と尺拡張・ショート・手動指定の例外、キープ解除を含む最新IDの復元を確認。Python 3.11.9の `python -m pytest` は1226 passed・1 skipped。`ruff check . ../launcher ../scripts`、frontend全16テスト・lint・typecheck・build、`git diff --check` 成功。
+- CI: PR #99の実装コミット `0bc0ea7` でbackend（Python 3.11・3.12）とfrontendがすべて成功。
+- 未確認: 実動画での新ロジックによる再選定と映像品質。稼働環境は以前のWIPからbuildされた状態で、今回のDocker再build・反映・実ジョブ再実行は行っていない。
+- 大規模アップデート方針（2026-09-30決定）: (a) 9/27確定事項から実装する。順番は task-165 → 有料API経路の削除 → 触る範囲の分割 → 尺ルール → 不採用理由 → 本数の自動振り分け。別動画からの補完、統合の形、Codexのモデル統一は後で決める。

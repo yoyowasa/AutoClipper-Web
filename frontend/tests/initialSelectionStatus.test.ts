@@ -71,6 +71,13 @@ assert.equal(retrying?.state, "retrying");
 assert.equal(retrying?.title, "Codex接続を再試行中");
 assert.equal(retrying?.detail, "試行 2回目");
 
+const failedReselectionIsNotRetrying = initialSelectionStatusDisplay(
+  { initialSelectionProvider: "codex", codexInitialSelectionStatus: "completed" },
+  "awaiting_clip_review",
+  "再選定に失敗しました。設定を確認して再試行してください"
+);
+assert.notEqual(failedReselectionIsNotRetrying?.state, "retrying");
+
 const legacy = initialSelectionStatusDisplay({ initialSelectionProvider: "legacy" });
 assert.equal(legacy, null);
 
