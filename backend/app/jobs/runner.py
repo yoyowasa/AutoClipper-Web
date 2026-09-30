@@ -720,6 +720,15 @@ def _unused_candidates(candidates: Sequence[Candidate], settings: dict[str, Any]
     ]
 
 
+def _is_repeated_normal_proposal(candidate: Candidate, settings: dict[str, Any]) -> bool:
+    return (
+        candidate.type == "normal"
+        and candidate.selection_reason != MANUAL_SELECTION_REASON
+        and not _bool_setting(settings, "excludePreviousSelection", False)
+        and near_duplicate_of_previous(candidate.start, candidate.end, settings)
+    )
+
+
 def _filter_selection_history(
     selection: CandidateSelection, candidates: list[Candidate], settings: dict[str, Any]
 ) -> tuple[CandidateSelection, list[Candidate]]:
@@ -1974,8 +1983,7 @@ def _codex_selection_with_diverse_refined_shorts(
     candidate_pool = [
         candidate
         for candidate in _unused_candidates(result.candidates, settings)
-        if candidate.type != "normal"
-        or not near_duplicate_of_previous(candidate.start, candidate.end, settings)
+        if not _is_repeated_normal_proposal(candidate, settings)
     ]
     normal_pool = sorted(
         (candidate for candidate in candidate_pool if candidate.type == "normal"),
@@ -2018,14 +2026,14 @@ def _codex_selection_with_diverse_refined_shorts(
             reasons=["near_duplicate_previous_proposal"],
         )
         for candidate in refined_pool_selection.normal_clips
-        if near_duplicate_of_previous(candidate.start, candidate.end, settings)
+        if _is_repeated_normal_proposal(candidate, settings)
     ]
     normal_selection = select_candidates(
         [
             candidate
             for candidate in refined_pool_selection.normal_clips
             if (candidate.topic_key or "").strip()
-            and not near_duplicate_of_previous(candidate.start, candidate.end, settings)
+            and not _is_repeated_normal_proposal(candidate, settings)
         ],
         settings=parsed_settings.model_copy(
             update={
@@ -5723,8 +5731,7 @@ def run_clip_plan_reselection(
             normal_candidates = [
                 candidate
                 for candidate in _unused_candidates(normal_candidates, settings)
-                if codex_reselection_result is None
-                or not near_duplicate_of_previous(candidate.start, candidate.end, settings)
+                if not _is_repeated_normal_proposal(candidate, settings)
             ]
             short_candidates = _unused_candidates(short_candidates, settings)
             write_candidates(normal_candidates, job_dir / "normal_candidates.json")

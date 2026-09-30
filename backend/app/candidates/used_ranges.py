@@ -47,10 +47,10 @@ def with_reselection_exclusions(settings: dict[str, Any], previous_plan: Any) ->
         *previous_plan.settings.get(PREVIOUS_PROPOSALS_SETTING, []),
         *previous_plan.settings.get("_reselectionExcludedRanges", []),
     ]
-    ranges = merge_ranges([
+    ranges = sorted(set([
         *[tuple(item) for item in previous],
         *[(clip.start, clip.end) for clip in previous_plan.clips if clip.end > clip.start],
-    ])
+    ]))
     if not settings.get("excludePreviousSelection"):
         # OFF allows overlapping old material for a longer edit, but the old
         # proposals remain available for near-duplicate prevention.
@@ -58,7 +58,7 @@ def with_reselection_exclusions(settings: dict[str, Any], previous_plan: Any) ->
     return {
         **settings,
         PREVIOUS_PROPOSALS_SETTING: ranges,
-        "_reselectionExcludedRanges": ranges,
+        "_reselectionExcludedRanges": merge_ranges(ranges),
         USED_RANGES_SETTING: merge_ranges([*used_ranges(settings), *ranges]),
     }
 

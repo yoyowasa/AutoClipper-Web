@@ -10509,3 +10509,19 @@ pip check: pass
 - 内容: OFFでも過去の提案範囲を記録し、Codexへ別話題優先を伝える。通常候補が過去提案と90%以上同じ区間なら再提示しないが、構成が大きく変わる長尺拡張は許す。OFFの再選定で尺帯が1つのときも通常1本につき最大3候補を探索する。手動指定候補にはこの重複制限を適用しない。
 - 検証: 関連backend 199 passed、ruff、`git diff --check` 成功。元の重複区間は新判定で除外、330秒から600秒への拡張は許可されることを回帰テストと稼働worker内で確認。GPU Composeのbackend・workerをbuild/再作成し、backend healthy・worker running、対象ジョブはrevision 19・確認待ち・キープ7本のままであることを確認。
 - 未確認: 対象の実動画を新ロジックで再選定した結果は未確認。ユーザーのキープ状態を守るためジョブは自動で再実行していない。別話題の良質な候補が必ず見つかることや映像面の良し悪しは未検証。
+
+## 2026-09-30 JST 添付ショート動画の全文文字起こし
+
+- 目的: 今回指定された `live-preview-video (2).mp4`（約55秒）を文字起こしする。同名の以前の動画とはサイズ・更新日時・尺が異なることを確認。
+- 成果物: `storage/transcripts/live-preview-2-20260930/文字起こし.txt` と認識原文・確認用フレーム。
+- 検証: ローカルのfaster-whisper small・large-v3-turbo・large-v3で全編を処理し、映像とも照合。UTF-8の保存・再読込を確認。
+- 未確定: 15〜20秒の一部と30秒台の動詞は注記を残した。同系列モデルの一致だけで確定とは扱わない。全文の耳による校正は未実施。アプリコードや既存ジョブの字幕は変更していない。
+
+## 2026-09-30 JST 長尺再選定の過去提案重複防止を完成（task-165）
+
+- 目的: 過去候補除外OFFでほぼ同じ通常場面を再提示する問題を防ぎ、退避済みWIPをmain向けPRにまとめる。
+- 変更ファイル: `backend/app/{api/jobs.py,candidates/codex_initial_selection.py,candidates/used_ranges.py,jobs/runner.py,schemas.py}`、`backend/tests/{test_api_routes.py,test_real_pipeline.py,test_reselection_exclusions.py,test_reselection_keep.py,test_source_clip_history.py}`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/lib/{initialSelectionStatus.ts,types.ts}`、`frontend/tests/initialSelectionStatus.test.ts`、本ファイル。既存WIPの尺設定・過去候補除外・キープ復元・失敗時表示の変更と、許可された文字起こし記録を含む。
+- 内容: 過去提案範囲を結合し、長い順に最大15件と省略件数をCodexへ渡す。ユーザー指示が1000文字でも保持できるよう、`guidance` と自動補足の `contextGuidance` を別欄にし、それぞれ1000文字以内で検証する。重複判定に使う `_previousProposedRanges` は個々の全範囲を保持し、結合は指示の要約と完全除外用だけで行う。設定から決めた拡張フラグを制約文書へ保存し、通常候補数を単一の期待値と照合する。除外OFFの90%以上重複する自動通常候補をCodexと字幕候補へのfallbackで除外し、330秒→600秒の拡張、ショート、手動指定は許す。失敗時は最新の有効なキープIDを保持する。
+- 検証: 関連131 passed。39範囲を15件＋「ほか24件」にまとめること、1000文字のユーザー指示の保持、文字数上限、再選定を繰り返した場合の個々の全範囲保持、候補数不一致の拒否、重複除外と尺拡張・ショート・手動指定の例外、キープ解除を含む最新IDの復元を確認。Python 3.11.9の `python -m pytest` は1226 passed・1 skipped。`ruff check . ../launcher ../scripts`、frontend全16テスト・lint・typecheck・build、`git diff --check` 成功。
+- 未確認: PRのCI結果、実動画での新ロジックによる再選定と映像品質。稼働環境は以前のWIPからbuildされた状態で、今回のDocker再build・反映・実ジョブ再実行は行っていない。
+- 大規模アップデート方針（2026-09-30決定）: (a) 9/27確定事項から実装する。順番は task-165 → 有料API経路の削除 → 触る範囲の分割 → 尺ルール → 不採用理由 → 本数の自動振り分け。別動画からの補完、統合の形、Codexのモデル統一は後で決める。

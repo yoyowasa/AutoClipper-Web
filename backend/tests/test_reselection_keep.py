@@ -70,12 +70,13 @@ def test_four_kept_out_of_five_requested_can_reselect_one(existing_count):
     assert merged.unfilled_requested_counts["short"] == 0
 
 
-def test_failed_reselection_keeps_new_checkbox_choices(tmp_path):
+@pytest.mark.parametrize("latest_ids", [["clip_0", "clip_1", "missing"], ["clip_1"], []])
+def test_failed_reselection_keeps_new_checkbox_choices(tmp_path, latest_ids):
     previous = CandidateSelection(shorts=[candidate(0), candidate(1)])
     plan = build_clip_plan(
         job_id="test", selection=previous, settings={"keptClipIds": ["clip_0"]}
     )
-    job = SimpleNamespace(settings_json={"keptClipIds": ["clip_0", "clip_1", "missing"]})
+    job = SimpleNamespace(settings_json={"keptClipIds": latest_ids})
 
     class SessionStub:
         def commit(self):
@@ -91,5 +92,6 @@ def test_failed_reselection_keeps_new_checkbox_choices(tmp_path):
 
     restored = load_clip_plan(clip_plan_output_path(tmp_path))
     assert restored.state == "awaiting_review"
-    assert restored.settings["keptClipIds"] == ["clip_0", "clip_1"]
-    assert job.settings_json["keptClipIds"] == ["clip_0", "clip_1"]
+    expected = [clip_id for clip_id in latest_ids if clip_id != "missing"]
+    assert restored.settings["keptClipIds"] == expected
+    assert job.settings_json["keptClipIds"] == expected

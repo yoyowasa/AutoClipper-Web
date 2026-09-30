@@ -18,6 +18,7 @@ from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType, build_candidate
 from app.candidates.used_ranges import (
     PREVIOUS_PROPOSALS_SETTING,
+    merge_ranges,
     overlaps_used,
     unused_items,
     used_ranges,
@@ -73,6 +74,7 @@ RETRYABLE_BRIDGE_ERROR_CODES = frozenset(
 
 CODEX_TOPIC_SELECTION_PROMPT = """あなたは日本語動画の構成編集者です。
 入力はローカルで作成した時刻付き話題ブロックの抽出要約です。動画全体の中から公開価値の高い話題を選び、重要度順に返してください。
+- guidanceはユーザー指示です。contextGuidanceは過去区間などの補足情報で、ユーザー指示を優先してください。
 - 通常clipとShortは別基準で評価してください。
 - 通常clip: 配信の主要テーマ、質問→説明→具体例→結論があり、単独で内容を理解できる話題を優先します。
   名前読み、連続お礼、スパチャ読みだけの話題は減点します。通常候補は異なるtopicKeyにしてください。
@@ -95,6 +97,7 @@ CODEX_TOPIC_SELECTION_PROMPT = """あなたは日本語動画の構成編集者�
 
 CODEX_INITIAL_SELECTION_PROMPT = """あなたは日本語動画の切り抜き編集者です。
 入力には、第1段階で選定済みの重要話題と、その周辺の時刻付き元字幕だけが含まれます。元字幕を根拠に開始・終了を精密化してください。
+- guidanceはユーザー指示です。contextGuidanceは過去区間などの補足情報で、ユーザー指示を優先してください。
 - timestampSemantics は source_absolute_seconds です。start/end は元動画の絶対秒で返してください。
 - 開始は話題開始または質問の開始、終了は回答・具体例・結論の完了後の文節または無音に合わせてください。
 - 通常clip: 配信の主要テーマ、質問→説明→具体例→結論、単独での理解を重視します。名前読み、連続お礼、スパチャ読みだけは減点します。
@@ -243,6 +246,7 @@ class CodexClipTypeConstraints(_StrictModel):
     max_duration: float = Field(gt=0, allow_inf_nan=False, alias="maxDuration")
     preset: ClipSelectionPreset = "auto"
     guidance: str = Field(default="", max_length=1000)
+    context_guidance: str = Field(default="", max_length=1000, alias="contextGuidance")
     duration_bands: list[CodexDurationBand] = Field(
         min_length=1,
         max_length=3,
@@ -274,6 +278,9 @@ class CodexSelectionConstraints(_StrictModel):
         le=MAX_NORMAL_CANDIDATE_COUNT,
         alias="normalCandidateCount",
     )
+    expand_normal_reselection_pool: bool = Field(
+        default=False, strict=True, alias="expandNormalReselectionPool",
+    )
     short_candidate_count: int = Field(
         ge=0,
         le=MAX_SHORT_CANDIDATE_COUNT,
@@ -301,13 +308,15 @@ class CodexSelectionConstraints(_StrictModel):
     def validate_requested_count(self) -> CodexSelectionConstraints:
         if self.normal.requested_count + self.short.requested_count <= 0:
             raise ValueError("at least one normal clip or short must be requested")
-        allowed_normal_candidate_counts = {
-            min(self.normal.requested_count * band_count, MAX_NORMAL_CANDIDATE_COUNT)
-            for band_count in (len(self.normal.duration_bands), max(3, len(self.normal.duration_bands)))
-        }
-        if self.normal_candidate_count not in allowed_normal_candidate_counts:
+        band_count = len(self.normal.duration_bands)
+        if self.expand_normal_reselection_pool:
+            band_count = max(3, band_count)
+        expected_normal_candidate_count = min(
+            self.normal.requested_count * band_count, MAX_NORMAL_CANDIDATE_COUNT,
+        )
+        if self.normal_candidate_count != expected_normal_candidate_count:
             raise ValueError(
-                "normalCandidateCount must use the duration bands or the expanded reselection pool"
+                "normalCandidateCount must match the configured candidate pool"
             )
         expected_short_candidate_count = min(
             self.short.requested_count * SHORT_CANDIDATE_MULTIPLIER,
@@ -887,6 +896,9 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
     short_maximum = _float_setting(settings, "shortMaxDuration", 75.0)
     normal_requested_count = _int_setting(settings, "normalClipCount", 2)
     short_requested_count = _int_setting(settings, "shortCount", 3)
+    expand_normal_reselection_pool = bool(settings.get(PREVIOUS_PROPOSALS_SETTING)) and not _bool_setting(
+        settings, "excludePreviousSelection", False,
+    )
     normal_duration_bands = _duration_bands(
         normal_minimum,
         normal_maximum,
@@ -917,11 +929,12 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
         normalCandidateCount=min(
             normal_requested_count * (
                 max(3, len(normal_duration_bands))
-                if settings.get(PREVIOUS_PROPOSALS_SETTING) and not settings.get("excludePreviousSelection")
+                if expand_normal_reselection_pool
                 else len(normal_duration_bands)
             ),
             MAX_NORMAL_CANDIDATE_COUNT,
         ),
+        expandNormalReselectionPool=expand_normal_reselection_pool,
         shortCandidateCount=min(
             short_requested_count * SHORT_CANDIDATE_MULTIPLIER,
             MAX_SHORT_CANDIDATE_COUNT,
@@ -941,6 +954,23 @@ def _selection_time_range(start: float, end: float) -> dict[str, float]:
     if end > start and rounded_end <= rounded_start:
         return {"start": float(start), "end": float(end)}
     return {"start": rounded_start, "end": rounded_end}
+
+
+def _previous_proposal_guidance(ranges: Sequence[tuple[float, float]], *, max_length: int) -> str:
+    merged = merge_ranges([tuple(item) for item in ranges])
+    ranked = sorted(merged, key=lambda item: (item[1] - item[0], item[0]), reverse=True)
+    advice = "ほぼ同じ区間の再提案を避け、別の話題を探してください。重なる素材でも構成を大きく変える長い切り出しは可能です。"
+    for count in range(min(15, len(ranked)), -1, -1):
+        intervals = ", ".join(
+            f"{start:.3f}".rstrip("0").rstrip(".") + "-" + f"{end:.3f}".rstrip("0").rstrip(".")
+            for start, end in ranked[:count]
+        )
+        omitted = len(ranked) - count
+        suffix = f"（ほか{omitted}件）" if omitted else ""
+        text = f"過去の提案範囲（元動画の秒、長い順）: {intervals}{suffix}。{advice}"
+        if len(text) <= max_length:
+            return text
+    raise ValueError("past proposal guidance exceeds its character budget")
 
 
 def build_codex_initial_selection_request(
@@ -981,25 +1011,18 @@ def build_codex_initial_selection_request(
         guidance = "過去に使用した場面は入力から除外済みです。欠落した時間帯をまたがず、未使用の連続した区間だけを選んでください。"
         constraints = constraints.model_copy(update={
             clip_type: getattr(constraints, clip_type).model_copy(update={
-                "guidance": (guidance + "\n" + getattr(constraints, clip_type).guidance)[:1000],
+                "context_guidance": guidance,
             })
             for clip_type in ("normal", "short")
         })
     previous_ranges = settings.get(PREVIOUS_PROPOSALS_SETTING, [])
-    if previous_ranges and not settings.get("excludePreviousSelection"):
-        intervals = ", ".join(
-            f"{int(start)}-{int(end)}"
-            for start, end in previous_ranges
-        )
-        guidance = (
-            "過去の提案範囲（元動画の秒）: " + intervals
-            + "。ほぼ同じ区間の再提案を避け、別の話題を探してください。"
-            "重なる素材でも構成を大きく変える長い切り出しは可能です。"
-        )
+    if previous_ranges and not _bool_setting(settings, "excludePreviousSelection", False):
         normal = constraints.normal
+        prefix = normal.context_guidance + "\n" if normal.context_guidance else ""
+        guidance = _previous_proposal_guidance(previous_ranges, max_length=1000 - len(prefix))
         constraints = constraints.model_copy(update={
             "normal": normal.model_copy(update={
-                "guidance": (normal.guidance + "\n" + guidance).strip()[:1000],
+                "context_guidance": prefix + guidance,
             }),
         })
     request = CodexInitialSelectionRequest(

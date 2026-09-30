@@ -2967,7 +2967,8 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
         assert all(item["start"] >= 100 for item in [*selected["normalClips"], *selected["shorts"]])
 
 
-def test_codex_short_pool_rejects_duplicate_and_backfills_after_refinement() -> None:
+@pytest.mark.parametrize("previous_ranges", [[], [(0, 20), (60, 80)]])
+def test_codex_short_pool_rejects_duplicate_and_backfills_after_refinement(previous_ranges) -> None:
     first = Candidate(
         id="short-first",
         type="short",
@@ -3027,6 +3028,8 @@ def test_codex_short_pool_rejects_duplicate_and_backfills_after_refinement() -> 
             "normalClipCount": 0,
             "shortCount": 2,
             "selectionPolicy": "strict_quality",
+            "_previousProposedRanges": previous_ranges,
+            "excludePreviousSelection": False,
         },
         timeline_duration=100,
     )
@@ -3119,10 +3122,11 @@ def test_codex_normal_pool_is_refined_and_reselected_by_quality(
     }
 
 
-def test_codex_reselection_does_not_reuse_almost_identical_normal_proposal() -> None:
+@pytest.mark.parametrize("end,expected_id", [(11461.73, "normal-different"), (11722.41, "normal-repeated")])
+def test_codex_reselection_does_not_reuse_almost_identical_normal_proposal(end: float, expected_id: str) -> None:
     repeated = Candidate(
-        id="normal-repeated", type="normal", start=11122.41, end=11461.73,
-        duration=339.32, transcript_text="前とほぼ同じ場面です。", final_score=99,
+        id="normal-repeated", type="normal", start=11122.41, end=end,
+        duration=end - 11122.41, transcript_text="前とほぼ同じ場面です。", final_score=99,
         should_use=True, topic_key="repeated-topic", selection_reason="codex_direct",
     )
     different = Candidate(
@@ -3146,7 +3150,7 @@ def test_codex_reselection_does_not_reuse_almost_identical_normal_proposal() -> 
         },
         timeline_duration=12202,
     )
-    assert [candidate.id for candidate in selection.normal_clips] == ["normal-different"]
+    assert [candidate.id for candidate in selection.normal_clips] == [expected_id]
 
 
 def test_codex_normal_pool_keeps_topic_overlap_and_quality_gates_when_fill_requested() -> None:
