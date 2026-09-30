@@ -10587,4 +10587,5 @@ pip check: pass
 - Codex中継: launcher/codex_bridge.pyは変更しない。既存のcontextGuidanceに文面を追加するだけで、入力・応答スキーマの形は変更していない。固定値は応答スキーマのハッシュであり、両段階のbackend契約との一致テストが成功したため更新不要。今回の変更のためのホスト側Codex中継の再起動は不要。
 - 検証: 実装コミット942f34dのクリーンcheckoutで、ruff check . ../launcher ../scriptsと全件python -m pytestが成功（Python 3.11.9、1269 passed・1 skipped。既存1234件に今回の35件を追加）。理由別の形式・50%境界値、小数秒、補正前後の却下理由、Codex候補プール、文脈不足の拡張と2回目、OFF時、旧形式・不正IDの422、補足500/501文字、保存/キュー登録失敗、worker失敗後の台帳・キープ保持、DB追加・掃除後の保持、補足の上限縮退を確認。frontend全18テスト・lint・typecheck・build、git diff --check成功。
 - lintの環境差: 主作業フォルダのruff check . ../launcher ../scriptsは、Git管理外のscripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。このファイルとruff設定は変更しない。
-- 未確認: CIのPython 3.11/3.12・frontendはPR作成後に確認する。実動画によるCodex選定の意味的な品質、稼働ブラウザでの実操作は未確認。Dockerのbuild・再起動・反映、稼働DBへの台帳追加、実ジョブの再実行は行っていない。
+- CI: PR #103の実装コミット54ce800でbackend（Python 3.11・3.12）とfrontendがすべて成功（run 36740956833）。
+- 未確認: 実動画によるCodex選定の意味的な品質、稼働ブラウザでの実操作は未確認。Dockerのbuild・再起動・反映、稼働DBへの台帳追加、実ジョブの再実行は行っていない。
