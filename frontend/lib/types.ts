@@ -106,12 +106,6 @@ export type ClipSettings = {
   crossTypeOverlapDedupe: boolean;
   heatmapIntervalMode: boolean;
   initialSelectionProvider: "legacy" | "codex";
-  useOpenAIScoring: boolean;
-  openaiCandidateLimit: number;
-  openaiModel: string;
-  openaiFallbackToRuleScore: boolean;
-  ensureSelectedOpenAIScored?: boolean;
-  openaiFinalistScoringLimit?: number;
   enableBoundaryRefinement: boolean;
   boundaryLeadingPaddingSeconds: number;
   boundaryTrailingPaddingSeconds: number;
@@ -169,24 +163,6 @@ export type ClipSettings = {
   transcriptionLanguage: "ja";
   transcriptionDevice: "auto" | "cpu" | "cuda";
   transcriptionComputeType: "auto" | "int8" | "float16" | "int8_float16";
-  subtitleCorrectionMode: "off" | "openai";
-  subtitleCorrectionScope: "all" | "suspicious";
-  transcriptCorrectionGlossary?: string[];
-  subtitleCorrectionSuspicionThreshold: number;
-  subtitleCorrectionModel: string;
-  subtitleCorrectionReasoningEffort:
-    | "default"
-    | "none"
-    | "minimal"
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh"
-    | "max";
-  subtitleCorrectionMinConfidence: number;
-  subtitleCorrectionBatchSize: number;
-  subtitleCorrectionContextSegments: number;
-  subtitleCorrectionFallbackEnabled: boolean;
   youtubeSourceTitle: string;
   youtubeSourceUrl: string;
   youtubePostingProfile: YouTubePostingProfile;
@@ -648,7 +624,6 @@ export type ClipPlanReselectionRequest = Pick<
   | "excludePromotionalContent"
   | "selectionPolicy"
   | "heatmapIntervalMode"
-  | "useOpenAIScoring"
 > & { excludePreviousSelection?: boolean; keptClipIds?: string[] };
 
 export type ClipPlanActionResponse = {

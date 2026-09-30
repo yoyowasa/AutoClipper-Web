@@ -29,11 +29,6 @@ VALIDATION_PROFILES: dict[str, dict[str, Any]] = {
         "short_min_duration": 20.0,
         "short_max_duration": 75.0,
         "selection_policy": "fill_requested",
-        "openai_candidate_limit": 20,
-        "openai_model": "gpt-5.5",
-        "openai_fallback_to_rule_score": True,
-        "ensure_selected_openai_scored": None,
-        "openai_finalist_scoring_limit": None,
     },
     "30min": {
         "timeout": 7200,
@@ -45,11 +40,6 @@ VALIDATION_PROFILES: dict[str, dict[str, Any]] = {
         "short_min_duration": 20.0,
         "short_max_duration": 75.0,
         "selection_policy": "fill_requested",
-        "openai_candidate_limit": 20,
-        "openai_model": "gpt-5.5",
-        "openai_fallback_to_rule_score": True,
-        "ensure_selected_openai_scored": None,
-        "openai_finalist_scoring_limit": None,
     },
     "30min_high_quality": {
         "timeout": 7200,
@@ -61,12 +51,6 @@ VALIDATION_PROFILES: dict[str, dict[str, Any]] = {
         "short_min_duration": 20.0,
         "short_max_duration": 75.0,
         "selection_policy": "fill_requested",
-        "use_openai_scoring": True,
-        "openai_candidate_limit": 20,
-        "openai_model": "gpt-5.5",
-        "openai_fallback_to_rule_score": True,
-        "ensure_selected_openai_scored": True,
-        "openai_finalist_scoring_limit": 7,
     },
 }
 REQUIRED_RESULT_ARTIFACTS = [
@@ -196,24 +180,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "int8", "float16", "int8_float16"],
         help="CTranslate2 compute type. Auto resolves to float16 on CUDA and int8 on CPU.",
     )
-    parser.add_argument("--subtitle-correction-mode", default="off", choices=["off", "openai"])
-    parser.add_argument("--subtitle-correction-scope", default="all", choices=["all", "suspicious"])
-    parser.add_argument("--subtitle-correction-suspicion-threshold", type=probability_float, default=0.4)
-    parser.add_argument("--subtitle-correction-model", default="gpt-5.5")
-    parser.add_argument(
-        "--subtitle-correction-reasoning-effort",
-        default="default",
-        choices=["default", "none", "minimal", "low", "medium", "high", "xhigh", "max"],
-    )
-    parser.add_argument("--subtitle-correction-min-confidence", type=probability_float, default=0.9)
-    parser.add_argument("--subtitle-correction-batch-size", type=positive_int, default=40)
-    parser.add_argument("--subtitle-correction-context-segments", type=non_negative_int, default=2)
-    parser.add_argument("--subtitle-correction-fallback-enabled", nargs="?", const=True, default=True, type=parse_bool)
-    parser.add_argument(
-        "--no-subtitle-correction-fallback",
-        dest="subtitle_correction_fallback_enabled",
-        action="store_false",
-    )
     parser.add_argument("--burn-subtitles", nargs="?", const=True, default=True, type=parse_bool)
     parser.add_argument("--no-burn-subtitles", dest="burn_subtitles", action="store_false")
     parser.add_argument("--normal-min-duration", type=positive_float, default=None)
@@ -226,13 +192,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "always", "high_quality_only", "never"],
     )
     parser.add_argument("--selection-policy", default=None, choices=["fill_requested", "strict_quality"])
-    parser.add_argument("--use-openai-scoring", nargs="?", const=True, default=None, type=parse_bool)
-    parser.add_argument("--openai-candidate-limit", type=non_negative_int, default=None)
-    parser.add_argument("--openai-model", default=None)
-    parser.add_argument("--openai-fallback-to-rule-score", nargs="?", const=True, default=None, type=parse_bool)
-    parser.add_argument("--no-openai-fallback-to-rule-score", dest="openai_fallback_to_rule_score", action="store_false")
-    parser.add_argument("--ensure-selected-openai-scored", nargs="?", const=True, default=None, type=parse_bool)
-    parser.add_argument("--openai-finalist-scoring-limit", type=non_negative_int, default=None)
     parser.add_argument("--max-raw-candidates-per-type", type=non_negative_int, default=None)
     parser.add_argument("--max-kept-candidates-per-type", type=non_negative_int, default=None)
     parser.add_argument("--max-candidates-per-time-bucket", type=non_negative_int, default=None)
@@ -281,16 +240,6 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
     if args.short_max_duration < args.short_min_duration:
         raise RuntimeError("short-max-duration must be >= short-min-duration")
 
-    use_openai_scoring = args.mode == "high_quality" if args.use_openai_scoring is None else args.use_openai_scoring
-    ensure_selected_openai_scored = (
-        args.mode == "high_quality"
-        if args.ensure_selected_openai_scored is None
-        else bool(args.ensure_selected_openai_scored)
-    )
-    finalist_limit = args.openai_finalist_scoring_limit
-    if finalist_limit is None:
-        requested_count = int(args.normal_count) + int(args.short_count)
-        finalist_limit = requested_count + 2 if requested_count > 0 else 0
     settings = {
         "mode": args.mode,
         "profile": args.profile,
@@ -298,15 +247,6 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "transcriptionLanguage": args.transcription_language,
         "transcriptionDevice": args.transcription_device,
         "transcriptionComputeType": args.transcription_compute_type,
-        "subtitleCorrectionMode": args.subtitle_correction_mode,
-        "subtitleCorrectionScope": args.subtitle_correction_scope,
-        "subtitleCorrectionSuspicionThreshold": args.subtitle_correction_suspicion_threshold,
-        "subtitleCorrectionModel": args.subtitle_correction_model,
-        "subtitleCorrectionReasoningEffort": args.subtitle_correction_reasoning_effort,
-        "subtitleCorrectionMinConfidence": args.subtitle_correction_min_confidence,
-        "subtitleCorrectionBatchSize": args.subtitle_correction_batch_size,
-        "subtitleCorrectionContextSegments": args.subtitle_correction_context_segments,
-        "subtitleCorrectionFallbackEnabled": args.subtitle_correction_fallback_enabled,
         "normalClipCount": args.normal_count,
         "shortCount": args.short_count,
         "normalMinDuration": args.normal_min_duration,
@@ -317,12 +257,6 @@ def build_job_settings(args: argparse.Namespace) -> dict[str, Any]:
         "burnSubtitles": bool(args.burn_subtitles),
         "shortLayout": "auto",
         "shortOverlayTitleMode": args.short_overlay_title_mode,
-        "useOpenAIScoring": use_openai_scoring,
-        "openaiCandidateLimit": args.openai_candidate_limit,
-        "openaiModel": args.openai_model,
-        "openaiFallbackToRuleScore": bool(args.openai_fallback_to_rule_score),
-        "ensureSelectedOpenAIScored": ensure_selected_openai_scored,
-        "openaiFinalistScoringLimit": finalist_limit,
         "normalizeAudio": False,
         "e2eFixtureTranscript": False,
     }
@@ -384,7 +318,6 @@ def poll_job_with_timings(backend_url: str, job_id: str, timeout_seconds: int) -
     status_times: dict[str, float] = {}
     poll_started_at = time.monotonic()
     last_status = ""
-    last_correction_progress: tuple[int, int, int] | None = None
     while time.monotonic() < deadline:
         payload = _request_json(f"{backend_url}/api/jobs/{job_id}")
         now = time.monotonic()
@@ -393,20 +326,6 @@ def poll_job_with_timings(backend_url: str, job_id: str, timeout_seconds: int) -
         if status != last_status:
             print(f"job {job_id}: {status} {payload.get('progress')}%")
             last_status = status
-        if status == "correcting_subtitles":
-            details = payload.get("details") if isinstance(payload.get("details"), dict) else {}
-            correction_progress = (
-                int(details.get("correctionBatchesCompleted") or 0),
-                int(details.get("correctionBatchesTotal") or 0),
-                int(details.get("correctionRetryCount") or 0),
-            )
-            if correction_progress != last_correction_progress:
-                print(
-                    "subtitle correction progress: "
-                    f"{correction_progress[0]}/{correction_progress[1]} batches "
-                    f"stage={details.get('stageProgress')}% retries={correction_progress[2]}"
-                )
-                last_correction_progress = correction_progress
         if status in {"completed", "failed"}:
             return TimedJobResult(
                 final_status=payload,
@@ -430,11 +349,6 @@ def runtime_metrics(
             job_timing.status_times,
             "transcribing",
             PHASE_END_STATUSES["transcribing"],
-        ),
-        "subtitle_correction_time": phase_duration(
-            job_timing.status_times,
-            "correcting_subtitles",
-            PHASE_END_STATUSES["correcting_subtitles"],
         ),
         "scene_detection_time": phase_duration(
             job_timing.status_times,
@@ -480,7 +394,6 @@ def print_runtime_metrics(metrics: dict[str, float | None]) -> None:
     print("runtime metrics:")
     print(f"  upload_time={format_seconds(metrics.get('upload_time'))}")
     print(f"  transcription_time={format_seconds(metrics.get('transcription_time'))}")
-    print(f"  subtitle_correction_time={format_seconds(metrics.get('subtitle_correction_time'))}")
     print(f"  scene_detection_time={format_seconds(metrics.get('scene_detection_time'))}")
     print(f"  candidate_generation_time={format_seconds(metrics.get('candidate_generation_time'))}")
     print(f"  scoring_time={format_seconds(metrics.get('scoring_time'))}")
@@ -643,131 +556,6 @@ def print_pipeline_metrics(metrics: dict[str, Any]) -> None:
     print(f"  unfilled_reason_counts={metrics.get('unfilled_reason_counts')}")
     print(f"  render_failures_count={metrics.get('render_failures_count')}")
     print(f"  zip_size_bytes={metrics.get('zip_size_bytes')}")
-
-
-def use_openai_scoring(settings: dict[str, Any]) -> bool:
-    return bool(settings.get("useOpenAIScoring"))
-
-
-def use_openai_subtitle_correction(settings: dict[str, Any]) -> bool:
-    return settings.get("subtitleCorrectionMode") == "openai"
-
-
-def check_openai_api_key_available(env: dict[str, str]) -> None:
-    try:
-        compose_exec("worker", ["sh", "-lc", 'test -n "${OPENAI_API_KEY:-}"'], env=env)
-    except Exception as exc:
-        raise RuntimeError(
-            "openai_configuration_missing: OPENAI_API_KEY is required for OpenAI scoring or subtitle correction. "
-            "Set OPENAI_API_KEY in .env, then run docker compose up -d --build."
-        ) from exc
-
-
-def validate_openai_scoring_summary(output_dir: Path) -> dict[str, Any]:
-    summary_path = output_dir / "openai_scoring_summary.json"
-    if not summary_path.is_file():
-        raise RuntimeError(f"openai_scoring_summary.json not found: {summary_path}")
-    payload = read_json(summary_path)
-    if not isinstance(payload, dict):
-        raise RuntimeError("openai_scoring_summary.json must contain an object")
-    candidates_sent = int(payload.get("candidates_sent_to_openai") or 0)
-    successful_scores = int(payload.get("successful_scores") or 0)
-    final_calls = int(payload.get("total_api_calls") or 0)
-    if candidates_sent <= 0:
-        raise RuntimeError("OpenAI scoring summary shows zero candidates sent")
-    if final_calls <= 0:
-        raise RuntimeError("OpenAI scoring summary shows zero API calls")
-    if successful_scores <= 0:
-        raise RuntimeError("OpenAI scoring summary shows zero successful structured scores")
-    print(
-        "openai scoring: "
-        f"model={payload.get('model')} "
-        f"candidate_limit={payload.get('candidate_limit')} "
-        f"finalist_limit={payload.get('finalist_scoring_limit')} "
-        f"eligible={payload.get('candidates_eligible_for_openai_scoring')} "
-        f"selected_for_openai={payload.get('candidates_selected_for_openai')} "
-        f"preselection={payload.get('candidates_sent_preselection')} "
-        f"finalists={payload.get('candidates_sent_as_finalists')} "
-        f"sent={candidates_sent} "
-        f"success={successful_scores} "
-        f"failed={payload.get('failed_scores')} "
-        f"fallback={payload.get('fallback_scores')} "
-        f"schema_failures={payload.get('schema_validation_failures')} "
-        f"calls={final_calls} "
-        f"avg_latency={payload.get('avg_latency_seconds', payload.get('average_latency_seconds'))} "
-        f"max_latency={payload.get('max_latency_seconds')} "
-        f"total_latency={payload.get('total_latency_seconds')} "
-        f"text_size={payload.get('estimated_text_payload_size')}"
-    )
-    print(
-        "openai selected clips: "
-        f"ai_score={payload.get('selected_ai_score_count')} "
-        f"fallback_score={payload.get('selected_fallback_score_count')} "
-        f"not_scored={payload.get('selected_not_scored_count')} "
-        f"rule_only_due_to_limit={payload.get('selected_rule_score_only_due_to_limit_count')} "
-        f"not_scored_reasons={payload.get('selected_not_scored_reason_counts')}"
-    )
-    return payload
-
-
-def validate_transcript_correction_summary(output_dir: Path) -> dict[str, Any]:
-    summary_path = output_dir / "transcript_correction_summary.json"
-    deterministic_path = output_dir / "deterministic_transcript_segments.json"
-    corrected_path = output_dir / "openai_corrected_transcript_segments.json"
-    final_path = output_dir / "transcript_segments.json"
-    diff_path = output_dir / "transcript_correction_diff.md"
-    for path in (summary_path, deterministic_path, corrected_path, final_path, diff_path):
-        if not path.is_file():
-            raise RuntimeError(f"subtitle correction artifact not found: {path}")
-    summary = read_json(summary_path)
-    deterministic = read_json(deterministic_path)
-    corrected = read_json(corrected_path)
-    final = read_json(final_path)
-    if not isinstance(summary, dict) or not summary.get("enabled"):
-        raise RuntimeError("transcript correction summary does not show enabled correction")
-    if not all(isinstance(value, list) for value in (deterministic, corrected, final)):
-        raise RuntimeError("transcript correction artifacts must contain segment lists")
-    if len(deterministic) != len(corrected) or len(corrected) != len(final):
-        raise RuntimeError("subtitle correction changed the segment count")
-    for before, after in zip(deterministic, corrected, strict=True):
-        if before.get("start") != after.get("start") or before.get("end") != after.get("end"):
-            raise RuntimeError("subtitle correction changed segment timestamps")
-    if corrected != final:
-        raise RuntimeError("final transcript does not match corrected transcript")
-    if (
-        not summary.get("fallback_used")
-        and int(summary.get("target_segment_count") or 0) > 0
-        and int(summary.get("api_call_count") or 0) <= 0
-    ):
-        raise RuntimeError("subtitle correction summary shows zero API calls")
-    if summary.get("scope") == "suspicious":
-        suspicion_summary = read_json(output_dir / "transcript_suspicion_summary.json")
-        required_suspicion_files = ["transcript_suspicion_summary.json"]
-        if not (isinstance(suspicion_summary, dict) and suspicion_summary.get("filter_failed")):
-            required_suspicion_files.extend(
-                ["transcript_suspicion_segments.json", "subtitle_correction_targets.json"]
-            )
-        for filename in required_suspicion_files:
-            if not (output_dir / filename).is_file():
-                raise RuntimeError(f"suspicion filter artifact not found: {output_dir / filename}")
-    print(
-        "subtitle correction: "
-        f"model={summary.get('model')} "
-        f"scope={summary.get('scope')} "
-        f"segments={summary.get('input_segment_count')} "
-        f"targets={summary.get('target_segment_count')} "
-        f"context={summary.get('context_segment_count')} "
-        f"corrected={summary.get('corrected_segment_count')} "
-        f"unchanged={summary.get('unchanged_segment_count')} "
-        f"fallback={summary.get('fallback_used')} "
-        f"calls={summary.get('api_call_count')} "
-        f"tokens={summary.get('input_tokens')}/{summary.get('output_tokens')} "
-        f"reasoning={summary.get('reasoning_tokens')} "
-        f"visible={summary.get('visible_output_tokens')} "
-        f"cached={summary.get('cached_tokens')} "
-        f"seconds={summary.get('processing_seconds')}"
-    )
-    return summary
 
 
 def transcript_text_from_segments(segments: Any) -> str:
@@ -995,27 +783,6 @@ def run_e2e(args: argparse.Namespace) -> int:
         f"device={settings['transcriptionDevice']} "
         f"compute_type={settings['transcriptionComputeType']}"
     )
-    if use_openai_scoring(settings) or use_openai_subtitle_correction(settings):
-        check_openai_api_key_available(env)
-    if use_openai_scoring(settings):
-        print(
-            "openai scoring: enabled "
-            f"model={settings['openaiModel']} "
-            f"candidate_limit={settings['openaiCandidateLimit']} "
-            f"fallback={settings['openaiFallbackToRuleScore']}"
-        )
-    if use_openai_subtitle_correction(settings):
-        print(
-            "subtitle correction: enabled "
-            f"model={settings['subtitleCorrectionModel']} "
-            f"reasoning={settings['subtitleCorrectionReasoningEffort']} "
-            f"scope={settings['subtitleCorrectionScope']} "
-            f"threshold={settings['subtitleCorrectionSuspicionThreshold']} "
-            f"confidence={settings['subtitleCorrectionMinConfidence']} "
-            f"batch_size={settings['subtitleCorrectionBatchSize']} "
-            f"context={settings['subtitleCorrectionContextSegments']} "
-            f"fallback={settings['subtitleCorrectionFallbackEnabled']}"
-        )
 
     upload_started_at = time.monotonic()
     upload = _upload_file(f"{args.backend_url}/api/videos/upload", video_path)
@@ -1063,10 +830,6 @@ def run_e2e(args: argparse.Namespace) -> int:
 
     validate_selected_artifact(output_dir)
     print_job_summaries(job_id)
-    if use_openai_scoring(settings):
-        validate_openai_scoring_summary(output_dir)
-    if use_openai_subtitle_correction(settings):
-        validate_transcript_correction_summary(output_dir)
     print_pipeline_metrics(pipeline_metrics(output_dir))
     download_and_probe_outputs(backend_url=args.backend_url, job_id=job_id, results=results, env=env)
     print_runtime_metrics(

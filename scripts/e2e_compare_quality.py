@@ -40,9 +40,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--short-min-duration", type=positive_float, default=20.0)
     parser.add_argument("--short-max-duration", type=positive_float, default=75.0)
     parser.add_argument("--selection-policy", choices=["fill_requested", "strict_quality"], default="fill_requested")
-    parser.add_argument("--openai-candidate-limit", type=non_negative_int, default=20)
-    parser.add_argument("--openai-finalist-scoring-limit", type=non_negative_int, default=7)
-    parser.add_argument("--openai-model", default="gpt-5.5")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--format", choices=["json", "markdown", "both"], default="both")
     return parser
@@ -84,8 +81,6 @@ def build_low_cost_command(args: argparse.Namespace) -> list[str]:
         *_base_e2e_command(args),
         "--mode",
         "low_cost",
-        "--use-openai-scoring",
-        "false",
     ]
 
 
@@ -94,18 +89,6 @@ def build_high_quality_command(args: argparse.Namespace) -> list[str]:
         *_base_e2e_command(args),
         "--mode",
         "high_quality",
-        "--use-openai-scoring",
-        "true",
-        "--openai-candidate-limit",
-        str(args.openai_candidate_limit),
-        "--openai-model",
-        args.openai_model,
-        "--openai-fallback-to-rule-score",
-        "true",
-        "--ensure-selected-openai-scored",
-        "true",
-        "--openai-finalist-scoring-limit",
-        str(args.openai_finalist_scoring_limit),
     ]
 
 

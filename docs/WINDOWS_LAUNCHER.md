@@ -65,10 +65,8 @@ docker compose up -d --build
 
 ## High-quality Mode
 
-The launcher only shows whether `OPENAI_API_KEY` is configured. It checks `.env`
-and the launcher process environment, but never displays or logs the key value.
-When the key is missing, low-cost mode remains available. Configure the key in
-`.env` or the process environment before using OpenAI-backed features.
+High-quality rendering uses local processing and the Codex login bridge.
+The launcher has no paid API configuration display. Log redaction for historical secrets is retained.
 
 ## Errors
 

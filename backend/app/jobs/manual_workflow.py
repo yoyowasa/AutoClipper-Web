@@ -144,8 +144,6 @@ def manual_plan_settings(
             ],
             "heatmapIntervalMode": False,
             "requireClipPlanReview": False,
-            "useOpenAIScoring": False,
-            "ensureSelectedOpenAIScored": False,
         }
     )
     if subtitle_mode == "none":

@@ -2098,9 +2098,8 @@ def _proposal_candidate(
             "evidence_segment_ids": list(proposal.evidence_segment_ids),
             "heatmap_segment_ids": list(proposal.heatmap_segment_ids),
             "selection_reason": "codex_direct",
+            "title_source": "codex",
             "used_ai_score": True,
-            "openai_scored": False,
-            "openai_not_scored_reason": "codex_direct_selection",
         }
     )
 

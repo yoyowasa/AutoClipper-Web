@@ -37,20 +37,10 @@ def automatic_selection_settings(
     manual_short: bool,
 ) -> dict[str, Any]:
     automatic = dict(settings)
-    normal_count = int(settings.get("normalClipCount", settings.get("normal_clip_count", 2)) or 0)
-    short_count = int(settings.get("shortCount", settings.get("short_count", 3)) or 0)
     if manual_normal:
         automatic["normalClipCount"] = 0
     if manual_short:
         automatic["shortCount"] = 0
-    has_automatic_output = (
-        normal_count > 0 and not manual_normal
-    ) or (
-        short_count > 0 and not manual_short
-    )
-    if not has_automatic_output:
-        automatic["useOpenAIScoring"] = False
-        automatic["ensureSelectedOpenAIScored"] = False
     return automatic
 
 
@@ -134,10 +124,6 @@ def build_manual_candidates(
                 below_quality_threshold=False,
                 selection_reason=MANUAL_SELECTION_REASON,
                 used_ai_score=False,
-                openai_scored=False,
-                openai_fallback_used=False,
-                openai_score_source="not_scored",
-                openai_not_scored_reason=MANUAL_SELECTION_REASON,
                 original_start=start,
                 original_end=end,
                 refined_start=start,

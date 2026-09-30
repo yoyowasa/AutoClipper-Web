@@ -19,7 +19,6 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.audio.benchmark_subtitle_correction import load_segments, load_target_indices
 from app.audio.transcript_correction_schema import (
     CorrectionReason,
     CorrectedTranscriptSegment,
@@ -30,6 +29,25 @@ from app.audio.transcript_suspicion import (
     analyze_transcript_suspicion,
     select_read_only_context_indices,
 )
+
+
+def load_segments(path: Path) -> list[TranscriptSegment]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("segments JSON must be an array")
+    return [TranscriptSegment.model_validate(item) for item in payload]
+
+def load_target_indices(path: Path | None, *, segment_count: int) -> list[int]:
+    if path is None:
+        return list(range(segment_count))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    values = payload.get("target_indices") if isinstance(payload, Mapping) else payload
+    if not isinstance(values, list):
+        raise ValueError("targets JSON must be an array or contain target_indices")
+    targets = sorted({int(value) for value in values})
+    if any(index < 0 or index >= segment_count for index in targets):
+        raise ValueError("target index is outside transcript segments")
+    return targets
 
 
 SYSTEM_PROMPT = """You correct ASR errors in Japanese subtitle text.
@@ -692,7 +710,7 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "This benchmark does not call OpenAI and does not change pipeline defaults.",
+            "This local benchmark does not change pipeline defaults.",
             "Model confidence is recorded but is not used by the deterministic acceptance gate.",
             "",
         ]

@@ -2,6 +2,8 @@ from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
+from app.legacy_settings import without_retired_api_settings
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
@@ -64,18 +66,6 @@ WhisperModelSize = Literal["base", "small", "medium", "large-v3", "turbo"]
 TranscriptionLanguage = Literal["ja"]
 TranscriptionDevice = Literal["auto", "cpu", "cuda"]
 TranscriptionComputeType = Literal["auto", "int8", "float16", "int8_float16"]
-SubtitleCorrectionMode = Literal["off", "openai"]
-SubtitleCorrectionScope = Literal["all", "suspicious"]
-SubtitleCorrectionReasoningEffort = Literal[
-    "default",
-    "none",
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-]
 
 
 class VideoUploadResponse(BaseModel):
@@ -431,28 +421,6 @@ class JobSettings(UploadTextStyles):
     transcription_language: TranscriptionLanguage = Field(default="ja", alias="transcriptionLanguage")
     transcription_device: TranscriptionDevice = Field(default="cpu", alias="transcriptionDevice")
     transcription_compute_type: TranscriptionComputeType = Field(default="auto", alias="transcriptionComputeType")
-    subtitle_correction_mode: SubtitleCorrectionMode = Field(default="off", alias="subtitleCorrectionMode")
-    subtitle_correction_scope: SubtitleCorrectionScope = Field(default="all", alias="subtitleCorrectionScope")
-    transcript_correction_glossary: list[str] = Field(
-        default_factory=list,
-        max_length=200,
-        alias="transcriptCorrectionGlossary",
-    )
-    subtitle_correction_suspicion_threshold: float = Field(
-        default=0.40,
-        ge=0,
-        le=1,
-        alias="subtitleCorrectionSuspicionThreshold",
-    )
-    subtitle_correction_model: str = Field(default="gpt-5.5", min_length=1, alias="subtitleCorrectionModel")
-    subtitle_correction_reasoning_effort: SubtitleCorrectionReasoningEffort = Field(
-        default="default",
-        alias="subtitleCorrectionReasoningEffort",
-    )
-    subtitle_correction_min_confidence: float = Field(default=0.9, ge=0, le=1, alias="subtitleCorrectionMinConfidence")
-    subtitle_correction_batch_size: int = Field(default=40, ge=1, le=100, alias="subtitleCorrectionBatchSize")
-    subtitle_correction_context_segments: int = Field(default=2, ge=0, le=10, alias="subtitleCorrectionContextSegments")
-    subtitle_correction_fallback_enabled: bool = Field(default=True, alias="subtitleCorrectionFallbackEnabled")
     selection_policy: SelectionPolicy = Field(default="strict_quality", alias="selectionPolicy")
     cross_type_overlap_dedupe: bool = Field(default=False, alias="crossTypeOverlapDedupe")
     heatmap_interval_mode: bool = Field(default=False, alias="heatmapIntervalMode")
@@ -460,12 +428,6 @@ class JobSettings(UploadTextStyles):
         default="legacy",
         alias="initialSelectionProvider",
     )
-    use_openai_scoring: bool = Field(default=False, alias="useOpenAIScoring")
-    openai_candidate_limit: int = Field(default=40, ge=0, alias="openaiCandidateLimit")
-    openai_model: str = Field(default="gpt-5.5", min_length=1, alias="openaiModel")
-    openai_fallback_to_rule_score: bool = Field(default=True, alias="openaiFallbackToRuleScore")
-    ensure_selected_openai_scored: bool | None = Field(default=None, alias="ensureSelectedOpenAIScored")
-    openai_finalist_scoring_limit: int | None = Field(default=None, ge=0, alias="openaiFinalistScoringLimit")
     enable_boundary_refinement: bool = Field(default=True, alias="enableBoundaryRefinement")
     boundary_leading_padding_seconds: float = Field(default=0.4, ge=0, alias="boundaryLeadingPaddingSeconds")
     boundary_trailing_padding_seconds: float = Field(default=0.6, ge=0, alias="boundaryTrailingPaddingSeconds")
@@ -491,6 +453,13 @@ class JobSettings(UploadTextStyles):
     )
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_retired_api_settings(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return without_retired_api_settings(value)
+        return value
 
     @field_validator("transcription_language", mode="before")
     @classmethod
@@ -552,16 +521,6 @@ class JobSettings(UploadTextStyles):
         )
         if self.workflow_mode == "manual" or not has_automatic_output or has_manual_ranges:
             self.initial_selection_provider = "legacy"
-            self.use_openai_scoring = False
-            self.ensure_selected_openai_scored = False
-        if self.initial_selection_provider == "codex":
-            self.use_openai_scoring = False
-            self.ensure_selected_openai_scored = False
-        if self.ensure_selected_openai_scored is None:
-            self.ensure_selected_openai_scored = self.mode == "high_quality"
-        if self.openai_finalist_scoring_limit is None:
-            requested_count = self.normal_clip_count + self.short_count
-            self.openai_finalist_scoring_limit = requested_count + 2 if requested_count > 0 else 0
         return self
 
     @staticmethod
@@ -786,7 +745,6 @@ class ClipPlanReselectionRequest(BaseModel):
     exclude_intro_outro: bool = Field(alias="excludeIntroOutro")
     exclude_promotional_content: bool = Field(alias="excludePromotionalContent")
     selection_policy: SelectionPolicy = Field(alias="selectionPolicy")
-    use_openai_scoring: bool = Field(alias="useOpenAIScoring")
     heatmap_interval_mode: bool | None = Field(
         default=None,
         alias="heatmapIntervalMode",

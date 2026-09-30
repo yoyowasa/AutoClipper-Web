@@ -47,6 +47,7 @@ OpenAIScoreSource = Literal[
 ]
 TitleSource = Literal[
     "openai",
+    "codex",
     "transcript_fallback",
     "deterministic_fallback",
     "existing",

@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import unicodedata
 from collections.abc import Callable, Sequence
@@ -34,7 +33,6 @@ from app.scoring.codex_title_hook_suggestions import (
 )
 from app.scoring.title_hook_suggestions import (
     TITLE_HOOK_PROMPT_VERSION,
-    OpenAITitleHookSuggestionGenerator,
     TitleHookSuggestion,
     TitleHookSuggestionResult,
     extract_representative_frames,
@@ -100,7 +98,7 @@ class TitleHookSuggestionInput(BaseModel):
         max_length=64,
         alias="revisionHash",
     )
-    provider: Literal["codex", "openai"] = "openai"
+    provider: Literal["codex", "openai"] = "openai"  # Historical artifacts may still name the retired provider.
     model: str = Field(min_length=1)
     segments: list[TitleHookSuggestionInputSegment] = Field(default_factory=list)
     avoid_publication_titles: list[str] = Field(
@@ -145,7 +143,7 @@ class TitleHookSuggestionsDocument(BaseModel):
         max_length=64,
         alias="revisionHash",
     )
-    provider: Literal["codex", "openai"] = "openai"
+    provider: Literal["codex", "openai"] = "openai"  # Historical artifacts may still name the retired provider.
     thread_id: str | None = Field(
         default=None,
         min_length=1,
@@ -224,8 +222,10 @@ def build_title_hook_suggestion_input(
     drafts: Sequence[TitleHookDraftSegment],
     *,
     model: str,
-    provider: Literal["codex", "openai"] = "codex",
+    provider: Literal["codex"] = "codex",
 ) -> TitleHookSuggestionInput:
+    if provider != "codex":
+        raise ValueError("new title/hook requests must use codex")
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
         raise KeyError(clip_id)
@@ -348,10 +348,6 @@ def failed_title_hook_suggestions(
     )
 
 
-def openai_api_key_is_configured() -> bool:
-    return bool(os.environ.get("OPENAI_API_KEY", "").strip())
-
-
 class TitleHookSuggestionGeneratorProtocol(Protocol):
     def generate(
         self,
@@ -370,8 +366,6 @@ def _safe_generation_error(exc: Exception) -> str:
         return "別の公開タイトル案を生成できませんでした。字幕を確認して再試行するか、手入力してください。"
     if isinstance(exc, CodexTitleHookSuggestionError):
         return f"title/hook generation failed ({exc.code})"
-    if isinstance(exc, RuntimeError) and str(exc) == "OPENAI_API_KEY is not configured":
-        return str(exc)
     return f"title/hook generation failed ({exc.__class__.__name__})"
 
 
@@ -475,7 +469,7 @@ def generate_title_hook_suggestions_for_auto(
     """Generate a current Codex proposal without requiring an active review stop.
 
     The automatic pipeline calls this before the subtitle-review document is first
-    published.  It deliberately has no OpenAI fallback: an unavailable host bridge
+    published.  An unavailable host bridge
     raises and the caller routes the job to human review.
     """
 
@@ -763,10 +757,6 @@ def run_title_hook_suggestion_generation(
                     return ["cancelled"]
                 request = active_request
                 generation_thread_id = active_state.thread_id
-            if active_generator is None and request.provider == "openai":
-                if not openai_api_key_is_configured():
-                    raise RuntimeError("OPENAI_API_KEY is not configured")
-                active_generator = OpenAITitleHookSuggestionGenerator(model=request.model)
             if active_generator is None:
                 active_generator = CodexTitleHookSuggestionGenerator(
                     storage_root=storage_paths.root,
@@ -824,7 +814,7 @@ def run_title_hook_suggestion_generation(
             inputHash=input_hash,
             draftHash=request.draft_hash,
             revisionHash=request.revision_hash,
-            provider=request.provider,
+            provider="codex",
             threadId=generation_thread_id,
             model=request.model,
             avoidPublicationTitles=request.avoid_publication_titles,
@@ -873,7 +863,7 @@ def run_title_hook_suggestion_generation(
             update={
                 "draft_hash": active_request.draft_hash,
                 "revision_hash": active_request.revision_hash,
-                "provider": active_request.provider,
+                "provider": "codex",
             }
         )
         write_title_hook_suggestions(next_state, state_path)

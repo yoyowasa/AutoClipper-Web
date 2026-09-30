@@ -27,14 +27,6 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.transcription_language == "ja"
     assert args.transcription_device == "cpu"
     assert args.transcription_compute_type == "auto"
-    assert args.subtitle_correction_mode == "off"
-    assert args.subtitle_correction_scope == "all"
-    assert args.subtitle_correction_suspicion_threshold == 0.4
-    assert args.subtitle_correction_model == "gpt-5.5"
-    assert args.subtitle_correction_min_confidence == 0.9
-    assert args.subtitle_correction_batch_size == 40
-    assert args.subtitle_correction_context_segments == 2
-    assert args.subtitle_correction_fallback_enabled is True
     assert args.burn_subtitles is True
     assert args.normal_min_duration == 90.0
     assert args.normal_max_duration == 600.0
@@ -42,12 +34,6 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
     assert args.short_max_duration == 75.0
     assert args.short_overlay_title_mode == "auto"
     assert args.selection_policy == "fill_requested"
-    assert args.use_openai_scoring is None
-    assert args.openai_candidate_limit == 20
-    assert args.openai_model == "gpt-5.5"
-    assert args.openai_fallback_to_rule_score is True
-    assert args.ensure_selected_openai_scored is None
-    assert args.openai_finalist_scoring_limit is None
     assert args.max_raw_candidates_per_type is None
     assert args.max_kept_candidates_per_type is None
     assert args.max_candidates_per_time_bucket is None
@@ -61,20 +47,6 @@ def test_parse_args_defaults_and_burn_subtitle_variants() -> None:
 
     no_flag_args = script.parse_args(["--video", "spoken.mp4", "--no-burn-subtitles"])
     assert no_flag_args.burn_subtitles is False
-
-
-@pytest.mark.parametrize(
-    "option,value",
-    [
-        ("--subtitle-correction-min-confidence", "1.1"),
-        ("--subtitle-correction-min-confidence", "-0.1"),
-        ("--subtitle-correction-suspicion-threshold", "1.1"),
-        ("--subtitle-correction-batch-size", "0"),
-    ],
-)
-def test_parse_args_rejects_invalid_subtitle_correction_values(option: str, value: str) -> None:
-    with pytest.raises(SystemExit):
-        script.parse_args(["--video", "spoken.mp4", option, value])
 
 
 def test_parse_args_30min_validation_profile_and_overrides() -> None:
@@ -117,17 +89,8 @@ def test_parse_args_30min_high_quality_validation_profile() -> None:
     assert args.normal_count == 2
     assert args.short_count == 3
     assert args.mode == "high_quality"
-    assert args.use_openai_scoring is True
-    assert args.openai_candidate_limit == 20
-    assert args.openai_model == "gpt-5.5"
-    assert args.openai_fallback_to_rule_score is True
-    assert args.ensure_selected_openai_scored is True
-    assert args.openai_finalist_scoring_limit == 7
     settings = script.build_job_settings(args)
-    assert settings["useOpenAIScoring"] is True
-    assert settings["openaiCandidateLimit"] == 20
-    assert settings["ensureSelectedOpenAIScored"] is True
-    assert settings["openaiFinalistScoringLimit"] == 7
+    assert settings["mode"] == args.mode
 
 
 def test_build_job_settings_disables_fixture_transcript() -> None:
@@ -147,10 +110,6 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "small",
             "--transcription-language",
             "ja",
-            "--subtitle-correction-mode",
-            "openai",
-            "--subtitle-correction-model",
-            "gpt-5.5",
             "--normal-min-duration",
             "20",
             "--normal-max-duration",
@@ -161,22 +120,6 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "45",
             "--selection-policy",
             "strict_quality",
-            "--use-openai-scoring",
-            "true",
-            "--openai-candidate-limit",
-            "7",
-            "--subtitle-correction-scope",
-            "suspicious",
-            "--subtitle-correction-suspicion-threshold",
-            "0.6",
-            "--subtitle-correction-reasoning-effort",
-            "none",
-            "--openai-model",
-            "gpt-test",
-            "--ensure-selected-openai-scored",
-            "true",
-            "--openai-finalist-scoring-limit",
-            "4",
             "--max-raw-candidates-per-type",
             "1000",
             "--max-kept-candidates-per-type",
@@ -194,7 +137,6 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
             "--short-overlay-title-mode",
             "always",
             "--disable-transcript-post-processing",
-            "--no-openai-fallback-to-rule-score",
             "--no-burn-subtitles",
         ]
     )
@@ -205,12 +147,6 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["transcriptionLanguage"] == "ja"
     assert settings["transcriptionDevice"] == "cpu"
     assert settings["transcriptionComputeType"] == "auto"
-    assert settings["subtitleCorrectionMode"] == "openai"
-    assert settings["subtitleCorrectionScope"] == "suspicious"
-    assert settings["subtitleCorrectionSuspicionThreshold"] == 0.6
-    assert settings["subtitleCorrectionModel"] == "gpt-5.5"
-    assert settings["subtitleCorrectionReasoningEffort"] == "none"
-    assert settings["useOpenAIScoring"] is True
     assert settings["normalClipCount"] == 2
     assert settings["shortCount"] == 0
     assert settings["normalMinDuration"] == 20.0
@@ -219,12 +155,6 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["shortMaxDuration"] == 45.0
     assert settings["shortOverlayTitleMode"] == "always"
     assert settings["selectionPolicy"] == "strict_quality"
-    assert settings["useOpenAIScoring"] is True
-    assert settings["openaiCandidateLimit"] == 7
-    assert settings["openaiModel"] == "gpt-test"
-    assert settings["openaiFallbackToRuleScore"] is False
-    assert settings["ensureSelectedOpenAIScored"] is True
-    assert settings["openaiFinalistScoringLimit"] == 4
     assert settings["burnSubtitles"] is False
     assert settings["profile"] == "talk"
     assert settings["maxRawCandidatesPerType"] == 1000
@@ -236,14 +166,6 @@ def test_build_job_settings_disables_fixture_transcript() -> None:
     assert settings["candidateChunkSeconds"] == 300.0
     assert settings["candidateChunkOverlapSeconds"] == 75.0
 
-    high_quality_args = script.parse_args(["--video", "spoken.mp4", "--mode", "high_quality"])
-    assert script.build_job_settings(high_quality_args)["useOpenAIScoring"] is True
-    assert script.build_job_settings(high_quality_args)["ensureSelectedOpenAIScored"] is True
-
-    disabled_args = script.parse_args(
-        ["--video", "spoken.mp4", "--mode", "high_quality", "--use-openai-scoring", "false"]
-    )
-    assert script.build_job_settings(disabled_args)["useOpenAIScoring"] is False
 
     invalid_args = script.parse_args(
         ["--video", "spoken.mp4", "--normal-min-duration", "60", "--normal-max-duration", "20"]
@@ -295,7 +217,6 @@ def test_runtime_metrics_use_observed_status_transitions() -> None:
 
     assert metrics["upload_time"] == 1.25
     assert metrics["transcription_time"] == pytest.approx(5.5)
-    assert metrics["subtitle_correction_time"] is None
     assert metrics["scene_detection_time"] == pytest.approx(0.5)
     assert metrics["candidate_generation_time"] == pytest.approx(4.0)
     assert metrics["scoring_time"] == pytest.approx(2.5)
@@ -307,25 +228,6 @@ def test_runtime_metrics_use_observed_status_transitions() -> None:
     assert metrics["total_time"] == 50.0
     assert script.format_seconds(None) == "n/a"
     assert script.format_seconds(1.23456) == "1.235s"
-
-
-def test_runtime_metrics_separate_subtitle_correction_time() -> None:
-    timing = script.TimedJobResult(
-        final_status={"status": "completed"},
-        status_times={
-            "transcribing": 10.0,
-            "correcting_subtitles": 15.0,
-            "detecting_scenes": 35.0,
-            "completed": 40.0,
-        },
-        poll_started_at=9.0,
-        poll_finished_at=40.0,
-    )
-
-    metrics = script.runtime_metrics(upload_seconds=1.0, job_timing=timing, total_seconds=41.0)
-
-    assert metrics["transcription_time"] == pytest.approx(5.0)
-    assert metrics["subtitle_correction_time"] == pytest.approx(20.0)
 
 
 def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
@@ -457,61 +359,6 @@ def test_pipeline_metrics_read_diagnostic_summaries(tmp_path: Path) -> None:
         "render_failures_count": 1,
         "zip_size_bytes": 9,
     }
-
-
-def test_validate_openai_scoring_summary_requires_successful_api_scores(tmp_path: Path) -> None:
-    with pytest.raises(RuntimeError, match="openai_scoring_summary.json not found"):
-        script.validate_openai_scoring_summary(tmp_path)
-
-    summary_path = tmp_path / "openai_scoring_summary.json"
-    summary_path.write_text(
-        json.dumps(
-            {
-                "model": "gpt-test",
-                "candidates_sent_to_openai": 2,
-                "successful_scores": 0,
-                "failed_scores": 2,
-                "fallback_scores": 2,
-                "total_api_calls": 2,
-            }
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError, match="zero successful"):
-        script.validate_openai_scoring_summary(tmp_path)
-
-    summary_path.write_text(
-        json.dumps(
-            {
-                "model": "gpt-test",
-                "candidate_limit": 20,
-                "finalist_scoring_limit": 7,
-                "candidates_eligible_for_openai_scoring": 12,
-                "candidates_selected_for_openai": 2,
-                "candidates_sent_preselection": 2,
-                "candidates_sent_as_finalists": 1,
-                "candidates_sent_to_openai": 2,
-                "successful_scores": 1,
-                "failed_scores": 1,
-                "fallback_scores": 1,
-                "schema_validation_failures": 0,
-                "total_api_calls": 2,
-                "avg_latency_seconds": 0.25,
-                "max_latency_seconds": 0.4,
-                "total_latency_seconds": 0.5,
-                "estimated_text_payload_size": 1024,
-                "selected_ai_score_count": 1,
-                "selected_fallback_score_count": 0,
-                "selected_not_scored_count": 0,
-                "selected_not_scored_reason_counts": {},
-                "selected_rule_score_only_due_to_limit_count": 1,
-            }
-        ),
-        encoding="utf-8",
-    )
-    payload = script.validate_openai_scoring_summary(tmp_path)
-    assert payload["successful_scores"] == 1
-    assert payload["selected_ai_score_count"] == 1
 
 
 def test_validate_output_probe_checks_short_dimensions_and_normal_duration(tmp_path: Path) -> None:
@@ -729,52 +576,6 @@ def test_e2e_summary_formats_and_prints_job_summaries(tmp_path: Path, capsys: py
     )
     assert "changed_segments=1" in postprocess_line
     assert "オープンAI" in postprocess_line
-    correction_line = e2e_summary.summary_line(
-        "transcript_correction_summary.json",
-        {
-            "enabled": True,
-            "model": "gpt-5.5",
-            "corrected_segment_count": 3,
-            "unchanged_segment_count": 17,
-            "low_confidence_rejected_count": 1,
-            "safety_rejected_count": 2,
-            "fallback_used": False,
-            "api_call_count": 2,
-            "schema_validation_failures": 0,
-            "processing_seconds": 1.25,
-        },
-    )
-    assert "model=gpt-5.5" in correction_line
-    assert "corrected=3" in correction_line
-    assert "safety_rejected=2" in correction_line
-    assert "fallback=False" in correction_line
-    assert "calls=2" in correction_line
-    openai_line = e2e_summary.summary_line(
-        "openai_scoring_summary.json",
-        {
-            "model": "gpt-test",
-            "candidate_limit": 20,
-            "finalist_scoring_limit": 7,
-            "candidates_eligible_for_openai_scoring": 40,
-            "candidates_selected_for_openai": 20,
-            "candidates_sent_preselection": 20,
-            "candidates_sent_as_finalists": 2,
-            "candidates_sent_to_openai": 18,
-            "successful_scores": 17,
-            "failed_scores": 1,
-            "fallback_scores": 1,
-            "schema_validation_failures": 0,
-            "total_api_calls": 18,
-            "avg_latency_seconds": 0.2,
-            "max_latency_seconds": 0.5,
-            "selected_ai_score_count": 2,
-            "selected_fallback_score_count": 0,
-            "selected_not_scored_count": 0,
-        },
-    )
-    assert "limit=20" in openai_line
-    assert "finalists=2" in openai_line
-    assert "selected_ai=2" in openai_line
     candidate_generation_line = e2e_summary.summary_line(
         "candidate_generation_summary.json",
         {

@@ -1,11 +1,7 @@
-import base64
-import json
-import re
 import subprocess
-import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,14 +10,6 @@ from app.posting_metadata import NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, PostTitle
 
 TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v10"
 REPRESENTATIVE_FRAME_RATIOS = (0.12, 0.38, 0.62, 0.88)
-TRANSIENT_STATUS_CODES = {408, 409, 429, 500, 502, 503, 504}
-TRANSIENT_ERROR_NAMES = {
-    "APIConnectionError",
-    "APITimeoutError",
-    "InternalServerError",
-    "RateLimitError",
-}
-OPENAI_REQUEST_TIMEOUT_SECONDS = 120.0
 
 SYSTEM_PROMPT = """あなたは日本語動画の編集者です。
 与えられた選定済みclipの修正字幕と代表フレームだけを根拠に、投稿用セットを作成してください。
@@ -380,158 +368,6 @@ TITLE_HOOK_GENERATION_SCHEMA: dict[str, Any] = {
     ],
     "additionalProperties": False,
 }
-
-
-class OpenAIResponsesResource(Protocol):
-    def create(self, **kwargs: Any) -> Any:
-        pass
-
-
-class OpenAIClientProtocol(Protocol):
-    responses: OpenAIResponsesResource
-
-
-def title_hook_response_format() -> dict[str, Any]:
-    return {
-        "type": "json_schema",
-        "name": "title_hook_suggestions",
-        "strict": True,
-        "schema": TITLE_HOOK_GENERATION_SCHEMA,
-    }
-
-
-def _extract_response_text(response: Any) -> str:
-    output_parsed = getattr(response, "output_parsed", None)
-    if output_parsed is not None:
-        return json.dumps(output_parsed, ensure_ascii=False)
-
-    output_text = getattr(response, "output_text", None)
-    if output_text:
-        return str(output_text)
-
-    if isinstance(response, dict):
-        if response.get("output_text"):
-            return str(response["output_text"])
-        if response.get("output_parsed") is not None:
-            return json.dumps(response["output_parsed"], ensure_ascii=False)
-        output = response.get("output", [])
-    else:
-        output = getattr(response, "output", [])
-
-    for item in output or []:
-        content = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
-        for content_item in content or []:
-            text = content_item.get("text") if isinstance(content_item, dict) else getattr(content_item, "text", None)
-            if text:
-                return str(text)
-    raise ValueError("OpenAI response did not include output text")
-
-
-def _load_default_client() -> OpenAIClientProtocol:
-    try:
-        from openai import OpenAI
-    except ImportError as exc:
-        raise RuntimeError("openai package is not installed") from exc
-    return OpenAI(max_retries=0, timeout=OPENAI_REQUEST_TIMEOUT_SECONDS)
-
-
-def _image_content(path: Path) -> dict[str, str]:
-    suffix = path.suffix.lower()
-    media_type = "image/png" if suffix == ".png" else "image/jpeg"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return {
-        "type": "input_image",
-        "image_url": f"data:{media_type};base64,{encoded}",
-    }
-
-
-def _frame_relative_seconds(
-    path: Path,
-    *,
-    clip_duration: float,
-    fallback_index: int,
-    frame_count: int,
-) -> float:
-    match = re.fullmatch(r"frame_(\d+)", path.stem)
-    if match is not None:
-        frame_index = int(match.group(1)) - 1
-        if 0 <= frame_index < len(REPRESENTATIVE_FRAME_RATIOS):
-            return clip_duration * REPRESENTATIVE_FRAME_RATIOS[frame_index]
-    return clip_duration * (fallback_index / (frame_count + 1))
-
-
-class OpenAITitleHookSuggestionGenerator:
-    def __init__(
-        self,
-        *,
-        model: str = "gpt-5.5",
-        client: OpenAIClientProtocol | None = None,
-        max_retries: int = 3,
-        retry_backoff_seconds: float = 0.25,
-        sleep_func: Callable[[float], None] = time.sleep,
-    ) -> None:
-        self.model = model
-        self._client = client
-        self.max_retries = max_retries
-        self.retry_backoff_seconds = retry_backoff_seconds
-        self.sleep_func = sleep_func
-
-    @property
-    def client(self) -> OpenAIClientProtocol:
-        if self._client is None:
-            self._client = _load_default_client()
-        return self._client
-
-    def generate(
-        self,
-        payload: dict[str, Any],
-        frame_paths: Sequence[Path],
-    ) -> TitleHookSuggestionResult:
-        user_content: list[dict[str, str]] = [
-            {
-                "type": "input_text",
-                "text": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-            }
-        ]
-        clip_duration = max(0.0, float(payload.get("clipDurationSeconds") or 0.0))
-        for index, path in enumerate(frame_paths, start=1):
-            relative_seconds = _frame_relative_seconds(
-                path,
-                clip_duration=clip_duration,
-                fallback_index=index,
-                frame_count=len(frame_paths),
-            )
-            user_content.append(
-                {
-                    "type": "input_text",
-                    "text": f"次の代表フレームはclip相対{relative_seconds:.3f}秒です。",
-                }
-            )
-            user_content.append(_image_content(path))
-        for attempt in range(self.max_retries + 1):
-            try:
-                response = self.client.responses.create(
-                    model=self.model,
-                    input=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": user_content},
-                    ],
-                    text={"format": title_hook_response_format()},
-                    store=False,
-                )
-                return GeneratedTitleHookSuggestionResult.model_validate_json(
-                    _extract_response_text(response)
-                ).to_compatible()
-            except Exception as exc:
-                status_code = getattr(exc, "status_code", None)
-                retryable = (
-                    status_code in TRANSIENT_STATUS_CODES
-                    or exc.__class__.__name__ in TRANSIENT_ERROR_NAMES
-                )
-                if not retryable or attempt >= self.max_retries:
-                    raise
-                self.sleep_func(self.retry_backoff_seconds * (2**attempt))
-        raise RuntimeError("unreachable title/hook retry state")
 
 
 FrameCommandRunner = Callable[..., subprocess.CompletedProcess[str]]

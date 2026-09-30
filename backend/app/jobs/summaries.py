@@ -19,7 +19,6 @@ TRANSCRIPT_SUMMARY_FILENAME = "transcript_summary.json"
 AUDIO_FEATURE_SUMMARY_FILENAME = "audio_feature_summary.json"
 CANDIDATE_SUMMARY_FILENAME = "candidate_summary.json"
 CANDIDATE_GENERATION_SUMMARY_FILENAME = "candidate_generation_summary.json"
-OPENAI_SCORING_SUMMARY_FILENAME = "openai_scoring_summary.json"
 REJECTION_SUMMARY_FILENAME = "rejection_summary.json"
 SELECTED_CLIPS_SUMMARY_FILENAME = "selected_clips_summary.json"
 
@@ -28,7 +27,6 @@ SUMMARY_FILENAMES = [
     AUDIO_FEATURE_SUMMARY_FILENAME,
     CANDIDATE_SUMMARY_FILENAME,
     CANDIDATE_GENERATION_SUMMARY_FILENAME,
-    OPENAI_SCORING_SUMMARY_FILENAME,
     REJECTION_SUMMARY_FILENAME,
     SELECTED_CLIPS_SUMMARY_FILENAME,
 ]
@@ -409,79 +407,6 @@ def build_selected_clips_summary(
     }
 
 
-def _selected_score_source_item(candidate: Candidate) -> dict[str, Any]:
-    return {
-        "id": candidate.id,
-        "type": candidate.type,
-        "final_score": _round(_score(candidate)),
-        "ai_score": _round(candidate.ai_score),
-        "rule_score": _round(candidate.rule_score),
-        "used_ai_score": candidate.used_ai_score,
-        "openai_scored": candidate.openai_scored,
-        "openai_fallback_used": candidate.openai_fallback_used,
-        "openai_score_source": candidate.openai_score_source,
-        "openai_not_scored_reason": candidate.openai_not_scored_reason,
-        "risk_flags": candidate.risk_flags,
-    }
-
-
-def build_openai_scoring_summary(
-    summary: dict[str, Any],
-    selection: CandidateSelection | None,
-) -> dict[str, Any]:
-    selected = []
-    if selection is not None:
-        selected = [*selection.normal_clips, *selection.shorts]
-
-    ai_scored = [
-        candidate
-        for candidate in selected
-        if candidate.ai_score is not None and "openai_fallback_rule_score" not in candidate.risk_flags
-    ]
-    fallback_scored = [
-        candidate for candidate in selected if "openai_fallback_rule_score" in candidate.risk_flags
-    ]
-    rule_only_due_to_limit = [
-        candidate for candidate in selected if "openai_not_scored_candidate_limit" in candidate.risk_flags
-    ]
-    not_scored = [
-        candidate
-        for candidate in selected
-        if candidate.openai_scored is not True and candidate.openai_fallback_used is not True
-    ]
-    not_scored_reasons = Counter(candidate.openai_not_scored_reason or "unknown" for candidate in not_scored)
-
-    payload = dict(summary)
-    candidates_considered = payload.get("candidates_considered")
-    candidates_sent = payload.get("candidates_sent_to_openai")
-    payload.setdefault("candidates_eligible_for_openai_scoring", candidates_considered)
-    payload.setdefault("candidates_selected_for_openai", candidates_sent)
-    payload.setdefault("candidates_actually_sent", candidates_sent)
-    payload.setdefault("successful_structured_scores", payload.get("successful_scores"))
-    payload.setdefault("failed_structured_scores", payload.get("failed_scores"))
-    payload.setdefault("avg_latency_seconds", payload.get("average_latency_seconds"))
-    payload.setdefault("estimated_text_payload_size", None)
-    payload.setdefault("schema_validation_failures", 0)
-    payload["selected_ai_score_count"] = len(ai_scored)
-    payload["selected_fallback_score_count"] = len(fallback_scored)
-    payload["selected_rule_score_only_due_to_limit_count"] = len(rule_only_due_to_limit)
-    payload["selected_not_scored_count"] = len(not_scored)
-    payload["selected_not_scored_reason_counts"] = dict(sorted(not_scored_reasons.items()))
-    payload["final_selected_clips_using_ai_score"] = [
-        _selected_score_source_item(candidate) for candidate in ai_scored
-    ]
-    payload["final_selected_clips_using_fallback_score"] = [
-        _selected_score_source_item(candidate) for candidate in fallback_scored
-    ]
-    payload["final_selected_clips_rule_score_only_due_to_limit"] = [
-        _selected_score_source_item(candidate) for candidate in rule_only_due_to_limit
-    ]
-    payload["final_selected_clips_not_scored"] = [
-        _selected_score_source_item(candidate) for candidate in not_scored
-    ]
-    return payload
-
-
 def write_generation_summaries(
     output_dir: str | Path,
     *,
@@ -492,7 +417,6 @@ def write_generation_summaries(
     candidate_generation_summary: dict[str, Any] | None = None,
     scored_candidates: Sequence[Candidate] | None = None,
     selection: CandidateSelection | None = None,
-    openai_scoring_summary: dict[str, Any] | None = None,
     normal_result: NormalRenderBatchResult | None = None,
     short_result: ShortRenderBatchResult | None = None,
     exports: Sequence[ExportItem] | None = None,
@@ -523,9 +447,4 @@ def write_generation_summaries(
         REJECTION_SUMMARY_FILENAME: build_rejection_summary(selection, normal_result, short_result),
         SELECTED_CLIPS_SUMMARY_FILENAME: build_selected_clips_summary(selection, exports),
     }
-    if openai_scoring_summary is not None:
-        payloads[OPENAI_SCORING_SUMMARY_FILENAME] = build_openai_scoring_summary(
-            openai_scoring_summary,
-            selection,
-        )
     return [_write_json(root / filename, payload) for filename, payload in payloads.items()]

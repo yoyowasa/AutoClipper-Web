@@ -172,7 +172,6 @@ def test_audit_outputs_builds_quality_report(tmp_path: Path) -> None:
     assert summary["warnings_by_type"]["normal"]["external_subtitle_autoload_risk"] == 1
     assert summary["warnings_by_type"]["short"]["short_resolution_not_1080x1920"] == 1
     assert summary["warnings_by_type"]["short"]["no_subtitle_file"] == 1
-    assert summary["warnings_by_type"]["short"]["rule_only_clip_in_high_quality_mode"] == 1
 
     normal_clip = report["clips"][0]
     short_clip = report["clips"][1]

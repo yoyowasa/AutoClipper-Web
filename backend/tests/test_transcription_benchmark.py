@@ -104,7 +104,7 @@ def test_build_run_summary_and_markdown_do_not_apply_post_processing() -> None:
     assert summary["transcription_realtime_factor"] == 1.1
     assert summary["keyword_metrics"]["accuracy"] == 1.0
     assert "base:ja" in markdown
-    assert "OpenAI correction is not applied" in markdown
+    assert "deterministic post-processing are compared" in markdown
 
 
 def test_main_writes_raw_and_summary_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

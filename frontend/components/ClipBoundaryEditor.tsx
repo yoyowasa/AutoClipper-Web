@@ -309,7 +309,7 @@ export function ClipBoundaryEditor({
           <p className="mt-1 text-xs font-medium leading-4 text-red-700">{validation}</p>
         ) : (
           <p className="mt-1 text-xs leading-4 text-neutral-500">
-            対象clip 1本の軽量動画だけを作り直します。OpenAI API料金は発生しません。
+            対象clip 1本の軽量動画だけを作り直します。
           </p>
         )}
       </div>

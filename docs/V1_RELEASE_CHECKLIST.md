@@ -12,7 +12,7 @@ Covered areas:
 - Docker Compose runtime
 - backend and frontend reachability
 - low_cost real-video E2E
-- optional high_quality OpenAI scoring smoke
+- optional high_quality local processing smoke
 - output audit report
 - subtitle sidecar autoload risk
 - results UI and download endpoints
@@ -31,7 +31,7 @@ Out of scope:
 - The repo is checked out at the commit being validated.
 - `.env` exists, or defaults from `.env.example` are acceptable.
 - A short spoken MP4 is available for the required low_cost smoke.
-- `OPENAI_API_KEY` is only required for the optional high_quality smoke.
+- High-quality processing uses local scoring or the Codex login bridge.
 
 Recommended sample:
 
@@ -187,16 +187,12 @@ Expected in UI:
 - job-level audit summary when audit exists
 - metadata and subtitle download links
 
-## 7. Optional high_quality OpenAI Smoke
-
-Run only when `OPENAI_API_KEY` is configured in `.env` and visible to the worker.
+## 7. Optional high_quality Local Smoke
 
 ```powershell
 python .\scripts\e2e_real_video.py `
   --video "C:\path\to\spoken_sample.mp4" `
   --mode high_quality `
-  --use-openai-scoring true `
-  --openai-candidate-limit 10 `
   --normal-count 1 `
   --short-count 2 `
   --normal-min-duration 20 `
@@ -205,13 +201,7 @@ python .\scripts\e2e_real_video.py `
   --timeout 3600
 ```
 
-Expected:
-
-- missing key fails clearly with `openai_configuration_missing`
-- `openai_scoring_summary.json` is written when scoring runs
-- selected clips use AI scores when API calls succeed
-- fallback usage is reported when fallback is enabled
-- low_cost behavior is unchanged
+Expected: local rule scores and rendering complete without a paid API dependency.
 
 ## 8. Known Previous Failure Modes Covered
 
