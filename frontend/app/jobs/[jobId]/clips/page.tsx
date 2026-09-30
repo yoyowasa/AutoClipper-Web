@@ -78,7 +78,6 @@ function reselectionPayload(settings: ClipSettings, excludePreviousSelection: bo
     excludePromotionalContent: settings.excludePromotionalContent,
     selectionPolicy: settings.selectionPolicy,
     heatmapIntervalMode: settings.heatmapIntervalMode,
-    useOpenAIScoring: settings.useOpenAIScoring
   };
 }
 
@@ -1049,16 +1048,6 @@ export default function ClipPlanReviewPage() {
                 <p className="mt-2 text-xs text-red-700">最低尺は最長尺以下にしてください。</p>
               ) : null}
             </div>
-
-            {draftSettings.useOpenAIScoring ? (
-              <p className="mt-3 border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                AI文脈判定を有効にすると、再選定でもOpenAI APIを使用します。
-              </p>
-            ) : (
-              <p className="mt-3 text-xs text-neutral-600">
-                現在はローカル判定です。再選定によるAPI料金は発生しません。
-              </p>
-            )}
 
             <button
               className="mt-4 min-h-11 w-full border border-neutral-950 bg-white px-4 text-sm font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"

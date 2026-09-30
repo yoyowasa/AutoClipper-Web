@@ -243,16 +243,13 @@ function UploadForm() {
               shortClipTimeRanges: [],
               heatmapIntervalMode: false,
               initialSelectionProvider: "legacy",
-              useOpenAIScoring: false,
               enableBoundaryRefinement: false,
               requireClipPlanReview: true,
               burnSubtitles: settings.manualSubtitleMode !== "none",
               requireSubtitleReview: true
             }
           : { ...settings, workflowMode: "automatic" };
-      const job = await createJob(uploaded.videoId, {
-        ...jobSettings, useOpenAIScoring: false, ensureSelectedOpenAIScored: false, subtitleCorrectionMode: "off"
-      });
+      const job = await createJob(uploaded.videoId, jobSettings);
       router.push(
         uploadMode === "manual" ? `/jobs/${job.jobId}/clips` : `/jobs/${job.jobId}`
       );

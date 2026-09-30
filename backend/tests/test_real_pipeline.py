@@ -12,7 +12,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.jobs.runner as runner_module
-from app.audio.openai_transcript_correction import OpenAITranscriptCorrector
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.volume_features import build_audio_features
@@ -28,14 +27,11 @@ from app.jobs.queue import (
 )
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.codex_initial_selection import CodexInitialSelectionResult
-from app.candidates.select_candidates import CandidateSelection, select_candidates
+from app.candidates.select_candidates import CandidateSelection
 from app.jobs.runner import (
     AutoClipperPipelineDependencies,
     PipelineExpectedError,
-    _build_openai_scoring_pool,
     _codex_selection_with_diverse_refined_shorts,
-    _ensure_selected_candidates_openai_scored,
-    _score_candidate_list,
     _transcript_quality_diagnostics,
     _transcription_language_setting,
     run_autoclipper_job,
@@ -49,9 +45,8 @@ from app.jobs.runner import (
 from app.jobs.status import SUCCESS_STATUSES
 from app.main import app
 from app.models import Job
-from app.scoring.openai_score import OpenAICandidateScorer
 from app.storage.paths import StoragePaths, get_storage_paths
-from app.video.black_screen import BlackScreenSegment, VisualQuality
+from app.video.black_screen import BlackScreenSegment
 from app.video.probe import VideoMetadata
 from app.video.scene_detect import SceneSegment
 from review_state_helpers import seed_legacy_reopened_review
@@ -184,40 +179,6 @@ def test_clustered_repetition_is_not_a_hard_failure_when_long_audio_has_good_cov
     assert quality["reasons"] == []
 
 
-class EchoCorrectionResponse:
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self.output_text = json.dumps(payload, ensure_ascii=False)
-
-
-class EchoCorrectionResponses:
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    def create(self, **kwargs: Any) -> EchoCorrectionResponse:
-        self.calls.append(kwargs)
-        request = json.loads(kwargs["input"][1]["content"])
-        return EchoCorrectionResponse(
-            {
-                "segments": [
-                    {
-                        "index": segment["index"],
-                        "original_text": segment["original_text"],
-                        "corrected_text": segment["original_text"],
-                        "changed": False,
-                        "reason": "unchanged",
-                        "confidence": 1.0,
-                    }
-                    for segment in request["target_segments"]
-                ]
-            }
-        )
-
-
-class EchoCorrectionClient:
-    def __init__(self) -> None:
-        self.responses = EchoCorrectionResponses()
-
-
 @pytest.fixture()
 def client(tmp_path: Path) -> Generator[TestClient, None, None]:
     database_path = tmp_path / "test.db"
@@ -288,61 +249,6 @@ VALID_OPENAI_SCORE = {
 }
 
 
-class FakeOpenAIResponse:
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self.output_text = json.dumps(payload)
-
-
-class FakeOpenAIResponses:
-    def __init__(self, payloads: list[dict[str, Any]]) -> None:
-        self.payloads = payloads
-        self.calls: list[dict[str, Any]] = []
-
-    def create(self, **kwargs: Any) -> FakeOpenAIResponse:
-        self.calls.append(kwargs)
-        payload = self.payloads.pop(0)
-        return FakeOpenAIResponse(payload)
-
-
-class FakeOpenAIClient:
-    def __init__(self, payloads: list[dict[str, Any]]) -> None:
-        self.responses = FakeOpenAIResponses(payloads)
-
-
-def test_openai_scoring_without_api_key_raises_clear_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    candidate = Candidate(
-        id="cand_openai_missing_key",
-        type="short",
-        start=0.0,
-        end=30.0,
-        duration=30.0,
-        transcript_text="a useful spoken candidate with enough context for scoring",
-        rule_score=70.0,
-    )
-    audio_features = build_audio_features(duration=30.0, silence_segments=[], volume_peak=0.5)
-    visual_quality = VisualQuality(
-        duration=30.0,
-        black_screen_ratio=0.0,
-        usable_ratio=1.0,
-        black_seconds=0.0,
-        black_segments=[],
-    )
-
-    with pytest.raises(PipelineExpectedError) as exc_info:
-        _score_candidate_list(
-            [candidate],
-            settings={"useOpenAIScoring": True},
-            audio_features=audio_features,
-            silence_segments=[],
-            visual_quality=visual_quality,
-            scorer=None,
-        )
-
-    assert exc_info.value.code == "openai_configuration_missing"
-    assert "OPENAI_API_KEY" in exc_info.value.message
-
-
 def _candidate(candidate_id: str, candidate_type: str, start: float, end: float, rule_score: float) -> Candidate:
     return Candidate(
         id=candidate_id,
@@ -355,106 +261,8 @@ def _candidate(candidate_id: str, candidate_type: str, start: float, end: float,
     )
 
 
-def test_openai_scoring_pool_is_type_aware_and_diverse() -> None:
-    candidates = [
-        *[_candidate(f"normal_{index}", "normal", index * 120.0, index * 120.0 + 120.0, 90 - index) for index in range(6)],
-        *[_candidate(f"short_{index}", "short", index * 80.0, index * 80.0 + 40.0, 70 - index) for index in range(6)],
-    ]
-    audio_features = build_audio_features(duration=800.0, silence_segments=[], volume_peak=0.5)
-
-    pool = _build_openai_scoring_pool(
-        candidates,
-        settings={
-            "normalClipCount": 2,
-            "shortCount": 3,
-            "openaiCandidateLimit": 6,
-            "minFinalScore": 0,
-            "rejectIncompleteSentence": False,
-        },
-        audio_features=audio_features,
-        silence_segments=[],
-        candidate_limit=6,
-    )
-
-    assert len(pool) == 6
-    assert {candidate.type for candidate in pool} == {"normal", "short"}
-    assert sum(1 for candidate in pool if candidate.type == "normal") >= 2
-    assert sum(1 for candidate in pool if candidate.type == "short") >= 2
-
-
-def test_finalist_on_demand_scores_selected_rule_only_candidates() -> None:
-    candidates = [
-        _candidate("normal_a", "normal", 0.0, 120.0, 95.0),
-        _candidate("normal_b", "normal", 300.0, 420.0, 94.0),
-    ]
-    audio_features = build_audio_features(duration=500.0, silence_segments=[], volume_peak=0.5)
-    visual_quality = VisualQuality(
-        duration=500.0,
-        black_screen_ratio=0.0,
-        usable_ratio=1.0,
-        black_seconds=0.0,
-        black_segments=[],
-    )
-    scorer = OpenAICandidateScorer(
-        client=FakeOpenAIClient(
-            [
-                {**VALID_OPENAI_SCORE, "title": "Preselection", "final_score": 88},
-                {**VALID_OPENAI_SCORE, "title": "Finalist", "final_score": 86},
-            ]
-        )
-    )
-    settings = {
-        "mode": "high_quality",
-        "normalClipCount": 2,
-        "shortCount": 0,
-        "minFinalScore": 0,
-        "rejectIncompleteSentence": False,
-        "useOpenAIScoring": True,
-        "openaiCandidateLimit": 1,
-        "ensureSelectedOpenAIScored": True,
-        "openaiFinalistScoringLimit": 3,
-    }
-
-    scoring = _score_candidate_list(
-        candidates,
-        settings=settings,
-        audio_features=audio_features,
-        silence_segments=[],
-        visual_quality=visual_quality,
-        scorer=scorer,
-    )
-    selection = select_candidates(
-        scoring.candidates,
-        settings=settings,
-        audio_features=audio_features,
-        silence_segments=[],
-    )
-    updated_selection, updated_candidates, updated_summary = _ensure_selected_candidates_openai_scored(
-        selection,
-        scoring.candidates,
-        settings=settings,
-        audio_features=audio_features,
-        visual_quality=visual_quality,
-        scorer=scoring.openai_scorer,
-        openai_summary=scoring.openai_summary,
-    )
-
-    selected = [*updated_selection.normal_clips, *updated_selection.shorts]
-    assert len(selected) == 2
-    assert all(candidate.used_ai_score is True for candidate in selected)
-    assert {candidate.openai_score_source for candidate in selected} == {"preselection_pool", "finalist_on_demand"}
-    assert {candidate.title_source for candidate in selected} == {"openai"}
-    assert updated_summary is not None
-    assert updated_summary["candidates_sent_preselection"] == 1
-    assert updated_summary["candidates_sent_as_finalists"] == 1
-    assert updated_summary["successful_scores"] == 2
-    assert {candidate.id for candidate in updated_candidates if candidate.used_ai_score is True} == {
-        "normal_a",
-        "normal_b",
-    }
-
-
-def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> None:
+@pytest.mark.parametrize("mode", ["low_cost", "high_quality"])
+def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient, mode: str) -> None:
     media = b"fake video bytes"
     sidecar = json.dumps(
         {
@@ -488,6 +296,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         json={
             "videoId": upload["videoId"],
             "settings": {
+                "mode": mode,
                 "normalClipCount": 1,
                 "shortCount": 1,
                 "normalMinDuration": 90,
@@ -496,10 +305,6 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
                 "shortMaxDuration": 75,
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
-                "useOpenAIScoring": False,
-                "subtitleCorrectionMode": "openai",
-                "subtitleCorrectionScope": "suspicious",
-                "subtitleCorrectionBatchSize": 2,
                 "burnSubtitles": True,
                 "normalizeAudio": True,
                 "transcriptReplacements": {"automation": "AutoClipper"},
@@ -544,7 +349,6 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         detect_black_screen=lambda _path: [BlackScreenSegment(start=220.0, end=225.0, duration=5.0)],
         normal_renderer=fake_render,
         short_renderer=fake_render,
-        transcript_corrector=OpenAITranscriptCorrector(client=EchoCorrectionClient()),
     )
 
     visited_statuses = run_autoclipper_job(
@@ -554,7 +358,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         dependencies=dependencies,
     )
 
-    assert visited_statuses == [*SUCCESS_STATUSES[1:4], "correcting_subtitles", *SUCCESS_STATUSES[4:]]
+    assert visited_statuses == SUCCESS_STATUSES[1:]
     assert not (storage.temp / created["jobId"]).exists()
 
     status_response = client.get(f"/api/jobs/{created['jobId']}")
@@ -588,12 +392,6 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
         "raw_transcript_segments.json",
         "deterministic_transcript_segments.json",
         "transcript_segments.json",
-        "transcript_correction_summary.json",
-        "transcript_correction_diff.md",
-        "subtitle_correction_progress.json",
-        "transcript_suspicion_segments.json",
-        "transcript_suspicion_summary.json",
-        "subtitle_correction_targets.json",
         "scene_segments.json",
         "silence_segments.json",
         "audio_features.json",
@@ -649,27 +447,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert transcript_summary["transcription_runtime"]["requested_compute_type"] == "auto"
     assert transcript_summary["transcription_runtime"]["actual_compute_type"] == "injected"
     assert transcript_summary["used_fixture_transcript"] is False
-    correction_summary = json.loads((job_dir / "transcript_correction_summary.json").read_text(encoding="utf-8"))
-    assert correction_summary["enabled"] is True
-    assert correction_summary["scope"] == "suspicious"
-    assert correction_summary["target_segment_count"] == 4
-    assert correction_summary["api_call_count"] == 2
-    correction_progress = json.loads((job_dir / "subtitle_correction_progress.json").read_text(encoding="utf-8"))
-    assert correction_progress == {
-        "stage": "correcting_subtitles",
-        "stageProgress": 100,
-        "correctionBatchesCompleted": 2,
-        "correctionBatchesTotal": 2,
-        "correctionRetryCount": 0,
-        "correctionTargetsCompleted": 4,
-        "correctionTargetsTotal": 4,
-        "transcriptSegmentCount": 4,
-        "fallbackUsed": False,
-        "finished": True,
-    }
-    status_details = status_response.json()["details"]
-    assert status_details["stageProgress"] == 100
-    assert status_details["correctionBatchesCompleted"] == 2
+
     transcript_postprocess_summary = json.loads((job_dir / "transcript_postprocess_summary.json").read_text(encoding="utf-8"))
     assert transcript_postprocess_summary["enabled"] is True
     assert transcript_postprocess_summary["segment_count"] == 4
@@ -744,9 +522,6 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient) -> 
     assert "metadata/automation_manifest.json" in names
     assert "metadata/raw_transcript_segments.json" in names
     assert "metadata/deterministic_transcript_segments.json" in names
-    assert "metadata/transcript_correction_summary.json" in names
-    assert "metadata/transcript_correction_diff.md" in names
-    assert "metadata/subtitle_correction_progress.json" in names
     assert "metadata/transcript_summary.json" in names
     assert "metadata/transcript_postprocess_summary.json" in names
     assert "metadata/heatmap_validation_summary.json" in names
@@ -804,7 +579,6 @@ def test_pipeline_uses_heatmap_as_reference_without_forcing_candidate_boundaries
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
                 "enableBoundaryRefinement": False,
-                "useOpenAIScoring": False,
                 "burnSubtitles": False,
             },
         },
@@ -957,7 +731,6 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
                 "enableBoundaryRefinement": False,
-                "useOpenAIScoring": False,
                 "burnSubtitles": True,
                 "requireClipPlanReview": True,
                 "requireSubtitleReview": True,
@@ -1062,7 +835,6 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
             "excludeIntroOutro": True,
             "excludePromotionalContent": False,
             "selectionPolicy": "fill_requested",
-            "useOpenAIScoring": False,
             "heatmapIntervalMode": mode,
         }
 
@@ -1242,7 +1014,6 @@ def test_pipeline_falls_back_to_content_candidates_when_heatmap_reference_is_tam
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
                 "enableBoundaryRefinement": False,
-                "useOpenAIScoring": False,
                 "burnSubtitles": False,
             },
         },
@@ -1365,7 +1136,6 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
                     {"startSeconds": 150, "endSeconds": 180},
                 ],
                 "heatmapIntervalMode": True,
-                "useOpenAIScoring": True,
                 "enableBoundaryRefinement": True,
                 "burnSubtitles": True,
                 "requireClipPlanReview": True,
@@ -1507,7 +1277,6 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
             "excludeIntroOutro": True,
             "excludePromotionalContent": False,
             "selectionPolicy": "strict_quality",
-            "useOpenAIScoring": False,
         },
     )
     assert failed_reselect_response.status_code == 503
@@ -1529,7 +1298,6 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
             "excludeIntroOutro": True,
             "excludePromotionalContent": True,
             "selectionPolicy": "strict_quality",
-            "useOpenAIScoring": False,
         },
     )
     assert reselect_response.status_code == 202
@@ -1737,7 +1505,6 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
                 "shortMaxDuration": 75,
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
-                "useOpenAIScoring": False,
                 "burnSubtitles": True,
                 "requireSubtitleReview": True,
                 "shortOverlayTitleMode": "never",
@@ -2105,7 +1872,6 @@ def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_d
                 "normalMinDuration": 20,
                 "normalMaxDuration": 60,
                 "selectionPolicy": "fill_requested",
-                "useOpenAIScoring": False,
                 "burnSubtitles": False,
             },
         },
@@ -2177,158 +1943,6 @@ def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_d
     assert selected_normal["selection_reason"] == "backfill_below_quality_threshold"
 
 
-def test_real_pipeline_openai_failure_falls_back_to_rule_scoring(client: TestClient) -> None:
-    upload = client.post(
-        "/api/videos/upload",
-        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
-    ).json()
-    created = client.post(
-        "/api/jobs",
-        json={
-            "videoId": upload["videoId"],
-            "settings": {
-                "normalClipCount": 1,
-                "shortCount": 1,
-                "normalMinDuration": 90,
-                "normalMaxDuration": 180,
-                "shortMinDuration": 20,
-                "shortMaxDuration": 75,
-                "minFinalScore": 0,
-                "rejectIncompleteSentence": False,
-                "useOpenAIScoring": True,
-            },
-        },
-    ).json()
-    storage = app.dependency_overrides[get_storage_paths]()
-
-    class BrokenScorer:
-        def score(self, *_args: object, **_kwargs: object) -> object:
-            raise RuntimeError("OpenAI unavailable")
-
-    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
-        Path(output_path).write_bytes(b"fake wav")
-        return Path(output_path)
-
-    def fake_render(
-        _input_path: str | Path,
-        output_path: str | Path,
-        **_kwargs: Any,
-    ) -> Path:
-        Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
-        return Path(output_path)
-
-    dependencies = AutoClipperPipelineDependencies(
-        probe_metadata=lambda _path: VideoMetadata(
-            duration=240.0,
-            width=1920,
-            height=1080,
-            fps=30.0,
-            has_audio=True,
-        ),
-        extract_audio=fake_extract,
-        transcribe_audio=lambda _path: fake_transcript(),
-        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
-        detect_silence=lambda _path, _duration: [],
-        compute_audio_features=lambda _path, duration, segments: build_audio_features(
-            duration=duration,
-            silence_segments=segments,
-            volume_peak=0.5,
-        ),
-        detect_black_screen=lambda _path: [],
-        normal_renderer=fake_render,
-        short_renderer=fake_render,
-        openai_scorer=BrokenScorer(),  # type: ignore[arg-type]
-    )
-
-    run_autoclipper_job(
-        created["jobId"],
-        session_factory=lambda: next(app.dependency_overrides[get_db]()),
-        paths=storage,
-        dependencies=dependencies,
-    )
-
-    status_response = client.get(f"/api/jobs/{created['jobId']}")
-    assert status_response.json()["status"] == "completed"
-    scored_payload = json.loads((storage.outputs / created["jobId"] / "scored_candidates.json").read_text(encoding="utf-8"))
-    assert any("openai_fallback_rule_score" in item["risk_flags"] for item in scored_payload)
-    openai_summary = json.loads((storage.outputs / created["jobId"] / "openai_scoring_summary.json").read_text(encoding="utf-8"))
-    assert openai_summary["candidates_sent_to_openai"] > 0
-    assert openai_summary["fallback_scores"] > 0
-    assert openai_summary["candidates_eligible_for_openai_scoring"] > 0
-    assert openai_summary["candidates_selected_for_openai"] > 0
-    assert openai_summary["selected_fallback_score_count"] > 0
-    assert openai_summary["final_selected_clips_using_fallback_score"]
-
-
-def test_real_pipeline_openai_failure_can_fail_without_fallback(client: TestClient) -> None:
-    upload = client.post(
-        "/api/videos/upload",
-        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
-    ).json()
-    created = client.post(
-        "/api/jobs",
-        json={
-            "videoId": upload["videoId"],
-            "settings": {
-                "normalClipCount": 1,
-                "shortCount": 0,
-                "normalMinDuration": 90,
-                "normalMaxDuration": 180,
-                "minFinalScore": 0,
-                "rejectIncompleteSentence": False,
-                "useOpenAIScoring": True,
-                "openaiCandidateLimit": 3,
-                "openaiFallbackToRuleScore": False,
-            },
-        },
-    ).json()
-    storage = app.dependency_overrides[get_storage_paths]()
-
-    class BrokenScorer:
-        model = "gpt-test"
-
-        def score(self, *_args: object, **_kwargs: object) -> object:
-            raise RuntimeError("OpenAI unavailable")
-
-    def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
-        Path(output_path).write_bytes(b"fake wav")
-        return Path(output_path)
-
-    dependencies = AutoClipperPipelineDependencies(
-        probe_metadata=lambda _path: VideoMetadata(
-            duration=240.0,
-            width=1920,
-            height=1080,
-            fps=30.0,
-            has_audio=True,
-        ),
-        extract_audio=fake_extract,
-        transcribe_audio=lambda _path: fake_transcript(),
-        detect_scenes=lambda _path: [SceneSegment(start=0.0, end=240.0)],
-        detect_silence=lambda _path, _duration: [],
-        compute_audio_features=lambda _path, duration, segments: build_audio_features(
-            duration=duration,
-            silence_segments=segments,
-            volume_peak=0.5,
-        ),
-        detect_black_screen=lambda _path: [],
-        openai_scorer=BrokenScorer(),  # type: ignore[arg-type]
-    )
-
-    run_autoclipper_job(
-        created["jobId"],
-        session_factory=lambda: next(app.dependency_overrides[get_db]()),
-        paths=storage,
-        dependencies=dependencies,
-    )
-
-    status_response = client.get(f"/api/jobs/{created['jobId']}")
-    payload = status_response.json()
-    assert payload["status"] == "failed"
-    assert payload["error"]["code"] == "openai_scoring_failed"
-    assert "candidates_sent_to_openai" in payload["error"]["message"]
-
-
 def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: TestClient) -> None:
     upload = client.post(
         "/api/videos/upload",
@@ -2347,7 +1961,6 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
                 "shortStepSeconds": 5,
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
-                "useOpenAIScoring": False,
                 "burnSubtitles": False,
                 "normalizeAudio": False,
                 "shortLayout": "center_crop",
@@ -2865,7 +2478,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
 
     monkeypatch.setattr(runner_module, "generate_normal_candidates_with_summary", forbidden)
     monkeypatch.setattr(runner_module, "generate_short_candidates_with_summary", forbidden)
-    monkeypatch.setattr(runner_module, "_score_candidate_list", forbidden)
+    monkeypatch.setattr(runner_module, "_score_local_candidates", forbidden)
 
     visited = run_autoclipper_job(
         created["jobId"],
@@ -2926,7 +2539,6 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
             "excludeIntroOutro": True,
             "excludePromotionalContent": False,
             "selectionPolicy": "strict_quality",
-            "useOpenAIScoring": False,
             "heatmapIntervalMode": False,
         },
     )
@@ -3406,8 +3018,6 @@ def test_real_pipeline_retries_repeated_turbo_transcript_with_small_on_cuda(
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
                 "heatmapIntervalMode": False,
-                "useOpenAIScoring": False,
-                "subtitleCorrectionMode": "off",
                 "whisperModelSize": "turbo",
                 "transcriptionLanguage": "ja",
                 "transcriptionDevice": "cuda",
@@ -3543,8 +3153,6 @@ def test_real_pipeline_recovers_long_form_transcript_without_user_action(
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
                 "heatmapIntervalMode": False,
-                "useOpenAIScoring": False,
-                "subtitleCorrectionMode": "off",
                 "whisperModelSize": "turbo",
                 "transcriptionDevice": "cuda",
                 "transcriptionComputeType": "float16",

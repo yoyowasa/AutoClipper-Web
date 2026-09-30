@@ -25,11 +25,7 @@ SELECTED_CLIP_FIELDS = [
     "selection_reason",
     "below_quality_threshold",
     "quality_warning",
-    "openai_score_source",
-    "openai_fallback_used",
     "used_ai_score",
-    "openai_scored",
-    "openai_not_scored_reason",
 ]
 
 
@@ -79,9 +75,7 @@ def _selected_clip_items(selected_payload: dict[str, Any]) -> list[dict[str, Any
             clip["ai_score"] = _number(raw.get("ai_score"))
             clip["final_score"] = _number(raw.get("final_score"))
             clip["below_quality_threshold"] = _bool(raw.get("below_quality_threshold"))
-            clip["openai_fallback_used"] = _bool(raw.get("openai_fallback_used"))
             clip["used_ai_score"] = _bool(raw.get("used_ai_score"))
-            clip["openai_scored"] = _bool(raw.get("openai_scored"))
             clips.append(clip)
     return clips
 
@@ -124,7 +118,6 @@ def load_job(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
 
     selected_summary = read_json(output_dir / "selected_clips_summary.json", {})
     candidate_summary = read_json(output_dir / "candidate_summary.json", {})
-    openai_summary = read_json(output_dir / "openai_scoring_summary.json", None)
     transcript_summary = read_json(output_dir / "transcript_summary.json", None)
     rejection_summary = read_json(output_dir / "rejection_summary.json", {})
     clips = _selected_clip_items(selected)
@@ -139,7 +132,6 @@ def load_job(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
         ),
         "selected_clips_summary": selected_summary if isinstance(selected_summary, dict) else {},
         "candidate_summary": candidate_summary if isinstance(candidate_summary, dict) else {},
-        "openai_scoring_summary": openai_summary if isinstance(openai_summary, dict) else None,
         "transcript_summary": transcript_summary if isinstance(transcript_summary, dict) else None,
         "rejection_summary": rejection_summary if isinstance(rejection_summary, dict) else {},
         "render_failures_count": _render_failure_count(
@@ -268,26 +260,8 @@ def _clip_report_item(clip: dict[str, Any] | None) -> dict[str, Any] | None:
         "selection_reason": clip.get("selection_reason"),
         "below_quality_threshold": clip.get("below_quality_threshold"),
         "quality_warning": clip.get("quality_warning"),
-        "openai_score_source": clip.get("openai_score_source"),
-        "openai_fallback_used": clip.get("openai_fallback_used"),
         "used_ai_score": clip.get("used_ai_score"),
-        "openai_scored": clip.get("openai_scored"),
-        "openai_not_scored_reason": clip.get("openai_not_scored_reason"),
     }
-
-
-def _count_openai_field(clips: Sequence[dict[str, Any]], field: str) -> int:
-    return sum(1 for clip in clips if _bool(clip.get(field)))
-
-
-def _count_not_scored(clips: Sequence[dict[str, Any]]) -> int:
-    return sum(
-        1
-        for clip in clips
-        if not _bool(clip.get("used_ai_score"))
-        and not _bool(clip.get("openai_fallback_used"))
-        and str(clip.get("openai_score_source") or "") in {"not_scored", ""}
-    )
 
 
 def _count_backfill(clips: Sequence[dict[str, Any]]) -> int:
@@ -336,7 +310,6 @@ def build_comparison_report(low_cost_job_id: str, high_quality_job_id: str, *, r
     rule_score_differences = [match["score_differences"]["rule_score"] for match in same_time_matches]
     ai_score_differences = [match["score_differences"]["ai_score"] for match in same_time_matches]
 
-    high_openai_summary = high_job.get("openai_scoring_summary") or {}
     summary_metrics = {
         "same_selected_clips_count": len(same_time_matches),
         "different_selected_clips_count": max(0, len(high_clips) - len(same_time_matches)),
@@ -348,23 +321,12 @@ def build_comparison_report(low_cost_job_id: str, high_quality_job_id: str, *, r
         "average_final_score_difference": _mean(final_score_differences),
         "average_rule_score_difference": _mean(rule_score_differences),
         "average_ai_score_difference": _mean(ai_score_differences),
-        "high_quality_clips_using_ai_score": _count_openai_field(high_clips, "used_ai_score"),
-        "high_quality_clips_using_fallback": _count_openai_field(high_clips, "openai_fallback_used"),
-        "high_quality_clips_not_scored": _count_not_scored(high_clips),
         "low_cost_backfill_count": _count_backfill(low_clips),
         "high_quality_backfill_count": _count_backfill(high_clips),
         "low_cost_count_fulfillment": _count_fulfillment(low_job),
         "high_quality_count_fulfillment": _count_fulfillment(high_job),
         "low_cost_render_failures": low_job.get("render_failures_count"),
         "high_quality_render_failures": high_job.get("render_failures_count"),
-        "high_quality_openai_summary_counts": {
-            "selected_ai_score_count": high_openai_summary.get("selected_ai_score_count"),
-            "selected_fallback_score_count": high_openai_summary.get("selected_fallback_score_count"),
-            "selected_not_scored_count": high_openai_summary.get("selected_not_scored_count"),
-            "candidates_sent_to_openai": high_openai_summary.get("candidates_sent_to_openai"),
-            "candidates_sent_preselection": high_openai_summary.get("candidates_sent_preselection"),
-            "candidates_sent_as_finalists": high_openai_summary.get("candidates_sent_as_finalists"),
-        },
     }
     return {
         "comparison": {
@@ -393,7 +355,6 @@ def _job_report_item(job: dict[str, Any]) -> dict[str, Any]:
         "selected_clips": [_clip_report_item(clip) for clip in job["selected_clips"]],
         "candidate_summary": job.get("candidate_summary"),
         "selected_clips_summary": job.get("selected_clips_summary"),
-        "openai_scoring_summary": job.get("openai_scoring_summary"),
         "transcript_summary": job.get("transcript_summary"),
     }
 
@@ -437,9 +398,6 @@ def render_markdown(report: dict[str, Any]) -> str:
         "different_selected_clips_count",
         "exact_selected_clip_id_match_count",
         "average_score_difference",
-        "high_quality_clips_using_ai_score",
-        "high_quality_clips_using_fallback",
-        "high_quality_clips_not_scored",
         "low_cost_backfill_count",
         "high_quality_backfill_count",
         "low_cost_render_failures",
@@ -465,8 +423,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             "## Selected Clip Comparison",
             "",
             "| Type | High Quality Clip | HQ Range | Low Cost Match | LC Range | Overlap | "
-            "HQ final | LC final | AI source | Fallback | Backfill | Title |",
-            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- | --- | --- |",
+            "HQ final | LC final | Backfill | Title |",
+            "| --- | --- | --- | --- | --- | ---: | ---: | ---: | --- | --- |",
         ]
     )
     for row in report["selected_clip_comparisons"]:
@@ -482,29 +440,10 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"{_markdown_value(row.get('overlap_ratio'))} | "
             f"{_markdown_value(high_clip.get('final_score'))} | "
             f"{_markdown_value(low_clip.get('final_score') if low_clip else None)} | "
-            f"{_markdown_value(high_clip.get('openai_score_source'))} | "
-            f"{_markdown_value(high_clip.get('openai_fallback_used'))} | "
             f"{_markdown_value(high_clip.get('selection_reason'))} | "
             f"{_markdown_value(high_clip.get('title'))} |"
         )
 
-    openai = report["jobs"]["high_quality"].get("openai_scoring_summary") or {}
-    lines.extend(["", "## High Quality OpenAI Summary", "", "| Field | Value |", "| --- | ---: |"])
-    for key in (
-        "model",
-        "candidate_limit",
-        "finalist_scoring_limit",
-        "candidates_sent_preselection",
-        "candidates_sent_as_finalists",
-        "candidates_sent_to_openai",
-        "successful_scores",
-        "failed_scores",
-        "fallback_scores",
-        "selected_ai_score_count",
-        "selected_fallback_score_count",
-        "selected_not_scored_count",
-    ):
-        lines.append(f"| `{key}` | {_markdown_value(openai.get(key))} |")
     lines.append("")
     return "\n".join(lines)
 

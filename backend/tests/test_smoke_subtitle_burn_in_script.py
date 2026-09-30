@@ -49,7 +49,6 @@ def test_parse_args_defaults() -> None:
     assert args.ffprobe_bin == "ffprobe"
     assert args.docker_service is None
     assert args.mode is None
-    assert args.openai_candidate_limit == 5
     assert args.timeout == 1800
     assert args.extract_short_frames is True
     assert args.run_audit is True

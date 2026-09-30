@@ -39,8 +39,8 @@ v1 で実現すること:
 - Backend: FastAPI + SQLite
 - Worker: RQ + Redis
 - Video processing: FFmpeg / ffprobe
-- Transcription: faster-whisper first, OpenAI transcription optional
-- AI scoring: OpenAI API Structured Outputs
+- Transcription: faster-whisper with local transcript post-processing
+- AI selection/title suggestions: Codex with ChatGPT login
 
 ## Code Rules
 

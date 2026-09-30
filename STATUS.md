@@ -10526,3 +10526,18 @@ pip check: pass
 - CI: PR #99の実装コミット `0bc0ea7` でbackend（Python 3.11・3.12）とfrontendがすべて成功。
 - 未確認: 実動画での新ロジックによる再選定と映像品質。稼働環境は以前のWIPからbuildされた状態で、今回のDocker再build・反映・実ジョブ再実行は行っていない。
 - 大規模アップデート方針（2026-09-30決定）: (a) 9/27確定事項から実装する。順番は task-165 → 有料API経路の削除 → 触る範囲の分割 → 尺ルール → 不採用理由 → 本数の自動振り分け。別動画からの補完、統合の形、Codexのモデル統一は後で決める。
+
+## 2026-09-30 JST 有料Platform APIの呼び出し経路を削除（task-166）
+
+- 目的: 有料のOpenAI Platform APIを使う実装・設定・画面・検証オプションを廃止し、ローカル処理とChatGPTログインのCodex経路に統一する。既存ジョブと書き出しは保持する。
+- 削除: `backend/app/scoring/openai_score.py`、`backend/app/audio/openai_transcript_correction.py`、`backend/app/audio/benchmark_subtitle_correction.py`、`scripts/benchmark_subtitle_correction_models.py` と専用3テストファイル。runnerのAPI採点プール・finalist追加採点・字幕補正・キー確認、タイトル生成のAPIクライアント/分岐、未実装のAPI文字起こしクラス、SDK依存も削除。
+- 変更ファイル: `backend/app/{schemas.py,legacy_settings.py,api/jobs.py,jobs/runner.py,jobs/summaries.py,jobs/title_hook_suggestions.py,jobs/manual_workflow.py,candidates/codex_initial_selection.py,candidates/manual_ranges.py,candidates/merge_boundaries.py,audio/transcribe_faster_whisper.py,audio/transcript_postprocess.py,audio/benchmark_transcription.py,audio/benchmark_local_subtitle_correction.py,scoring/title_hook_suggestions.py}`、`backend/pyproject.toml`、関連backendテスト、frontendの設定/型/upload/clip再選定/手動範囲/結果カード、`launcher/{app.py,controller.py}`、E2E・audit・compare・smokeスクリプト、README、AGENTSの構成説明、Windows手順2文書とv1チェックリスト、本ファイル。
+- ローカル/Codex: rule scoring、faster-whisper、辞書置換・整形・決定的後処理のJSONを維持。タイトル候補の共通型・検証・プロンプト・代表フレーム抽出とCodex生成を残す。Ollama字幕補正比較とreasoning品質監査はAPIを呼ばないため残し、JSON読み込み関数をローカル比較モジュールへ移した。新しいCodex候補のタイトル出典を `codex` と明記し、過去APIの出典に誤分類しない。
+- 設定: 採点6項目・字幕補正10項目と再選定のAPI採点フラグをschema/画面/スクリプトから削除。`high_quality` で採点を自動ONにする処理と、API採点がないことを品質警告にする集計を廃止。launcherのキー有無表示も廃止。
+- 互換性: `JobSettings` の検証前に旧設定キー（JSONの別名とsnake_case名、過去の別フラグ）を除く。内部の候補履歴・キープID等は維持し、入力の保存済み辞書は変更しない。候補JSONの `ai_score` / `used_ai_score` / `openai_*`、結果の `openaiScoreSource`、旧タイトル出典、旧タイトル依頼/文書のprovider値とprovider省略時の読み込みは維持する。旧providerのqueued依頼も生成はCodexのみで行い、新しい生成結果はproviderをCodexとして記録する。結果カードのAPI採点出典は「過去の採点」と表示。
+- 実DB確認: `storage/autoclipper.db` をSQLite URI `mode=ro` と `query_only=ON` で読み取り、22ジョブ中22件に旧設定キーが残ることを確認。API採点ONと字幕補正ONはいずれも0件。22件すべての保存済み設定が新しい `JobSettings` で検証成功。DB/既存ジョブのデータは変更していない。
+- 残したAPI関連参照: (1) 安全策: launcherの `_configured_openai_keys` とログの伏せ字、Codex子プロセス環境の許可リスト（キーを渡さない）と回帰テスト。(2) README: 「有料のOpenAI Platform APIは使わない」の方針1行のみ。(3) 旧データ互換: `legacy_settings.py`、候補/結果/タイトルの保存済み出典・provider・型・履歴出力とテスト、auditの旧採点summaryの存在による旧レンダリングモード推定。API集計値の取得・表示・呼び出しは残さない。
+- 文字列検索の補足: `git grep -i "openai"` はAPI参照以外にも、CodexのWindowsインストール先の会社名、既存文字起こしの表記を維持する辞書、PNG内の生成メタデータ、STATUSと日付付きの過去仕様/検証記録に一致する。これらはAPI呼び出しではなく、辞書・Codex起動・既存画像・過去記録を壊さないため保持した。現行Windows手順/v1チェックリストのAPI有効化手順は更新済み。アプリ/launcher/scriptsにSDKのimportはないことをASTでも確認。
+- 検証: Python 3.11.9で `python -m pytest` は1173 passed・1 skipped。旧キーを含むGET/再選定/retry、旧採点JSON、旧provider依頼のCodex実行、SDK/実装の不存在、low_cost/high_qualityのローカル書き出し・ZIP・字幕保存を確認。frontend全16テスト・lint・typecheck・build、`git diff --check` 成功。
+- lintの環境差: 主作業フォルダで `ruff check . ../launcher ../scripts` を実行すると、Git管理外の `scripts/make_plotwith_solar_finished_variants.py` に既存F841が出る。このファイルは変更せず、PR対象のみのクリーンなcheckoutで指定コマンドを確認する。
+- 未確認: クリーンなcheckoutでのlint、CI（Python 3.11・3.12とfrontend）、稼働Dockerでの実動画処理と画面表示。Dockerのbuild・再起動・反映は行っていない。

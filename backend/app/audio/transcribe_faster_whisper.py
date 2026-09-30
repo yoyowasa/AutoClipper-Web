@@ -333,11 +333,6 @@ def _transcribe_pcm_wav_in_chunks(
     return _deduplicate_overlapping_segments(shifted_segments), len(starts)
 
 
-class OpenAITranscriptionEngine:
-    def transcribe(self, wav_path: str | Path) -> list[TranscriptSegment]:
-        raise NotImplementedError("OpenAI transcription is not implemented yet")
-
-
 def _float_or_none(value: Any) -> float | None:
     if value is None:
         return None

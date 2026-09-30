@@ -58,7 +58,7 @@ function readableToken(value: string | null | undefined): string {
 
 function scoreSourceLabel(item: ResultExportItem): string {
   if (item.openaiScoreSource) {
-    return readableToken(item.openaiScoreSource);
+    return `過去の採点: ${readableToken(item.openaiScoreSource)}`;
   }
   if (item.aiScore !== null) {
     return "AI";

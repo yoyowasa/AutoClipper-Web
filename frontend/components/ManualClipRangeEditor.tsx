@@ -96,8 +96,6 @@ function ManualRangeGroup({
         ? {
             ...next,
             initialSelectionProvider: "legacy",
-            useOpenAIScoring: false,
-            ensureSelectedOpenAIScored: false
           }
         : next
     );

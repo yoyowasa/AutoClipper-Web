@@ -22,12 +22,10 @@ def test_job_settings_accepts_complete_manual_ranges_and_disables_unused_openai(
                 {"startSeconds": 65, "endSeconds": 82},
                 {"startSeconds": 120.5, "endSeconds": 145},
             ],
-            "useOpenAIScoring": True,
         }
     )
 
     assert len(settings.short_clip_time_ranges) == 2
-    assert settings.use_openai_scoring is False
 
 
 def test_automatic_settings_keep_recommendations_only_for_unlocked_output_type() -> None:
@@ -35,7 +33,6 @@ def test_automatic_settings_keep_recommendations_only_for_unlocked_output_type()
         {
             "normalClipCount": 1,
             "shortCount": 2,
-            "useOpenAIScoring": True,
         },
         manual_normal=True,
         manual_short=False,
@@ -44,17 +41,14 @@ def test_automatic_settings_keep_recommendations_only_for_unlocked_output_type()
         {
             "normalClipCount": 0,
             "shortCount": 2,
-            "useOpenAIScoring": True,
         },
         manual_normal=False,
         manual_short=True,
     )
 
     assert mixed["normalClipCount"] == 0
+    assert manual_only["shortCount"] == 0
     assert mixed["shortCount"] == 2
-    assert mixed["useOpenAIScoring"] is True
-    assert manual_only["useOpenAIScoring"] is False
-    assert manual_only["ensureSelectedOpenAIScored"] is False
 
 
 @pytest.mark.parametrize(

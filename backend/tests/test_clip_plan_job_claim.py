@@ -44,7 +44,6 @@ def test_clip_plan_action_claim_rejects_second_request_before_writing(
             "excludeIntroOutro": True,
             "excludePromotionalContent": False,
             "selectionPolicy": "fill_requested",
-            "useOpenAIScoring": False,
         }
         dependency = get_enqueue_clip_plan_reselection
     else:

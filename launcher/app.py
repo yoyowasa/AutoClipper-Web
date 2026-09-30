@@ -51,7 +51,6 @@ class LauncherApp:
         self.backend_var = tk.StringVar(value="確認中")
         self.frontend_var = tk.StringVar(value="確認中")
         self.docker_var = tk.StringVar(value="確認中")
-        self.openai_var = tk.StringVar(value="確認中")
         self.disk_var = tk.StringVar(value="確認中")
         self.runtime_profile_var = tk.StringVar(value="確認中")
         self.transcription_var = tk.StringVar(value="確認中")
@@ -118,12 +117,8 @@ class LauncherApp:
         ttk.Label(status_frame, textvariable=self.docker_var).grid(
             row=3, column=2, sticky=tk.W
         )
-        ttk.Label(status_frame, text="OpenAI key").grid(
-            row=2, column=3, sticky=tk.W, pady=(12, 0)
-        )
-        ttk.Label(status_frame, textvariable=self.openai_var).grid(
-            row=3, column=3, sticky=tk.W
-        )
+
+
         ttk.Label(status_frame, text="Disk free").grid(
             row=4, column=0, sticky=tk.W, pady=(12, 0)
         )
@@ -304,9 +299,6 @@ class LauncherApp:
         self.frontend_var.set("ready" if status.frontend_ready else "not ready")
         self.docker_var.set(
             "ready" if report.daemon_ready and report.compose_available else "not ready"
-        )
-        self.openai_var.set(
-            "configured" if report.openai_key_configured else "not configured"
         )
         self.disk_var.set(f"{report.disk_free_gb:.1f} GB")
         actual_profile = status.worker_profile

@@ -158,9 +158,7 @@ def _clip_items(selected_payload: dict[str, Any]) -> list[dict[str, Any]]:
             clip["ai_score"] = _number(raw.get("ai_score"))
             clip["final_score"] = _number(raw.get("final_score"))
             clip["below_quality_threshold"] = _bool(raw.get("below_quality_threshold"))
-            clip["openai_fallback_used"] = _bool(raw.get("openai_fallback_used"))
             clip["used_ai_score"] = _bool(raw.get("used_ai_score"))
-            clip["openai_scored"] = _bool(raw.get("openai_scored"))
             clips.append(clip)
     return clips
 
@@ -766,8 +764,6 @@ def _quality_warnings(
         warnings.append("below_quality_threshold")
     if "backfill" in str(clip.get("selection_reason") or ""):
         warnings.append("backfilled_clip")
-    if high_quality_mode and not clip.get("used_ai_score") and not clip.get("openai_fallback_used"):
-        warnings.append("rule_only_clip_in_high_quality_mode")
     if duration is None or duration <= 0:
         warnings.append("invalid_duration")
     elif (
@@ -790,8 +786,8 @@ def _quality_warnings(
     elif clip_type == "short" and (probe.width, probe.height) != (1080, 1920):
         warnings.append("short_resolution_not_1080x1920")
     overlay_title = _plain_text(clip.get("overlay_title") or metadata.get("overlay_title"))
-    overlay_expected = _overlay_title_expected(clip, metadata, high_quality_mode=high_quality_mode)
     title_dialogue_count = int(subtitle.get("title_dialogue_count", 0) or 0)
+    overlay_expected = _overlay_title_expected(clip, metadata, high_quality_mode=high_quality_mode)
     if clip_type == "short" and overlay_expected and not overlay_title:
         warnings.append("missing_overlay_title")
     if clip_type == "short" and overlay_expected and overlay_title and title_dialogue_count <= 0:
@@ -933,8 +929,8 @@ def _clip_report(
     title = clip.get("title") or metadata.get("title")
     title_source = clip.get("title_source") or metadata.get("title_source")
     overlay_title = clip.get("overlay_title") or metadata.get("overlay_title")
-    overlay_title_mode = _overlay_title_mode(clip, metadata)
     overlay_title_expected = _overlay_title_expected(clip, metadata, high_quality_mode=high_quality_mode)
+    overlay_title_mode = _overlay_title_mode(clip, metadata)
     overlay_title_rendered = _metadata_bool(clip, metadata, "overlay_title_rendered")
     if overlay_title_rendered is None:
         overlay_title_rendered = bool(subtitle.get("title_dialogue_count", 0))
@@ -981,9 +977,7 @@ def _clip_report(
         "selection_reason": clip.get("selection_reason"),
         "below_quality_threshold": clip.get("below_quality_threshold"),
         "quality_warning": clip.get("quality_warning"),
-        "openai_score_source": clip.get("openai_score_source"),
         "used_ai_score": clip.get("used_ai_score"),
-        "openai_fallback_used": clip.get("openai_fallback_used"),
         "subtitle_file_path": str(subtitle_path) if subtitle_path is not None else None,
         "container_subtitle_file_path": container_subtitle_path,
         "external_subtitle_autoload_risk_files": [str(path) for path in external_subtitle_autoload_risks],
@@ -1026,12 +1020,12 @@ def build_audit_report(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
     candidate_summary = read_json(output_dir / "candidate_summary.json", {})
     candidate_generation_summary = read_json(output_dir / "candidate_generation_summary.json", {})
     transcript_segments = read_json(output_dir / "transcript_segments.json", [])
-    openai_summary = read_json(output_dir / "openai_scoring_summary.json", None)
     if not isinstance(transcript_segments, list):
         transcript_segments = []
     transcript_segments = [segment for segment in transcript_segments if isinstance(segment, dict)]
     export_metadata = _load_export_metadata(output_dir)
-    high_quality_mode = isinstance(openai_summary, dict)
+    # Old exports used this artifact to record high-quality rendering; no scores are audited.
+    high_quality_mode = (output_dir / "openai_scoring_summary.json").is_file()
 
     clip_reports = [
         _clip_report(
@@ -1064,7 +1058,6 @@ def build_audit_report(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
         "audit": {
             "job_id": job_id,
             "output_dir": str(output_dir),
-            "high_quality_mode": high_quality_mode,
         },
         "aggregate_summary": {
             "generated_normal_count": _count_by_type(clip_reports, "normal"),
@@ -1082,7 +1075,6 @@ def build_audit_report(job_id: str, *, root: Path = ROOT) -> dict[str, Any]:
             "candidate_generation_summary": (
                 candidate_generation_summary if isinstance(candidate_generation_summary, dict) else {}
             ),
-            "openai_scoring_summary": openai_summary if isinstance(openai_summary, dict) else None,
         },
     }
 
@@ -1108,7 +1100,6 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         f"- job: `{audit['job_id']}`",
         f"- output dir: `{audit['output_dir']}`",
-        f"- high quality mode: `{audit['high_quality_mode']}`",
         "",
         "## Aggregate Summary",
         "",

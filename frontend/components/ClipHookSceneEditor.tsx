@@ -356,7 +356,7 @@ export function ClipHookSceneEditor({
           <p
             className={`${compact ? "mt-1 leading-4" : "mt-2"} text-xs text-neutral-500`}
           >
-            対象clipの軽量プレビューだけを作り直します。OpenAI APIは使いません。
+            対象clipの軽量プレビューだけを作り直します。
           </p>
         </>
       )}

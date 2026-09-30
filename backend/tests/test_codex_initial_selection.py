@@ -760,6 +760,9 @@ def test_valid_response_converts_to_existing_candidate_selection() -> None:
     assert len(result.selection.normal_clips) == 1
     assert len(result.selection.shorts) == 1
     assert result.selection.normal_clips[0].selection_reason == "codex_direct"
+    assert result.selection.normal_clips[0].title_source == "codex"
+    assert result.selection.shorts[0].title_source == "codex"
+    assert result.selection.normal_clips[0].openai_score_source is None
     assert result.selection.normal_clips[0].final_score == 91
     assert result.selection.shorts[0].transcript_text
     assert result.selection.shorts[0].moment_key == "surprise_reaction"

@@ -415,7 +415,6 @@ def test_preflight_does_not_warn_about_missing_openai_key(tmp_path: Path) -> Non
 
     report = controller.preflight()
 
-    assert report.openai_key_configured is False
     assert not any("OPENAI_API_KEY未設定" in warning for warning in report.warnings)
     assert all("sk-" not in warning for warning in report.warnings)
 
@@ -428,9 +427,8 @@ def test_preflight_accepts_and_redacts_openai_key_from_process_environment(
         make_project(tmp_path, env_text="OPENAI_API_KEY=\n"), FakeRunner()
     )
 
-    report = controller.preflight()
+    controller.preflight()
 
-    assert report.openai_key_configured is True
     assert controller.redact("key=environment-secret") == "key=[REDACTED]"
 
 

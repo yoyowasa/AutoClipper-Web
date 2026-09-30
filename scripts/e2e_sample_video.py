@@ -146,7 +146,6 @@ def run_e2e(
                 "shortStepSeconds": 5,
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
-                "useOpenAIScoring": False,
                 "burnSubtitles": True,
                 "normalizeAudio": False,
                 "shortLayout": "center_crop",

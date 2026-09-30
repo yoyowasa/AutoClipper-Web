@@ -266,6 +266,10 @@ def raw_transcript_output_path(output_dir: str | Path) -> Path:
     return Path(output_dir) / RAW_TRANSCRIPT_FILENAME
 
 
+def deterministic_transcript_output_path(output_dir: str | Path) -> Path:
+    return Path(output_dir) / "deterministic_transcript_segments.json"
+
+
 def transcript_postprocess_summary_path(output_dir: str | Path) -> Path:
     return Path(output_dir) / TRANSCRIPT_POSTPROCESS_SUMMARY_FILENAME
 

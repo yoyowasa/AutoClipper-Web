@@ -269,7 +269,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         "# Transcription Accuracy Benchmark",
         "",
-        "Raw faster-whisper and deterministic post-processing are compared. OpenAI correction is not applied.",
+        "Raw faster-whisper and deterministic post-processing are compared.",
         "",
         "| Profile | Runtime | Raw CER | Deterministic CER | Keywords | Suspicious | Calls | Token proxy | RTF | Transcribe | Peak VRAM |",
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -434,7 +434,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         "reference_file": str(args.reference_file.resolve()) if args.reference_file else None,
         "post_processing_applied": False,
         "deterministic_post_processing_evaluated": True,
-        "openai_correction_applied": False,
         "runs": runs,
     }
     json_path = args.output_dir / "transcription_benchmark_report.json"

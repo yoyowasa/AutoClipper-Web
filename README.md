@@ -1,5 +1,7 @@
 # AutoClipper Web
 
+有料のOpenAI Platform APIは使わない。CodexはChatGPTログインの経路を使用する。
+
 ## 日本語で始める（Windows）
 
 **[Windows導入・起動手順（日本語）](docs/WINDOWS_SETUP_JA.md)** — 必要ソフト、GitHubからの取得、CPUでの初回起動、Codex連携、更新・設定移行を説明しています。
@@ -26,7 +28,7 @@ Full timeline editing, approve/reject workflow management, auth, billing, and so
 - Worker: RQ
 - Queue: Redis
 - Database: SQLite
-- Processing: FFmpeg / ffprobe, faster-whisper, optional OpenAI scoring
+- Processing: FFmpeg / ffprobe, faster-whisper, local rule scoring and Codex selection
 - Storage: local filesystem under `storage/`
 
 ## Requirements
@@ -135,8 +137,7 @@ transcription profile selected.
 ## Local subtitle correction benchmark
 
 Task 68 provides an offline Ollama benchmark for `qwen3.5:9b` and optional `qwen3:14b`.
-It evaluates deterministic safety escalation and projected OpenAI text reduction without
-changing the pipeline or calling OpenAI. Both tested models failed the safety or utility gates,
+It evaluates deterministic safety escalation without changing the pipeline. Both tested models failed the safety or utility gates,
 so local LLM correction is not integrated. See `docs/TASK68_LOCAL_LLM_BENCHMARK.md`.
 
 ## Health Checks
@@ -210,8 +211,8 @@ python scripts/v1_smoke_check.py --job-id JOB_ID
 ```
 
 This verifies backend health, frontend reachability, results metadata, subtitle
-and ZIP download endpoints, and local subtitle sidecar autoload risk. It does
-not require `OPENAI_API_KEY` by default.
+and ZIP download endpoints, and local subtitle sidecar autoload risk. Processing
+uses local functions and the Codex host bridge.
 
 ## Upload A Small Test Video
 
@@ -386,7 +387,7 @@ python scripts/e2e_real_video.py `
   --selection-policy fill_requested
 ```
 
-For a 10 minute spoken video, use a longer timeout and keep OpenAI scoring off:
+For a 10 minute spoken video, use a longer timeout and keep local scoring enabled:
 
 ```powershell
 python scripts/e2e_real_video.py `
@@ -402,7 +403,7 @@ python scripts/e2e_real_video.py `
   --timeout 3600
 ```
 
-For a 30 minute spoken video, use the built-in validation profile. It keeps OpenAI scoring off by default and expands to `normalCount=2`, `shortCount=3`, `normalMinDuration=90`, `normalMaxDuration=600`, `shortMinDuration=20`, `shortMaxDuration=75`, `selectionPolicy=fill_requested`, `mode=low_cost`, and `timeout=7200`.
+For a 30 minute spoken video, use the built-in validation profile. It keeps local scoring enabled by default and expands to `normalCount=2`, `shortCount=3`, `normalMinDuration=90`, `normalMaxDuration=600`, `shortMinDuration=20`, `shortMaxDuration=75`, `selectionPolicy=fill_requested`, `mode=low_cost`, and `timeout=7200`.
 
 Recommended input:
 
@@ -434,9 +435,7 @@ python scripts/e2e_real_video.py `
   --timeout 7200
 ```
 
-Expected runtime depends on CPU/GPU, disk speed, first-run faster-whisper model download, and render count. Start with the 30 minute profile before enabling OpenAI scoring.
-
-For a 1 hour spoken video, keep OpenAI scoring off first and use a longer timeout. Candidate generation is bounded by time buckets and chunked generation, so this path should reach selection/rendering instead of building unbounded raw candidates in memory.
+For a 1 hour spoken video, keep local scoring enabled first and use a longer timeout. Candidate generation is bounded by time buckets and chunked generation, so this path should reach selection/rendering instead of building unbounded raw candidates in memory.
 
 ```powershell
 python scripts/e2e_real_video.py `
@@ -509,7 +508,7 @@ The JSON file must be an object:
 
 ```json
 {
-  "オープンAI": "OpenAI",
+  "チャットGPT": "ChatGPT",
   "ニューズピックス": "NewsPicks"
 }
 ```
@@ -557,279 +556,19 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml exec -T worker `
   --profile large-v3:ja:cuda:float16 `
   --profile turbo:ja:cuda:float16 `
   --reference-file /app/storage/temp/transcription_benchmark/reference.txt `
-  --keyword OpenAI `
+  --keyword ChatGPT `
   --output-dir /app/storage/outputs/transcription_benchmarks/sample
 ```
-
-Omit `--profile` to run the default benchmark matrix: `base:auto`, `base:ja`, `small:ja`, and `medium:ja`.
-The report contains normalized Japanese CER, keyword accuracy, segment/timestamp checks,
-RTF, GPU time, peak VRAM proxy, suspicion target count, API-call estimate, and a local
-context-inclusive input-token proxy. The token proxy excludes prompt, schema, reasoning,
-and output tokens; actual OpenAI usage still requires an API benchmark.
-Per-profile raw transcript JSON is preserved. Transcript dictionary replacement and other post-processing are not applied.
-First execution may include model download time; rerun after models are cached before comparing runtime.
 
 The Task 59 reference result is documented in `docs/TRANSCRIPTION_BENCHMARK_2026-07-10.md`.
 The Task 67 GPU result is documented in `docs/GPU_TRANSCRIPTION_BENCHMARK_2026-07-19.md`.
 On the tested RTX 5070 Ti, `turbo + ja + cuda + float16` is the current GPU recommendation.
 It reduces correction demand but does not eliminate transcription errors or the need for
-optional OpenAI correction on important material.
-
-### OpenAI subtitle correction
-
-既定の構成ではキーをコンテナへ渡さない。OpenAI機能は使わない前提。
-
-OpenAI subtitle correction is optional and disabled by default. It sends deterministic transcript text, nearby text context, confidence, and preferred terms only. It does not send audio, video, or rendered files. Segment count, order, and timestamps are preserved.
-
-Set `OPENAI_API_KEY` in `.env`, rebuild the services, then enable correction from the Upload UI or the E2E script:
-
-```powershell
-python scripts/e2e_real_video.py `
-  --video path\to\spoken_sample.mp4 `
-  --mode low_cost `
-  --whisper-model-size small `
-  --transcription-language ja `
-  --subtitle-correction-mode openai `
-  --subtitle-correction-scope suspicious `
-  --subtitle-correction-suspicion-threshold 0.4 `
-  --subtitle-correction-model gpt-5.5 `
-  --subtitle-correction-reasoning-effort default `
-  --subtitle-correction-min-confidence 0.9 `
-  --subtitle-correction-batch-size 40 `
-  --subtitle-correction-context-segments 2
-```
-
-The worker preserves each correction stage:
-
-```text
-raw_transcript_segments.json
-deterministic_transcript_segments.json
-openai_corrected_transcript_segments.json
-transcript_segments.json
-transcript_correction_summary.json
-transcript_correction_diff.md
-transcript_suspicion_segments.json
-transcript_suspicion_summary.json
-subtitle_correction_targets.json
-```
-
-`subtitleCorrectionScope=all` remains the compatibility default and sends every segment. Set it to `suspicious` to score segments locally and send only target indices plus a bounded read-only context set. Non-target segments cannot be changed. If no target is found, the correction uses zero API calls. If the local filter fails, correction is skipped and the deterministic transcript is retained; the worker never silently switches to all-segment correction.
-
-Suspicious selection keeps the configured score threshold and can also use narrowly targeted rescue signals for known malformed ASR expressions, glossary aliases, and nearby glossary-anchored spelling variants. Rescue signals only add OpenAI correction targets; they never replace transcript text locally. Supply additional canonical terms through the API-only `transcriptCorrectionGlossary` string array. Suspicion artifacts record `selected`, `selection_source`, and `rescue_reasons`; the summary records score-selected and rescue-selected counts separately.
-
-When `subtitleCorrectionFallbackEnabled=true`, transient API or schema failures use the complete deterministic transcript and record `fallback_used=true`; partial OpenAI corrections are discarded. Disable fallback only when the job must fail with `openai_subtitle_correction_failed`. Missing `OPENAI_API_KEY` fails early with `openai_configuration_missing`.
-
-While correction is running, `GET /api/jobs/{job_id}` returns `status=correcting_subtitles`. Progress details contain only counters and never subtitle text or credentials:
-
-```json
-{
-  "stage": "correcting_subtitles",
-  "stageProgress": 47,
-  "correctionBatchesCompleted": 8,
-  "correctionBatchesTotal": 17,
-  "correctionRetryCount": 1,
-  "correctionTargetsCompleted": 143,
-  "correctionTargetsTotal": 412,
-  "transcriptSegmentCount": 1695
-}
-```
-
-The job page shows this stage percentage separately from overall pipeline progress. Batch completion and retries refresh the worker heartbeat. Correction-off jobs keep the existing `transcribing` to `detecting_scenes` transition.
-
-`subtitleCorrectionReasoningEffort=default` preserves compatibility by omitting the Responses API
-`reasoning` parameter. Explicit values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and
-`max`; accepted values depend on the selected model. Correction summaries separate `output_tokens`
-into `reasoning_tokens` and `visible_output_tokens` when the API returns usage details.
-
-Use the fixed-transcript benchmark before changing the production default:
-
-```powershell
-python scripts/benchmark_subtitle_correction_models.py `
-  --phase probe `
-  --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
-  --targets-file storage/outputs/JOB_ID/subtitle_correction_targets.json `
-  --probe-target-index 0 `
-  --output-dir storage/temp/subtitle_correction_probe
-
-python scripts/benchmark_subtitle_correction_models.py `
-  --phase benchmark `
-  --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
-  --targets-file storage/outputs/JOB_ID/subtitle_correction_targets.json `
-  --probe-report storage/temp/subtitle_correction_probe/subtitle_correction_probe_report.json `
-  --batch-size 100 `
-  --context-segments 2 `
-  --output-dir storage/temp/subtitle_correction_benchmark
-```
-
-The probe sends one text segment per profile. The benchmark sends transcript text/features only,
-never video or audio. Reports include actual API token usage, reasoning/visible output token splits,
-processing time, schema/fallback counts, timestamp preservation, CER when a reference is supplied,
-proper-noun matches, and a usage-based cost estimate. See
-`docs/SUBTITLE_CORRECTION_MODEL_BENCHMARK.md`.
-
-Audit `gpt-5.5:default` and `gpt-5.5:none` differences without new API calls:
-
-```powershell
-python scripts/audit_reasoning_quality.py prepare `
-  --segments storage/outputs/JOB_ID/deterministic_transcript_segments.json `
-  --default-changes storage/temp/BENCHMARK/gpt-5_5_default_changes.json `
-  --none-changes storage/temp/BENCHMARK/gpt-5_5_none_changes.json `
-  --video storage/uploads/VIDEO_ID.mp4 `
-  --output-dir storage/temp/reasoning_quality_audit `
-  --extract-audio `
-  --docker-service worker `
-  --storage-root storage
-```
-
-The ignored review package contains a UTF-8 CSV, JSON context, and per-index WAV snippets. Correctness
-labels require listening to the audio; the script does not infer them. See
-`docs/REASONING_QUALITY_AUDIT.md`.
-
-The 58-minute Task 65 audit stopped after 29 prioritized audio reviews because the product decision
-was already conclusive. `gpt-5.5:none` missed 17 corrections that reviewers judged useful from
-`gpt-5.5:default`; even the most favorable remaining-shared-index assumption limits its useful
-recall to at most 87.3%, below the 95% decision gate. Five harmful `none` corrections were observed,
-including four repeated `キオクシア -> NVIDIA` substitutions. Keep `default` as the production
-recommendation. Treat `none` as an experimental cost-saving option whose important subtitles require
-manual verification. The full-population harmful-rate estimate is deferred.
-
-For a high-quality OpenAI Structured Outputs scoring check, put an existing key in `.env`:
-
-```powershell
-OPENAI_API_KEY=<your_openai_api_key>
-docker compose up -d --build
-```
-
-Then run a small, cost-bounded E2E:
-
-```powershell
-python scripts/e2e_real_video.py `
-  --video path\to\spoken_sample.mp4 `
-  --normal-count 1 `
-  --short-count 1 `
-  --mode high_quality `
-  --use-openai-scoring true `
-  --openai-candidate-limit 20 `
-  --openai-model gpt-5.5 `
-  --timeout 1800
-```
-
-For a 30 minute high-quality API-path validation, use the cost-bounded profile:
-
-```powershell
-python scripts/e2e_real_video.py `
-  --video path\to\spoken_30min_sample.mp4 `
-  --validation-profile 30min_high_quality
-```
-
-Equivalent explicit command:
-
-```powershell
-python scripts/e2e_real_video.py `
-  --video path\to\spoken_30min_sample.mp4 `
-  --validation-profile 30min `
-  --mode high_quality `
-  --use-openai-scoring true `
-  --openai-candidate-limit 20 `
-  --openai-fallback-to-rule-score true `
-  --ensure-selected-openai-scored true `
-  --openai-finalist-scoring-limit 7 `
-  --normal-count 2 `
-  --short-count 3 `
-  --selection-policy fill_requested `
-  --timeout 7200
-```
-
-Cost controls:
-
-- `--openai-candidate-limit` defaults to `20` in the E2E script.
-- Backend default `openaiCandidateLimit` is `40`.
-- The worker sends candidate transcript text plus audio/visual feature summaries only. It does not send uploaded video files or rendered MP4 files.
-- The 30 minute high-quality profile first sends only the limited OpenAI preselection pool. It does not send all generated candidates.
-- When `ensureSelectedOpenAIScored=true`, selected rule-only finalists are scored on demand before rendering, up to `openaiFinalistScoringLimit`.
-- Use `--use-openai-scoring false` with `--mode high_quality` to exercise the rest of high-quality settings without API calls.
-
-The script:
-
-- uploads through `POST /api/videos/upload`
-- creates a job through `POST /api/jobs`
-- explicitly sets `e2eFixtureTranscript=false`
-- waits for completion
-- validates `storage/outputs/{job_id}/transcript_segments.json`
-- fails if transcript text is empty, too short, or matches the synthetic fixture marker
-- validates `selected_clips.json` when clips are generated
-- downloads the ZIP
-- downloads generated MP4 files
-- probes downloaded MP4 files through worker `ffprobe`
-- verifies short MP4 files are `1080x1920`
-- verifies normal MP4 files have valid dimensions and a valid duration close to the export metadata
-- validates `candidate_summary.json`, `selected_clips_summary.json`, and `selected_clips.json`
-- prints runtime metrics: upload, transcription, scene detection, candidate generation, scoring, selection, normal render, short render, ZIP packaging, and total time
-- prints pipeline metrics: video duration, transcript length, candidate counts, candidate generation chunks/raw/kept/dropped/caps, hard-gate counts, selected counts, backfilled count, render failure count, and ZIP size
-- validates `openai_scoring_summary.json` when OpenAI scoring is enabled and prints model, candidate limit, finalist limit, preselection/finalist call counts, success/failure/fallback counts, schema failures, latency, text-size proxy, and selected clip score source counts
-- validates `transcript_correction_summary.json` and timestamp/count preservation when OpenAI subtitle correction is enabled
-- prints diagnostic summary JSON files when they exist
-
-Expected outputs:
-
-```text
-storage/outputs/{job_id}/raw_transcript_segments.json
-storage/outputs/{job_id}/deterministic_transcript_segments.json
-storage/outputs/{job_id}/openai_corrected_transcript_segments.json
-storage/outputs/{job_id}/transcript_segments.json
-storage/outputs/{job_id}/transcript_summary.json
-storage/outputs/{job_id}/transcript_postprocess_summary.json
-storage/outputs/{job_id}/transcript_correction_summary.json
-storage/outputs/{job_id}/transcript_correction_diff.md
-storage/outputs/{job_id}/subtitle_correction_progress.json
-storage/outputs/{job_id}/audio_feature_summary.json
-storage/outputs/{job_id}/candidate_generation_summary.json
-storage/outputs/{job_id}/candidate_summary.json
-storage/outputs/{job_id}/openai_scoring_summary.json
-storage/outputs/{job_id}/rejection_summary.json
-storage/outputs/{job_id}/selected_clips_summary.json
-storage/outputs/{job_id}/selected_clips.json
-storage/outputs/{job_id}/download.zip
-storage/temp/e2e_real_{job_id}.zip
-storage/temp/e2e_real_{job_id}_*.mp4
-```
-
-`openai_corrected_transcript_segments.json` is written only when `subtitleCorrectionMode=openai`. The correction summary and diff are written for both enabled and disabled runs so the selected path remains auditable.
-
-Troubleshooting:
-
-- `audio_silent_or_unusable`: the audio track is silent, near-silent, or has too little measurable speech.
-- `transcript_unusable`: faster-whisper ran, but the transcript was empty, too short, too low confidence, or repeated low-information text.
-- `transcription_empty`: use a clearer spoken sample with audible voice.
-- `no_candidates_found`: use a longer sample, ideally at least 90 seconds if normal clips are requested.
-- `candidate_generation_memory_limit`: candidate generation exceeded `maxCandidateGenerationMemoryMb`. Lower `--max-kept-candidates-per-type` or `--max-candidates-per-time-bucket`, then retry.
-- `worker_terminated_unexpectedly`: the worker heartbeat stopped while a job was running. Check `docker compose logs worker` for RQ work-horse termination, signal 9, or container restart.
-- `quality gate rejection`: check `selected_clips.json` and `rejection_summary.json`; in `strict_quality` mode, low scores can intentionally leave selected outputs at zero.
-- `openai_configuration_missing`: `OPENAI_API_KEY` is missing in the worker container. Update `.env`, then recreate services with `docker compose up -d --build`.
-- `openai_subtitle_correction_failed`: subtitle correction failed and fallback was disabled. Check `transcript_correction_summary.json`, `transcript_correction_diff.md`, and worker logs.
-- `openai_scoring_failed`: OpenAI scoring failed and fallback was disabled. Check `openai_scoring_summary.json` and `docker compose logs worker`.
-- OpenAI rate limit / timeout: lower `--openai-candidate-limit`, retry later, or use `--openai-fallback-to-rule-score true`.
-- Structured output validation failure: check `openai_scoring_summary.json` error fields and keep the default strict schema.
-- `render failure`: check `render_failures.json` and `docker compose logs worker`.
-- 30 minute timeout: rerun with a larger `--timeout` if the worker is still making progress in `docker compose logs worker`.
-- First run can be slow because faster-whisper may download the model.
-- Use `--short-count 1 --normal-count 0` for a shorter first real run on a 1 minute sample.
+optional remote correction on important material.
 
 ## Job Settings
 
 `POST /api/jobs` accepts advanced duration settings in `settings`:
-
-The Upload UI can generate both formats, normal clips only, or shorts only.
-For API requests, set the unused count to `0`; at least one of
-`normalClipCount` or `shortCount` must remain greater than `0`. Subtitle font,
-size, outline, colors, position, and edge margin can be configured independently
-for normal clips and shorts. Color values use `#RRGGBB`.
-Clip selection can also be configured independently for normal clips and shorts:
-choose a preset (`auto`, `highlights`, `funny`, `important`, `emotional`, or
-`informative`) and optionally provide free-text guidance. Local scoring matches
-transcript terms and deterministic content signals. Enable OpenAI scoring only
-when semantic interpretation of abstract guidance is required; it remains off by
-default and the Upload UI limits the initial pool to 8 candidates.
 
 ```json
 {
@@ -859,12 +598,6 @@ default and the Upload UI limits the initial pool to 8 candidates.
     "excludePromotionalContent": false,
     "selectionPolicy": "fill_requested",
     "crossTypeOverlapDedupe": false,
-    "useOpenAIScoring": false,
-    "openaiCandidateLimit": 40,
-    "openaiModel": "gpt-5.5",
-    "openaiFallbackToRuleScore": true,
-    "ensureSelectedOpenAIScored": true,
-    "openaiFinalistScoringLimit": 7,
     "enableBoundaryRefinement": true,
     "boundaryLeadingPaddingSeconds": 0.4,
     "boundaryTrailingPaddingSeconds": 0.6,
@@ -876,22 +609,12 @@ default and the Upload UI limits the initial pool to 8 candidates.
     "transcriptNormalizePunctuation": true,
     "useDefaultTranscriptDictionary": true,
     "transcriptReplacements": {
-      "オープンAI": "OpenAI"
+      "チャットGPT": "ChatGPT"
     },
     "whisperModelSize": "base",
     "transcriptionLanguage": "ja",
     "transcriptionDevice": "cpu",
     "transcriptionComputeType": "auto",
-    "subtitleCorrectionMode": "off",
-    "subtitleCorrectionScope": "all",
-    "transcriptCorrectionGlossary": [],
-    "subtitleCorrectionSuspicionThreshold": 0.4,
-    "subtitleCorrectionModel": "gpt-5.5",
-    "subtitleCorrectionReasoningEffort": "default",
-    "subtitleCorrectionMinConfidence": 0.9,
-    "subtitleCorrectionBatchSize": 40,
-    "subtitleCorrectionContextSegments": 2,
-    "subtitleCorrectionFallbackEnabled": true,
     "normalSubtitleFontName": "Noto Sans CJK JP",
     "normalSubtitleFontSize": 65,
     "normalSubtitleOutline": 4,
@@ -934,12 +657,6 @@ Production-safe defaults remain:
 - `excludePromotionalContent`: `false`
 - `selectionPolicy`: `fill_requested`
 - `crossTypeOverlapDedupe`: `false`
-- `useOpenAIScoring`: `false`
-- `openaiCandidateLimit`: `40`
-- `openaiModel`: `gpt-5.5`
-- `openaiFallbackToRuleScore`: `true`
-- `ensureSelectedOpenAIScored`: `true` in `high_quality`, `false` in `low_cost`
-- `openaiFinalistScoringLimit`: requested output count plus a small buffer by default
 - `enableBoundaryRefinement`: `true`
 - `boundaryLeadingPaddingSeconds`: `0.4`
 - `boundaryTrailingPaddingSeconds`: `0.6`
@@ -955,16 +672,6 @@ Production-safe defaults remain:
 - `transcriptionLanguage`: `ja`（固定）
 - `transcriptionDevice`: `cpu`
 - `transcriptionComputeType`: `auto`
-- `subtitleCorrectionMode`: `off`
-- `subtitleCorrectionScope`: `all`
-- `transcriptCorrectionGlossary`: `[]`
-- `subtitleCorrectionSuspicionThreshold`: `0.4`
-- `subtitleCorrectionModel`: `gpt-5.5`
-- `subtitleCorrectionReasoningEffort`: `default` (omit the API reasoning parameter)
-- `subtitleCorrectionMinConfidence`: `0.9`
-- `subtitleCorrectionBatchSize`: `40`
-- `subtitleCorrectionContextSegments`: `2`
-- `subtitleCorrectionFallbackEnabled`: `true`
 
 For development and E2E checks with shorter spoken videos, set `normalMinDuration` to `20` or `30` and keep `normalMaxDuration` at or below the input duration.
 
@@ -991,11 +698,10 @@ Transcript post-processing:
 - Keeps the original faster-whisper output in `raw_transcript_segments.json`.
 - Writes corrected text to the existing `transcript_segments.json`.
 - Writes `transcript_postprocess_summary.json` with changed segment counts, before/after character counts, replacement counts, and normalization settings.
-- Default processing is local and deterministic: Unicode NFKC normalization, whitespace cleanup, repeated punctuation cleanup, and a conservative dictionary for common terms such as `OpenAI`, `ChatGPT`, `YouTube`, `NewsPicks`, and `ReHacQ`.
-- Add project-specific replacements with `transcriptReplacements`; this does not call OpenAI.
+- Default processing is local and deterministic: Unicode NFKC normalization, whitespace cleanup, repeated punctuation cleanup, and a conservative dictionary for common terms such as `ChatGPT`, `YouTube`, `NewsPicks`, and `ReHacQ`.
+- Add project-specific replacements with `transcriptReplacements`; this runs locally.
 - Disable with `enableTranscriptPostProcessing=false` when raw transcription text is needed for debugging.
 
-OpenAI subtitle correction runs after deterministic post-processing when `subtitleCorrectionMode=openai`. The final `transcript_segments.json` is used by candidate generation and subtitle rendering. Correction never changes segment timestamps or count. Correction summaries include target/context counts and actual Responses API `input_tokens`, `output_tokens`, `reasoning_tokens`, `visible_output_tokens`, and `cached_tokens` when the API returns usage data.
 
 ## Generation Diagnostics
 
@@ -1013,7 +719,6 @@ Summary files:
 - `transcript_suspicion_summary.json`: local filter threshold, suspicious ratio, target/context counts, unique segments sent, score/rescue selection counts, rescue reason counts, and explicit filter failure state.
 - `audio_feature_summary.json`: duration, silence ratio, speech density, volume peak, silent seconds, speech seconds.
 - `candidate_summary.json`: total/normal/short candidate counts, transcript text coverage, hard gate counts, requested/selected counts, overlap diagnostics, timeline cluster diagnostics, backfill counts, duration stats, rule/final score stats, score percentiles, top selected candidates, top rejected candidates by reason.
-- `openai_scoring_summary.json`: model, initial candidate limit, finalist scoring limit, eligible/selected/sent counts, preselection/finalist counts, successful structured scores, failed scores, fallback scores, schema validation failures, average/max/total latency, text length proxy, total API calls, selected clip score source counts, and not-scored reasons.
 - `rejection_summary.json`: quality gate rejection counts, high-overlap counts by type, cross-type overlap counts, and render failure counts.
 - `selected_clips_summary.json`: requested/selected normal/short counts, unfilled counts, selected IDs, durations, scores, quality warnings, selection reasons, boundary refinement fields, overlap relaxation flags, timeline clusters, and output paths.
 
@@ -1051,7 +756,7 @@ python scripts/audit_outputs.py `
 
 The report includes:
 
-- per-clip file path, duration, resolution, selected start/end, transcript excerpts, scores, selection reason, title, title source, overlay title, subtitle path, and OpenAI score source
+- per-clip file path, duration, resolution, selected start/end, transcript excerpts, scores, selection reason, title, title source, overlay title, subtitle path, and historical score source
 - short verification for `1080x1920`
 - normal verification for valid dimensions and duration
 - subtitle existence and readability density checks
@@ -1085,32 +790,6 @@ Heuristic warnings include:
 - Dominant warnings: generic fallback titles on older artifacts, subtitle density, likely abrupt starts, one below-threshold backfill clip
 
 Title fallback behavior:
-
-- OpenAI titles are preserved with `title_source=openai`.
-- Low-cost and rule-only clips get deterministic local titles without calling OpenAI.
-- Fallback priority is existing/OpenAI title, candidate transcript text, transcript segments within the clip range, then deterministic labels such as `Normal Clip 01` or `Short 01`.
-- Generated `selected_clips.json`, `normal_XX.json`, and `short_XX.json` include `title` and `title_source`.
-- Short metadata also includes `overlay_title`, `overlay_title_expected`, `overlay_title_rendered`, and `overlay_title_mode`.
-- `shortOverlayTitleMode` controls short title burn-in: `auto`, `always`, `high_quality_only`, or `never`; new jobs default to `auto`.
-- In `auto`, high-quality runs expect a burned-in overlay title; low-cost runs keep overlay titles as metadata and do not force title burn-in.
-- `shortTopBannerEnabled` and `shortBottomBannerEnabled` independently control the full-duration short-video banners. Both default to `false` and do not affect normal clips.
-- The top switch controls the bundled Japanese-pattern background. After the pattern has been enabled, turning it off keeps the displayed title as a title-only overlay and removes only the background.
-- Each subtitle-review clip exposes `overlayTitleExpected`, calculated by the same policy used by the renderer.
-- The bottom banner uses `backend/app/render/assets/short_bottom_banner.png` as supplied, without redrawing its logo or text, and scales the complete image uniformly to the short-video width.
-- The subtitle review and completed-video re-edit screen exposes the short framing selector (`auto`, face tracking, center crop, or blur background) and the same two banner switches for short clips. Changes are saved immediately, regenerate the exact short preview, and are used by the next re-render.
-- The subtitle review and re-edit screen separates `Normal edit` and `Short edit`. Normal previews play at `16:9`; short previews play at `9:16`.
-- The main review player defaults to an editable live view: a textless base video generated with the same normal/short renderer, crop strategy, hook-scene composition, and bundled banner bytes as the final export, with the unsaved title, hook, or subtitle style drawn immediately on the same canvas.
-- `Saved final view` switches the same player to the exact MP4 generated with the final ASS/libass path. Browser glyph rasterization can differ slightly, so this saved view remains the final output reference.
-- Exact preview artifacts are keyed by the reviewed text/style and full render settings. The textless live base has an independent visual hash, so title, hook, subtitle text, color, size, and position drafts update immediately without writing the review artifact or re-rendering video.
-- `OK` batches the selected clip's content, text styles, and edited subtitle segments into one atomic update, marks that clip reviewed, and queues the exact preview once. Editing can continue on the next clip while that preview renders; finalization still waits for every current exact preview revision.
-- Subtitle review has an explicit `AI タイトル・フック案` action. It uses the current unsaved subtitle draft and four representative frames from the selected source range to produce three alternatives for the publication title, in-video title, opening hook text, and a 1.5-to-3-second hook scene.
-- AI suggestions use the OpenAI Responses API with the job's `openaiModel` setting, defaulting to `gpt-5.5`. The action requires `OPENAI_API_KEY`; it does not use a ChatGPT or Codex login.
-- Generation runs in RQ and never blocks the HTTP request. It starts only when the user presses the generate button. Selecting a suggestion changes the browser draft only; `OK` remains the single save operation.
-- Video files, video URLs, storage paths, cookies, and credentials are not sent to OpenAI. The request contains only the selected clip's corrected subtitle text, clip-relative timestamps, clip type/duration, and the four extracted JPEG frames. Responses use `store=false`.
-- Suggestions become stale as soon as the subtitle draft changes and cannot be applied until regenerated. Suggested hook times are clip-relative in the AI contract and are converted exactly once to source-video absolute times when applied to the draft.
-- While a short hook is displayed, regular subtitle events are suppressed. This applies both to duplicated hook scenes and to text-only hooks, so hook text and conversation subtitles do not overlap.
-- Audit treats an empty title as `missing_title`; deterministic labels are reported as the weaker `generic_fallback_title`.
-- Audit only reports `missing_ass_title_event` when overlay title burn-in is expected but the ASS title event is missing.
 
 Subtitle readability behavior:
 
@@ -1186,14 +865,12 @@ The script writes representative short frames under:
 storage/outputs/{smoke_job_id}/audit_frames/
 ```
 
-To create a new high-quality job first, pass `--video` instead of `--job-id`. This requires `OPENAI_API_KEY` and uses a small `--openai-candidate-limit` by default:
 
 ```powershell
 python scripts/smoke_subtitle_burn_in.py `
   --video path\to\spoken_sample.mp4 `
   --docker-service worker `
   --mode high_quality `
-  --openai-candidate-limit 5 `
   --normal-count 1 `
   --short-count 2 `
   --timeout 1800 `
@@ -1249,7 +926,7 @@ The report compares:
 - low_cost / high_quality time overlap
 - rule, AI, and final scores
 - titles and overlay titles
-- selection reason, quality warning, fallback, backfill, and OpenAI score source
+- selection reason, quality warning, fallback, backfill, and historical score source
 - render failure counts
 - high_quality selected clips using AI score, fallback, or no score
 
@@ -1260,11 +937,7 @@ python scripts/e2e_compare_quality.py `
   --video path\to\spoken_30min_sample.mp4 `
   --normal-count 2 `
   --short-count 3 `
-  --openai-candidate-limit 20 `
-  --openai-finalist-scoring-limit 7
 ```
-
-`e2e_compare_quality.py` runs a low_cost E2E first, then a high_quality E2E with limited OpenAI scoring, then writes the comparison reports. It requires `OPENAI_API_KEY` for the high_quality run. CI does not require an OpenAI key because tests use fixture JSON files.
 
 ## Storage
 
@@ -1410,11 +1083,6 @@ Backend cannot find files:
 - Confirm backend and worker both use `STORAGE_ROOT=/app/storage`.
 - Confirm `docker compose ps` shows both services running from the same compose project.
 - Run `python scripts/smoke_runtime.py` to verify shared storage.
-
-OpenAI scoring failures:
-
-- Set `OPENAI_API_KEY` in `.env` for OpenAI scoring.
-- If OpenAI scoring fails, the worker falls back to rule scoring where possible.
 
 Long-form transcription recovery:
 

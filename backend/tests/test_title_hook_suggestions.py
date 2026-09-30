@@ -1,5 +1,4 @@
 import json
-import sys
 from collections.abc import Generator
 from hashlib import sha256
 from pathlib import Path
@@ -47,11 +46,9 @@ from app.posting_metadata import (
     write_youtube_posting_artifacts,
 )
 from app.scoring.title_hook_suggestions import (
-    OPENAI_REQUEST_TIMEOUT_SECONDS,
     SYSTEM_PROMPT,
     TITLE_HOOK_GENERATION_SCHEMA,
     TITLE_HOOK_PROMPT_VERSION,
-    OpenAITitleHookSuggestionGenerator,
     TitleHookSuggestionResult,
     extract_representative_frames,
     normalize_title_hook_suggestions,
@@ -180,7 +177,6 @@ def title_hook_api(tmp_path: Path) -> Generator[dict[str, Any], None, None]:
                 status="awaiting_subtitle_review",
                 progress=88,
                 current_step="字幕確認",
-                settings_json={"openaiModel": "gpt-test-title-hook"},
             )
         )
         db.commit()
@@ -537,12 +533,12 @@ def test_revision_hash_tracks_reviewed_content_not_provider_or_model(
         model="codex-default",
         provider="codex",
     )
-    openai_input = build_title_hook_suggestion_input(
+    other_model_input = build_title_hook_suggestion_input(
         review,
         "short_1",
         drafts,
         model="gpt-test",
-        provider="openai",
+        provider="codex",
     )
     changed_drafts = [item.model_copy(deep=True) for item in drafts]
     changed_drafts[0].text += "変更"
@@ -554,8 +550,8 @@ def test_revision_hash_tracks_reviewed_content_not_provider_or_model(
         provider="codex",
     )
 
-    assert codex_input.revision_hash == openai_input.revision_hash
-    assert codex_input.input_hash != openai_input.input_hash
+    assert codex_input.revision_hash == other_model_input.revision_hash
+    assert codex_input.input_hash != other_model_input.input_hash
     assert changed_input.revision_hash != codex_input.revision_hash
 
 
@@ -604,24 +600,6 @@ def test_title_hook_api_rejects_incomplete_or_foreign_draft_snapshot(
     assert incomplete.json()["detail"] == "all subtitle segments for the selected clip are required"
     assert foreign.status_code == 422
     assert foreign.json()["detail"] == "subtitle segment does not belong to the selected clip"
-
-
-def test_title_hook_api_codex_default_does_not_require_openai_key(
-    title_hook_api: dict[str, Any],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    client: TestClient = title_hook_api["client"]
-    job_id = title_hook_api["job_id"]
-    response = client.post(
-        f"/api/jobs/{job_id}/subtitle-review/clips/short_1/title-hook-suggestions",
-        json={"segments": _short_drafts(title_hook_api["review"]), "forceRegenerate": False},
-    )
-
-    assert response.status_code == 200
-    assert response.json()["state"] == "queued"
-    assert response.json()["provider"] == "codex"
-    assert title_hook_api["queued"]
 
 
 def test_subtitleless_clip_allows_empty_snapshot_and_generates_from_frame(
@@ -1103,29 +1081,6 @@ def test_legacy_normal_uses_review_title_even_when_candidate_overlay_differs(
     assert applied.normal_clips[0].title_source == "manual_review"
 
 
-def test_default_openai_client_disables_sdk_retries_and_sets_bounded_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, Any] = {}
-    fake_client = object()
-
-    def fake_openai(**kwargs: Any) -> object:
-        captured.update(kwargs)
-        return fake_client
-
-    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=fake_openai))
-    import app.scoring.title_hook_suggestions as title_hook_module
-
-    loaded = title_hook_module._load_default_client()
-
-    assert loaded is fake_client
-    assert captured == {
-        "max_retries": 0,
-        "timeout": OPENAI_REQUEST_TIMEOUT_SECONDS,
-    }
-    assert OPENAI_REQUEST_TIMEOUT_SECONDS < 900 / 4
-
-
 def _prepare_worker_case(title_hook_api: dict[str, Any]) -> dict[str, Any]:
     storage: StoragePaths = title_hook_api["storage"]
     job_id = title_hook_api["job_id"]
@@ -1151,6 +1106,37 @@ def _prepare_worker_case(title_hook_api: dict[str, Any]) -> dict[str, Any]:
         "output_dir": output_dir,
         "state_path": state_path,
     }
+
+
+def test_queued_legacy_provider_is_generated_by_codex_only(
+    title_hook_api: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.jobs.title_hook_suggestions as suggestions_module
+
+    case = _prepare_worker_case(title_hook_api)
+    legacy_request = case["request"].model_copy(update={"provider": "openai"})
+    write_title_hook_suggestion_input(
+        legacy_request, title_hook_suggestion_input_path(case["output_dir"], "short_1"),
+    )
+    write_title_hook_suggestions(queued_title_hook_suggestions(legacy_request), case["state_path"])
+    calls: list[dict[str, Any]] = []
+
+    class LocalBridgeGenerator:
+        def __init__(self, **kwargs: Any) -> None:
+            calls.append(kwargs)
+
+        def generate(self, *_args: Any) -> TitleHookSuggestionResult:
+            return _suggestion_result()
+
+    monkeypatch.setattr(suggestions_module, "CodexTitleHookSuggestionGenerator", LocalBridgeGenerator)
+    result = run_title_hook_suggestion_generation(
+        case["job_id"], "short_1", legacy_request.input_hash,
+        session_factory=title_hook_api["session_factory"], paths=case["storage"],
+        frame_extractor=lambda *_args, **_kwargs: [],
+    )
+    assert result == ["ready"]
+    assert len(calls) == 1
+    assert load_title_hook_suggestions(case["state_path"]).provider == "codex"
 
 
 def test_worker_cancels_before_frames_when_job_left_subtitle_review(
@@ -1428,20 +1414,11 @@ def test_worker_preserves_main_job_after_provider_retries_are_exhausted(
     class RateLimitError(Exception):
         status_code = 429
 
-    class ExhaustedResponses:
-        calls = 0
-
-        def create(self, **_kwargs: Any) -> Any:
-            self.calls += 1
+    class FailingGenerator:
+        def generate(self, *_args: Any) -> Any:
             raise RateLimitError("provider body containing secret-token-value")
 
-    responses = ExhaustedResponses()
-    generator = OpenAITitleHookSuggestionGenerator(
-        model="gpt-test-title-hook",
-        client=SimpleNamespace(responses=responses),
-        max_retries=1,
-        sleep_func=lambda _seconds: None,
-    )
+    generator = FailingGenerator()
 
     result = run_title_hook_suggestion_generation(
         case["job_id"],
@@ -1458,7 +1435,6 @@ def test_worker_preserves_main_job_after_provider_retries_are_exhausted(
         assert job is not None
         job_status = job.status
 
-    assert responses.calls == 2
     assert result == ["failed"]
     assert artifact.error == "title/hook generation failed (RateLimitError)"
     assert "secret-token-value" not in artifact.model_dump_json()
@@ -1466,98 +1442,6 @@ def test_worker_preserves_main_job_after_provider_retries_are_exhausted(
     assert load_subtitle_review(
         subtitle_review_output_path(case["output_dir"])
     ).state == "awaiting_review"
-
-
-def test_openai_generator_retries_transient_error_and_disables_storage(
-    tmp_path: Path,
-) -> None:
-    class RateLimitError(Exception):
-        status_code = 429
-
-    class FakeResponses:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, Any]] = []
-
-        def create(self, **kwargs: Any) -> Any:
-            self.calls.append(kwargs)
-            if len(self.calls) == 1:
-                raise RateLimitError("sensitive provider response")
-            return SimpleNamespace(
-                output_text=json.dumps(
-                    _suggestion_result().model_dump(by_alias=True, mode="json"),
-                    ensure_ascii=False,
-                )
-            )
-
-    image_path = tmp_path / "frame.jpg"
-    image_path.write_bytes(b"jpeg")
-    responses = FakeResponses()
-    sleeps: list[float] = []
-    generator = OpenAITitleHookSuggestionGenerator(
-        model="gpt-test",
-        client=SimpleNamespace(responses=responses),
-        max_retries=1,
-        sleep_func=sleeps.append,
-    )
-
-    generated = generator.generate(
-        {"clipType": "short", "clipDurationSeconds": 20, "segments": []},
-        [image_path],
-    )
-
-    assert len(generated.suggestions) == 3
-    assert len(responses.calls) == 2
-    assert sleeps == [0.25]
-    assert responses.calls[-1]["store"] is False
-    user_content = responses.calls[-1]["input"][1]["content"]
-    assert user_content[0]["type"] == "input_text"
-    assert user_content[1]["text"] == "次の代表フレームはclip相対10.000秒です。"
-    assert user_content[2]["image_url"].startswith("data:image/jpeg;base64,")
-
-
-def test_openai_image_labels_preserve_original_timestamp_when_frame_is_missing(
-    tmp_path: Path,
-) -> None:
-    class FakeResponses:
-        def __init__(self) -> None:
-            self.call: dict[str, Any] | None = None
-
-        def create(self, **kwargs: Any) -> Any:
-            self.call = kwargs
-            return SimpleNamespace(
-                output_text=json.dumps(
-                    _suggestion_result().model_dump(by_alias=True, mode="json"),
-                    ensure_ascii=False,
-                )
-            )
-
-    frame_1 = tmp_path / "frame_1.jpg"
-    frame_3 = tmp_path / "frame_3.jpg"
-    frame_1.write_bytes(b"first")
-    frame_3.write_bytes(b"third")
-    responses = FakeResponses()
-    generator = OpenAITitleHookSuggestionGenerator(
-        model="gpt-test",
-        client=SimpleNamespace(responses=responses),
-        max_retries=0,
-    )
-
-    generator.generate(
-        {"clipType": "short", "clipDurationSeconds": 20, "segments": []},
-        [frame_1, frame_3],
-    )
-
-    assert responses.call is not None
-    content = responses.call["input"][1]["content"]
-    assert [item["type"] for item in content] == [
-        "input_text",
-        "input_text",
-        "input_image",
-        "input_text",
-        "input_image",
-    ]
-    assert content[1]["text"] == "次の代表フレームはclip相対2.400秒です。"
-    assert content[3]["text"] == "次の代表フレームはclip相対12.400秒です。"
 
 
 def test_frame_extraction_continues_after_one_failed_frame(tmp_path: Path) -> None:
@@ -1778,3 +1662,21 @@ def test_legacy_suggestion_result_fills_intents_and_recommendation() -> None:
     assert restored.recommended_suggestion_id == "model-a"
     assert restored.suggestions[0].thumbnail_kicker == ""
     assert restored.suggestions[0].thumbnail_frame_seconds is None
+
+
+def test_title_hook_api_codex_default_does_not_require_platform_key(
+    title_hook_api: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    client: TestClient = title_hook_api["client"]
+    job_id = title_hook_api["job_id"]
+    response = client.post(
+        f"/api/jobs/{job_id}/subtitle-review/clips/short_1/title-hook-suggestions",
+        json={"segments": _short_drafts(title_hook_api["review"]), "forceRegenerate": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["state"] == "queued"
+    assert response.json()["provider"] == "codex"
+    assert title_hook_api["queued"]

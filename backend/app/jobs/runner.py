@@ -1,5 +1,4 @@
 import json
-import os
 import re
 import unicodedata
 import shutil
@@ -14,23 +13,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audio.extract import extract_mono_wav
-from app.audio.openai_transcript_correction import (
-    OpenAITranscriptCorrector,
-    TranscriptCorrectionResult,
-    correction_diff_output_path,
-    correction_progress_output_path,
-    correction_summary_output_path,
-    deterministic_transcript_output_path,
-    disabled_correction_result,
-    fallback_correction_result,
-    filter_failed_correction_result,
-    write_corrected_transcript,
-    write_correction_diff,
-    write_correction_summary,
-)
 from app.audio.silence_detect import SilenceSegment, detect_silence, silence_output_path, write_silence_segments
 from app.audio.transcript_postprocess import (
-    DEFAULT_TRANSCRIPT_REPLACEMENTS,
+    deterministic_transcript_output_path,
     finalize_transcript_width,
     postprocess_transcript_segments,
     raw_transcript_output_path,
@@ -49,12 +34,6 @@ from app.audio.transcription_runtime import (
     TRANSCRIPTION_COMPUTE_TYPES,
     TRANSCRIPTION_DEVICES,
     TranscriptionRuntimeError,
-)
-from app.audio.transcript_suspicion import (
-    TranscriptSuspicionResult,
-    analyze_transcript_suspicion,
-    write_suspicion_artifacts,
-    write_suspicion_failure_summary,
 )
 from app.audio.volume_features import (
     AudioFeatures,
@@ -87,8 +66,6 @@ from app.candidates.merge_boundaries import (
     Candidate,
     CandidateGenerationResult,
     CandidateGenerationMemoryLimitError,
-    CandidateType,
-    OpenAIScoreSource,
     merge_candidate_generation_summaries,
     write_candidates,
 )
@@ -233,10 +210,8 @@ from app.render.render_thumbnail import (
     render_normal_thumbnail,
     render_short_thumbnail,
 )
-from app.scoring.openai_score import OpenAICandidateScorer, score_candidate_batch
 from app.scoring.clip_preferences import build_clip_selection_preferences
 from app.scoring.heatmap import annotate_candidates_with_heatmap
-from app.scoring.quality_gate import evaluate_hard_gate
 from app.scoring.rule_score import score_candidates
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.video.black_screen import (
@@ -296,14 +271,6 @@ LOW_INFORMATION_WORDS = {
     "you",
     "yeah",
 }
-DEFAULT_OPENAI_CANDIDATE_LIMIT = 40
-
-
-@dataclass(frozen=True)
-class ScoringResult:
-    candidates: list[Candidate]
-    openai_summary: dict[str, Any] | None = None
-    openai_scorer: Any | None = None
 
 
 @dataclass(frozen=True)
@@ -323,8 +290,6 @@ class AutoClipperPipelineDependencies:
     manual_source_proxy_renderer: Callable[..., Path] = render_manual_source_proxy
     subtitle_review_preview_renderer: Callable[..., Path] = render_review_preview
     subtitle_review_exact_preview_renderer: Callable[..., ExactPreviewResult] = render_exact_subtitle_review_preview
-    openai_scorer: OpenAICandidateScorer | None = None
-    transcript_corrector: OpenAITranscriptCorrector | None = None
     codex_initial_selector: Callable[..., Any] = request_codex_initial_selection
     auto_title_hook_generator: Callable[..., TitleHookSuggestionsDocument] = (
         generate_title_hook_suggestions_for_auto
@@ -340,16 +305,6 @@ class PipelineExpectedError(Exception):
 
 
 WHISPER_MODEL_SIZES = {"base", "small", "medium", "large-v3", "turbo"}
-SUBTITLE_CORRECTION_REASONING_EFFORTS = {
-    "default",
-    "none",
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "xhigh",
-    "max",
-}
 
 
 def _whisper_model_size_setting(settings: dict[str, Any]) -> str:
@@ -374,103 +329,11 @@ def _transcription_compute_type_setting(settings: dict[str, Any]) -> str:
     return normalized if normalized in TRANSCRIPTION_COMPUTE_TYPES else "auto"
 
 
-def _subtitle_correction_mode_setting(settings: dict[str, Any]) -> str:
-    value = settings.get("subtitleCorrectionMode") or settings.get("subtitle_correction_mode") or "off"
-    normalized = str(value).strip().lower()
-    return normalized if normalized in {"off", "openai"} else "off"
-
-
-def _subtitle_correction_model_setting(settings: dict[str, Any]) -> str:
-    value = settings.get("subtitleCorrectionModel") or settings.get("subtitle_correction_model") or "gpt-5.5"
-    normalized = str(value).strip()
-    return normalized or "gpt-5.5"
-
-
-def _subtitle_correction_reasoning_effort_setting(settings: dict[str, Any]) -> str:
-    value = settings.get("subtitleCorrectionReasoningEffort") or settings.get("subtitle_correction_reasoning_effort") or "default"
-    normalized = str(value).strip().lower()
-    return normalized if normalized in SUBTITLE_CORRECTION_REASONING_EFFORTS else "default"
-
-
-def _subtitle_correction_batch_size_setting(settings: dict[str, Any]) -> int:
-    return max(1, min(100, _int_setting(settings, "subtitleCorrectionBatchSize", 40)))
-
-
-def _subtitle_correction_scope_setting(settings: dict[str, Any]) -> str:
-    value = settings.get("subtitleCorrectionScope") or settings.get("subtitle_correction_scope") or "all"
-    normalized = str(value).strip().lower()
-    return normalized if normalized in {"all", "suspicious"} else "all"
-
-
 def _float_setting(settings: dict[str, Any], key: str, default: float) -> float:
     try:
         return float(settings.get(key, default))
     except (TypeError, ValueError):
         return default
-
-
-def _transcript_correction_glossary(settings: dict[str, Any]) -> list[str]:
-    terms: list[str] = []
-    if _bool_setting(settings, "useDefaultTranscriptDictionary", True):
-        terms.extend(DEFAULT_TRANSCRIPT_REPLACEMENTS.values())
-    replacements = settings.get("transcriptReplacements")
-    if isinstance(replacements, dict):
-        terms.extend(str(value).strip() for value in replacements.values())
-    custom_glossary = settings.get("transcriptCorrectionGlossary")
-    if isinstance(custom_glossary, list):
-        terms.extend(str(term).strip() for term in custom_glossary)
-    return list(dict.fromkeys(term for term in terms if term))
-
-
-def _apply_transcript_correction(
-    segments: Sequence[TranscriptSegment],
-    settings: dict[str, Any],
-    *,
-    corrector: OpenAITranscriptCorrector | None = None,
-    target_indices: Sequence[int] | None = None,
-    progress_callback: Callable[[int, int, int], None] | None = None,
-) -> TranscriptCorrectionResult:
-    mode = _subtitle_correction_mode_setting(settings)
-    model = _subtitle_correction_model_setting(settings)
-    if mode == "off":
-        return disabled_correction_result(segments, model)
-    needs_api_call = target_indices is None or bool(target_indices)
-    if corrector is None and needs_api_call and not os.getenv("OPENAI_API_KEY"):
-        raise PipelineExpectedError(
-            "openai_configuration_missing",
-            "OPENAI_API_KEY is required when subtitleCorrectionMode is openai.",
-            details={"setting": "OPENAI_API_KEY", "feature": "subtitle_correction"},
-        )
-
-    active_corrector = corrector or OpenAITranscriptCorrector(
-        model=model,
-        reasoning_effort=_subtitle_correction_reasoning_effort_setting(settings),
-    )
-    min_confidence = max(0.0, min(1.0, _float_setting(settings, "subtitleCorrectionMinConfidence", 0.9)))
-    batch_size = _subtitle_correction_batch_size_setting(settings)
-    context_segments = min(10, _int_setting(settings, "subtitleCorrectionContextSegments", 2))
-    try:
-        return active_corrector.correct_segments(
-            segments,
-            min_confidence=min_confidence,
-            batch_size=batch_size,
-            context_segments=context_segments,
-            glossary=_transcript_correction_glossary(settings),
-            target_indices=target_indices,
-            progress_callback=progress_callback,
-        )
-    except Exception as exc:
-        if _bool_setting(settings, "subtitleCorrectionFallbackEnabled", True):
-            return fallback_correction_result(segments, active_corrector, exc)
-        raise PipelineExpectedError(
-            "openai_subtitle_correction_failed",
-            f"OpenAI subtitle correction failed: {exc}",
-            details={
-                "model": model,
-                "reasoning_effort": _subtitle_correction_reasoning_effort_setting(settings),
-                "fallback_enabled": False,
-            },
-        ) from exc
 
 
 def _truthy_setting(settings: dict[str, Any], key: str) -> bool:
@@ -612,17 +475,6 @@ def _generate_candidates_for_reselection_mode(
     return normal_candidates, short_candidates, summary
 
 
-def _openai_model_setting(settings: dict[str, Any]) -> str:
-    value = settings.get("openaiModel") or settings.get("openai_model")
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return "gpt-5.5"
-
-
-def _openai_enabled(settings: dict[str, Any]) -> bool:
-    return bool(settings.get("useOpenAIScoring") or settings.get("openaiScoring") or settings.get("enableOpenAIScoring"))
-
-
 def _codex_initial_selection_enabled(
     settings: dict[str, Any],
     *,
@@ -631,25 +483,6 @@ def _codex_initial_selection_enabled(
 ) -> bool:
     provider = str(settings.get("initialSelectionProvider") or "legacy").strip().lower()
     return provider == "codex" and not manual_workflow and not has_manual_ranges
-
-
-def _ensure_selected_openai_scored(settings: dict[str, Any]) -> bool:
-    if "ensureSelectedOpenAIScored" in settings:
-        return _bool_setting(settings, "ensureSelectedOpenAIScored", False)
-    if "ensure_selected_openai_scored" in settings:
-        return _bool_setting(settings, "ensure_selected_openai_scored", False)
-    return settings.get("mode") == "high_quality"
-
-
-def _requested_output_count(settings: dict[str, Any]) -> int:
-    parsed = parse_selection_settings(settings)
-    return parsed.normal_clip_count + parsed.short_count
-
-
-def _openai_finalist_scoring_limit(settings: dict[str, Any]) -> int:
-    requested_count = _requested_output_count(settings)
-    default = requested_count + 2 if requested_count > 0 else 0
-    return _int_setting(settings, "openaiFinalistScoringLimit", default)
 
 
 def _e2e_fixture_transcript_enabled(settings: dict[str, Any]) -> bool:
@@ -864,44 +697,6 @@ def _set_clip_plan_preview_progress(
     job.updated_at = utc_now()
     job.error_code = None
     job.error_message = None
-    db.commit()
-    db.refresh(job)
-
-
-def _record_subtitle_correction_progress(
-    db: Session,
-    job: Job,
-    output_path: Path,
-    *,
-    completed_batches: int,
-    total_batches: int,
-    retry_count: int,
-    target_segments_completed: int = 0,
-    target_segments_total: int = 0,
-    transcript_segment_count: int = 0,
-    finished: bool = False,
-    fallback_used: bool = False,
-) -> None:
-    bounded_total = max(0, total_batches)
-    bounded_completed = max(0, min(completed_batches, bounded_total))
-    stage_progress = 100 if finished else (100 if bounded_total == 0 else int(bounded_completed * 100 / bounded_total))
-    payload = {
-        "stage": "correcting_subtitles",
-        "stageProgress": stage_progress,
-        "correctionBatchesCompleted": bounded_completed,
-        "correctionBatchesTotal": bounded_total,
-        "correctionRetryCount": max(0, retry_count),
-        "correctionTargetsCompleted": max(0, min(target_segments_completed, target_segments_total)),
-        "correctionTargetsTotal": max(0, target_segments_total),
-        "transcriptSegmentCount": max(0, transcript_segment_count),
-        "fallbackUsed": fallback_used,
-        "finished": finished,
-    }
-    _write_json(output_path, payload)
-    job.status = "correcting_subtitles"
-    job.progress = min(39, PROGRESS_MAP["correcting_subtitles"] + int(stage_progress * 8 / 100))
-    job.current_step = f"Correcting subtitles ({bounded_completed}/{bounded_total} batches)"
-    job.updated_at = utc_now()
     db.commit()
     db.refresh(job)
 
@@ -1467,283 +1262,6 @@ def _safe_visual_quality(
     return build_visual_quality(duration, black_segments)
 
 
-def _openai_summary(
-    scorer: Any,
-    *,
-    candidate_limit: int,
-    candidates_considered: int,
-    skipped_due_to_limit: int,
-    fallback_scores: int,
-    rule_score_only_candidates: int,
-    candidates_sent: int,
-    initial_candidate_limit: int | None = None,
-    finalist_scoring_limit: int | None = None,
-    preselection_candidates_sent: int | None = None,
-    finalist_candidates_sent: int = 0,
-) -> dict[str, Any]:
-    stats = getattr(scorer, "stats", None)
-    if stats is not None and hasattr(stats, "to_summary"):
-        summary = stats.to_summary(
-            candidate_limit=candidate_limit,
-            candidates_considered=candidates_considered,
-            skipped_due_to_limit=skipped_due_to_limit,
-            fallback_scores=fallback_scores,
-            rule_score_only_candidates=rule_score_only_candidates,
-            candidates_selected_for_openai=candidates_sent,
-        )
-    else:
-        summary = {
-            "model": getattr(scorer, "model", "unknown"),
-            "candidate_limit": candidate_limit,
-            "candidates_considered": candidates_considered,
-            "candidates_eligible_for_openai_scoring": candidates_considered,
-            "candidates_selected_for_openai": candidates_sent,
-            "candidates_sent_to_openai": candidates_sent,
-            "candidates_actually_sent": candidates_sent,
-            "successful_scores": 0,
-            "successful_structured_scores": 0,
-            "failed_scores": fallback_scores,
-            "failed_structured_scores": fallback_scores,
-            "fallback_scores": fallback_scores,
-            "rule_score_only_candidates": rule_score_only_candidates,
-            "skipped_due_to_limit": skipped_due_to_limit,
-            "cache_hits": 0,
-            "average_latency_seconds": None,
-            "avg_latency_seconds": None,
-            "max_latency_seconds": None,
-            "total_latency_seconds": None,
-            "estimated_input_text_length": None,
-            "estimated_output_text_length": None,
-            "estimated_text_payload_size": None,
-            "total_api_calls": None,
-            "schema_validation_failures": 0,
-            "error_types": {},
-            "errors": ["scorer did not expose runtime stats"],
-        }
-    summary["initial_candidate_limit"] = initial_candidate_limit if initial_candidate_limit is not None else candidate_limit
-    summary["finalist_scoring_limit"] = finalist_scoring_limit
-    summary["candidates_sent_preselection"] = preselection_candidates_sent if preselection_candidates_sent is not None else candidates_sent
-    summary["candidates_sent_as_finalists"] = finalist_candidates_sent
-    return summary
-
-
-def _candidate_rank_value(candidate: Candidate) -> tuple[float, float, float, int, float]:
-    return (
-        float(candidate.rule_score or candidate.final_score or 0.0),
-        float(candidate.final_score or candidate.rule_score or 0.0),
-        -candidate.duration,
-        len(candidate.transcript_text),
-        -candidate.start,
-    )
-
-
-def _candidate_midpoint(candidate: Candidate) -> float:
-    return (candidate.start + candidate.end) / 2
-
-
-def _openai_cluster_ids(candidates: Sequence[Candidate], requested_count: int) -> dict[str, int]:
-    if not candidates:
-        return {}
-    min_start = min(candidate.start for candidate in candidates)
-    max_end = max(candidate.end for candidate in candidates)
-    span = max(max_end - min_start, 1.0)
-    bucket_count = max(requested_count * 3, 1)
-    bucket_size = max(60.0, span / bucket_count)
-    return {candidate.id: int(_candidate_midpoint(candidate) // bucket_size) for candidate in candidates}
-
-
-def _openai_cluster_diverse_order(candidates: Sequence[Candidate], requested_count: int) -> list[Candidate]:
-    cluster_ids = _openai_cluster_ids(candidates, requested_count)
-    grouped: dict[int, list[Candidate]] = {}
-    for candidate in candidates:
-        grouped.setdefault(cluster_ids.get(candidate.id, 0), []).append(candidate)
-    for items in grouped.values():
-        items.sort(key=_candidate_rank_value, reverse=True)
-
-    cluster_order = sorted(
-        grouped,
-        key=lambda cluster: _candidate_rank_value(grouped[cluster][0]) if grouped[cluster] else (0.0, 0.0, 0.0, 0, 0.0),
-        reverse=True,
-    )
-    ordered: list[Candidate] = []
-    while any(grouped[cluster] for cluster in cluster_order):
-        for cluster in cluster_order:
-            if grouped[cluster]:
-                ordered.append(grouped[cluster].pop(0))
-    return ordered
-
-
-def _append_openai_pool_candidates(
-    pool: list[Candidate],
-    candidates: Sequence[Candidate],
-    limit: int,
-    *,
-    max_overlap_ratio: float,
-) -> None:
-    for candidate in candidates:
-        if len(pool) >= limit:
-            return
-        if any(item.id == candidate.id for item in pool):
-            continue
-        if any(time_overlap_ratio(candidate, selected) >= max_overlap_ratio for selected in pool):
-            continue
-        pool.append(candidate)
-
-
-def _openai_type_budgets(
-    normal_candidates: Sequence[Candidate],
-    short_candidates: Sequence[Candidate],
-    settings: dict[str, Any],
-    limit: int,
-) -> dict[CandidateType, int]:
-    if limit <= 0:
-        return {"normal": 0, "short": 0}
-    parsed = parse_selection_settings(settings)
-    requested_normal = parsed.normal_clip_count if normal_candidates else 0
-    requested_short = parsed.short_count if short_candidates else 0
-    requested_total = requested_normal + requested_short
-    if requested_total <= 0:
-        normal_budget = limit // 2 if normal_candidates and short_candidates else limit
-    else:
-        normal_budget = round(limit * (requested_normal / requested_total)) if requested_normal > 0 else 0
-    if normal_candidates and requested_normal > 0 and normal_budget == 0:
-        normal_budget = 1
-    if short_candidates and requested_short > 0 and limit - normal_budget == 0:
-        normal_budget = max(0, normal_budget - 1)
-    short_budget = limit - normal_budget
-    normal_budget = min(normal_budget, len(normal_candidates))
-    short_budget = min(short_budget, len(short_candidates))
-    leftover = limit - normal_budget - short_budget
-    if leftover > 0 and len(normal_candidates) > normal_budget:
-        add = min(leftover, len(normal_candidates) - normal_budget)
-        normal_budget += add
-        leftover -= add
-    if leftover > 0 and len(short_candidates) > short_budget:
-        short_budget += min(leftover, len(short_candidates) - short_budget)
-    return {"normal": normal_budget, "short": short_budget}
-
-
-def _build_openai_scoring_pool(
-    candidates: Sequence[Candidate],
-    settings: dict[str, Any],
-    audio_features: AudioFeatures,
-    silence_segments: Sequence[SilenceSegment],
-    candidate_limit: int,
-) -> list[Candidate]:
-    if candidate_limit <= 0:
-        return []
-    selection_settings = parse_selection_settings(settings)
-    hard_gate_passed = [
-        candidate
-        for candidate in candidates
-        if evaluate_hard_gate(
-            candidate,
-            settings=selection_settings.quality_gate,
-            audio_features=audio_features,
-            silence_segments=silence_segments,
-        ).passed
-    ]
-    normal_candidates = [candidate for candidate in hard_gate_passed if candidate.type == "normal"]
-    short_candidates = [candidate for candidate in hard_gate_passed if candidate.type == "short"]
-    budgets = _openai_type_budgets(normal_candidates, short_candidates, settings, candidate_limit)
-    selected: list[Candidate] = []
-    for candidate_type, type_candidates in (("normal", normal_candidates), ("short", short_candidates)):
-        budget = budgets[candidate_type]
-        ordered = _openai_cluster_diverse_order(
-            sorted(type_candidates, key=_candidate_rank_value, reverse=True),
-            max(budget, 1),
-        )
-        type_pool: list[Candidate] = []
-        _append_openai_pool_candidates(
-            type_pool,
-            ordered,
-            budget,
-            max_overlap_ratio=selection_settings.max_overlap_ratio,
-        )
-        if len(type_pool) < budget:
-            _append_openai_pool_candidates(
-                type_pool,
-                ordered,
-                budget,
-                max_overlap_ratio=1.01,
-            )
-        selected.extend(type_pool)
-    if len(selected) < candidate_limit:
-        selected_ids = {candidate.id for candidate in selected}
-        remaining = [
-            candidate for candidate in _openai_cluster_diverse_order(hard_gate_passed, candidate_limit) if candidate.id not in selected_ids
-        ]
-        _append_openai_pool_candidates(
-            selected,
-            remaining,
-            candidate_limit,
-            max_overlap_ratio=selection_settings.max_overlap_ratio,
-        )
-        if len(selected) < candidate_limit:
-            _append_openai_pool_candidates(
-                selected,
-                remaining,
-                candidate_limit,
-                max_overlap_ratio=1.01,
-            )
-    return selected[:candidate_limit]
-
-
-def _candidate_with_openai_source(candidate: Candidate, source: OpenAIScoreSource) -> Candidate:
-    flags = [flag for flag in candidate.risk_flags if flag != "openai_not_scored_candidate_limit"]
-    fallback = "openai_fallback_rule_score" in flags
-    used_ai_score = candidate.ai_score is not None and not fallback
-    openai_source = "fallback_rule_score" if fallback else source
-    return candidate.model_copy(
-        update={
-            "risk_flags": flags,
-            "used_ai_score": used_ai_score,
-            "openai_scored": used_ai_score,
-            "openai_fallback_used": fallback,
-            "openai_score_source": openai_source,
-            "openai_not_scored_reason": None,
-        }
-    )
-
-
-def _candidate_not_scored(candidate: Candidate, reason: str) -> Candidate:
-    flags = list(candidate.risk_flags)
-    if "openai_not_scored_candidate_limit" not in flags:
-        flags.append("openai_not_scored_candidate_limit")
-    return candidate.model_copy(
-        update={
-            "final_score": candidate.rule_score,
-            "risk_flags": flags,
-            "used_ai_score": False,
-            "openai_scored": False,
-            "openai_fallback_used": False,
-            "openai_score_source": "not_scored",
-            "openai_not_scored_reason": reason,
-        }
-    )
-
-
-def _fallback_candidate(candidate: Candidate, source: OpenAIScoreSource) -> Candidate:
-    flags = [flag for flag in candidate.risk_flags if flag != "openai_scoring_failed"]
-    if "openai_fallback_rule_score" not in flags:
-        flags.append("openai_fallback_rule_score")
-    return candidate.model_copy(
-        update={
-            "ai_score": None,
-            "final_score": candidate.rule_score,
-            "should_use": None,
-            "reject_reason": None,
-            "reason": "OpenAI scoring failed; used rule score fallback.",
-            "risk_flags": flags,
-            "used_ai_score": False,
-            "openai_scored": False,
-            "openai_fallback_used": True,
-            "openai_score_source": "fallback_rule_score",
-            "openai_not_scored_reason": source,
-        }
-    )
-
-
 def _replace_scored_candidates(
     candidates: Sequence[Candidate],
     replacements: dict[str, Candidate],
@@ -1751,146 +1269,15 @@ def _replace_scored_candidates(
     return [replacements.get(candidate.id, candidate) for candidate in candidates]
 
 
-def _score_candidate_list(
-    candidates: Sequence[Candidate],
-    settings: dict[str, Any],
-    audio_features: AudioFeatures,
-    silence_segments: Sequence[SilenceSegment],
-    visual_quality: VisualQuality,
-    scorer: OpenAICandidateScorer | None,
-) -> ScoringResult:
-    selection_preferences = build_clip_selection_preferences(settings)
-    rule_scored = score_candidates(
-        candidates,
-        audio_features=audio_features,
-        silence_segments=silence_segments,
-        selection_preferences=selection_preferences,
+def _score_local_candidates(
+    candidates: Sequence[Candidate], settings: dict[str, Any],
+    audio_features: AudioFeatures, silence_segments: Sequence[SilenceSegment],
+) -> list[Candidate]:
+    scored = score_candidates(
+        candidates, audio_features=audio_features, silence_segments=silence_segments,
+        selection_preferences=build_clip_selection_preferences(settings),
     )
-    use_openai = _openai_enabled(settings)
-    if not use_openai:
-        return ScoringResult(candidates=[candidate.model_copy(update={"final_score": candidate.rule_score}) for candidate in rule_scored])
-
-    if scorer is None and not os.getenv("OPENAI_API_KEY"):
-        raise PipelineExpectedError(
-            "openai_configuration_missing",
-            "OPENAI_API_KEY is required when useOpenAIScoring is true.",
-            details={"setting": "OPENAI_API_KEY"},
-        )
-
-    fallback_enabled = _bool_setting(settings, "openaiFallbackToRuleScore", True)
-    candidate_limit = _int_setting(settings, "openaiCandidateLimit", DEFAULT_OPENAI_CANDIDATE_LIMIT)
-    active_scorer = scorer or OpenAICandidateScorer(
-        model=_openai_model_setting(settings),
-        selection_preferences=selection_preferences,
-    )
-    if scorer is not None and hasattr(active_scorer, "selection_preferences"):
-        active_scorer.selection_preferences = selection_preferences
-    ranked_for_openai = _build_openai_scoring_pool(
-        rule_scored,
-        settings=settings,
-        audio_features=audio_features,
-        silence_segments=silence_segments,
-        candidate_limit=candidate_limit,
-    )
-    candidates_for_openai = ranked_for_openai if candidate_limit > 0 else []
-    openai_candidate_ids = {candidate.id for candidate in candidates_for_openai}
-    skipped_due_to_limit = max(0, len(rule_scored) - len(candidates_for_openai))
-    scored_by_id: dict[str, Candidate] = {}
-    fallback_scores = 0
-
-    try:
-        openai_scored = score_candidate_batch(
-            candidates_for_openai,
-            scorer=active_scorer,
-            audio_features=audio_features,
-            visual_features=visual_quality,
-        )
-    except Exception as exc:
-        if not fallback_enabled:
-            summary = _openai_summary(
-                active_scorer,
-                candidate_limit=candidate_limit,
-                candidates_considered=len(rule_scored),
-                skipped_due_to_limit=skipped_due_to_limit,
-                fallback_scores=0,
-                rule_score_only_candidates=skipped_due_to_limit,
-                candidates_sent=len(candidates_for_openai),
-                initial_candidate_limit=candidate_limit,
-                finalist_scoring_limit=_openai_finalist_scoring_limit(settings),
-                preselection_candidates_sent=len(candidates_for_openai),
-            )
-            raise PipelineExpectedError(
-                "openai_scoring_failed",
-                f"OpenAI scoring failed: {exc}",
-                details=summary,
-            ) from exc
-        openai_scored = [
-            candidate.model_copy(
-                update={
-                    "final_score": candidate.rule_score,
-                    "should_use": None,
-                    "reject_reason": None,
-                    "reason": "OpenAI scoring failed; used rule score fallback.",
-                    "risk_flags": [*candidate.risk_flags, "openai_fallback_rule_score"],
-                }
-            )
-            for candidate in candidates_for_openai
-        ]
-        fallback_scores = len(candidates_for_openai)
-
-    failed_candidates = [candidate for candidate in openai_scored if "openai_scoring_failed" in candidate.risk_flags]
-    if failed_candidates and not fallback_enabled:
-        summary = _openai_summary(
-            active_scorer,
-            candidate_limit=candidate_limit,
-            candidates_considered=len(rule_scored),
-            skipped_due_to_limit=skipped_due_to_limit,
-            fallback_scores=0,
-            rule_score_only_candidates=skipped_due_to_limit,
-            candidates_sent=len(candidates_for_openai),
-            initial_candidate_limit=candidate_limit,
-            finalist_scoring_limit=_openai_finalist_scoring_limit(settings),
-            preselection_candidates_sent=len(candidates_for_openai),
-        )
-        raise PipelineExpectedError(
-            "openai_scoring_failed",
-            "OpenAI scoring failed for one or more candidates.",
-            details={
-                **summary,
-                "failed_candidate_ids": [candidate.id for candidate in failed_candidates[:20]],
-            },
-        )
-
-    for candidate in openai_scored:
-        if "openai_scoring_failed" not in candidate.risk_flags:
-            scored_by_id[candidate.id] = _candidate_with_openai_source(candidate, "preselection_pool")
-            continue
-        fallback_scores += 1
-        scored_by_id[candidate.id] = _fallback_candidate(candidate, "preselection_pool")
-
-    merged: list[Candidate] = []
-    for candidate in rule_scored:
-        if candidate.id in scored_by_id:
-            merged.append(scored_by_id[candidate.id])
-            continue
-        reason = "candidate_limit" if openai_candidate_ids else "openai_candidate_limit_zero"
-        merged.append(_candidate_not_scored(candidate, reason))
-
-    summary = _openai_summary(
-        active_scorer,
-        candidate_limit=candidate_limit,
-        candidates_considered=len(rule_scored),
-        skipped_due_to_limit=skipped_due_to_limit,
-        fallback_scores=fallback_scores,
-        rule_score_only_candidates=skipped_due_to_limit,
-        candidates_sent=len(candidates_for_openai),
-        initial_candidate_limit=candidate_limit,
-        finalist_scoring_limit=_openai_finalist_scoring_limit(settings),
-        preselection_candidates_sent=len(candidates_for_openai),
-    )
-    summary["preselection_candidate_ids"] = [candidate.id for candidate in candidates_for_openai]
-    summary["preselection_candidate_types"] = dict(Counter(candidate.type for candidate in candidates_for_openai))
-    return ScoringResult(candidates=merged, openai_summary=summary, openai_scorer=active_scorer)
+    return [candidate.model_copy(update={"final_score": candidate.rule_score}) for candidate in scored]
 
 
 def _selected_candidates(selection: CandidateSelection) -> list[Candidate]:
@@ -2255,125 +1642,6 @@ def _automatic_selection_with_diverse_refined_shorts(
         requested_count=parsed_settings.short_count,
     )
     return final_selection, refined_candidates, aggregate_diversity
-
-
-def _candidate_needs_finalist_scoring(candidate: Candidate) -> bool:
-    if candidate.used_ai_score is True and candidate.ai_score is not None:
-        return False
-    if candidate.openai_fallback_used is True:
-        return False
-    return True
-
-
-def _candidate_with_final_quality_metadata(candidate: Candidate, settings: dict[str, Any]) -> Candidate:
-    min_final_score = parse_selection_settings(settings).quality_gate.min_final_score
-    score = candidate.final_score if candidate.final_score is not None else candidate.rule_score
-    below_threshold = score is not None and float(score) < min_final_score
-    return candidate.model_copy(
-        update={
-            "below_quality_threshold": below_threshold,
-            "quality_warning": "below_min_final_score" if below_threshold else None,
-        }
-    )
-
-
-def _ensure_selected_candidates_openai_scored(
-    selection: CandidateSelection,
-    scored_candidates: Sequence[Candidate],
-    settings: dict[str, Any],
-    audio_features: AudioFeatures,
-    visual_quality: VisualQuality,
-    scorer: Any | None,
-    openai_summary: dict[str, Any] | None,
-) -> tuple[CandidateSelection, list[Candidate], dict[str, Any] | None]:
-    if not (_openai_enabled(settings) and _ensure_selected_openai_scored(settings)):
-        return selection, list(scored_candidates), openai_summary
-    if scorer is None or openai_summary is None:
-        return selection, list(scored_candidates), openai_summary
-
-    selected = _selected_candidates(selection)
-    needs_scoring = [candidate for candidate in selected if _candidate_needs_finalist_scoring(candidate)]
-    finalist_limit = _openai_finalist_scoring_limit(settings)
-    finalists = needs_scoring[:finalist_limit] if finalist_limit > 0 else []
-    not_scored_due_to_limit = needs_scoring[len(finalists) :]
-    fallback_enabled = _bool_setting(settings, "openaiFallbackToRuleScore", True)
-    replacements: dict[str, Candidate] = {
-        candidate.id: _candidate_not_scored(candidate, "finalist_scoring_limit") for candidate in not_scored_due_to_limit
-    }
-    finalist_fallback_scores = 0
-
-    try:
-        finalist_scored = score_candidate_batch(
-            finalists,
-            scorer=scorer,
-            audio_features=audio_features,
-            visual_features=visual_quality,
-        )
-    except Exception as exc:
-        if not fallback_enabled:
-            summary = dict(openai_summary)
-            summary["finalist_candidate_ids"] = [candidate.id for candidate in finalists]
-            summary["candidates_sent_as_finalists"] = len(finalists)
-            raise PipelineExpectedError(
-                "openai_scoring_failed",
-                f"OpenAI finalist scoring failed: {exc}",
-                details=summary,
-            ) from exc
-        finalist_scored = [_fallback_candidate(candidate, "finalist_on_demand") for candidate in finalists]
-        finalist_fallback_scores = len(finalists)
-
-    failed_finalists = [candidate for candidate in finalist_scored if "openai_scoring_failed" in candidate.risk_flags]
-    if failed_finalists and not fallback_enabled:
-        summary = dict(openai_summary)
-        summary["finalist_candidate_ids"] = [candidate.id for candidate in finalists]
-        summary["failed_finalist_candidate_ids"] = [candidate.id for candidate in failed_finalists]
-        summary["candidates_sent_as_finalists"] = len(finalists)
-        raise PipelineExpectedError(
-            "openai_scoring_failed",
-            "OpenAI finalist scoring failed for one or more selected candidates.",
-            details=summary,
-        )
-
-    for candidate in finalist_scored:
-        if "openai_scoring_failed" in candidate.risk_flags:
-            finalist_fallback_scores += 1
-            replacements[candidate.id] = _fallback_candidate(candidate, "finalist_on_demand")
-            continue
-        replacements[candidate.id] = _candidate_with_openai_source(candidate, "finalist_on_demand")
-    replacements = {
-        candidate_id: _candidate_with_final_quality_metadata(candidate, settings) for candidate_id, candidate in replacements.items()
-    }
-
-    updated_selection = _selection_with_replacements(selection, replacements)
-    updated_candidates = _replace_scored_candidates(scored_candidates, replacements)
-
-    initial_limit = int(openai_summary.get("initial_candidate_limit") or openai_summary.get("candidate_limit") or 0)
-    candidates_considered = int(openai_summary.get("candidates_considered") or len(scored_candidates))
-    preselection_sent = int(openai_summary.get("candidates_sent_preselection") or 0)
-    previous_fallback = int(openai_summary.get("fallback_scores") or 0)
-    previous_rule_only = int(openai_summary.get("rule_score_only_candidates") or 0)
-    previous_skipped = int(openai_summary.get("skipped_due_to_limit") or 0)
-    updated_summary = _openai_summary(
-        scorer,
-        candidate_limit=initial_limit,
-        candidates_considered=candidates_considered,
-        skipped_due_to_limit=max(0, previous_skipped - len(finalists)),
-        fallback_scores=previous_fallback + finalist_fallback_scores,
-        rule_score_only_candidates=max(0, previous_rule_only - len(finalists)),
-        candidates_sent=preselection_sent + len(finalists),
-        initial_candidate_limit=initial_limit,
-        finalist_scoring_limit=finalist_limit,
-        preselection_candidates_sent=preselection_sent,
-        finalist_candidates_sent=len(finalists),
-    )
-    updated_summary = {
-        **openai_summary,
-        **updated_summary,
-        "finalist_candidate_ids": [candidate.id for candidate in finalists],
-        "finalist_candidate_types": dict(Counter(candidate.type for candidate in finalists)),
-        "finalist_not_scored_due_to_limit_ids": [candidate.id for candidate in not_scored_due_to_limit],
-    }
-    return updated_selection, updated_candidates, updated_summary
 
 
 def _render_failures_to_jsonable(
@@ -3512,7 +2780,6 @@ def run_autoclipper_job(
     candidate_generation_summary: dict[str, Any] | None = None
     scored_candidates: list[Candidate] = []
     selection: CandidateSelection | None = None
-    openai_scoring_summary: dict[str, Any] | None = None
     codex_initial_selection_result: Any | None = None
     exports: list[ExportItem] = []
     transcription_engine = "not_run"
@@ -3651,7 +2918,6 @@ def run_autoclipper_job(
                 candidate_generation_summary=candidate_generation_summary,
                 scored_candidates=scored_candidates,
                 selection=selection,
-                openai_scoring_summary=openai_scoring_summary,
                 normal_result=normal_result,
                 short_result=short_result,
                 exports=exports,
@@ -4058,133 +3324,10 @@ def run_autoclipper_job(
                     transcript_postprocess_summary_path(job_dir),
                 )
                 metadata_files.append(postprocess_summary_path)
-                deterministic_path = write_transcript_segments(
-                    transcript_segments,
-                    deterministic_transcript_output_path(job_dir),
-                )
-                metadata_files.append(deterministic_path)
-
-                correction_mode = _subtitle_correction_mode_setting(settings)
-                correction_scope = _subtitle_correction_scope_setting(settings)
-                correction_progress_path = correction_progress_output_path(job_dir)
-                correction_progress_state = {"completed": 0, "total": 0, "retries": 0}
-                correction_progress_callback: Callable[[int, int, int], None] | None = None
-                correction_target_indices: list[int] | None = None
-                suspicion_result: TranscriptSuspicionResult | None = None
-                suspicion_filter_error: Exception | None = None
-                if correction_mode == "openai":
-                    if correction_scope == "suspicious":
-                        try:
-                            suspicion_result = analyze_transcript_suspicion(
-                                transcript_segments,
-                                threshold=max(
-                                    0.0,
-                                    min(1.0, _float_setting(settings, "subtitleCorrectionSuspicionThreshold", 0.40)),
-                                ),
-                                context_segments=min(10, _int_setting(settings, "subtitleCorrectionContextSegments", 2)),
-                                batch_size=_subtitle_correction_batch_size_setting(settings),
-                                glossary=_transcript_correction_glossary(settings),
-                                replacements=(
-                                    settings.get("transcriptReplacements")
-                                    if isinstance(settings.get("transcriptReplacements"), dict)
-                                    else None
-                                ),
-                            )
-                            correction_target_indices = suspicion_result.target_indices
-                            metadata_files.extend(write_suspicion_artifacts(suspicion_result, job_dir))
-                        except Exception as exc:
-                            suspicion_filter_error = exc
-                            correction_target_indices = []
-                            metadata_files.append(
-                                write_suspicion_failure_summary(
-                                    job_dir,
-                                    segment_count=len(transcript_segments),
-                                    threshold=max(
-                                        0.0,
-                                        min(
-                                            1.0,
-                                            _float_setting(settings, "subtitleCorrectionSuspicionThreshold", 0.40),
-                                        ),
-                                    ),
-                                    exc=exc,
-                                )
-                            )
-                    _set_status(db, job, "correcting_subtitles")
-                    visited_statuses.append("correcting_subtitles")
-                    batch_size = _subtitle_correction_batch_size_setting(settings)
-                    target_segment_count = (
-                        len(correction_target_indices) if correction_target_indices is not None else len(transcript_segments)
-                    )
-                    total_batches = (target_segment_count + batch_size - 1) // batch_size
-                    _record_subtitle_correction_progress(
-                        db,
-                        job,
-                        correction_progress_path,
-                        completed_batches=0,
-                        total_batches=total_batches,
-                        retry_count=0,
-                        target_segments_total=target_segment_count,
-                        transcript_segment_count=len(transcript_segments),
-                    )
-                    metadata_files.append(correction_progress_path)
-
-                    def correction_progress_callback(completed: int, total: int, retries: int) -> None:
-                        correction_progress_state.update(completed=completed, total=total, retries=retries)
-                        completed_targets = min(completed * batch_size, target_segment_count)
-                        _record_subtitle_correction_progress(
-                            db,
-                            job,
-                            correction_progress_path,
-                            completed_batches=completed,
-                            total_batches=total,
-                            retry_count=retries,
-                            target_segments_completed=completed_targets,
-                            target_segments_total=target_segment_count,
-                            transcript_segment_count=len(transcript_segments),
-                        )
-
-                if suspicion_filter_error is not None:
-                    correction_result = filter_failed_correction_result(
-                        transcript_segments,
-                        _subtitle_correction_model_setting(settings),
-                        suspicion_filter_error,
-                    )
-                else:
-                    correction_result = _apply_transcript_correction(
-                        transcript_segments,
-                        settings,
-                        corrector=deps.transcript_corrector,
-                        target_indices=correction_target_indices,
-                        progress_callback=correction_progress_callback,
-                    )
-                if correction_mode == "openai":
-                    final_target_total = int(correction_result.summary.get("target_segment_count", 0))
-                    _record_subtitle_correction_progress(
-                        db,
-                        job,
-                        correction_progress_path,
-                        completed_batches=correction_progress_state["completed"],
-                        total_batches=correction_progress_state["total"],
-                        retry_count=correction_progress_state["retries"],
-                        target_segments_completed=(0 if correction_result.summary.get("fallback_used") else final_target_total),
-                        target_segments_total=final_target_total,
-                        transcript_segment_count=len(transcript_segments),
-                        finished=True,
-                        fallback_used=bool(correction_result.summary.get("fallback_used")),
-                    )
-                correction_summary_path = write_correction_summary(
-                    correction_result.summary,
-                    correction_summary_output_path(job_dir),
-                )
-                correction_diff_path = write_correction_diff(
-                    correction_result,
-                    correction_diff_output_path(job_dir),
-                )
-                metadata_files.extend([correction_summary_path, correction_diff_path])
-                if correction_mode == "openai":
-                    metadata_files.append(write_corrected_transcript(correction_result, job_dir))
-
-                transcript_segments = finalize_transcript_width(correction_result.segments, settings)
+                metadata_files.append(write_transcript_segments(
+                    transcript_segments, deterministic_transcript_output_path(job_dir),
+                ))
+                transcript_segments = finalize_transcript_width(transcript_segments, settings)
                 transcript_path = write_transcript_segments(transcript_segments, transcript_output_path(job_dir))
                 metadata_files.append(transcript_path)
                 _raise_if_transcript_unusable(
@@ -4458,37 +3601,19 @@ def run_autoclipper_job(
             else:
                 _set_status(db, job, "scoring_candidates")
                 visited_statuses.append("scoring_candidates")
-                scoring_result = (
-                    _score_candidate_list(
-                        automatic_candidates,
-                        settings=automatic_settings,
-                        audio_features=audio_features,
-                        silence_segments=silence_segments,
-                        visual_quality=visual_quality,
-                        scorer=deps.openai_scorer,
-                    )
-                    if automatic_candidates
-                    else ScoringResult(candidates=[])
+                automatic_scored = _score_local_candidates(
+                    automatic_candidates, settings=automatic_settings,
+                    audio_features=audio_features, silence_segments=silence_segments,
                 )
-                scored_candidates = [*scoring_result.candidates, *manual_candidates]
-                openai_scoring_summary = scoring_result.openai_summary
+                scored_candidates = [*automatic_scored, *manual_candidates]
 
                 _set_status(db, job, "selecting_clips")
                 visited_statuses.append("selecting_clips")
                 automatic_selection = select_candidates(
-                    scoring_result.candidates,
+                    automatic_scored,
                     settings=automatic_settings,
                     audio_features=audio_features,
                     silence_segments=silence_segments,
-                )
-                automatic_selection, automatic_scored, openai_scoring_summary = _ensure_selected_candidates_openai_scored(
-                    automatic_selection,
-                    scoring_result.candidates,
-                    settings=automatic_settings,
-                    audio_features=audio_features,
-                    visual_quality=visual_quality,
-                    scorer=scoring_result.openai_scorer,
-                    openai_summary=openai_scoring_summary,
                 )
                 automatic_selection, automatic_scored, _ = (
                     _automatic_selection_with_diverse_refined_shorts(
@@ -5542,7 +4667,6 @@ def run_clip_plan_reselection(
             job_dir / "candidate_generation_summary.json",
             job_dir / "selected_clips.json",
             job_dir / "scored_candidates.json",
-            job_dir / "openai_scoring_summary.json",
             job_dir / "candidate_summary.json",
             job_dir / "rejection_summary.json",
             job_dir / "selected_clips_summary.json",
@@ -5765,7 +4889,6 @@ def run_clip_plan_reselection(
                         heatmap_segments=heatmap_reference_segments,
                     )
                 )
-                openai_scoring_summary = None
                 write_codex_initial_selection_summary(
                     {
                         **codex_reselection_result.summary,
@@ -5776,32 +4899,15 @@ def run_clip_plan_reselection(
                     codex_summary_path,
                 )
             else:
-                scoring_result = (
-                    _score_candidate_list(
-                        automatic_candidates,
-                        settings=automatic_settings,
-                        audio_features=audio_features,
-                        silence_segments=silence_segments,
-                        visual_quality=visual_quality,
-                        scorer=deps.openai_scorer,
-                    )
-                    if automatic_candidates
-                    else ScoringResult(candidates=[])
+                automatic_scored = _score_local_candidates(
+                    automatic_candidates, settings=automatic_settings,
+                    audio_features=audio_features, silence_segments=silence_segments,
                 )
                 automatic_selection = select_candidates(
-                    scoring_result.candidates,
+                    automatic_scored,
                     settings=automatic_settings,
                     audio_features=audio_features,
                     silence_segments=silence_segments,
-                )
-                automatic_selection, automatic_scored, openai_scoring_summary = _ensure_selected_candidates_openai_scored(
-                    automatic_selection,
-                    scoring_result.candidates,
-                    settings=automatic_settings,
-                    audio_features=audio_features,
-                    visual_quality=visual_quality,
-                    scorer=scoring_result.openai_scorer,
-                    openai_summary=scoring_result.openai_summary,
                 )
                 automatic_selection, automatic_scored, _ = (
                     _automatic_selection_with_diverse_refined_shorts(
@@ -5860,9 +4966,6 @@ def run_clip_plan_reselection(
                     mode=quality_gate_mode,
                 )
 
-            openai_summary_path = job_dir / "openai_scoring_summary.json"
-            if openai_scoring_summary is None:
-                openai_summary_path.unlink(missing_ok=True)
             candidate_generation_summary = _read_json_file(job_dir / "candidate_generation_summary.json")
             transcript_summary_path = job_dir / "transcript_summary.json"
             transcript_summary = _read_json_file(transcript_summary_path) if transcript_summary_path.is_file() else {}
@@ -5875,7 +4978,6 @@ def run_clip_plan_reselection(
                 candidate_generation_summary=candidate_generation_summary,
                 scored_candidates=scored_candidates,
                 selection=selection,
-                openai_scoring_summary=openai_scoring_summary,
                 transcription_engine=str(transcript_summary.get("transcription_engine", "not_run")),
                 used_fixture_transcript=bool(transcript_summary.get("used_fixture_transcript", False)),
                 transcription_model=transcript_summary.get("transcription_model"),
@@ -6245,8 +5347,6 @@ def run_subtitle_review_render(
             short_candidates = _read_model_list(job_dir / "short_candidates.json", Candidate)
             scored_candidates = _read_model_list(job_dir / "scored_candidates.json", Candidate)
             candidate_generation_summary = _read_json_file(job_dir / "candidate_generation_summary.json")
-            openai_summary_path = job_dir / "openai_scoring_summary.json"
-            openai_scoring_summary = _read_json_file(openai_summary_path) if openai_summary_path.is_file() else None
             transcript_summary_path = job_dir / "transcript_summary.json"
             transcript_summary = _read_json_file(transcript_summary_path) if transcript_summary_path.is_file() else {}
 
@@ -6259,7 +5359,6 @@ def run_subtitle_review_render(
                 candidate_generation_summary=candidate_generation_summary,
                 scored_candidates=scored_candidates,
                 selection=selection,
-                openai_scoring_summary=openai_scoring_summary,
                 normal_result=normal_result,
                 short_result=short_result,
                 exports=exports,

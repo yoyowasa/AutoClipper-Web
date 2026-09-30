@@ -146,7 +146,6 @@ def _create_review_job(
                 ],
                 "minFinalScore": 0,
                 "rejectIncompleteSentence": False,
-                "useOpenAIScoring": False,
                 "burnSubtitles": True,
                 "requireClipPlanReview": True,
                 "requireSubtitleReview": True,

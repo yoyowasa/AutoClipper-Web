@@ -163,8 +163,6 @@ export function ClipSelectionEditor({
               onChange({
                 ...settings,
                 initialSelectionProvider: event.target.checked ? "codex" : "legacy",
-                useOpenAIScoring: false,
-                ensureSelectedOpenAIScored: false
               })
             }
           />

@@ -16,7 +16,6 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.audio.openai_transcript_correction import TRANSCRIPT_CORRECTION_PROGRESS_FILENAME
 from app.audio.transcribe_faster_whisper import (
     TranscriptSegment,
     transcript_output_path,
@@ -1046,8 +1045,6 @@ def _create_isolated_reedit_job(
             "requireClipPlanReview": False,
             "heatmapIntervalMode": False,
             "initialSelectionProvider": "legacy",
-            "useOpenAIScoring": False,
-            "ensureSelectedOpenAIScored": False,
         }
     )
     child = Job(
@@ -1660,7 +1657,7 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
         if confidences:
             details["average_confidence"] = round(sum(confidences) / len(confidences), 6)
 
-    correction_progress = _read_json_if_exists(output_dir / TRANSCRIPT_CORRECTION_PROGRESS_FILENAME)
+    correction_progress = _read_json_if_exists(output_dir / "subtitle_correction_progress.json")
     if isinstance(correction_progress, dict):
         for key in (
             "stage",

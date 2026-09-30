@@ -7,7 +7,6 @@ import pytest
 
 from app.audio.transcribe_faster_whisper import (
     FasterWhisperTranscriptionEngine,
-    OpenAITranscriptionEngine,
     TranscriptSegment,
     _deduplicate_overlapping_segments,
     _transcribe_pcm_wav_in_chunks,
@@ -315,10 +314,3 @@ def test_faster_whisper_engine_rejects_missing_wav() -> None:
 
     with pytest.raises(FileNotFoundError):
         engine.transcribe("missing.wav")
-
-
-def test_openai_transcription_engine_placeholder() -> None:
-    engine = OpenAITranscriptionEngine()
-
-    with pytest.raises(NotImplementedError, match="not implemented"):
-        engine.transcribe("sample.wav")

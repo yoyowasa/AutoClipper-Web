@@ -89,7 +89,7 @@ codex login status
 
 ChatGPTでのログインが未完了なら、`codex`を起動して「Sign in with ChatGPT」を選びます。CLIが見つからない場合は[Codex公式のCLI導入手順](https://learn.chatgpt.com/docs/codex/cli)のWindows向け案内に従い、導入後にAutoClipperを開き直してください。
 
-この連携ではOpenAI APIキーの入力は不要です。任意のOpenAI API機能とは別の仕組みです。Codexの利用可能量・ログイン状態によって、選定や文言生成を実行できない場合があります。
+この連携はChatGPTログインを使います。有料Platform APIを使う経路は削除しました。Codexの利用可能量・ログイン状態によって、選定や文言生成を実行できない場合があります。
 
 ## 6. AutoClipperを起動する
 

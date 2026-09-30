@@ -583,7 +583,6 @@ def test_create_job_persists_codex_initial_selection_and_exposes_summary(
             "videoId": upload["videoId"],
             "settings": {
                 "initialSelectionProvider": "codex",
-                "useOpenAIScoring": True,
             },
         },
     )
@@ -594,8 +593,6 @@ def test_create_job_persists_codex_initial_selection_and_exposes_summary(
         job = db.get(Job, job_id)
         assert job is not None
         assert job.settings_json["initialSelectionProvider"] == "codex"
-        assert job.settings_json["useOpenAIScoring"] is False
-        assert job.settings_json["ensureSelectedOpenAIScored"] is False
 
     output_dir = app.dependency_overrides[get_storage_paths]().job_outputs(job_id)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -2773,11 +2770,6 @@ def test_create_job_and_fetch_status(client: TestClient) -> None:
         assert job.settings_json["shortTopBannerEnabled"] is True
         assert job.settings_json["shortBottomBannerEnabled"] is True
         assert job.settings_json["shortSubtitleYPercent"] == 68.75
-        assert job.settings_json["openaiCandidateLimit"] == 40
-        assert job.settings_json["openaiModel"] == "gpt-5.5"
-        assert job.settings_json["openaiFallbackToRuleScore"] is True
-        assert job.settings_json["ensureSelectedOpenAIScored"] is True
-        assert job.settings_json["openaiFinalistScoringLimit"] == 20
         assert job.settings_json["transcriptionLanguage"] == "ja"
 
 
@@ -3481,12 +3473,6 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
                 "normalSubtitleYPercent": 84,
                 "selectionPolicy": "strict_quality",
                 "crossTypeOverlapDedupe": True,
-                "useOpenAIScoring": True,
-                "openaiCandidateLimit": 7,
-                "openaiModel": "gpt-test",
-                "openaiFallbackToRuleScore": False,
-                "ensureSelectedOpenAIScored": True,
-                "openaiFinalistScoringLimit": 5,
                 "minFinalScore": 0,
             },
         },
@@ -3538,33 +3524,7 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
         assert job.settings_json["normalSubtitleYPercent"] == 84.0
         assert job.settings_json["selectionPolicy"] == "strict_quality"
         assert job.settings_json["crossTypeOverlapDedupe"] is True
-        assert job.settings_json["useOpenAIScoring"] is True
-        assert job.settings_json["openaiCandidateLimit"] == 7
-        assert job.settings_json["openaiModel"] == "gpt-test"
-        assert job.settings_json["openaiFallbackToRuleScore"] is False
-        assert job.settings_json["ensureSelectedOpenAIScored"] is True
-        assert job.settings_json["openaiFinalistScoringLimit"] == 5
         assert job.settings_json["minFinalScore"] == 0
-
-
-def test_low_cost_defaults_do_not_require_selected_openai_scoring(client: TestClient) -> None:
-    upload = client.post(
-        "/api/videos/upload",
-        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
-    ).json()
-
-    response = client.post(
-        "/api/jobs",
-        json={"videoId": upload["videoId"], "settings": {"mode": "low_cost"}},
-    )
-
-    assert response.status_code == 201
-    created = response.json()
-    with next(app.dependency_overrides[get_db]()) as db:
-        job = db.get(Job, created["jobId"])
-        assert job is not None
-        assert job.settings_json["mode"] == "low_cost"
-        assert job.settings_json["ensureSelectedOpenAIScored"] is False
 
 
 def test_create_job_rejects_invalid_duration_ranges(client: TestClient) -> None:
@@ -3585,43 +3545,6 @@ def test_create_job_rejects_invalid_duration_ranges(client: TestClient) -> None:
     )
 
     assert response.status_code == 422
-
-
-def test_create_job_persists_manual_clip_ranges_and_disables_unused_openai(
-    client: TestClient,
-) -> None:
-    upload = client.post(
-        "/api/videos/upload",
-        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
-    ).json()
-
-    response = client.post(
-        "/api/jobs",
-        json={
-            "videoId": upload["videoId"],
-            "settings": {
-                "normalClipCount": 0,
-                "shortCount": 2,
-                "shortClipSelectionPreset": "funny",
-                "shortClipGuidance": "大きなリアクション",
-                "shortClipTimeRanges": [
-                    {"startSeconds": 65, "endSeconds": 82},
-                    {"startSeconds": 120.5, "endSeconds": 145},
-                ],
-                "useOpenAIScoring": True,
-            },
-        },
-    )
-
-    assert response.status_code == 201
-    with next(app.dependency_overrides[get_db]()) as db:
-        job = db.get(Job, response.json()["jobId"])
-        assert job is not None
-        assert job.settings_json["shortClipTimeRanges"] == [
-            {"startSeconds": 65.0, "endSeconds": 82.0},
-            {"startSeconds": 120.5, "endSeconds": 145.0},
-        ]
-        assert job.settings_json["useOpenAIScoring"] is False
 
 
 def test_create_job_rejects_partially_entered_manual_clip_ranges(
@@ -3683,26 +3606,13 @@ def test_openapi_exposes_advanced_job_duration_settings(client: TestClient) -> N
     assert properties["selectionPolicy"]["default"] == "strict_quality"
     assert properties["crossTypeOverlapDedupe"]["default"] is False
     assert properties["heatmapIntervalMode"]["default"] is False
-    assert properties["openaiCandidateLimit"]["default"] == 40
-    assert properties["openaiModel"]["default"] == "gpt-5.5"
-    assert properties["openaiFallbackToRuleScore"]["default"] is True
     assert properties["whisperModelSize"]["default"] == "base"
     assert properties["transcriptionLanguage"]["default"] == "ja"
     assert properties["transcriptionLanguage"]["const"] == "ja"
     assert properties["transcriptionDevice"]["default"] == "cpu"
     assert properties["transcriptionComputeType"]["default"] == "auto"
-    assert properties["subtitleCorrectionMode"]["default"] == "off"
-    assert properties["subtitleCorrectionScope"]["default"] == "all"
-    assert properties["transcriptCorrectionGlossary"]["type"] == "array"
-    assert properties["subtitleCorrectionSuspicionThreshold"]["default"] == 0.4
-    assert properties["subtitleCorrectionModel"]["default"] == "gpt-5.5"
-    assert properties["subtitleCorrectionReasoningEffort"]["default"] == "default"
-    assert properties["subtitleCorrectionMinConfidence"]["default"] == 0.9
-    assert properties["subtitleCorrectionBatchSize"]["default"] == 40
-    assert properties["subtitleCorrectionContextSegments"]["default"] == 2
-    assert properties["subtitleCorrectionFallbackEnabled"]["default"] is True
-    assert "ensureSelectedOpenAIScored" in properties
-    assert "openaiFinalistScoringLimit" in properties
+    assert "ensureSelectedOpenAIScored" not in properties
+    assert "openaiFinalistScoringLimit" not in properties
     assert "subtitleFontName" in properties
     assert "subtitleOutline" in properties
     assert "shortSubtitleFontSize" in properties
@@ -4363,3 +4273,39 @@ def test_review_loads_saved_character_without_reselecting(client: TestClient) ->
     assert client.get('/api/preferences/character-presets').json() == stored.json()
     assert client.patch(root + '/settings', json={**request, 'characterPresetName': 'missing'}).status_code == 404
     assert client.get(root).json()['shortTopBannerEnabled'] is True
+
+
+def test_create_job_persists_manual_clip_ranges(
+    client: TestClient,
+) -> None:
+    upload = client.post(
+        "/api/videos/upload",
+        files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
+    ).json()
+
+    response = client.post(
+        "/api/jobs",
+        json={
+            "videoId": upload["videoId"],
+            "settings": {
+                "normalClipCount": 0,
+                "shortCount": 2,
+                "shortClipSelectionPreset": "funny",
+                "shortClipGuidance": "大きなリアクション",
+                "shortClipTimeRanges": [
+                    {"startSeconds": 65, "endSeconds": 82},
+                    {"startSeconds": 120.5, "endSeconds": 145},
+                ],
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    with next(app.dependency_overrides[get_db]()) as db:
+        job = db.get(Job, response.json()["jobId"])
+        assert job is not None
+        assert job.settings_json["shortClipTimeRanges"] == [
+            {"startSeconds": 65.0, "endSeconds": 82.0},
+            {"startSeconds": 120.5, "endSeconds": 145.0},
+        ]
+        assert "useOpenAIScoring" not in job.settings_json

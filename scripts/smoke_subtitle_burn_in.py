@@ -285,7 +285,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--video", type=Path, default=None, help="Optional input video for a high_quality E2E before smoke rendering.")
     parser.add_argument("--backend-url", default="http://localhost:8000")
     parser.add_argument("--mode", default=None, choices=["low_cost", "fast", "high_quality"])
-    parser.add_argument("--openai-candidate-limit", type=int, default=5)
     parser.add_argument("--timeout", type=int, default=1800)
     parser.add_argument("--output-job-id", default=None)
     parser.add_argument("--input-video", type=Path, default=None)
@@ -340,18 +339,10 @@ def run_video_e2e(args: argparse.Namespace) -> str:
         str(args.timeout),
         "--burn-subtitles",
         "true",
-        "--openai-candidate-limit",
-        str(args.openai_candidate_limit),
     ]
     if mode == "high_quality":
         command.extend(
             [
-                "--use-openai-scoring",
-                "true",
-                "--ensure-selected-openai-scored",
-                "true",
-                "--openai-fallback-to-rule-score",
-                "true",
             ]
         )
     completed = subprocess.run(
@@ -518,7 +509,6 @@ def run(args: argparse.Namespace) -> int:
     write_json(output_dir / "selected_clips.json", subset)
     write_json(output_dir / "transcript_segments.json", transcript_payload)
     for filename in [
-        "openai_scoring_summary.json",
         "transcript_summary.json",
         "candidate_summary.json",
         "selected_clips_summary.json",

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import urllib.error
 import urllib.request
@@ -244,7 +243,6 @@ def build_summary(args: argparse.Namespace, checks: list[dict[str, Any]]) -> dic
         "backend_url": args.backend_url,
         "frontend_url": args.frontend_url,
         "job_id": args.job_id,
-        "openai_api_key_present": bool(os.environ.get("OPENAI_API_KEY")),
         "failed": any(check["status"] == "fail" for check in checks),
         "checks": checks,
     }

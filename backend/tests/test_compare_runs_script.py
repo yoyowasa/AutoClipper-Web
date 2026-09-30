@@ -159,9 +159,6 @@ def test_compare_runs_builds_metrics_and_writes_reports(tmp_path: Path) -> None:
     assert report["summary_metrics"]["different_selected_clips_count"] == 1
     assert report["summary_metrics"]["exact_selected_clip_id_match_count"] == 0
     assert report["summary_metrics"]["average_score_difference"] == 20.0
-    assert report["summary_metrics"]["high_quality_clips_using_ai_score"] == 1
-    assert report["summary_metrics"]["high_quality_clips_using_fallback"] == 1
-    assert report["summary_metrics"]["high_quality_clips_not_scored"] == 0
     assert report["summary_metrics"]["low_cost_backfill_count"] == 1
     assert report["summary_metrics"]["high_quality_count_fulfillment"]["normal"]["fulfilled"] is True
     assert report["selected_clip_comparisons"][0]["same_time_range"] is True
@@ -183,7 +180,7 @@ def test_compare_runs_builds_metrics_and_writes_reports(tmp_path: Path) -> None:
     markdown = paths.markdown_path.read_text(encoding="utf-8")
     assert "# AutoClipper Run Comparison" in markdown
     assert "high_normal_1" in markdown
-    assert "fallback_rule_score" in markdown
+    assert "High fallback short" in markdown
 
 
 def test_compare_runs_output_path_suffixes(tmp_path: Path) -> None:
@@ -222,10 +219,6 @@ def test_e2e_compare_quality_builds_commands_and_extracts_job_id() -> None:
             "1",
             "--short-count",
             "2",
-            "--openai-candidate-limit",
-            "12",
-            "--openai-finalist-scoring-limit",
-            "4",
         ]
     )
 
@@ -234,13 +227,8 @@ def test_e2e_compare_quality_builds_commands_and_extracts_job_id() -> None:
 
     assert "--mode" in low_command
     assert "low_cost" in low_command
-    assert "--use-openai-scoring" in low_command
-    assert "false" in low_command
     assert "high_quality" in high_command
-    assert "--openai-candidate-limit" in high_command
-    assert "12" in high_command
-    assert "--openai-finalist-scoring-limit" in high_command
-    assert "4" in high_command
+    assert not any("openai" in arg for arg in low_command + high_command)
 
     assert e2e_compare_quality.extract_job_id("created job: job_abc123\nREAL VIDEO E2E PASSED") == "job_abc123"
     assert e2e_compare_quality.extract_job_id("created job: job_a\njob: job_b\n") == "job_b"

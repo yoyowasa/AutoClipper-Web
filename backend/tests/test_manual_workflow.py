@@ -329,7 +329,7 @@ def test_finalized_manual_job_skips_scene_scoring_and_preserves_identity(
         "generate_short_candidates_with_summary",
         must_not_run,
     )
-    monkeypatch.setattr(runner_module, "_score_candidate_list", must_not_run)
+    monkeypatch.setattr(runner_module, "_score_local_candidates", must_not_run)
     monkeypatch.setattr(runner_module, "select_candidates", must_not_run)
 
     visited = run_autoclipper_job(
@@ -357,7 +357,6 @@ def test_finalized_manual_job_skips_scene_scoring_and_preserves_identity(
             detect_black_screen=must_not_run,  # type: ignore[arg-type]
             normal_renderer=fake_render,
             short_renderer=fake_render,
-            openai_scorer=must_not_run,  # type: ignore[arg-type]
         ),
     )
 
