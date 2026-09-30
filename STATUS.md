@@ -10600,6 +10600,7 @@ pip check: pass
 - 画面: アップロードは合計・最低本数へ変更し、不正な入力は理由を表示して送信を止める。確認画面では「10本中7本（通常3・ショート4）」形式の表示と不足の理由、再選定欄ではキープを差し引いた残り枠を表示する。手動作業の追加本数は合計を超えると422とし、clip plan保存時に実数を更新する。
 - fixed互換: totalClipCountがない設定はfixedとしてnormalClipCount・shortCountを従来どおり使う。保存済みジョブを自動で書き換えず、GET・retryは元設定を維持する。再選定も新しい配分キーを指定しない限り追加せず、形式別本数の挙動を維持する。e2e_real_video.py・e2e_sample_video.pyの旧指定は合計を送らないのでfixedとなり、CLIオプションは変更しない。
 - Codex中継: プロンプト版をcodex_initial_selection_v6へ更新。依頼へ合計・最低・手動/キープ確定本数を追加し、場面ごとの最適形式とShortsの単体成立、両形式での利用を指示する。応答のpromptVersionの固定値が変わるため、話題選定・初期選定の2種類の応答スキーマハッシュをlauncherへ反映した。ホスト側のCodex中継の再起動が必要。今回再起動は行っていない。
-- 検証: 実装コミット50b6f82のクリーンcheckoutでruff check . ../launcher ../scriptsとpython -m pytestが成功（Python 3.11、1297 passed・1 skipped。既存1269件から新規24件と既存テストのAI配分パラメータ4件を追加）。合計0/1/36/37・最低本数、最低優先後の全体順位、同じ場面の両形式、却下理由と不足の保存、autoでも候補確認、0本失敗、手動のみ/手動＋AI、キープだけ残る再選定、キープの両形式利用、fixedのGET・再選定・retry、Codex中継の契約一致を確認。frontend全19テスト・lint・typecheck・build、git diff --check成功。CIはPR作成後に確認する。
+- 検証: 実装コミット50b6f82のクリーンcheckoutでruff check . ../launcher ../scriptsとpython -m pytestが成功（Python 3.11、1297 passed・1 skipped。既存1269件から新規24件と既存テストのAI配分パラメータ4件を追加）。合計0/1/36/37・最低本数、最低優先後の全体順位、同じ場面の両形式、却下理由と不足の保存、autoでも候補確認、0本失敗、手動のみ/手動＋AI、キープだけ残る再選定、キープの両形式利用、fixedのGET・再選定・retry、Codex中継の契約一致を確認。frontend全19テスト・lint・typecheck・build、git diff --check成功。CI結果は次項に記録する。
+- CI: PR #104の実装コミットa935930でbackend（Python 3.11・3.12）とfrontendがすべて成功（run 36750199115）。
 - lintの環境差: 主作業フォルダのruffはGit管理外scripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。このファイル・ruff設定は変更せず、クリーンcheckoutで上記コマンドの成功を確認した。
 - 未確認: 実動画を使ったCodexの配分・Shortsの意味的な成立、稼働ブラウザでの操作は未確認。Dockerのbuild・再起動・反映、ホスト側Codex中継の再起動、既存稼働DBの更新は行っていない。
