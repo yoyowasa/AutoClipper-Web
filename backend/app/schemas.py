@@ -756,7 +756,36 @@ class SubtitleReviewSettingsUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
 
+ClipRejectionReason = Literal["no_content", "missing_context", "weak_highlight", "other", "unspecified"]
+
+
+class ClipRejectionRequest(BaseModel):
+    clip_id: str = Field(alias="clipId")
+    reason: ClipRejectionReason
+    note: str | None = Field(default=None, max_length=500)
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+
+class ClipRejectionRead(BaseModel):
+    id: str
+    job_id: str = Field(alias="jobId")
+    video_id: str = Field(alias="videoId")
+    source_key: str | None = Field(alias="sourceKey")
+    clip_plan_revision: int = Field(alias="clipPlanRevision")
+    clip_id: str = Field(alias="clipId")
+    clip_type: Literal["normal", "short"] = Field(alias="clipType")
+    start: float
+    end: float
+    reason: ClipRejectionReason
+    note: str | None
+    created_at: datetime = Field(alias="createdAt")
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
 class ClipPlanReselectionRequest(BaseModel):
+    rejections: list[ClipRejectionRequest] = Field(default_factory=list, max_length=36)
     kept_clip_ids: list[str] = Field(default_factory=list, max_length=36, alias="keptClipIds")
     exclude_previous_selection: bool = Field(default=False, alias="excludePreviousSelection", strict=True)
     normal_min_duration: float | None = Field(default=None, ge=NORMAL_MIN_SECONDS, le=NORMAL_MAX_SECONDS, alias="normalMinDuration")

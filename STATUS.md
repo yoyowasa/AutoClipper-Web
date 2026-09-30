@@ -10572,3 +10572,19 @@ pip check: pass
 - lintの環境差: 主作業フォルダのruff check . ../launcher ../scriptsは、Git管理外のscripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗する。このファイルとruff設定は変更せず、実装コミットad4a054のクリーンなcheckoutで指定コマンドが成功したことを確認。
 - CI: PR #102のコミット71586daでbackend（Python 3.11・3.12）とfrontendがすべて成功。
 - 未確認: 稼働Dockerの実動画生成・映像品質・ブラウザでの実操作。Dockerのbuild・再起動・反映、実ジョブの再実行は行っていない。
+
+
+## 2026-10-01 JST 不採用理由の記録と再選定への反映（task-169）
+
+- 目的: キープしない候補の人の判断を永続記録し、同じ場面の再提示を理由に応じて抑える。理由はclipごとに1つ（no_content / missing_context / weak_highlight / other / unspecified）。理由を推定・置換せず、未指定はunspecified。任意の補足は500文字以内で、全理由で記録してCodexへユーザー補足として渡す。
+- 変更ファイル: backend/app/{models.py,schemas.py,clip_rejections.py}、api/clip_plan.py、candidates/{user_rejections.py,used_ranges.py,codex_initial_selection.py}、jobs/{clip_plan_runner.py,pipeline_common.py}、backend/tests/{test_clip_rejections.py,test_clip_plan_split_contract.py,test_real_pipeline.py}、frontend/app/jobs/[jobId]/clips/page.tsx、components/{ClipRejectionEditor.tsx,ClipReselectionPanel.tsx}、lib/{clipRejections.ts,types.ts,api.ts}、tests/clipRejections.test.ts、本ファイル。
+- 台帳: clip_rejectionsの列はid、job_id、video_id、source_key、clip_plan_revision、clip_id、clip_type、start、end、reason、note、created_at。source_keyはsource_clip_historyと同じ関数で算出し、識別不能時はNULL。ジョブ・動画への削除連動を持たず、追記のみ。init_db/create_allで既存DBにもテーブルを追加し、storage lifecycleのジョブ・動画・ファイル掃除後も保持する。
+- 保存順: 再選定の状態を取得し、理由全件を_rejectedRangesへ保存、clip plan保存・キュー登録が成功した後に台帳へ追記する。保存/キュー登録前の失敗では台帳へ書かず、worker失敗時には理由全件と最新の有効なキープIDを復元した設定に残す。以降の依頼ではDB台帳から全件を再構築する。現在のclip以外・キープ済みclip・同一clipの重複指定・500文字超は422。
+- 補足決定3点: no_contentは通常/Shortsの形式をまたいで避ける。50%判定は「不採用にした元区間の長さ」に対する候補との重なり率（50%以上を却下）。補足文は理由未指定を含む全理由でCodexへ渡す。
+- 再選定: weak_highlightは同じ形式で50%以上を避け、より見どころの強い別の場面を指示する。missing_context初回は元区間を含む尺ルール内の拡張候補を優先検討するよう指示し、広げないほぼ同じ区間は既存の90%判定で却下する。同じ形式・90%以上重なる区間で2回目になると50%以上を避けるが、記録上の理由はmissing_contextのまま。other/unspecifiedは従来のほぼ同じ場面の判定を使い、手動指定区間の従来の扱いを維持する。理由による除外は過去候補を避ける設定がOFFでも有効。初回文脈不足の拡張用区間はONでも一律除外から外すが、既存書き出しとキープ場面の除外は維持する。
+- 採用判定: 候補の境界補正前後と手動候補の統合後に理由を確認し、rejected_by_user_*をrejectedCandidatesへ記録する。キープは再判定対象に混ぜず保存する。全台帳は保持し、CodexのcontextGuidanceは1000文字以内の区間・理由・補足、溢れる場合は件数の要約、それも入らなければ省略して失敗させない。
+- 画面: キープしていない候補ごとに4理由のボタンと任意補足欄、未選択時の理由未指定を表示。DB台帳をGET /api/jobs/{job_id}/clip-plan/rejectionsから取得し、折りたたみの区間・形式・理由・補足一覧を表示。新しいrevisionでは入力した理由をリセットし、再利用されたclip IDへ以前の理由を自動付与しない。worker失敗による同じrevisionの復元では入力を保持する。
+- Codex中継: launcher/codex_bridge.pyは変更しない。既存のcontextGuidanceに文面を追加するだけで、入力・応答スキーマの形は変更していない。固定値は応答スキーマのハッシュであり、両段階のbackend契約との一致テストが成功したため更新不要。今回の変更のためのホスト側Codex中継の再起動は不要。
+- 検証: 実装コミット942f34dのクリーンcheckoutで、ruff check . ../launcher ../scriptsと全件python -m pytestが成功（Python 3.11.9、1269 passed・1 skipped。既存1234件に今回の35件を追加）。理由別の形式・50%境界値、小数秒、補正前後の却下理由、Codex候補プール、文脈不足の拡張と2回目、OFF時、旧形式・不正IDの422、補足500/501文字、保存/キュー登録失敗、worker失敗後の台帳・キープ保持、DB追加・掃除後の保持、補足の上限縮退を確認。frontend全18テスト・lint・typecheck・build、git diff --check成功。
+- lintの環境差: 主作業フォルダのruff check . ../launcher ../scriptsは、Git管理外のscripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。このファイルとruff設定は変更しない。
+- 未確認: CIのPython 3.11/3.12・frontendはPR作成後に確認する。実動画によるCodex選定の意味的な品質、稼働ブラウザでの実操作は未確認。Dockerのbuild・再起動・反映、稼働DBへの台帳追加、実ジョブの再実行は行っていない。

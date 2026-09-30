@@ -3,13 +3,15 @@ import { durationSettingsError, effectiveShortMax, validateClipDuration } from "
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ClipBoundaryEditor,
   type ClipBoundaryDraft
 } from "../../../../components/ClipBoundaryEditor";
 import { ClipHookSceneEditor } from "../../../../components/ClipHookSceneEditor";
+import { ClipRejectionEditor } from "../../../../components/ClipRejectionEditor";
+import { rejectionPayload, retainRejectionDrafts, type RejectionDraft } from "../../../../lib/clipRejections";
 import { ClipReselectionPanel } from "../../../../components/ClipReselectionPanel";
 import { ClipTranscriptList, ClipTranscriptPanel } from "../../../../components/ClipTranscriptList";
 import { InitialSelectionStatusBanner } from "../../../../components/InitialSelectionStatusBanner";
@@ -19,6 +21,7 @@ import {
   createClipPlanClip,
   deleteClipPlanClip,
   getClipPlan,
+  getClipRejections,
   getClipPlanTranscriptSegments,
   getJobStatus,
   reselectClipPlan,
@@ -29,6 +32,7 @@ import {
   updateManualClipPlanClip
 } from "../../../../lib/api";
 import type {
+  ClipRejectionRead,
   ClipPlanClip,
   ClipPlanDocument,
   ClipPlanReselectionRequest,
@@ -90,6 +94,10 @@ export default function ClipPlanReviewPage() {
   const [draftSettings, setDraftSettings] = useState<ClipSettings | null>(null);
   const [selectedClipId, setSelectedClipId] = useState("");
   const [excludePreviousSelection, setExcludePreviousSelection] = useState(true);
+  const [rejectionDrafts, setRejectionDrafts] = useState<Record<string, RejectionDraft>>({});
+  const previousRejectionPlan = useRef<ClipPlanDocument | null>(null);
+  const [rejectionHistory, setRejectionHistory] = useState<ClipRejectionRead[]>([]);
+  const [rejectionHistoryError, setRejectionHistoryError] = useState<string | null>(null);
   const [keptClipIds, setKeptClipIds] = useState<string[]>([]);
   const remainingReselectionCount = plan ? (["normal", "short"] as const).reduce((total, kind) => {
     const existing = plan.clips.filter(clip => clip.type === kind);
@@ -117,9 +125,22 @@ export default function ClipPlanReviewPage() {
   >(null);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!plan) return;
+    const previous = previousRejectionPlan.current;
+    setRejectionDrafts(current => retainRejectionDrafts(previous, plan, current));
+    previousRejectionPlan.current = plan;
+  }, [plan]);
+
   const loadPlan = useCallback(async () => {
     const document = await getClipPlan(jobId);
     setPlan(document);
+    try {
+      setRejectionHistory(await getClipRejections(jobId));
+      setRejectionHistoryError(null);
+    } catch (caught) {
+      setRejectionHistoryError(caught instanceof Error ? caught.message : "不採用の履歴を読み込めませんでした");
+    }
     setDraftSettings(document.settings);
     setExcludePreviousSelection(document.settings.excludePreviousSelection ?? true);
     const nextSelectedClipId = document.clips.some(
@@ -169,6 +190,15 @@ export default function ClipPlanReviewPage() {
         }
         if (!active) {
           return;
+        }
+        try {
+          const history = await getClipRejections(jobId);
+          if (!active) return;
+          setRejectionHistory(history);
+          setRejectionHistoryError(null);
+        } catch (caught) {
+          if (!active) return;
+          setRejectionHistoryError(caught instanceof Error ? caught.message : "不採用の履歴を読み込めませんでした");
         }
         setPlan(document);
         setExcludePreviousSelection(document.settings.excludePreviousSelection ?? true);
@@ -606,7 +636,8 @@ export default function ClipPlanReviewPage() {
     setIsReselecting(true);
     try {
       await reselectClipPlan(jobId, { ...reselectionPayload(draftSettings, excludePreviousSelection),
-        keptClipIds: keptClipIds.filter(id => plan?.clips.some(clip => clip.id === id)) });
+        keptClipIds: keptClipIds.filter(id => plan?.clips.some(clip => clip.id === id)),
+        rejections: rejectionPayload(plan?.clips ?? [], keptClipIds, rejectionDrafts) });
       setJob((current) =>
         current
           ? {
@@ -798,6 +829,10 @@ export default function ClipPlanReviewPage() {
                       ? [...current, clip.id] : current.filter(id => id !== clip.id))} />
                   この候補をキープ
                 </label>}
+                {!plan.boundaryReedit && !keptClipIds.includes(clip.id) && <ClipRejectionEditor
+                  label={clipLabel(clip, plan.clips)} disabled={controlsDisabled}
+                  value={rejectionDrafts[clip.id] ?? { reason: "unspecified", note: "" }}
+                  onChange={value => setRejectionDrafts(current => ({ ...current, [clip.id]: value }))} />}
                 </div>
               );
             })}
@@ -955,6 +990,8 @@ export default function ClipPlanReviewPage() {
 
         <section className="border-b border-neutral-300 bg-[#f7f7f4] px-5 py-5 lg:col-start-2 lg:row-start-2 lg:border-r">
           {!plan.boundaryReedit && <ClipReselectionPanel
+            rejectionHistory={rejectionHistory}
+            rejectionHistoryError={rejectionHistoryError}
             plan={plan}
             keptClipIds={keptClipIds}
             remainingReselectionCount={remainingReselectionCount}

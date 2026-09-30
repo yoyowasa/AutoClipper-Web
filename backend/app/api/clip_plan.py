@@ -1,4 +1,7 @@
 from app.jobs.reselection_keep import target_count
+from app.clip_rejections import job_rejections, rejection_ranges
+from app.candidates.user_rejections import REJECTED_RANGES_SETTING
+from app.source_clip_history import source_key
 import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -60,7 +63,7 @@ from app.jobs.subtitle_review import (
 from app.jobs.subtitle_review_preview import (
     subtitle_review_document_lock,
 )
-from app.models import Job, Video
+from app.models import ClipRejection, Job, Video
 from app.models import utc_now
 from app.schemas import (
     ClipPlanActionResponse,
@@ -71,6 +74,7 @@ from app.schemas import (
     ManualClipCreateRequest,
     ManualClipUpdateRequest,
     JobSettings,
+    ClipRejectionRead,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
 
@@ -202,6 +206,15 @@ def get_clip_plan(
 ) -> ClipPlanDocument:
     _get_job_or_404(db, job_id)
     return _get_clip_plan_or_404(job_id, paths)
+
+
+@router.get("/{job_id}/clip-plan/rejections", response_model=list[ClipRejectionRead])
+def get_clip_rejections(job_id: str, db: Session = Depends(get_db)) -> list[ClipRejectionRead]:
+    rows = job_rejections(db, job_id)
+    if not rows:
+        _get_job_or_404(db, job_id)
+    return [ClipRejectionRead.model_validate(row) for row in rows]
+
 
 @router.post(
     "/{job_id}/clip-plan/clips",
@@ -798,12 +811,29 @@ def reselect_clip_plan(
         raise HTTPException(422, "キープ対象の候補が見つかりません。画面を確認してください。")
     if keep_ids and len(keep_ids) >= sum(target_count(previous_settings, document, kind) for kind in ("normal", "short")):
         raise HTTPException(422, "全候補がキープされています。再選定する候補のキープを外してください。")
+    rejected_ids = [item.clip_id for item in request.rejections]
+    available_ids = {clip.id for clip in document.clips} - keep_ids
+    if len(rejected_ids) != len(set(rejected_ids)) or not set(rejected_ids).issubset(available_ids):
+        raise HTTPException(422, "不採用理由はキープしていない現在の候補に1つだけ指定してください。")
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(404, "video not found")
+    decisions = {item.clip_id: item for item in request.rejections}
+    rows = [ClipRejection(
+        id=make_id("rej"), job_id=job.id, video_id=job.video_id,
+        source_key=source_key(video, previous_settings), clip_plan_revision=document.revision,
+        clip_id=clip.id, clip_type=clip.type, start=clip.start, end=clip.end,
+        reason=decisions[clip.id].reason if clip.id in decisions else "unspecified",
+        note=decisions[clip.id].note if clip.id in decisions else None,
+    ) for clip in document.clips if clip.id not in keep_ids]
     settings_payload = dict(previous_settings)
+    settings_payload[REJECTED_RANGES_SETTING] = rejection_ranges([*job_rejections(db, job.id), *rows])
     settings_payload.update(
         request.model_dump(
             by_alias=True,
             mode="json",
             exclude_none=True,
+            exclude={"rejections"},
         )
     )
     try:
@@ -855,6 +885,10 @@ def reselect_clip_plan(
             detail="could not queue clip plan reselection",
         ) from exc
 
+    # Enqueue failure never writes human decisions. Worker failure keeps this ledger.
+    db.add_all(rows)
+    db.commit()
+    db.refresh(job)
     return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
 @router.post(

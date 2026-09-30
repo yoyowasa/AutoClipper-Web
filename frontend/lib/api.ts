@@ -4,6 +4,7 @@ import type {
   ClipPlanBoundaryUpdateRequest,
   ClipPlanClipCreateRequest,
   ClipPlanDocument,
+  ClipRejectionRead,
   ClipPlanHookSceneUpdateRequest,
   ClipPlanReselectionRequest,
   ClipPlanTypeUpdateRequest,
@@ -313,6 +314,10 @@ export async function getClipPlan(jobId: string): Promise<ClipPlanDocument> {
     cache: "no-store"
   });
   return parseJsonResponse<ClipPlanDocument>(response);
+}
+
+export async function getClipRejections(jobId: string): Promise<ClipRejectionRead[]> {
+  return parseJsonResponse(await fetch(`${API_BASE_URL}/api/jobs/${jobId}/clip-plan/rejections`, { cache: "no-store" }));
 }
 
 export async function reselectClipPlan(
