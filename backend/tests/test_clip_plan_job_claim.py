@@ -27,7 +27,7 @@ def test_clip_plan_action_claim_rejects_second_request_before_writing(
     if action == "boundary":
         method = client.patch
         url = f"/api/jobs/{job_id}/clip-plan/clips/normal0/boundary"
-        payload = {"start": 1, "end": 29}
+        payload = {"start": 1, "end": 91}
         dependency = get_enqueue_clip_plan_boundary_update
     elif action == "hook-scene":
         method = client.patch

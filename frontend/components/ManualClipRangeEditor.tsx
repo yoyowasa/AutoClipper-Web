@@ -1,4 +1,5 @@
 "use client";
+import { effectiveShortMax, validateClipDuration } from "../lib/durationRules";
 
 import { useEffect, useRef, useState } from "react";
 
@@ -6,6 +7,7 @@ import {
   clearManualRanges,
   isManualTimeMode,
   manualRangeRows,
+  manualRangeValidationError,
   updateManualRangeTime
 } from "../lib/manualClipRanges";
 import type {
@@ -57,7 +59,7 @@ function timePart(
   if (total === null) {
     return "";
   }
-  return unit === "minutes" ? Math.floor(total / 60) : Math.floor(total % 60);
+  return unit === "minutes" ? Math.floor(total / 60) : Math.round((total % 60) * 1000) / 1000;
 }
 
 function rangeDuration(range: ClipTimeRange): string | null {
@@ -69,8 +71,8 @@ function rangeDuration(range: ClipTimeRange): string | null {
     return null;
   }
   const minutes = Math.floor(duration / 60);
-  const seconds = Math.floor(duration % 60);
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  const seconds = Math.round((duration % 60) * 1000) / 1000;
+  return `${minutes}:${seconds < 10 ? "0" : ""}${seconds}`;
 }
 
 function ManualRangeGroup({
@@ -128,6 +130,8 @@ function ManualRangeGroup({
       <div className="mt-3 space-y-2">
         {rows.map((range, index) => {
           const duration = rangeDuration(range);
+          const durationError = range.startSeconds !== null && range.endSeconds !== null
+            ? validateClipDuration(type, range.endSeconds - range.startSeconds, effectiveShortMax(settings.shortMaxDuration)) : null;
           return (
             <div
               className="grid gap-2 border-t border-neutral-200 pt-3 sm:grid-cols-[5rem_1fr_1fr_auto]"
@@ -154,7 +158,8 @@ function ManualRangeGroup({
                   aria-label={`${label}${index + 1} 開始 秒`}
                   className="min-h-10 min-w-0 border border-neutral-300 px-2 text-sm"
                   disabled={disabled}
-                  max={59}
+                  max={59.999}
+                  step={0.001}
                   min={0}
                   placeholder="秒"
                   type="number"
@@ -183,7 +188,8 @@ function ManualRangeGroup({
                   aria-label={`${label}${index + 1} 終了 秒`}
                   className="min-h-10 min-w-0 border border-neutral-300 px-2 text-sm"
                   disabled={disabled}
-                  max={59}
+                  max={59.999}
+                  step={0.001}
                   min={0}
                   placeholder="秒"
                   type="number"
@@ -197,6 +203,7 @@ function ManualRangeGroup({
               <span className="min-w-16 pt-2 text-right text-xs text-neutral-500">
                 {duration ? `長さ ${duration}` : "未入力"}
               </span>
+              {durationError ? <p className="text-xs text-red-700 sm:col-span-4" role="alert">{durationError}</p> : null}
             </div>
           );
         })}
@@ -268,6 +275,9 @@ export function ManualClipRangeEditor({
         空欄ならおすすめから自動選定します。どれか入力すると時間指定モードになり、
         表示されている本数すべての開始・終了時間が必要です。
       </p>
+      {manualRangeValidationError(settings) ? (
+        <p className="mt-2 text-sm text-red-700" role="alert">{manualRangeValidationError(settings)}</p>
+      ) : null}
       <div
         className={`mt-3 grid gap-4 ${workspace ? "2xl:grid-cols-2" : "xl:grid-cols-2"}`}
       >

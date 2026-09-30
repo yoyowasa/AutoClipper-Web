@@ -10558,3 +10558,17 @@ pip check: pass
 - lintの環境差: 主作業フォルダで`ruff check . ../launcher ../scripts`は、Git管理外の`scripts/make_plotwith_solar_finished_variants.py`の既存F841で失敗した。このファイルとruff設定は変更せず、実装コミット`27ded43`のクリーンなcheckoutで指定コマンドが成功したことを確認。
 - CI: PR #101のコミット`722815a`でbackend（Python 3.11・3.12）とfrontendがすべて成功。
 - 未確認: 稼働Dockerの実動画処理・画面操作と既存RQキューの実行は未確認。Dockerのbuild・再起動・反映、実ジョブの再実行は行っていない。
+
+## 2026-10-01 JST 切り抜きの尺ルールを統一（task-168）
+
+- 目的: 2026-09-27確定・2026-09-30補足の尺ルールを、AI選定・再選定と人による編集に共通で適用する。
+- ルール: 通常切り抜きは90〜600秒。ショートの最低尺は強制せず、上限は既定75秒・設定可能範囲1〜180秒。shortMinDurationは0以上かつ上限以下の探索目安で、Codexにも最低尺の制限ではないと伝える。ショートは冒頭に複製するフック映像を含めた完成尺で判定する。
+- 変更ファイル: `backend/app/duration_rules.py`、`api/{clip_plan.py,_job_common.py}`、`schemas.py`、`candidates/{merge_boundaries.py,boundary_refinement.py,codex_initial_selection.py,select_candidates.py}`、`jobs/{runner.py,clip_plan_runner.py,pipeline_common.py,subtitle_review.py}`。共通判定へ置き換えて参照がなくなった旧`jobs/hook_scene.py`を削除。frontendは`lib/{durationRules.ts,clipBoundaryTime.ts,manualClipRanges.ts}`、`components/{SettingsPanel,ClipReselectionPanel,ClipBoundaryEditor,ManualClipPlanEditor,ManualClipRangeEditor,ClipHookSceneEditor}.tsx`、upload・clips・subtitlesの各page。backendの既存10テストと新規`test_duration_rules.py`・`test_duration_rules_api.py`・共通定数fixture、frontendの境界時刻テストと新規`durationRules.test.ts`、本ファイル。
+- 適用箇所: JobSettings・再選定依頼の設定検証、手動アップロード範囲、Codexの尺帯と返却候補、境界補正前後の候補、通常のルール選定、clip planの境界変更・手動作成/更新・形式変更・フック編集・手動確定、workerの境界/フック更新。字幕確認から尺調整へ戻った後も同じ検証を通す。字幕確認のフック編集・applyにも完成尺の上限を適用し、別画面からの回避を防ぐ。違反候補はduration_out_of_rangeで記録して採用せず、本数不足を短い通常clipで埋めない。
+- 画面: 各入力に範囲外の理由を表示し、upload・再選定・境界/手動保存・形式変更・フック編集の送信を止める。ショートの1秒未満の編集を可能にするため、境界調整の1秒制限を取り除き、手動範囲の秒入力にも小数を使えるようにした。ショートの上限は時間指定中も変更でき、入力した範囲を消さずに調整できる。
+- 既存データ: 保存済み設定は読み取り専用のvalidation contextで旧値を受け入れ、GET・retryで422/500にしない。ディスクとDBの設定は書き換えず、生成に使うコピーだけ現行ルール内へ収める。新規保存・再選定は通常の厳しい検証を行う。既存clipの元の長さで拒否せず、変更後の範囲・完成尺が適合すれば修正できる。
+- 自動補足: 過去提案の説明に残り文字数が足りない場合は、範囲一覧0件＋「過去の提案範囲がほかN件あります」まで縮め、それも入らなければ補足を省略する。既存の自動補足・ユーザー指示・重複判定用の全範囲は保持する。
+- 検証: Python 3.11.9の全件python -m pytestは1234 passed・1 skipped（移動後1175件に今回の59件を追加）。通常89/90/600/601秒、ショート上限0/1/180/181秒、min>max、0.5秒のショート、各編集窓口の422とファイル不変・キュー未登録、範囲外の既存clipの修正、字幕確認からの再編集、旧設定のGET・retry、Codex候補の補正前後の却下・フック追加後の上限、狭い文字数予算と全範囲の保持、backend/frontend定数一致を確認。frontend全17テスト・lint・typecheck・build成功。backend/app・backend/tests・launcherのruffとgit diff --check成功。
+- lintの環境差: 主作業フォルダのruff check . ../launcher ../scriptsは、Git管理外のscripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗する。このファイルとruff設定は変更せず、Git管理ファイルだけのクリーンなcheckoutでも指定コマンドを確認する。
+- CI: PR作成後にbackend（Python 3.11・3.12）とfrontendを確認する。
+- 未確認: 稼働Dockerの実動画生成・映像品質・ブラウザでの実操作。Dockerのbuild・再起動・反映、実ジョブの再実行は行っていない。

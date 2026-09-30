@@ -1,4 +1,5 @@
 import json
+from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration
 import math
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -1179,10 +1180,12 @@ def update_review_hook_scene(
             raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
         if start < clip.start - 0.001 or end > clip.end + 0.001:
             raise ValueError("hook scene must stay within the selected clip")
-        # The configured short maximum is a selection target. Once a short is in
-        # subtitle review, a manual hook-scene edit may take the finished duration
-        # slightly past that target. The hook itself remains bounded to 0.5-3s and
-        # must stay inside the selected clip.
+    reason = validate_clip_duration(
+        clip.type, completed_clip_duration(clip.type, clip.start, clip.end, start, end),
+        short_max=effective_short_max({"shortMaxDuration": document.short_max_duration}),
+    )
+    if reason:
+        raise ValueError(reason)
 
     if clip.hook_scene_start == start and clip.hook_scene_end == end:
         return _refresh_counts(document)

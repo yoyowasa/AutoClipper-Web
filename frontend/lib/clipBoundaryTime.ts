@@ -43,7 +43,7 @@ export function combineBoundaryTime(parts: BoundaryTimeParts): number | null {
 }
 
 export function clampStartBoundary(value: number, end: number | null): number {
-  const upperBound = end === null ? Number.POSITIVE_INFINITY : Math.max(0, end - 1);
+  const upperBound = end === null ? Number.POSITIVE_INFINITY : Math.max(0, end - 0.001);
   return Math.round(Math.min(Math.max(0, value), upperBound) * 1000) / 1000;
 }
 
@@ -52,7 +52,7 @@ export function clampEndBoundary(
   start: number | null,
   sourceDuration: number | null
 ): number {
-  const lowerBound = start === null ? 1 : start + 1;
+  const lowerBound = start === null ? 0.001 : start + 0.001;
   const upperBound = sourceDuration ?? Number.POSITIVE_INFINITY;
   return (
     Math.round(Math.min(Math.max(lowerBound, value), upperBound) * 1000) / 1000

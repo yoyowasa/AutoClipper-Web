@@ -1,4 +1,5 @@
 "use client";
+import { durationSettingsError, effectiveShortMax, validateClipDuration } from "../../../../lib/durationRules";
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -599,6 +600,8 @@ export default function ClipPlanReviewPage() {
     if (!draftSettings) {
       return;
     }
+    const durationError = durationSettingsError(draftSettings);
+    if (durationError) { setError(durationError); return; }
     setError(null);
     setIsReselecting(true);
     try {
@@ -834,11 +837,18 @@ export default function ClipPlanReviewPage() {
                           ? "範囲とタイトルを維持したまま、通常切り抜きへ変更できます。"
                           : `ショートへ変更できます。上限${plan.settings.shortMaxDuration ?? 75}秒を超える場合は範囲を調整してください。`}
                       </p>
+                      {!isManualWorkflow && !plan.boundaryReedit && validateClipDuration(
+                        selectedClip.type === "short" ? "normal" : "short", selectedClip.end - selectedClip.start,
+                        effectiveShortMax(plan.settings.shortMaxDuration)) ? <p className="mt-1 text-xs text-red-700">
+                        {validateClipDuration(selectedClip.type === "short" ? "normal" : "short",
+                          selectedClip.end - selectedClip.start, effectiveShortMax(plan.settings.shortMaxDuration))}
+                      </p> : null}
                     </div>
                     {!isManualWorkflow && !plan.boundaryReedit ? (
                       <button
                         className="min-h-9 border border-neutral-900 bg-white px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        disabled={controlsDisabled}
+                        disabled={controlsDisabled || validateClipDuration(selectedClip.type === "short" ? "normal" : "short",
+                          selectedClip.end - selectedClip.start, effectiveShortMax(plan.settings.shortMaxDuration)) !== null}
                         type="button"
                         onClick={() => void handleConvertType(selectedClip.type === "short" ? "normal" : "short")}
                       >
@@ -852,6 +862,7 @@ export default function ClipPlanReviewPage() {
                     key={`${selectedClip.id}-${selectedClip.type}-${selectedClip.start}-${selectedClip.end}`}
                     saving={isAdjusting}
                     sourceDuration={plan.sourceDuration}
+                    shortMaxDuration={plan.settings.shortMaxDuration}
                     onDraftChange={handleBoundaryDraftChange}
                     onSave={(start, end) =>
                       void handleBoundaryUpdate(start, end)

@@ -88,16 +88,16 @@ def _seed_job(
         db.commit()
 
 
-def _probe(*, has_audio: bool = True) -> VideoMetadata:
+def _probe(*, has_audio: bool = True, duration: float = 30.0) -> VideoMetadata:
     return VideoMetadata(
-        duration=30.0,
+        duration=duration,
         width=1920,
         height=1080,
         fps=30.0,
         has_audio=has_audio,
-        video_stream_duration=30.0,
-        audio_stream_duration=30.0 if has_audio else None,
-        container_duration=30.0,
+        video_stream_duration=duration,
+        audio_stream_duration=duration if has_audio else None,
+        container_duration=duration,
     )
 
 
@@ -179,7 +179,7 @@ def test_manual_clip_crud_and_approve_preserve_user_values(
         session_factory=session_factory,
         paths=storage,
         dependencies=AutoClipperPipelineDependencies(
-            probe_metadata=lambda _path: _probe(),
+            probe_metadata=lambda _path: _probe(duration=120),
             manual_source_proxy_renderer=_fake_manual_source_proxy,
         ),
     )
@@ -201,7 +201,7 @@ def test_manual_clip_crud_and_approve_preserve_user_values(
                     "type": "normal",
                     "title": "仮タイトル",
                     "start": 2.0,
-                    "end": 8.0,
+                    "end": 92.0,
                 },
             )
             assert created.status_code == 201
@@ -232,7 +232,7 @@ def test_manual_clip_crud_and_approve_preserve_user_values(
 
             disposable = client.post(
                 "/api/jobs/job_manual/clip-plan/clips",
-                json={"type": "normal", "start": 10.0, "end": 12.0},
+                json={"type": "normal", "start": 10.0, "end": 100.0},
             )
             disposable_id = disposable.json()["clips"][1]["id"]
             deleted = client.delete(
@@ -288,7 +288,7 @@ def test_finalized_manual_job_skips_scene_scoring_and_preserves_identity(
         manualEditFinalized=True,
         normalClipCount=1,
         shortCount=0,
-        normalClipTimeRanges=[{"startSeconds": 3.0, "endSeconds": 9.5}],
+        normalClipTimeRanges=[{"startSeconds": 3.0, "endSeconds": 93.5}],
         requireClipPlanReview=False,
         requireSubtitleReview=False,
         burnSubtitles=True,
@@ -298,7 +298,7 @@ def test_finalized_manual_job_skips_scene_scoring_and_preserves_identity(
                 "type": "normal",
                 "title": "固定タイトル",
                 "startSeconds": 3.0,
-                "endSeconds": 9.5,
+                "endSeconds": 93.5,
                 "hookSceneStart": None,
                 "hookSceneEnd": None,
             }
@@ -355,7 +355,7 @@ def test_finalized_manual_job_skips_scene_scoring_and_preserves_identity(
         session_factory=session_factory,
         paths=storage,
         dependencies=AutoClipperPipelineDependencies(
-            probe_metadata=lambda _path: _probe(),
+            probe_metadata=lambda _path: _probe(duration=120),
             extract_audio=fake_extract,
             transcribe_audio=lambda _path: [
                 TranscriptSegment(
@@ -389,7 +389,7 @@ def test_finalized_manual_job_skips_scene_scoring_and_preserves_identity(
     assert selected["normalClips"][0]["id"] == clip_id
     assert selected["normalClips"][0]["title"] == "固定タイトル"
     assert selected["normalClips"][0]["start"] == 3.0
-    assert selected["normalClips"][0]["end"] == 9.5
+    assert selected["normalClips"][0]["end"] == 93.5
     finalized_plan = load_clip_plan(
         storage.job_outputs("job_manual") / "clip_plan.json"
     )
@@ -417,7 +417,7 @@ def test_manual_subtitle_modes_skip_audio_and_prepare_review(
         manualSubtitleMode=subtitle_mode,
         normalClipCount=1,
         shortCount=1,
-        normalClipTimeRanges=[{"startSeconds": 3.0, "endSeconds": 9.0}],
+        normalClipTimeRanges=[{"startSeconds": 3.0, "endSeconds": 93.0}],
         shortClipTimeRanges=[{"startSeconds": 3.0, "endSeconds": 9.0}],
         requireClipPlanReview=False,
         requireSubtitleReview=True,
@@ -428,7 +428,7 @@ def test_manual_subtitle_modes_skip_audio_and_prepare_review(
                 "type": "normal",
                 "title": "通常タイトル",
                 "startSeconds": 3.0,
-                "endSeconds": 9.0,
+                "endSeconds": 93.0,
                 "hookSceneStart": None,
                 "hookSceneEnd": None,
             },
@@ -462,7 +462,7 @@ def test_manual_subtitle_modes_skip_audio_and_prepare_review(
         session_factory=session_factory,
         paths=storage,
         dependencies=AutoClipperPipelineDependencies(
-            probe_metadata=lambda _path: _probe(has_audio=False),
+            probe_metadata=lambda _path: _probe(has_audio=False, duration=120),
             extract_audio=must_not_run,  # type: ignore[arg-type]
             transcribe_audio=must_not_run,  # type: ignore[arg-type]
             detect_scenes=must_not_run,  # type: ignore[arg-type]

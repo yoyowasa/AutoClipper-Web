@@ -4,6 +4,7 @@ import type { Dispatch, SetStateAction } from "react";
 
 import { ClipSelectionEditor } from "./ClipSelectionEditor";
 import type { ClipPlanDocument, ClipSettings, JobStatusResponse } from "../lib/types";
+import { durationSettingsError, NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS } from "../lib/durationRules";
 
 type ClipReselectionPanelProps = {
   plan: ClipPlanDocument;
@@ -32,6 +33,7 @@ export function ClipReselectionPanel({
   job,
   handleReselect
 }: ClipReselectionPanelProps) {
+  const durationError = durationSettingsError(draftSettings);
   return (
     <details>
             <summary className="cursor-pointer text-sm font-semibold text-neutral-700">
@@ -122,29 +124,26 @@ export function ClipReselectionPanel({
                 <label className="flex flex-col gap-1 text-xs font-medium text-neutral-700">
                   最低（秒）
                   <input className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                    disabled={controlsDisabled} min={1} step={1} type="number"
+                    disabled={controlsDisabled} min={NORMAL_MIN_SECONDS} max={NORMAL_MAX_SECONDS} step={1} type="number"
                     value={draftSettings.normalMinDuration}
                     onChange={event => setDraftSettings(current => current ? { ...current, normalMinDuration: Number(event.target.value) } : current)} />
                 </label>
                 <label className="flex flex-col gap-1 text-xs font-medium text-neutral-700">
                   最長（秒）
                   <input className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
-                    disabled={controlsDisabled} min={1} step={1} type="number"
+                    disabled={controlsDisabled} min={NORMAL_MIN_SECONDS} max={NORMAL_MAX_SECONDS} step={1} type="number"
                     value={draftSettings.normalMaxDuration}
                     onChange={event => setDraftSettings(current => current ? { ...current, normalMaxDuration: Number(event.target.value) } : current)} />
                 </label>
               </div>
-              {draftSettings.normalMinDuration > draftSettings.normalMaxDuration ? (
-                <p className="mt-2 text-xs text-red-700">最低尺は最長尺以下にしてください。</p>
+              {durationError ? (
+                <p className="mt-2 text-xs text-red-700" role="alert">{durationError}</p>
               ) : null}
             </div>
 
             <button
               className="mt-4 min-h-11 w-full border border-neutral-950 bg-white px-4 text-sm font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={controlsDisabled || remainingReselectionCount === 0 ||
-                !Number.isFinite(draftSettings.normalMinDuration) || !Number.isFinite(draftSettings.normalMaxDuration) ||
-                draftSettings.normalMinDuration <= 0 || draftSettings.normalMaxDuration <= 0 ||
-                draftSettings.normalMinDuration > draftSettings.normalMaxDuration}
+              disabled={controlsDisabled || remainingReselectionCount === 0 || durationError !== null}
               type="button"
               onClick={() => void handleReselect()}
             >

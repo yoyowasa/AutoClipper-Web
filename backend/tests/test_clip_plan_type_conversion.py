@@ -13,9 +13,9 @@ from app.schemas import JobSettings
 from app.storage.paths import get_storage_paths
 
 
-def seed_plan(api, *, normal_count=2, short_count=1, duration=30):
+def seed_plan(api, *, normal_count=2, short_count=1, duration=30, short_max=75):
     video = api.post('/api/videos/upload', files={'file': ('test.mp4', b'qa', 'video/mp4')}).json()
-    settings = JobSettings(normalClipCount=normal_count, shortCount=short_count).model_dump(by_alias=True)
+    settings = JobSettings(normalClipCount=normal_count, shortCount=short_count, shortMaxDuration=short_max).model_dump(by_alias=True)
     created = api.post('/api/jobs', json={'videoId': video['videoId'], 'settings': settings}).json()
     job_id = created['jobId']
     with next(app.dependency_overrides[get_db]()) as db:
@@ -40,14 +40,14 @@ def seed_plan(api, *, normal_count=2, short_count=1, duration=30):
 
 
 def test_plan_converts_both_directions_and_passes_type_to_subtitles(client):  # noqa: F811
-    job_id, output = seed_plan(client)
+    job_id, output = seed_plan(client, duration=90, short_max=120)
     endpoint = f'/api/jobs/{job_id}/clip-plan/clips/normal0/type'
     original = json.loads((output / 'clip_plan.json').read_text(encoding='utf-8'))
     response = client.patch(endpoint, json={'type': 'short'})
     assert response.status_code == 200, response.text
     converted = response.json()['clips'][0]
     assert (converted['id'], converted['type'], converted['title'], converted['start'], converted['end']) == (
-        'normal0', 'short', 'title0', 0, 30)
+        'normal0', 'short', 'title0', 0, 90)
     assert converted['hookSceneStart'] is None
     assert response.json()['clips'][1:] == original['clips'][1:]
     assert client.patch(endpoint, json={'type': 'short'}).status_code == 200

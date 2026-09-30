@@ -10,6 +10,7 @@ from app.audio.silence_detect import SilenceSegment
 from app.audio.volume_features import AudioFeatures
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType
+from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration, SHORT_MAX_DEFAULT_SECONDS
 from app.scoring.quality_gate import (
     QualityGateSettings,
     effective_final_score,
@@ -64,6 +65,7 @@ class CandidateSelectionSettings(BaseModel):
     cross_type_overlap_dedupe: bool = False
     selection_policy: SelectionPolicy = "strict_quality"
     quality_gate: QualityGateSettings = Field(default_factory=QualityGateSettings)
+    short_max_duration: float = SHORT_MAX_DEFAULT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -95,6 +97,7 @@ def parse_selection_settings(
         "crossTypeOverlapDedupe": "cross_type_overlap_dedupe",
         "selectionPolicy": "selection_policy",
         "qualityGate": "quality_gate",
+        "shortMaxDuration": "short_max_duration",
     }
     quality_aliases = {
         "maxSilenceRatio": "max_silence_ratio",
@@ -123,6 +126,27 @@ def parse_selection_settings(
         normalized["quality_gate"] = quality_gate
 
     return CandidateSelectionSettings(**normalized)
+
+
+def partition_candidates_by_duration(
+    candidates: Sequence[Candidate], settings: dict[str, Any],
+) -> tuple[list[Candidate], list[CandidateRejection]]:
+    valid: list[Candidate] = []
+    rejected: list[CandidateRejection] = []
+    short_max = effective_short_max(settings)
+    for candidate in candidates:
+        duration = completed_clip_duration(
+            candidate.type, candidate.start, candidate.end, candidate.hook_scene_start, candidate.hook_scene_end,
+        )
+        reason = validate_clip_duration(candidate.type, duration, short_max=short_max)
+        if reason:
+            rejected.append(CandidateRejection(
+                candidateId=candidate.id, type=candidate.type, reasons=["duration_out_of_range"],
+                details={"duration": duration, "message": reason, "shortMaxDuration": short_max},
+            ))
+        else:
+            valid.append(candidate)
+    return valid, rejected
 
 
 def _rank_key(candidate: Candidate) -> tuple[float, float, int, float, float, int, float]:
@@ -677,6 +701,9 @@ def select_candidates(
     silence_segments: Sequence[SilenceSegment] | None = None,
 ) -> CandidateSelection:
     parsed_settings = parse_selection_settings(settings)
+    candidates, duration_rejections = partition_candidates_by_duration(
+        candidates, {"shortMaxDuration": parsed_settings.short_max_duration},
+    )
     selector = (
         _select_strict_for_type
         if parsed_settings.selection_policy == "strict_quality"
@@ -702,7 +729,7 @@ def select_candidates(
     normal_clips = normal_result.selected
     shorts = shorts_result.selected
     selected = [*normal_clips, *shorts]
-    rejections = [*normal_result.rejected, *shorts_result.rejected]
+    rejections = [*duration_rejections, *normal_result.rejected, *shorts_result.rejected]
     hard_gate_passed_count, hard_gate_rejected_count = _hard_gate_counts(
         candidates,
         settings=parsed_settings,
@@ -720,7 +747,7 @@ def select_candidates(
         requested_normal_count=parsed_settings.normal_clip_count,
         requested_short_count=parsed_settings.short_count,
         hard_gate_passed_count=hard_gate_passed_count,
-        hard_gate_rejected_count=hard_gate_rejected_count,
+        hard_gate_rejected_count=hard_gate_rejected_count + len(duration_rejections),
         normal_hard_gate_passed_count=normal_result.hard_gate_passed_count,
         short_hard_gate_passed_count=shorts_result.hard_gate_passed_count,
         selected_above_threshold_count=sum(

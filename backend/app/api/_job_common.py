@@ -54,7 +54,7 @@ def _validated_persisted_job_settings(
     payload.setdefault("shortTopBannerEnabled", False)
     payload.setdefault("shortBottomBannerEnabled", False)
     payload.setdefault("shortSubtitleYPercent", None)
-    return JobSettings.model_validate(payload)
+    return JobSettings.model_validate(payload, context={"persisted_job": True})
 
 def _get_job_or_404(db: Session, job_id: str) -> Job:
     job = db.get(Job, job_id)

@@ -105,7 +105,7 @@ def _constraints_for_candidate(
 ) -> BoundaryConstraints:
     generation_settings = parse_generation_settings(settings if isinstance(settings, dict) else None)
     if candidate.type == "short":
-        min_duration = generation_settings.short_min_duration
+        min_duration = 0.0
         max_duration = generation_settings.short_max_duration
     else:
         min_duration = generation_settings.normal_min_duration

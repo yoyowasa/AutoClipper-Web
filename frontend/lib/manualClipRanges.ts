@@ -1,4 +1,5 @@
 import type { ClipSettings, ClipTimeRange } from "./types";
+import { effectiveShortMax, validateClipDuration } from "./durationRules";
 
 export type ClipOutputType = "normal" | "short";
 export type TimeBoundary = "startSeconds" | "endSeconds";
@@ -67,8 +68,10 @@ export function updateManualRangeTime(
   const current = ranges[index] ?? emptyRange();
   const currentTotal = current[boundary];
   const currentMinutes = currentTotal === null ? 0 : Math.floor(currentTotal / 60);
-  const currentSeconds = currentTotal === null ? 0 : Math.floor(currentTotal % 60);
-  const parsed = rawValue === "" ? null : Math.max(0, Math.floor(Number(rawValue) || 0));
+  const currentSeconds = currentTotal === null ? 0 : Math.round((currentTotal % 60) * 1000) / 1000;
+  const rawNumber = Number(rawValue) || 0;
+  const parsed = rawValue === "" ? null : Math.max(0,
+    unit === "minutes" ? Math.floor(rawNumber) : Math.round(rawNumber * 1000) / 1000);
 
   let nextTotal: number | null;
   if (unit === "minutes") {
@@ -79,7 +82,7 @@ export function updateManualRangeTime(
           : null
         : parsed * 60 + currentSeconds;
   } else {
-    const seconds = parsed === null ? 0 : Math.min(59, parsed);
+    const seconds = parsed === null ? 0 : Math.min(59.999, parsed);
     nextTotal =
       parsed === null && currentMinutes === 0
         ? null
@@ -115,6 +118,8 @@ export function manualRangeValidationError(settings: ClipSettings): string | nul
       if (range.endSeconds <= range.startSeconds) {
         return `${label}${index + 1}は終了時間を開始時間より後にしてください。`;
       }
+      const durationError = validateClipDuration(type, range.endSeconds - range.startSeconds, effectiveShortMax(settings.shortMaxDuration));
+      if (durationError) return `${label}${index + 1}: ${durationError}`;
       const key = `${range.startSeconds}:${range.endSeconds}`;
       if (seen.has(key)) {
         return `${label}${index + 1}が前の時間指定と重複しています。`;

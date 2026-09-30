@@ -1,4 +1,5 @@
 "use client";
+import { effectiveShortMax, validateClipDuration } from "../lib/durationRules";
 
 import { useMemo, useRef, useState } from "react";
 
@@ -190,18 +191,15 @@ export function ManualClipPlanEditor({
     if (end <= start) {
       return "終了は開始より後にしてください";
     }
-    if (end - start < 1) {
-      return "切り抜き範囲は1秒以上にしてください";
-    }
     if (sourceDuration !== null && end > sourceDuration + 0.001) {
       return `元動画の長さ ${formatTime(sourceDuration)} を超えています`;
     }
     const outputType = selectedClip?.type ?? draftType;
-    if (outputType === "short" && end - start > plan.settings.shortMaxDuration + 0.001) {
-      return `ショートは ${formatTime(plan.settings.shortMaxDuration)} 以内にしてください`;
-    }
-    return null;
-  }, [draftType, end, plan.settings.shortMaxDuration, selectedClip?.type, sourceDuration, start]);
+    const hookDuration = outputType === "short" && selectedClip?.hookSceneStart != null && selectedClip.hookSceneEnd != null
+      ? selectedClip.hookSceneEnd - selectedClip.hookSceneStart : 0;
+    return validateClipDuration(outputType, end - start + hookDuration, effectiveShortMax(plan.settings.shortMaxDuration));
+  }, [draftType, end, plan.settings.shortMaxDuration, selectedClip?.hookSceneEnd, selectedClip?.hookSceneStart,
+    selectedClip?.type, sourceDuration, start]);
 
   function beginCreate(type: ExportType) {
     const startAt = Math.min(playhead, Math.max(0, (sourceDuration ?? playhead) - 1));

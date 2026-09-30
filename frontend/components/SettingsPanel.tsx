@@ -1,5 +1,6 @@
 "use client";
 
+import { durationSettingsError, NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_DEFAULT_SECONDS, SHORT_MAX_CEILING_SECONDS } from "../lib/durationRules";
 import type { ClipSettings } from "../lib/types";
 import { ClipSelectionEditor } from "./ClipSelectionEditor";
 import { ManualClipRangeEditor } from "./ManualClipRangeEditor";
@@ -27,10 +28,10 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   profile: "auto",
   normalClipCount: 2,
   shortCount: 3,
-  normalMinDuration: 90,
-  normalMaxDuration: 600,
+  normalMinDuration: NORMAL_MIN_SECONDS,
+  normalMaxDuration: NORMAL_MAX_SECONDS,
   shortMinDuration: 20,
-  shortMaxDuration: 75,
+  shortMaxDuration: SHORT_MAX_DEFAULT_SECONDS,
   normalClipSelectionPreset: "auto",
   shortClipSelectionPreset: "auto",
   normalClipGuidance: "",
@@ -156,6 +157,7 @@ export function SettingsPanel({
       }
       data-density={workspace ? "workspace" : "default"}
     >
+      {durationSettingsError(settings) ? <p className="p-3 text-sm text-red-700" role="alert">{durationSettingsError(settings)}</p> : null}
       <div
         className={
           workspace
@@ -455,7 +457,7 @@ export function SettingsPanel({
           </summary>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">Normal min seconds</span>
+              <span className="text-sm font-medium text-neutral-700">通常の最低尺（90〜600秒）</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={
@@ -463,7 +465,8 @@ export function SettingsPanel({
                   settings.normalClipCount === 0 ||
                   isManualTimeMode(settings, "normal")
                 }
-                min={1}
+                min={NORMAL_MIN_SECONDS}
+                max={NORMAL_MAX_SECONDS}
                 step={1}
                 type="number"
                 value={settings.normalMinDuration}
@@ -477,7 +480,7 @@ export function SettingsPanel({
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">Normal max seconds</span>
+              <span className="text-sm font-medium text-neutral-700">通常の最長尺（90〜600秒）</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={
@@ -485,7 +488,8 @@ export function SettingsPanel({
                   settings.normalClipCount === 0 ||
                   isManualTimeMode(settings, "normal")
                 }
-                min={1}
+                min={NORMAL_MIN_SECONDS}
+                max={NORMAL_MAX_SECONDS}
                 step={1}
                 type="number"
                 value={settings.normalMaxDuration}
@@ -499,7 +503,7 @@ export function SettingsPanel({
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">Short min seconds</span>
+              <span className="text-sm font-medium text-neutral-700">ショートの探索目安（最低尺の制限ではありません）</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={
@@ -507,7 +511,8 @@ export function SettingsPanel({
                   settings.shortCount === 0 ||
                   isManualTimeMode(settings, "short")
                 }
-                min={1}
+                min={0}
+                max={settings.shortMaxDuration}
                 step={1}
                 type="number"
                 value={settings.shortMinDuration}
@@ -521,15 +526,14 @@ export function SettingsPanel({
             </label>
 
             <label className="flex flex-col gap-2">
-              <span className="text-sm font-medium text-neutral-700">Short max seconds</span>
+              <span className="text-sm font-medium text-neutral-700">ショートの上限（1〜180秒）</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={
-                  disabled ||
-                  settings.shortCount === 0 ||
-                  isManualTimeMode(settings, "short")
+                  disabled || settings.shortCount === 0
                 }
                 min={1}
+                max={SHORT_MAX_CEILING_SECONDS}
                 step={1}
                 type="number"
                 value={settings.shortMaxDuration}

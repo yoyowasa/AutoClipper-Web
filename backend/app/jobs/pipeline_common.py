@@ -3,6 +3,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from app.duration_rules import duration_search_settings
 from sqlalchemy.orm import Session
 from app.audio.extract import extract_mono_wav
 from app.audio.silence_detect import SilenceSegment
@@ -27,6 +28,7 @@ from app.candidates.merge_boundaries import (
 from app.candidates.select_candidates import (
     CandidateRejection,
     CandidateSelection,
+    partition_candidates_by_duration,
 )
 from app.candidates.title_fallback import titled_candidates
 from app.jobs.clip_plan import (
@@ -237,7 +239,7 @@ def _settings_with_source_history(
     except SourceTimelineChanged as exc:
         raise PipelineExpectedError("source_history_timeline_changed", str(exc)) from exc
     _write_json(paths.job_outputs(job.id) / "source_clip_history_summary.json", summary)
-    return settings
+    return duration_search_settings(settings)
 
 def _unused_candidates(candidates: Sequence[Candidate], settings: dict[str, Any]) -> list[Candidate]:
     ranges = used_ranges(settings)
@@ -417,6 +419,13 @@ def _selection_with_refined_boundaries(
     timeline_duration: float,
     heatmap_segments: Sequence[HeatmapSegment] = (),
 ) -> tuple[CandidateSelection, list[Candidate]]:
+    scored_candidates, duration_rejections = partition_candidates_by_duration(scored_candidates, settings)
+    valid_ids = {candidate.id for candidate in scored_candidates}
+    selection = selection.model_copy(update={
+        "normal_clips": [candidate for candidate in selection.normal_clips if candidate.id in valid_ids],
+        "shorts": [candidate for candidate in selection.shorts if candidate.id in valid_ids],
+        "rejected_candidates": [*selection.rejected_candidates, *duration_rejections],
+    })
     def refine_unlocked(candidates: Sequence[Candidate]) -> list[Candidate]:
         unlocked = [candidate for candidate in candidates if candidate.selection_reason != MANUAL_SELECTION_REASON]
         refined = refine_selected_candidates(
@@ -435,11 +444,23 @@ def _selection_with_refined_boundaries(
     normal_clips = refine_unlocked(selection.normal_clips)
     shorts = refine_unlocked(selection.shorts)
     replacements = {candidate.id: candidate for candidate in [*normal_clips, *shorts]}
-    return _filter_selection_history(
+    selection, candidates = _filter_selection_history(
         selection.model_copy(update={"normal_clips": normal_clips, "shorts": shorts}),
         _replace_scored_candidates(scored_candidates, replacements),
         settings,
     )
+    candidates, duration_rejections = partition_candidates_by_duration(candidates, settings)
+    valid_ids = {candidate.id for candidate in candidates}
+    normals = [candidate for candidate in selection.normal_clips if candidate.id in valid_ids]
+    shorts = [candidate for candidate in selection.shorts if candidate.id in valid_ids]
+    return selection.model_copy(update={
+        "normal_clips": normals, "shorts": shorts,
+        "rejected_candidates": [*selection.rejected_candidates, *duration_rejections],
+        "unfilled_requested_counts": {
+            "normal": max(0, selection.requested_normal_count - len(normals)),
+            "short": max(0, selection.requested_short_count - len(shorts)),
+        },
+    }), candidates
 
 def _read_json_file(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))

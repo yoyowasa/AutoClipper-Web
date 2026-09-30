@@ -4,7 +4,14 @@ from urllib.parse import urlsplit
 
 from app.legacy_settings import without_retired_api_settings
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel, ConfigDict, Field, TypeAdapter, ValidationInfo,
+    ValidatorFunctionWrapHandler, field_validator, model_validator,
+)
+from app.duration_rules import (
+    NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_DEFAULT_SECONDS,
+    SHORT_MAX_CEILING_SECONDS, validate_clip_duration,
+)
 
 from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
 from app.short_banners import BannerAssetId
@@ -270,10 +277,10 @@ class JobSettings(UploadTextStyles):
     profile: ClipProfile = "auto"
     normal_clip_count: int = Field(default=2, ge=0, le=12, alias="normalClipCount")
     short_count: int = Field(default=3, ge=0, le=24, alias="shortCount")
-    normal_min_duration: float = Field(default=90.0, gt=0, alias="normalMinDuration")
-    normal_max_duration: float = Field(default=600.0, gt=0, alias="normalMaxDuration")
-    short_min_duration: float = Field(default=20.0, gt=0, alias="shortMinDuration")
-    short_max_duration: float = Field(default=75.0, gt=0, alias="shortMaxDuration")
+    normal_min_duration: float = Field(default=NORMAL_MIN_SECONDS, ge=NORMAL_MIN_SECONDS, le=NORMAL_MAX_SECONDS, alias="normalMinDuration")
+    normal_max_duration: float = Field(default=NORMAL_MAX_SECONDS, ge=NORMAL_MIN_SECONDS, le=NORMAL_MAX_SECONDS, alias="normalMaxDuration")
+    short_min_duration: float = Field(default=20.0, ge=0, alias="shortMinDuration")
+    short_max_duration: float = Field(default=SHORT_MAX_DEFAULT_SECONDS, ge=1, le=SHORT_MAX_CEILING_SECONDS, alias="shortMaxDuration")
     normal_clip_selection_preset: ClipSelectionPreset = Field(
         default="auto",
         alias="normalClipSelectionPreset",
@@ -468,6 +475,13 @@ class JobSettings(UploadTextStyles):
             return "ja"
         return value
 
+    @field_validator("normal_min_duration", "normal_max_duration", "short_min_duration", "short_max_duration", mode="wrap")
+    @classmethod
+    def preserve_persisted_duration_settings(cls, value: Any, handler: ValidatorFunctionWrapHandler, info: ValidationInfo) -> float:
+        if info.context and info.context.get("persisted_job"):
+            return TypeAdapter(float).validate_python(value)
+        return handler(value)
+
     @field_validator("youtube_source_title", "youtube_source_url", mode="before")
     @classmethod
     def normalize_youtube_source_text(cls, value: Any) -> str:
@@ -484,7 +498,7 @@ class JobSettings(UploadTextStyles):
         return value
 
     @model_validator(mode="after")
-    def validate_duration_ranges(self) -> "JobSettings":
+    def validate_duration_ranges(self, info: ValidationInfo) -> "JobSettings":
         if self.workflow_mode == "manual":
             self.automation_mode = "manual"
         elif self.automation_mode in {"shadow", "guarded", "auto"} and not (
@@ -497,9 +511,10 @@ class JobSettings(UploadTextStyles):
             )
         if self.workflow_mode != "manual" and self.normal_clip_count + self.short_count <= 0:
             raise ValueError("at least one normal clip or short must be requested")
-        if self.normal_max_duration < self.normal_min_duration:
+        persisted = bool(info.context and info.context.get("persisted_job"))
+        if not persisted and self.normal_max_duration < self.normal_min_duration:
             raise ValueError("normalMaxDuration must be >= normalMinDuration")
-        if self.short_max_duration < self.short_min_duration:
+        if not persisted and self.short_max_duration < self.short_min_duration:
             raise ValueError("shortMaxDuration must be >= shortMinDuration")
         if self.max_subtitle_duration < self.min_subtitle_duration:
             raise ValueError("maxSubtitleDuration must be >= minSubtitleDuration")
@@ -513,6 +528,14 @@ class JobSettings(UploadTextStyles):
             requested_count=self.short_count,
             field_name="shortClipTimeRanges",
         )
+        if not persisted:
+            for clip_type, ranges in (("normal", self.normal_clip_time_ranges), ("short", self.short_clip_time_ranges)):
+                for clip_range in ranges:
+                    reason = validate_clip_duration(
+                        clip_type, clip_range.end_seconds - clip_range.start_seconds, short_max=self.short_max_duration,
+                    )
+                    if reason:
+                        raise ValueError(reason)
         has_automatic_output = (self.normal_clip_count > 0 and not self.normal_clip_time_ranges) or (
             self.short_count > 0 and not self.short_clip_time_ranges
         )
@@ -736,8 +759,8 @@ class SubtitleReviewSettingsUpdateRequest(BaseModel):
 class ClipPlanReselectionRequest(BaseModel):
     kept_clip_ids: list[str] = Field(default_factory=list, max_length=36, alias="keptClipIds")
     exclude_previous_selection: bool = Field(default=False, alias="excludePreviousSelection", strict=True)
-    normal_min_duration: float | None = Field(default=None, gt=0, alias="normalMinDuration")
-    normal_max_duration: float | None = Field(default=None, gt=0, alias="normalMaxDuration")
+    normal_min_duration: float | None = Field(default=None, ge=NORMAL_MIN_SECONDS, le=NORMAL_MAX_SECONDS, alias="normalMinDuration")
+    normal_max_duration: float | None = Field(default=None, ge=NORMAL_MIN_SECONDS, le=NORMAL_MAX_SECONDS, alias="normalMaxDuration")
     normal_clip_selection_preset: ClipSelectionPreset = Field(alias="normalClipSelectionPreset")
     short_clip_selection_preset: ClipSelectionPreset = Field(alias="shortClipSelectionPreset")
     normal_clip_guidance: str = Field(max_length=1000, alias="normalClipGuidance")
@@ -753,6 +776,15 @@ class ClipPlanReselectionRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    @model_validator(mode="after")
+    def validate_duration_range(self) -> "ClipPlanReselectionRequest":
+        if (
+            self.normal_min_duration is not None and self.normal_max_duration is not None
+            and self.normal_min_duration > self.normal_max_duration
+        ):
+            raise ValueError("normalMaxDuration must be >= normalMinDuration")
+        return self
+
 
 class ClipPlanBoundaryUpdateRequest(BaseModel):
     start: float = Field(ge=0)
@@ -762,8 +794,6 @@ class ClipPlanBoundaryUpdateRequest(BaseModel):
     def validate_range(self) -> "ClipPlanBoundaryUpdateRequest":
         if self.end <= self.start:
             raise ValueError("end must be greater than start")
-        if self.end - self.start < 1:
-            raise ValueError("clip duration must be at least 1 second")
         return self
 
 
@@ -783,8 +813,6 @@ class ManualClipCreateRequest(BaseModel):
     def validate_range(self) -> "ManualClipCreateRequest":
         if self.end <= self.start:
             raise ValueError("end must be greater than start")
-        if self.end - self.start < 1:
-            raise ValueError("clip duration must be at least 1 second")
         return self
 
 
@@ -804,8 +832,6 @@ class ManualClipUpdateRequest(BaseModel):
         if self.start is not None and self.end is not None:
             if self.end <= self.start:
                 raise ValueError("end must be greater than start")
-            if self.end - self.start < 1:
-                raise ValueError("clip duration must be at least 1 second")
         return self
 
 

@@ -2,6 +2,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
+from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration, duration_search_settings
 from sqlalchemy.orm import Session
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import (
@@ -55,7 +56,6 @@ from app.jobs.quality_gate import (
     invalidate_quality_gate_decisions,
     quality_gate_decision_path,
 )
-from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
 from app.jobs.manual_workflow import (
     is_manual_workflow,
 )
@@ -370,7 +370,7 @@ def _automatic_selection_with_diverse_refined_shorts(
             candidate for candidate in automatic_candidates if candidate.type == "short"
         ],
     )
-    _, refined_candidates = _selection_with_refined_boundaries(
+    refined_pool_selection, refined_candidates = _selection_with_refined_boundaries(
         pool_selection,
         automatic_candidates,
         transcript_segments=transcript_segments,
@@ -452,6 +452,7 @@ def _automatic_selection_with_diverse_refined_shorts(
             "shorts": list(diversity.selected),
             "rejected_candidates": [
                 *selection.rejected_candidates,
+                *refined_pool_selection.rejected_candidates,
                 *translated_rejections,
             ],
             "unfilled_requested_counts": unfilled_requested_counts,
@@ -623,6 +624,14 @@ def run_clip_plan_boundary_update(
             if start < 0 or end <= start or end > source_duration + 0.001:
                 raise ValueError("requested clip boundary is outside the source video")
 
+            reason = validate_clip_duration(
+                planned_clip.type,
+                completed_clip_duration(planned_clip.type, start, end, planned_clip.hook_scene_start, planned_clip.hook_scene_end),
+                short_max=effective_short_max(dict(job.settings_json or {})),
+            )
+            if reason:
+                raise ValueError(reason)
+
             _set_status(db, job, "preparing_clip_review")
             job.current_step = "調整した範囲の確認動画を準備中"
             job.error_code = None
@@ -744,13 +753,12 @@ def run_clip_plan_hook_scene_update(
                     raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
                 if start < candidate.start - 0.001 or end > candidate.end + 0.001:
                     raise ValueError("hook scene must stay within the selected clip")
-                short_max_duration = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
-                if candidate.type == "short" and hook_scene_newly_exceeds_short_limit(
-                    clip_duration=candidate.duration,
-                    hook_duration=hook_duration,
-                    short_max_duration=short_max_duration,
-                ):
-                    raise ValueError("hook scene would exceed the configured short maximum duration")
+            reason = validate_clip_duration(
+                candidate.type, completed_clip_duration(candidate.type, candidate.start, candidate.end, start, end),
+                short_max=effective_short_max(dict(job.settings_json or {})),
+            )
+            if reason:
+                raise ValueError(reason)
 
             candidate_payload = candidate.model_dump(mode="python")
             candidate_payload["hook_scene_start"] = start
@@ -837,7 +845,7 @@ def run_clip_plan_reselection(
             raise ValueError(f"video not found for job: {job_id}")
 
         job_dir = storage_paths.job_outputs(job.id)
-        settings = dict(job.settings_json or {})
+        settings = duration_search_settings(dict(job.settings_json or {}))
         input_path = storage_paths.resolve_stored_file(video.stored_path)
         previous_plan_path = clip_plan_output_path(job_dir)
         previous_plan = load_clip_plan(previous_plan_path) if previous_plan_path.is_file() else None

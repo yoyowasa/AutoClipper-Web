@@ -596,13 +596,13 @@ def test_hook_preview_worker_updates_normal_selection(tmp_path: Path) -> None:
         id=clip_id,
         type="normal",
         start=0,
-        end=20,
-        duration=20,
+        end=90,
+        duration=90,
         transcript_text="通常切り抜き",
         title="通常タイトル",
     )
     selection = CandidateSelection(normalClips=[candidate], shorts=[])
-    segments = [TranscriptSegment(start=0, end=20, text="通常字幕", confidence=0.9)]
+    segments = [TranscriptSegment(start=0, end=90, text="通常字幕", confidence=0.9)]
     selected_path = output_dir / "selected_clips.json"
     write_selected_clips(selection, selected_path)
     write_transcript_segments(segments, transcript_output_path(output_dir))
@@ -615,7 +615,7 @@ def test_hook_preview_worker_updates_normal_selection(tmp_path: Path) -> None:
             id="vid_normal_hook_preview",
             original_filename="source.mp4",
             stored_path=str(source_path),
-            duration=20,
+            duration=90,
             width=1920,
             height=1080,
             fps=30,

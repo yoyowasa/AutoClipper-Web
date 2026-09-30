@@ -9,6 +9,8 @@ from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.duration_rules import NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_DEFAULT_SECONDS
+
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.posting_metadata import PostMetadataSource, YouTubeTitleCandidate
@@ -242,10 +244,10 @@ class Candidate(BaseModel):
 
 
 class CandidateGenerationSettings(BaseModel):
-    short_min_duration: float = Field(default=20.0, gt=0)
-    short_max_duration: float = Field(default=75.0, gt=0)
-    normal_min_duration: float = Field(default=90.0, gt=0)
-    normal_max_duration: float = Field(default=600.0, gt=0)
+    short_min_duration: float = Field(default=20.0, ge=0)
+    short_max_duration: float = Field(default=SHORT_MAX_DEFAULT_SECONDS, gt=0)
+    normal_min_duration: float = Field(default=NORMAL_MIN_SECONDS, gt=0)
+    normal_max_duration: float = Field(default=NORMAL_MAX_SECONDS, gt=0)
     short_step_seconds: float = Field(default=10.0, gt=0)
     normal_step_seconds: float = Field(default=30.0, gt=0)
     speech_boundary_tolerance: float = Field(default=8.0, ge=0)
