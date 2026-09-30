@@ -10604,3 +10604,15 @@ pip check: pass
 - CI: PR #104の実装コミットa935930でbackend（Python 3.11・3.12）とfrontendがすべて成功（run 36750199115）。
 - lintの環境差: 主作業フォルダのruffはGit管理外scripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。このファイル・ruff設定は変更せず、クリーンcheckoutで上記コマンドの成功を確認した。
 - 未確認: 実動画を使ったCodexの配分・Shortsの意味的な成立、稼働ブラウザでの操作は未確認。Dockerのbuild・再起動・反映、ホスト側Codex中継の再起動、既存稼働DBの更新は行っていない。
+
+
+## 2026-10-01 JST PyAVの互換性を固定（task-171）
+
+- 目的・原因: Dockerの依存解決でPyAVが18.xから19.0.0へ上がり、faster-whisper 1.2.1のdecode_audioがav.openへ渡すmetadata_errors引数を受け付けず、文字起こしがtranscription_failedになる。変更前の稼働worker（av 19.0.0 / faster-whisper 1.2.1）で、モデルを読み込まない0.5秒の無音WAVのdecode_audioが同じTypeErrorになることを再現した。
+- 変更ファイル: backend/pyproject.toml、backend/tests/test_transcribe_faster_whisper.py、本ファイル。
+- 依存の制限: av>=11.0.0,<19.0.0を直接の依存へ追加する。faster-whisperの版・文字起こし処理は変更しない。
+- 回帰テスト: 16kHz・モノラル・16bit・0.5秒の無音WAVをテスト内で生成し、実際のfaster_whisper.decode_audioが8000サンプルのfloat32配列（全て0）を返すことを確認する。モデルの読み込み・ダウンロードは行わない。
+- 上流確認（2026-10-01）: PyPIの最新版は1.2.1で、同版のaudio.pyにはmetadata_errors引数が残っている。GitHubのmasterにはPyAV 19以降でこの引数を渡さない修正があるが、修正版はまだPyPIへリリースされていない。確認元: https://pypi.org/project/faster-whisper/ 、https://github.com/SYSTRAN/faster-whisper/blob/master/faster_whisper/audio.py 、https://github.com/SYSTRAN/faster-whisper/blob/v1.2.1/faster_whisper/audio.py 。
+- 検証: ruff check . ../launcher ../scripts成功。frontend全19テスト・lint・typecheck・build成功。ローカルはPython 3.11.9 / av 18.0.0 / faster-whisper 1.2.1。python -m pytestは1298 passed・1 skipped（96.81秒）。CI（Python 3.11・3.12・frontend）はPR作成後に確認する。
+- 反映: マージ後にRQ・実行中ジョブが0であることを確かめ、backend/workerだけをGPU構成でbuildし直す予定。反映結果は実施後に運用記録として追記する。DBのバックアップ、frontend/redisの作り直し、Codex中継の再起動は行わない。
+- 未確認: 稼働workerでの修正後decode_audioと実動画の文字起こし。job_79f82ac1603f4dc68cea4461e0f1afdbは再試行しない。
