@@ -3,7 +3,9 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pytest
+from faster_whisper import decode_audio
 
 from app.audio.transcribe_faster_whisper import (
     FasterWhisperTranscriptionEngine,
@@ -16,6 +18,22 @@ from app.audio.transcribe_faster_whisper import (
     transcribe_wav_to_json,
     write_transcript_segments,
 )
+
+
+def test_decode_audio_reads_silent_wav_without_model(tmp_path: Path) -> None:
+    wav_path = tmp_path / "silence.wav"
+    with wave.open(str(wav_path), "wb") as writer:
+        writer.setnchannels(1)
+        writer.setsampwidth(2)
+        writer.setframerate(16000)
+        writer.writeframes(b"\x00\x00" * 8000)
+
+    audio = decode_audio(str(wav_path))
+
+    assert isinstance(audio, np.ndarray)
+    assert audio.shape == (8000,)
+    assert audio.dtype == np.float32
+    assert np.all(audio == 0)
 
 
 class FakeEngine:
