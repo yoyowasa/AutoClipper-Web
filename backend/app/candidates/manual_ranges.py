@@ -1,3 +1,4 @@
+from app.clip_allocation import is_ai_allocation
 from collections.abc import Sequence
 from typing import Any
 
@@ -37,6 +38,8 @@ def automatic_selection_settings(
     manual_short: bool,
 ) -> dict[str, Any]:
     automatic = dict(settings)
+    if is_ai_allocation(settings):
+        return automatic
     if manual_normal:
         automatic["normalClipCount"] = 0
     if manual_short:
@@ -172,6 +175,11 @@ def merge_manual_candidates_into_selection(
     manual_short_candidates: Sequence[Candidate],
 ) -> CandidateSelection:
     parsed = parse_selection_settings(settings)
+    if is_ai_allocation(settings):
+        return automatic_selection.model_copy(update={
+            'normal_clips': [*automatic_selection.normal_clips, *manual_normal_candidates],
+            'shorts': [*automatic_selection.shorts, *manual_short_candidates],
+        })
     normal_clips = (
         list(manual_normal_candidates)
         if manual_normal_candidates

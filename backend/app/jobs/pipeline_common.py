@@ -1,3 +1,4 @@
+from app.clip_allocation import is_ai_allocation, candidate_pool_counts
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -213,7 +214,9 @@ def _codex_initial_selection_enabled(
     has_manual_ranges: bool,
 ) -> bool:
     provider = str(settings.get("initialSelectionProvider") or "legacy").strip().lower()
-    return provider == "codex" and not manual_workflow and not has_manual_ranges
+    return (provider == "codex" and not manual_workflow
+            and (not has_manual_ranges or is_ai_allocation(settings))
+            and (not is_ai_allocation(settings) or any(candidate_pool_counts(settings))))
 
 def _assign_status(job: Job, status: str) -> None:
     job.status = status
@@ -247,7 +250,11 @@ def _unused_candidates(candidates: Sequence[Candidate], settings: dict[str, Any]
         candidate for candidate in candidates
         if candidate.selection_reason == MANUAL_SELECTION_REASON
         or user_rejection_reason(candidate.start, candidate.end, candidate.type, settings) is not None
-        or not overlaps_used(candidate.start, candidate.end, ranges)
+        or (not overlaps_used(candidate.start, candidate.end, ranges)
+            and not overlaps_used(candidate.start, candidate.end, settings.get('_allocationKeptRanges', {}).get(candidate.type, []))
+             and not (is_ai_allocation(settings) and overlaps_used(candidate.start, candidate.end, [
+                 (r['startSeconds'], r['endSeconds']) for r in settings.get(
+                     'normalClipTimeRanges' if candidate.type == 'normal' else 'shortClipTimeRanges', [])])))
     ]
 
 def _is_repeated_normal_proposal(candidate: Candidate, settings: dict[str, Any]) -> bool:
@@ -285,7 +292,9 @@ def _filter_user_rejections(
 def _filter_selection_history(
     selection: CandidateSelection, candidates: list[Candidate], settings: dict[str, Any]
 ) -> tuple[CandidateSelection, list[Candidate]]:
-    if not used_ranges(settings):
+    if not used_ranges(settings) and not settings.get('_allocationKeptRanges') and not (
+        is_ai_allocation(settings) and (settings.get('normalClipTimeRanges') or settings.get('shortClipTimeRanges'))
+    ):
         return selection, candidates
     kept = _unused_candidates(candidates, settings)
     kept_ids = {candidate.id for candidate in kept}

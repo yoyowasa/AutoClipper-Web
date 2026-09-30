@@ -10589,3 +10589,18 @@ pip check: pass
 - lintの環境差: 主作業フォルダのruff check . ../launcher ../scriptsは、Git管理外のscripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。このファイルとruff設定は変更しない。
 - CI: PR #103の実装コミット54ce800でbackend（Python 3.11・3.12）とfrontendがすべて成功（run 36740956833）。
 - 未確認: 実動画によるCodex選定の意味的な品質、稼働ブラウザでの実操作は未確認。Dockerのbuild・再起動・反映、稼働DBへの台帳追加、実ジョブの再実行は行っていない。
+
+
+## 2026-10-01 task-170 合計本数とAIによる形式配分
+
+- 目的・仕様: 新規画面ではclipAllocationMode=ai、合計totalClipCount（1〜36）と任意の最低minNormalClipCount（0〜12）・minShortCount（0〜24、既定0）を指定する。最低の合計は合計本数以下。固定配分を選ぶUIは追加しない。通常とShortsで同じ場面を使えるが、Shortsは単体で内容と見どころが成立するものに限る。別動画からの補完は実装しない。
+- 変更ファイル: backend/app/clip_allocation.pyを新設し、schemas.py、candidates/{select_candidates,codex_initial_selection,manual_ranges,used_ranges,user_rejections}.py、jobs/{runner,clip_plan_runner,pipeline_common,reselection_keep,clip_plan,quality_gate,summaries}.py、api/clip_plan.pyへ適用。frontend/lib/{clipAllocation,types,manualClipRanges}.ts、components/{SettingsPanel,ManualClipRangeEditor,ClipSelectionEditor,ClipReselectionPanel}.tsx、app/upload/page.tsx・app/jobs/[jobId]/clips/page.tsx、launcher/codex_bridge.py、backend/tests/{test_clip_allocation,test_real_pipeline}.py、frontend/tests/clipAllocation.test.ts、本ファイル。
+- 選び方: 尺ルール・不採用理由・使用済み区間・同形式の重複の判定後、(1)手動・キープを確定、(2)形式ごとの最低に足りない分をその形式の順位順に選択、(3)残りを形式をまたいだCodex confidence・既存スコア順に選択する。同順位は開始・終了・形式・ID順で決める。弱い候補による穴埋めはしない。各形式の探索プールは未確定枠から決め、従来どおり最大24候補。手動指定がある形式でも残りはAI選定でき、同区間をキープした手動候補は二重計上しない。
+- 不足: requestedTotal・selectedTotal・selectedByType・shortfallReasons（却下理由の件数と強い候補の不足数）・minimumShortfallをselection summaryとclip planへ保存。1本以上なら不足でも失敗にせず候補確認へ進む（autoモードでも停止して確認）。0本は従来のno_candidates_found/no_usable_selection等の理由付き失敗。最低本数を満たせない場合も不足を明記する。再選定ではキープを合計と最低へ数え、新しい候補が0本でもキープがあれば候補確認へ進む。
+- 画面: アップロードは合計・最低本数へ変更し、不正な入力は理由を表示して送信を止める。確認画面では「10本中7本（通常3・ショート4）」形式の表示と不足の理由、再選定欄ではキープを差し引いた残り枠を表示する。手動作業の追加本数は合計を超えると422とし、clip plan保存時に実数を更新する。
+- fixed互換: totalClipCountがない設定はfixedとしてnormalClipCount・shortCountを従来どおり使う。保存済みジョブを自動で書き換えず、GET・retryは元設定を維持する。再選定も新しい配分キーを指定しない限り追加せず、形式別本数の挙動を維持する。e2e_real_video.py・e2e_sample_video.pyの旧指定は合計を送らないのでfixedとなり、CLIオプションは変更しない。
+- Codex中継: プロンプト版をcodex_initial_selection_v6へ更新。依頼へ合計・最低・手動/キープ確定本数を追加し、場面ごとの最適形式とShortsの単体成立、両形式での利用を指示する。応答のpromptVersionの固定値が変わるため、話題選定・初期選定の2種類の応答スキーマハッシュをlauncherへ反映した。ホスト側のCodex中継の再起動が必要。今回再起動は行っていない。
+- 検証: 実装コミット50b6f82のクリーンcheckoutでruff check . ../launcher ../scriptsとpython -m pytestが成功（Python 3.11、1297 passed・1 skipped。既存1269件から新規24件と既存テストのAI配分パラメータ4件を追加）。合計0/1/36/37・最低本数、最低優先後の全体順位、同じ場面の両形式、却下理由と不足の保存、autoでも候補確認、0本失敗、手動のみ/手動＋AI、キープだけ残る再選定、キープの両形式利用、fixedのGET・再選定・retry、Codex中継の契約一致を確認。frontend全19テスト・lint・typecheck・build、git diff --check成功。CI結果は次項に記録する。
+- CI: PR #104の実装コミットa935930でbackend（Python 3.11・3.12）とfrontendがすべて成功（run 36750199115）。
+- lintの環境差: 主作業フォルダのruffはGit管理外scripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。このファイル・ruff設定は変更せず、クリーンcheckoutで上記コマンドの成功を確認した。
+- 未確認: 実動画を使ったCodexの配分・Shortsの意味的な成立、稼働ブラウザでの操作は未確認。Dockerのbuild・再起動・反映、ホスト側Codex中継の再起動、既存稼働DBの更新は行っていない。

@@ -1,3 +1,4 @@
+from app.clip_allocation import allocation_summary, allocate_selection, is_ai_allocation
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -82,6 +83,11 @@ class ClipPlanClip(BaseModel):
 
 
 class ClipPlanDocument(BaseModel):
+    requested_total: int | None = Field(default=None, alias="requestedTotal")
+    selected_total: int | None = Field(default=None, alias="selectedTotal")
+    selected_by_type: dict[str, int] = Field(default_factory=dict, alias="selectedByType")
+    shortfall_reasons: dict[str, int] = Field(default_factory=dict, alias="shortfallReasons")
+    minimum_shortfall: dict[str, int] = Field(default_factory=dict, alias="minimumShortfall")
     version: int = 3
     job_id: str = Field(alias="jobId")
     state: ClipPlanState = "preparing"
@@ -173,6 +179,7 @@ def build_clip_plan(
     source_duration: float | None = None,
     editor_video_url: str | None = None,
 ) -> ClipPlanDocument:
+    selection = selection if selection.requested_total is not None else allocate_selection(selection, settings)
     type_indices = {"normal": 0, "short": 0}
     clips: list[ClipPlanClip] = []
     for candidate in [*selection.normal_clips, *selection.shorts]:
@@ -203,6 +210,7 @@ def build_clip_plan(
         )
     now = _utc_iso()
     return ClipPlanDocument(
+        **allocation_summary(selection),
         jobId=job_id,
         state="preparing",
         revision=revision,
@@ -299,6 +307,23 @@ def update_clip_plan_hook_scene(
 
 
 def write_clip_plan(document: ClipPlanDocument, output_path: str | Path) -> Path:
+    if is_ai_allocation(document.settings):
+        document.requested_total = int(document.settings['totalClipCount'])
+        document.selected_total = len(document.clips)
+        document.selected_by_type = {kind: sum(c.type == kind for c in document.clips) for kind in ('normal', 'short')}
+        document.minimum_shortfall = {
+            kind: max(0, int(document.settings.get(key, 0)) - document.selected_by_type[kind])
+            for kind, key in [('normal', 'minNormalClipCount'), ('short', 'minShortCount')]
+        }
+        reasons = {key: value for key, value in document.shortfall_reasons.items()
+                   if key not in {'insufficient_strong_candidates', 'minimum_normal_shortfall', 'minimum_short_shortfall'}}
+        shortage = max(0, document.requested_total - document.selected_total)
+        if shortage:
+            reasons['insufficient_strong_candidates'] = shortage
+        for kind, count in document.minimum_shortfall.items():
+            if count:
+                reasons[f'minimum_{kind}_shortfall'] = count
+        document.shortfall_reasons = reasons if shortage or any(document.minimum_shortfall.values()) else {}
     return write_json_atomic(
         Path(output_path),
         document.model_dump(by_alias=True, mode="json"),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.clip_allocation import is_ai_allocation
 import hashlib
 import json
 import math
@@ -358,6 +359,10 @@ def evaluate_selection_quality_gate(
     relevant_settings = {
         key: settings.get(key)
         for key in (
+            "clipAllocationMode",
+            "totalClipCount",
+            "minNormalClipCount",
+            "minShortCount",
             "normalClipCount",
             "shortCount",
             "normalMinDuration",
@@ -443,12 +448,15 @@ def evaluate_selection_quality_gate(
         "normal": max(0, requested_normal - len(selection.normal_clips)),
         "short": max(0, requested_short - len(selection.shorts)),
     }
+    ai = is_ai_allocation(settings)
+    if ai:
+        shortfall = {'total': max(0, int(settings['totalClipCount']) - len(clips))}
     has_shortfall = any(shortfall.values())
     checks.append(
         _check(
             "selection.requested_counts",
-            "fail" if has_shortfall else "pass",
-            reason_code="requested_clip_shortfall" if has_shortfall else None,
+            "fail" if has_shortfall and not ai else "pass",
+            reason_code="requested_clip_shortfall" if has_shortfall and not ai else None,
             evidence={
                 "requested": {"normal": requested_normal, "short": requested_short},
                 "selected": {
@@ -456,6 +464,8 @@ def evaluate_selection_quality_gate(
                     "short": len(selection.shorts),
                 },
                 "shortfall": shortfall,
+                **({'requestedTotal': settings['totalClipCount'], 'selectedTotal': len(clips),
+                    'shortage': has_shortfall, 'shortfallReasons': selection.shortfall_reasons} if ai else {}),
             },
         )
     )

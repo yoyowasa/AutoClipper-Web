@@ -1,3 +1,4 @@
+from app.clip_allocation import is_ai_allocation
 from app.jobs.reselection_keep import target_count
 from app.clip_rejections import job_rejections, rejection_ranges
 from app.candidates.user_rejections import REJECTED_RANGES_SETTING
@@ -235,6 +236,8 @@ def create_manual_clip(
         end=request.end,
         clip_type=request.type,
     )
+    if is_ai_allocation(document.settings) and len(document.clips) >= document.settings['totalClipCount']:
+        raise HTTPException(422, '手動指定の本数が合計本数を超えています。')
     type_index = sum(clip.type == request.type for clip in document.clips) + 1
     default_title = "通常切り抜き" if request.type == "normal" else "ショート"
     clip = ClipPlanClip(
@@ -809,7 +812,11 @@ def reselect_clip_plan(
     keep_ids = set(request.kept_clip_ids)
     if not keep_ids.issubset({clip.id for clip in document.clips}):
         raise HTTPException(422, "キープ対象の候補が見つかりません。画面を確認してください。")
-    if keep_ids and len(keep_ids) >= sum(target_count(previous_settings, document, kind) for kind in ("normal", "short")):
+    target = (request.total_clip_count or previous_settings['totalClipCount']) if is_ai_allocation(previous_settings) else sum(
+        target_count(previous_settings, document, kind) for kind in ('normal', 'short'))
+    if is_ai_allocation(previous_settings) and len(keep_ids) > target:
+        raise HTTPException(422, 'キープ本数が合計本数を超えています。')
+    if keep_ids and len(keep_ids) >= target:
         raise HTTPException(422, "全候補がキープされています。再選定する候補のキープを外してください。")
     rejected_ids = [item.clip_id for item in request.rejections]
     available_ids = {clip.id for clip in document.clips} - keep_ids
@@ -852,7 +859,12 @@ def reselect_clip_plan(
         new_status="reselecting_clips",
         current_step=CURRENT_STEP_MAP["reselecting_clips"],
     )
-    job.settings_json = validated_settings.model_dump(by_alias=True, mode="json")
+    next_settings = validated_settings.model_dump(by_alias=True, mode="json")
+    if previous_settings.get('totalClipCount') is None and request.total_clip_count is None:
+        for key in ('clipAllocationMode', 'totalClipCount', 'minNormalClipCount', 'minShortCount'):
+            if key not in previous_settings:
+                next_settings.pop(key, None)
+    job.settings_json = next_settings
     document.state = "reselecting"
     try:
         write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))

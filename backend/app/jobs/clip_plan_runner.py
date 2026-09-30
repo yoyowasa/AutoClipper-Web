@@ -1,3 +1,4 @@
+from app.clip_allocation import is_ai_allocation, allocate_selection, candidate_pool_counts, allocation_summary
 from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -131,7 +132,7 @@ def _generate_candidates_for_reselection_mode(
             normal_manual_ranges,
             transcript_segments,
         )
-        if normal_manual_ranges
+        if normal_manual_ranges and not is_ai_allocation(settings)
         else generate_normal_candidates_with_summary(
             unused_items(transcript_segments, settings),
             scene_segments,
@@ -146,7 +147,7 @@ def _generate_candidates_for_reselection_mode(
             short_manual_ranges,
             transcript_segments,
         )
-        if short_manual_ranges
+        if short_manual_ranges and not is_ai_allocation(settings)
         else generate_short_candidates_with_summary(
             unused_items(transcript_segments, settings),
             scene_segments,
@@ -192,6 +193,8 @@ def _codex_selection_with_diverse_refined_shorts(
             score = candidate.ai_score
         return (-(score if score is not None else 0.0), candidate.id)
 
+    pool_normal_count, pool_short_count = candidate_pool_counts(settings) if is_ai_allocation(settings) else (
+        result.selection.requested_normal_count, result.selection.requested_short_count)
     candidate_pool = [
         candidate
         for candidate in _unused_candidates(result.candidates, settings)
@@ -249,7 +252,7 @@ def _codex_selection_with_diverse_refined_shorts(
         ],
         settings=parsed_settings.model_copy(
             update={
-                "normal_clip_count": result.selection.requested_normal_count,
+                "normal_clip_count": pool_normal_count,
                 "short_count": 0,
                 "selection_policy": "strict_quality",
             }
@@ -285,7 +288,7 @@ def _codex_selection_with_diverse_refined_shorts(
 
     diversity = select_diverse_shorts(
         eligible_shorts,
-        requested_count=result.selection.requested_short_count,
+        requested_count=pool_short_count,
         settings=ShortDiversitySettings(enforce_heatmap_segment_uniqueness=False),
     )
     diversity_rejections = [
@@ -305,7 +308,7 @@ def _codex_selection_with_diverse_refined_shorts(
     ]
     normal_unfilled = max(
         0,
-        result.selection.requested_normal_count - len(selected_normals),
+        pool_normal_count - len(selected_normals),
     )
     short_unfilled = diversity.unfilled_count
     unfilled_reason_counts: dict[str, dict[str, int]] = {}
@@ -1045,6 +1048,11 @@ def run_clip_plan_reselection(
                     f"Could not generate clip candidates: {exc}",
                 ) from exc
 
+            if is_ai_allocation(settings):
+                normal_candidates.extend(annotate_candidates_with_heatmap(
+                    build_manual_candidates('normal', normal_manual_ranges, transcript_segments).candidates, heatmap_reference_segments))
+                short_candidates.extend(annotate_candidates_with_heatmap(
+                    build_manual_candidates('short', short_manual_ranges, transcript_segments).candidates, heatmap_reference_segments))
             normal_candidates = [
                 candidate
                 for candidate in _unused_candidates(normal_candidates, settings)
@@ -1061,14 +1069,8 @@ def run_clip_plan_reselection(
                 candidate_generation_summary_path,
                 candidate_generation_summary,
             )
-            manual_candidates = [
-                *(normal_candidates if normal_manual_ranges else []),
-                *(short_candidates if short_manual_ranges else []),
-            ]
-            automatic_candidates = [
-                *(normal_candidates if not normal_manual_ranges else []),
-                *(short_candidates if not short_manual_ranges else []),
-            ]
+            manual_candidates = [c for c in [*normal_candidates, *short_candidates] if c.selection_reason == MANUAL_SELECTION_REASON]
+            automatic_candidates = [c for c in [*normal_candidates, *short_candidates] if c.selection_reason != MANUAL_SELECTION_REASON]
 
             if codex_reselection_result is not None:
                 automatic_selection, automatic_scored, _ = (
@@ -1118,8 +1120,8 @@ def run_clip_plan_reselection(
             selection = merge_manual_candidates_into_selection(
                 automatic_selection,
                 settings=settings,
-                manual_normal_candidates=(normal_candidates if normal_manual_ranges else []),
-                manual_short_candidates=(short_candidates if short_manual_ranges else []),
+                manual_normal_candidates=[c for c in manual_candidates if c.type == "normal"],
+                manual_short_candidates=[c for c in manual_candidates if c.type == "short"],
             )
             selection, scored_candidates = _filter_user_rejections(selection, scored_candidates, settings)
             selection, scored_candidates = _selection_with_fallback_titles(
@@ -1127,7 +1129,10 @@ def run_clip_plan_reselection(
                 scored_candidates,
                 transcript_segments,
             )
-            if kept_candidates:
+            if is_ai_allocation(full_reselection_settings):
+                selection = allocate_selection(selection, full_reselection_settings, confirmed=kept_candidates)
+                scored_candidates = list({c.id: c for c in [*scored_candidates, *kept_candidates]}.values())
+            elif kept_candidates:
                 if not selection.normal_clips and not selection.shorts:
                     raise PipelineExpectedError(
                         "reselection_no_alternatives",
@@ -1135,7 +1140,14 @@ def run_clip_plan_reselection(
                     )
                 selection = merge_kept_candidates(selection, kept_candidates, previous_plan)
                 scored_candidates = [*scored_candidates, *kept_candidates]
+            if is_ai_allocation(full_reselection_settings) and not selection.normal_clips and not selection.shorts:
+                raise PipelineExpectedError('no_usable_selection', '強い候補が1本も選べませんでした。')
             settings = full_reselection_settings
+            if is_ai_allocation(settings) and codex_reselection_result is not None:
+                write_codex_initial_selection_summary({
+                    **codex_reselection_result.summary, **allocation_summary(selection), 'phase': 'reselection',
+                    'selectedNormalCount': len(selection.normal_clips), 'selectedShortCount': len(selection.shorts),
+                }, codex_summary_path)
             write_candidates(
                 scored_candidates,
                 job_dir / "scored_candidates.json",

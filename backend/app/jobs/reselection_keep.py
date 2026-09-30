@@ -1,3 +1,4 @@
+from app.clip_allocation import is_ai_allocation, confirmed_counts
 from typing import Any
 
 from app.candidates.merge_boundaries import Candidate
@@ -27,9 +28,22 @@ def prepare_kept_candidates(
             }, deep=True))
     reduced = {**settings}
     for kind, key in [("normal", "normalClipCount"), ("short", "shortCount")]:
+        if is_ai_allocation(settings):
+            continue
         reduced[key] = target_count(settings, plan, kind) - sum(c.type == kind and c.id in ids for c in plan.clips)
+    if is_ai_allocation(settings):
+        counts = confirmed_counts(settings)
+        for candidate in kept:
+            key = 'normalClipTimeRanges' if candidate.type == 'normal' else 'shortClipTimeRanges'
+            if not any(abs(row['startSeconds'] - candidate.start) < 0.001 and abs(row['endSeconds'] - candidate.end) < 0.001
+                       for row in settings.get(key, [])):
+                counts[candidate.type] += 1
+        reduced['_allocationConfirmedCounts'] = counts
     # Kept scenes are always excluded from replacements, even when variety is OFF.
-    reduced[USED_RANGES_SETTING] = merge_ranges([*used_ranges(settings), *[(c.start, c.end) for c in kept]])
+    if is_ai_allocation(settings):
+        reduced['_allocationKeptRanges'] = {kind: [(c.start, c.end) for c in kept if c.type == kind] for kind in ('normal', 'short')}
+    else:
+        reduced[USED_RANGES_SETTING] = merge_ranges([*used_ranges(settings), *[(c.start, c.end) for c in kept]])
     return reduced, kept
 
 

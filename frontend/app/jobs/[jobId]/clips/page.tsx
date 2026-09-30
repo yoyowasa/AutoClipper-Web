@@ -1,6 +1,7 @@
 "use client";
 import { durationSettingsError, effectiveShortMax, validateClipDuration } from "../../../../lib/durationRules";
 
+import { isAIAllocation, remainingClipSlots, allocationLabel, allocationSettingsError, shortageLabels } from "../../../../lib/clipAllocation";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -73,6 +74,8 @@ type TranscriptPreview = ClipBoundaryDraft & {
 function reselectionPayload(settings: ClipSettings, excludePreviousSelection: boolean): ClipPlanReselectionRequest {
   return {
     excludePreviousSelection,
+    ...(isAIAllocation(settings) ? { clipAllocationMode: 'ai' as const, totalClipCount: settings.totalClipCount,
+      minNormalClipCount: settings.minNormalClipCount ?? 0, minShortCount: settings.minShortCount ?? 0 } : {}),
     normalClipSelectionPreset: settings.normalClipSelectionPreset,
     shortClipSelectionPreset: settings.shortClipSelectionPreset,
     normalClipGuidance: settings.normalClipGuidance,
@@ -99,11 +102,7 @@ export default function ClipPlanReviewPage() {
   const [rejectionHistory, setRejectionHistory] = useState<ClipRejectionRead[]>([]);
   const [rejectionHistoryError, setRejectionHistoryError] = useState<string | null>(null);
   const [keptClipIds, setKeptClipIds] = useState<string[]>([]);
-  const remainingReselectionCount = plan ? (["normal", "short"] as const).reduce((total, kind) => {
-    const existing = plan.clips.filter(clip => clip.type === kind);
-    const requested = kind === "normal" ? plan.settings.normalClipCount : plan.settings.shortCount;
-    return total + Math.max(requested ?? 0, existing.length) - existing.filter(clip => keptClipIds.includes(clip.id)).length;
-  }, 0) : 0;
+  const remainingReselectionCount = plan ? remainingClipSlots(plan, keptClipIds) : 0;
   const [job, setJob] = useState<JobStatusResponse | null>(null);
   const [isReselecting, setIsReselecting] = useState(false);
   const [isAdjusting, setIsAdjusting] = useState(false);
@@ -630,6 +629,8 @@ export default function ClipPlanReviewPage() {
     if (!draftSettings) {
       return;
     }
+    const allocationError = allocationSettingsError(draftSettings);
+    if (allocationError) { setError(allocationError); return; }
     const durationError = durationSettingsError(draftSettings);
     if (durationError) { setError(durationError); return; }
     setError(null);
@@ -732,6 +733,12 @@ export default function ClipPlanReviewPage() {
         </div>
       </div>
 
+      {isAIAllocation(plan.settings) ? <div className="mx-5 mt-3 border border-sky-200 bg-sky-50 px-4 py-3">
+        <p className="font-semibold">{allocationLabel(plan)}</p>
+        {Object.entries(plan.shortfallReasons ?? {}).map(([reason, count]) => <p key={reason} className="mt-1 text-sm">
+          {shortageLabels[reason] ?? "候補基準を満たさない"}: {count}件
+        </p>)}
+      </div> : null}
       {!isManualWorkflow && job && !job.error ? (
         <div className="sticky top-0 z-20 w-full bg-[#f7f7f4] px-5 pt-4">
           <InitialSelectionStatusBanner

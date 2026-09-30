@@ -1104,8 +1104,10 @@ def test_pipeline_falls_back_to_content_candidates_when_heatmap_reference_is_tam
     [(None, "auto"), ("never", "never")],
     ids=["legacy-missing-mode", "explicit-never"],
 )
+@pytest.mark.parametrize("ai_allocation", [False, True])
 def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     client: TestClient,
+    ai_allocation: bool,
     stored_overlay_mode: str | None,
     expected_overlay_mode: str,
 ) -> None:
@@ -1142,6 +1144,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         json={
             "videoId": upload["videoId"],
             "settings": {
+                **({"totalClipCount": 3} if ai_allocation else {}),
                 "normalClipCount": 1,
                 "shortCount": 2,
                 "normalClipTimeRanges": [
@@ -2352,11 +2355,13 @@ def test_real_pipeline_fails_silent_audio_before_transcription_and_candidates(cl
     assert not (storage.temp / created["jobId"]).exists()
 
 
+@pytest.mark.parametrize("ai_allocation", [False, True])
 @pytest.mark.parametrize("with_history", [False, True])
 def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     with_history: bool,
+    ai_allocation: bool,
 ) -> None:
     upload = client.post(
         "/api/videos/upload",
@@ -2367,6 +2372,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
         json={
             "videoId": upload["videoId"],
             "settings": {
+                **({"totalClipCount": 10, "minNormalClipCount": 0, "minShortCount": 0} if ai_allocation else {}),
                 "initialSelectionProvider": "codex",
                 "normalClipCount": 1,
                 "shortCount": 1,
@@ -2382,6 +2388,14 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
         },
     ).json()
     storage = app.dependency_overrides[get_storage_paths]()
+    if not ai_allocation:
+        with next(app.dependency_overrides[get_db]()) as db:
+            legacy_job = db.get(Job, created['jobId'])
+            legacy_settings = dict(legacy_job.settings_json)
+            for key in ('clipAllocationMode', 'totalClipCount', 'minNormalClipCount', 'minShortCount'):
+                legacy_settings.pop(key, None)
+            legacy_job.settings_json = legacy_settings
+            db.commit()
     selector_calls: list[dict[str, Any]] = []
 
     if with_history:
@@ -2416,8 +2430,8 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     short = Candidate(
         id="codex-short",
         type="short",
-        start=145.0,
-        end=175.0,
+        start=30.0 if ai_allocation and not with_history else 145.0,
+        end=60.0 if ai_allocation and not with_history else 175.0,
         duration=30.0,
         transcript_text="another complete section for a normal clip selection",
         rule_score=92.0,
@@ -2528,7 +2542,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     assert "scoring_candidates" not in visited
     selected = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
     assert selected["normalClips"][0]["start"] == (110.0 if with_history else 0.0)
-    assert selected["shorts"][0]["start"] == 145.0
+    assert selected["shorts"][0]["start"] == (30.0 if ai_allocation and not with_history else 145.0)
     summary_path = storage.job_outputs(created["jobId"]) / "codex_initial_selection_summary.json"
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["phase"] == "initial"
@@ -2538,6 +2552,16 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     assert status["details"]["codexInitialSelectionSelectedShortCount"] == 1
     assert status["status"] == "awaiting_clip_review"
 
+    plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
+    if ai_allocation:
+        assert (plan['requestedTotal'], plan['selectedTotal']) == (10, 2)
+        assert plan['selectedByType'] == {'normal': 1, 'short': 1}
+        assert plan['shortfallReasons']['insufficient_strong_candidates'] == 8
+        assert summary['requestedTotal'] == 10 and summary['selectedTotal'] == 2
+    else:
+        assert plan['requestedTotal'] is None
+        with next(app.dependency_overrides[get_db]()) as db:
+            assert db.get(Job, created['jobId']).settings_json == legacy_settings
     initial_summary_payload = summary_path.read_bytes()
     queued_reselections: list[str] = []
     app.dependency_overrides[get_enqueue_clip_plan_reselection] = (
@@ -2588,6 +2612,12 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
     )
     assert reselection_summary["phase"] == "reselection"
     assert reselection_summary["status"] == "completed"
+    if ai_allocation:
+        assert reselection_summary['requestedTotal'] == 10
+        assert reselection_summary['selectedTotal'] == 2
+    else:
+        with next(app.dependency_overrides[get_db]()) as db:
+            assert 'totalClipCount' not in db.get(Job, created['jobId']).settings_json
     if with_history:
         selected = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
         assert all(item["start"] >= 100 for item in [*selected["normalClips"], *selected["shorts"]])

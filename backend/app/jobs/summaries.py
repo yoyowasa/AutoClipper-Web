@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.clip_allocation import allocation_summary
 import json
 from collections import Counter
 from collections.abc import Sequence
@@ -212,6 +213,7 @@ def build_candidate_summary(
         "candidates_with_transcript_text": sum(1 for candidate in candidates if candidate.transcript_text.strip()),
         "hard_gate_passed_count": selection.hard_gate_passed_count if selection is not None else 0,
         "hard_gate_rejected_count": selection.hard_gate_rejected_count if selection is not None else 0,
+        **(allocation_summary(selection) if selection is not None else {}),
         "requested_normal_count": selection.requested_normal_count if selection is not None else 0,
         "selected_normal_count": len(selection.normal_clips) if selection is not None else 0,
         "requested_short_count": selection.requested_short_count if selection is not None else 0,
@@ -381,6 +383,7 @@ def build_selected_clips_summary(
     return {
         "selected_normal_count": len(normal),
         "selected_short_count": len(shorts),
+        **(allocation_summary(selection) if selection is not None else {}),
         "requested_normal_count": selection.requested_normal_count if selection is not None else 0,
         "requested_short_count": selection.requested_short_count if selection is not None else 0,
         "normal_hard_gate_passed_count": selection.normal_hard_gate_passed_count if selection is not None else 0,

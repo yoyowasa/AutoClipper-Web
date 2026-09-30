@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import model_serializer, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.candidates.user_rejections import rejection_context_guidance
+from app.clip_allocation import is_ai_allocation, candidate_pool_counts, confirmed_counts
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.duration_rules import (
     NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_CEILING_SECONDS,
@@ -35,7 +36,7 @@ from app.storage.json_io import write_json_atomic
 from app.video.heatmap import HeatmapSegment
 
 
-CODEX_INITIAL_SELECTION_PROMPT_VERSION = "codex_initial_selection_v5"
+CODEX_INITIAL_SELECTION_PROMPT_VERSION = "codex_initial_selection_v6"
 CODEX_INITIAL_SELECTION_SUMMARY_FILENAME = "codex_initial_selection_summary.json"
 CODEX_RESELECTION_SUMMARY_FILENAME = "codex_reselection_summary.json"
 CODEX_INITIAL_SELECTION_BRIDGE_DIRNAME = "codex_bridge"
@@ -78,6 +79,13 @@ RETRYABLE_BRIDGE_ERROR_CODES = frozenset(
 )
 
 CODEX_TOPIC_SELECTION_PROMPT = """あなたは日本語動画の構成編集者です。
+- clipAllocationMode=aiではtotalClipCountが合計本数です。形式ごとの最低本数も考慮します。
+  confirmedNormalCount/confirmedShortCountは手動・キープで確定済みの本数です。
+  requestedCountは各形式の探索枠であり完成本数の固定目標ではありません。
+- 場面ごとに、通常とShortsのどちらで最も強くなるかを判断する。
+  Shortsは単体で内容と見どころが成立するものに限る。同じ場面を両方に使ってもよい。
+- aiでは最後に最低本数を優先してから、形式に関係なくconfidenceと順位で合計まで選びます。
+  強い候補が足りなければ届いた分だけ返し、弱い候補で埋めないでください。
 入力はローカルで作成した時刻付き話題ブロックの抽出要約です。動画全体の中から公開価値の高い話題を選び、重要度順に返してください。
 - guidanceはユーザー指示です。contextGuidanceは過去区間などの補足情報で、ユーザー指示を優先してください。
 - 通常clipとShortは別基準で評価してください。
@@ -101,6 +109,13 @@ CODEX_TOPIC_SELECTION_PROMPT = """あなたは日本語動画の構成編集者�
 指定されたJSON schema以外を返さないでください。"""
 
 CODEX_INITIAL_SELECTION_PROMPT = """あなたは日本語動画の切り抜き編集者です。
+- clipAllocationMode=aiではtotalClipCountが合計本数です。形式ごとの最低本数も考慮します。
+  confirmedNormalCount/confirmedShortCountは手動・キープで確定済みの本数です。
+  requestedCountは各形式の探索枠であり完成本数の固定目標ではありません。
+- 場面ごとに、通常とShortsのどちらで最も強くなるかを判断する。
+  Shortsは単体で内容と見どころが成立するものに限る。同じ場面を両方に使ってもよい。
+- aiでは最後に最低本数を優先してから、形式に関係なくconfidenceと順位で合計まで選びます。
+  強い候補が足りなければ届いた分だけ返し、弱い候補で埋めないでください。
 入力には、第1段階で選定済みの重要話題と、その周辺の時刻付き元字幕だけが含まれます。元字幕を根拠に開始・終了を精密化してください。
 - guidanceはユーザー指示です。contextGuidanceは過去区間などの補足情報で、ユーザー指示を優先してください。
 - timestampSemantics は source_absolute_seconds です。start/end は元動画の絶対秒で返してください。
@@ -272,6 +287,12 @@ class CodexClipTypeConstraints(_StrictModel):
 
 
 class CodexSelectionConstraints(_StrictModel):
+    allocation_mode: Literal['ai', 'fixed'] = Field(default='fixed', alias='clipAllocationMode')
+    total_clip_count: int | None = Field(default=None, ge=1, le=36, alias='totalClipCount')
+    min_normal_clip_count: int = Field(default=0, ge=0, le=12, alias='minNormalClipCount')
+    min_short_count: int = Field(default=0, ge=0, le=24, alias='minShortCount')
+    confirmed_normal_count: int = Field(default=0, ge=0, alias='confirmedNormalCount')
+    confirmed_short_count: int = Field(default=0, ge=0, alias='confirmedShortCount')
     normal: CodexClipTypeConstraints
     short: CodexClipTypeConstraints
     selection_policy: SelectionPolicy = Field(
@@ -311,6 +332,12 @@ class CodexSelectionConstraints(_StrictModel):
 
     @model_validator(mode="after")
     def validate_requested_count(self) -> CodexSelectionConstraints:
+        if self.allocation_mode == 'ai':
+            if self.total_clip_count is None or self.min_normal_clip_count + self.min_short_count > self.total_clip_count:
+                raise ValueError('invalid total allocation constraints')
+            remaining = max(0, self.total_clip_count - self.confirmed_normal_count - self.confirmed_short_count)
+            if self.normal.requested_count != min(remaining, 24) or self.short.requested_count != min(remaining, 24):
+                raise ValueError('ai exploration counts must match remaining total')
         if self.normal.requested_count + self.short.requested_count <= 0:
             raise ValueError("at least one normal clip or short must be requested")
         band_count = len(self.normal.duration_bands)
@@ -675,11 +702,25 @@ CodexInitialSelectionSummaryStatus = Literal[
 
 
 class CodexInitialSelectionSummary(_StrictModel):
+    requested_total: int | None = Field(default=None, alias='requestedTotal')
+    selected_total: int | None = Field(default=None, alias='selectedTotal')
+    selected_by_type: dict[str, int] = Field(default_factory=dict, alias='selectedByType')
+    shortfall_reasons: dict[str, int] = Field(default_factory=dict, alias='shortfallReasons')
+    minimum_shortfall: dict[str, int] = Field(default_factory=dict, alias='minimumShortfall')
     provider: Literal["codex"] = "codex"
     phase: Literal["initial", "reselection"] = "initial"
     status: CodexInitialSelectionSummaryStatus
     fallback_used: bool = Field(alias="fallbackUsed")
     error: CodexInitialSelectionSummaryError | None = None
+    @model_serializer(mode='wrap')
+    def serialize_allocation(self, handler):
+        result = handler(self)
+        if self.requested_total is None:
+            for key in ('requestedTotal', 'selectedTotal', 'selectedByType', 'shortfallReasons', 'minimumShortfall',
+                        'requested_total', 'selected_total', 'selected_by_type', 'shortfall_reasons', 'minimum_shortfall'):
+                result.pop(key, None)
+        return result
+
     requested_normal_count: int = Field(ge=0, alias="requestedNormalCount")
     requested_short_count: int = Field(ge=0, alias="requestedShortCount")
     selected_normal_count: int = Field(ge=0, alias="selectedNormalCount")
@@ -900,8 +941,7 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
     normal_maximum = _float_setting(settings, "normalMaxDuration", 600.0)
     short_minimum = 0.0
     short_maximum = _float_setting(settings, "shortMaxDuration", 75.0)
-    normal_requested_count = _int_setting(settings, "normalClipCount", 2)
-    short_requested_count = _int_setting(settings, "shortCount", 3)
+    normal_requested_count, short_requested_count = candidate_pool_counts(settings)
     expand_normal_reselection_pool = bool(settings.get(PREVIOUS_PROPOSALS_SETTING)) and not _bool_setting(
         settings, "excludePreviousSelection", False,
     )
@@ -915,7 +955,12 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
         short_maximum,
         ((0.0, 35.0), (35.0, 50.0), (50.0, SHORT_MAX_CEILING_SECONDS)),
     )
+    confirmed = confirmed_counts(settings) if is_ai_allocation(settings) else {'normal': 0, 'short': 0}
     return CodexSelectionConstraints(
+        clipAllocationMode='ai' if is_ai_allocation(settings) else 'fixed',
+        totalClipCount=settings.get('totalClipCount') if is_ai_allocation(settings) else None,
+        minNormalClipCount=settings.get('minNormalClipCount', 0), minShortCount=settings.get('minShortCount', 0),
+        confirmedNormalCount=confirmed['normal'], confirmedShortCount=confirmed['short'],
         normal=CodexClipTypeConstraints(
             requestedCount=normal_requested_count,
             minDuration=normal_minimum,
@@ -949,7 +994,7 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
         selectionPolicy=_selection_policy_setting(settings),
         heatmapIntervalMode=_bool_setting(settings, "heatmapIntervalMode", False),
         maxOverlapRatio=_float_setting(settings, "maxOverlapRatio", 0.8),
-        crossTypeOverlapDedupe=_bool_setting(settings, "crossTypeOverlapDedupe", False),
+        crossTypeOverlapDedupe=False if is_ai_allocation(settings) else _bool_setting(settings, "crossTypeOverlapDedupe", False),
         excludeIntroOutro=_bool_setting(settings, "excludeIntroOutro", True),
         excludePromotionalContent=_bool_setting(settings, "excludePromotionalContent", False),
     )
@@ -2286,6 +2331,10 @@ def convert_codex_initial_selection_response(
 
     requested_normal = request.constraints.normal.requested_count
     requested_short = request.constraints.short.requested_count
+    low_confidence_rejections = [
+        {"candidateId": item.proposal_id, "type": item.type, "reasons": ["low_codex_confidence"]}
+        for item in response.selected_clips if item.confidence < CODEX_STRICT_QUALITY_MIN_CONFIDENCE
+    ]
     response = response.model_copy(
         update={
             "selected_clips": [
@@ -2355,9 +2404,10 @@ def convert_codex_initial_selection_response(
         requestedNormalCount=request.constraints.normal.requested_count,
         requestedShortCount=request.constraints.short.requested_count,
         rejectedCandidates=[
-            {"candidateId": item.proposal_id, "type": clip_type, "reasons": [item.code], "details": {"message": item.message}}
+            *low_confidence_rejections,
+            *[{"candidateId": item.proposal_id, "type": clip_type, "reasons": [item.code], "details": {"message": item.message}}
             for clip_type, dropped in (("normal", dropped_normal_candidates), ("short", dropped_short_candidates))
-            for item in dropped
+            for item in dropped]
         ],
     )
     summary_model = CodexInitialSelectionSummary(
