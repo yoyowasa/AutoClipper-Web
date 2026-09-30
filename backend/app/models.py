@@ -97,3 +97,22 @@ class SourceClipUsage(Base):
     end: Mapped[float] = mapped_column(Float, nullable=False)
     source_duration: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
+
+
+class ClipRejection(Base):
+    """Append-only human decisions, independent of media and job cleanup."""
+
+    __tablename__ = "clip_rejections"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    video_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_key: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    clip_plan_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    clip_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    clip_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    start: Mapped[float] = mapped_column(Float, nullable=False)
+    end: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)

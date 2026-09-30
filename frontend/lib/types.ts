@@ -612,6 +612,14 @@ export type ClipPlanDocument = {
   updatedAt: string;
 };
 
+export type ClipRejectionReason = "no_content" | "missing_context" | "weak_highlight" | "other" | "unspecified";
+export type ClipRejectionRequest = { clipId: string; reason: ClipRejectionReason; note?: string | null };
+export type ClipRejectionRead = {
+  id: string; jobId: string; videoId: string; sourceKey: string | null;
+  clipPlanRevision: number; clipId: string; clipType: ExportType;
+  start: number; end: number; reason: ClipRejectionReason; note: string | null; createdAt: string;
+};
+
 export type ClipPlanReselectionRequest = Pick<
   ClipSettings,
   | "normalClipSelectionPreset"
@@ -624,7 +632,7 @@ export type ClipPlanReselectionRequest = Pick<
   | "excludePromotionalContent"
   | "selectionPolicy"
   | "heatmapIntervalMode"
-> & { excludePreviousSelection?: boolean; keptClipIds?: string[] };
+> & { excludePreviousSelection?: boolean; keptClipIds?: string[]; rejections?: ClipRejectionRequest[] };
 
 export type ClipPlanActionResponse = {
   jobId: string;

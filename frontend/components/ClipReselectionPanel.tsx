@@ -2,11 +2,16 @@
 
 import type { Dispatch, SetStateAction } from "react";
 
+import { rejectionLabels } from "../lib/clipRejections";
+import type { ClipRejectionRead } from "../lib/types";
+
 import { ClipSelectionEditor } from "./ClipSelectionEditor";
 import type { ClipPlanDocument, ClipSettings, JobStatusResponse } from "../lib/types";
 import { durationSettingsError, NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS } from "../lib/durationRules";
 
 type ClipReselectionPanelProps = {
+  rejectionHistory: ClipRejectionRead[];
+  rejectionHistoryError: string | null;
   plan: ClipPlanDocument;
   keptClipIds: string[];
   remainingReselectionCount: number;
@@ -21,6 +26,8 @@ type ClipReselectionPanelProps = {
 };
 
 export function ClipReselectionPanel({
+  rejectionHistory,
+  rejectionHistoryError,
   plan,
   keptClipIds,
   remainingReselectionCount,
@@ -50,7 +57,7 @@ export function ClipReselectionPanel({
                   onChange={event => setExcludePreviousSelection(event.target.checked)} />
                 これまでの候補を避けて選ぶ
               </label>
-              <p className="mt-1 text-xs text-neutral-600">ONではこのジョブで提示済みの区間を除外します。同じ場所も選び直す場合はOFFにしてください。</p>
+              <p className="mt-1 text-xs text-neutral-600">ONでは過去の候補を避けます。理由による除外はOFFでも有効です。文脈不足の初回は、その区間を広げた候補を検討します。</p>
               <p className="mt-2 text-sm leading-6 text-neutral-600">
                 保存済みの文字起こし・音声・映像解析を使うため、動画の再アップロードや再文字起こしは行いません。
               </p>
@@ -141,6 +148,17 @@ export function ClipReselectionPanel({
               ) : null}
             </div>
 
+            <p className="mt-3 text-xs text-neutral-600">キープしない候補の理由と補足を記録します。選ばなければ「理由未指定」です。補足はどの理由でもAIへ伝えます。</p>
+            <details className="mt-3 text-sm">
+              <summary className="cursor-pointer">過去の不採用判断（{rejectionHistory.length}件）</summary>
+              {rejectionHistoryError ? <p role="alert" className="mt-2 text-red-700">{rejectionHistoryError}</p> : null}
+              <ul className="mt-2 max-h-80 space-y-2 overflow-auto">
+                {rejectionHistory.map(row => <li key={row.id} className="border-b border-neutral-200 pb-2">
+                  <p>{row.clipType === "normal" ? "通常" : "ショート"} {row.start.toFixed(1)}〜{row.end.toFixed(1)}秒・{rejectionLabels[row.reason]}</p>
+                  {row.note ? <p className="whitespace-pre-wrap break-words text-neutral-600">{row.note}</p> : null}
+                </li>)}
+              </ul>
+            </details>
             <button
               className="mt-4 min-h-11 w-full border border-neutral-950 bg-white px-4 text-sm font-semibold text-neutral-950 disabled:cursor-not-allowed disabled:opacity-50"
               disabled={controlsDisabled || remainingReselectionCount === 0 || durationError !== null}

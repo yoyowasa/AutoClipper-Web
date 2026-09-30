@@ -2439,6 +2439,14 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
                                           "topic_key": "unused-topic"}),
                 short.model_copy(update={"id": "previous-short", "start": 10.0, "end": 40.0}),
             ])
+        if len(selector_calls) > 1:
+            # Reusing this fixture's first proposals is now rejected even with
+            # the generic exclusion OFF. Return valid alternative scenes.
+            candidates.extend([
+                normal.model_copy(update={"id": "alternate-normal", "start": 100.0, "end": 190.0,
+                                          "duration": 90.0, "topic_key": "alternate-topic"}),
+                short.model_copy(update={"id": "alternate-short", "start": 205.0, "end": 235.0}),
+            ])
         selection = CandidateSelection(
             normalClips=[normal],
             shorts=[short],

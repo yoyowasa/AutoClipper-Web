@@ -43,10 +43,11 @@ def with_reselection_exclusions(settings: dict[str, Any], previous_plan: Any) ->
     """Avoid earlier proposals in this job without marking them as exported footage."""
     if previous_plan is None:
         return settings
-    previous = [
-        *previous_plan.settings.get(PREVIOUS_PROPOSALS_SETTING, []),
-        *previous_plan.settings.get("_reselectionExcludedRanges", []),
-    ]
+    # Keep individual proposals when available: merged exclusions lose the
+    # identity needed to allow a first context rejection to be expanded.
+    previous = previous_plan.settings.get(
+        PREVIOUS_PROPOSALS_SETTING, previous_plan.settings.get("_reselectionExcludedRanges", []),
+    )
     ranges = sorted(set([
         *[tuple(item) for item in previous],
         *[(clip.start, clip.end) for clip in previous_plan.clips if clip.end > clip.start],
@@ -55,11 +56,20 @@ def with_reselection_exclusions(settings: dict[str, Any], previous_plan: Any) ->
         # OFF allows overlapping old material for a longer edit, but the old
         # proposals remain available for near-duplicate prevention.
         return {**settings, PREVIOUS_PROPOSALS_SETTING: ranges}
+    from app.candidates.user_rejections import REJECTED_RANGES_SETTING, missing_context_count
+
+    judgments = settings.get(REJECTED_RANGES_SETTING, [])
+    # A first context rejection needs the old material as input for an expanded edit.
+    excluded = [item for item in ranges if not any(
+        row["reason"] == "missing_context" and missing_context_count(row, judgments) == 1
+        and abs(item[0] - row["start"]) <= 0.001 and abs(item[1] - row["end"]) <= 0.001
+        for row in judgments
+    )]
     return {
         **settings,
         PREVIOUS_PROPOSALS_SETTING: ranges,
-        "_reselectionExcludedRanges": merge_ranges(ranges),
-        USED_RANGES_SETTING: merge_ranges([*used_ranges(settings), *ranges]),
+        "_reselectionExcludedRanges": merge_ranges(excluded),
+        USED_RANGES_SETTING: merge_ranges([*used_ranges(settings), *excluded]),
     }
 
 

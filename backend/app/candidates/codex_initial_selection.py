@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from app.candidates.user_rejections import rejection_context_guidance
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.duration_rules import (
     NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_CEILING_SECONDS,
@@ -1022,6 +1023,12 @@ def build_codex_initial_selection_request(
             })
             for clip_type in ("normal", "short")
         })
+    for clip_type in ("normal", "short"):
+        constraint = getattr(constraints, clip_type)
+        prefix = constraint.context_guidance + "\n" if constraint.context_guidance else ""
+        guidance = rejection_context_guidance(clip_type, settings, max_length=1000 - len(prefix))
+        if guidance:
+            constraints = constraints.model_copy(update={clip_type: constraint.model_copy(update={"context_guidance": prefix + guidance})})
     previous_ranges = settings.get(PREVIOUS_PROPOSALS_SETTING, [])
     if previous_ranges and not _bool_setting(settings, "excludePreviousSelection", False):
         normal = constraints.normal

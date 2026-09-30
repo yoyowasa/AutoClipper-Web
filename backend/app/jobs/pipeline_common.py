@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 from app.duration_rules import duration_search_settings
 from sqlalchemy.orm import Session
+from app.candidates.user_rejections import REJECTED_RANGES_SETTING, user_rejection_reason, near_previous_except_context_expansion
 from app.audio.extract import extract_mono_wav
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import (
@@ -61,7 +62,6 @@ from app.jobs.title_hook_suggestions import (
 )
 from app.models import Job, Video, utc_now
 from app.candidates.used_ranges import (
-    near_duplicate_of_previous,
     overlaps_used,
     used_ranges,
 )
@@ -246,6 +246,7 @@ def _unused_candidates(candidates: Sequence[Candidate], settings: dict[str, Any]
     return [
         candidate for candidate in candidates
         if candidate.selection_reason == MANUAL_SELECTION_REASON
+        or user_rejection_reason(candidate.start, candidate.end, candidate.type, settings) is not None
         or not overlaps_used(candidate.start, candidate.end, ranges)
     ]
 
@@ -254,8 +255,32 @@ def _is_repeated_normal_proposal(candidate: Candidate, settings: dict[str, Any])
         candidate.type == "normal"
         and candidate.selection_reason != MANUAL_SELECTION_REASON
         and not _bool_setting(settings, "excludePreviousSelection", False)
-        and near_duplicate_of_previous(candidate.start, candidate.end, settings)
+        and user_rejection_reason(candidate.start, candidate.end, candidate.type, settings) is None
+        and near_previous_except_context_expansion(candidate.start, candidate.end, candidate.type, settings)
     )
+
+def _filter_user_rejections(
+    selection: CandidateSelection, candidates: Sequence[Candidate], settings: dict[str, Any],
+) -> tuple[CandidateSelection, list[Candidate]]:
+    if not settings.get(REJECTED_RANGES_SETTING):
+        return selection, list(candidates)
+    rejected = [CandidateRejection(candidateId=candidate.id, type=candidate.type, reasons=[reason])
+                for candidate in candidates
+                if (reason := user_rejection_reason(candidate.start, candidate.end, candidate.type, settings))
+                and not (candidate.selection_reason == MANUAL_SELECTION_REASON
+                         and reason in {"rejected_by_user_other", "rejected_by_user_unspecified"})]
+    rejected_ids = {item.candidate_id for item in rejected}
+    normal = [candidate for candidate in selection.normal_clips if candidate.id not in rejected_ids]
+    shorts = [candidate for candidate in selection.shorts if candidate.id not in rejected_ids]
+    return selection.model_copy(update={
+        "normal_clips": normal, "shorts": shorts,
+        "rejected_candidates": [*selection.rejected_candidates, *rejected],
+        "unfilled_requested_counts": {
+            "normal": max(0, selection.requested_normal_count - len(normal)),
+            "short": max(0, selection.requested_short_count - len(shorts)),
+        },
+    }), [candidate for candidate in candidates if candidate.id not in rejected_ids]
+
 
 def _filter_selection_history(
     selection: CandidateSelection, candidates: list[Candidate], settings: dict[str, Any]
@@ -419,6 +444,7 @@ def _selection_with_refined_boundaries(
     timeline_duration: float,
     heatmap_segments: Sequence[HeatmapSegment] = (),
 ) -> tuple[CandidateSelection, list[Candidate]]:
+    selection, scored_candidates = _filter_user_rejections(selection, scored_candidates, settings)
     scored_candidates, duration_rejections = partition_candidates_by_duration(scored_candidates, settings)
     valid_ids = {candidate.id for candidate in scored_candidates}
     selection = selection.model_copy(update={
@@ -444,11 +470,11 @@ def _selection_with_refined_boundaries(
     normal_clips = refine_unlocked(selection.normal_clips)
     shorts = refine_unlocked(selection.shorts)
     replacements = {candidate.id: candidate for candidate in [*normal_clips, *shorts]}
-    selection, candidates = _filter_selection_history(
+    selection, candidates = _filter_user_rejections(
         selection.model_copy(update={"normal_clips": normal_clips, "shorts": shorts}),
-        _replace_scored_candidates(scored_candidates, replacements),
-        settings,
+        _replace_scored_candidates(scored_candidates, replacements), settings,
     )
+    selection, candidates = _filter_selection_history(selection, candidates, settings)
     candidates, duration_rejections = partition_candidates_by_duration(candidates, settings)
     valid_ids = {candidate.id for candidate in candidates}
     normals = [candidate for candidate in selection.normal_clips if candidate.id in valid_ids]

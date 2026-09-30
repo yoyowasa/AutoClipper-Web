@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration, duration_search_settings
 from sqlalchemy.orm import Session
+from app.candidates.user_rejections import REJECTED_RANGES_SETTING
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import (
     TranscriptSegment,
@@ -101,6 +102,7 @@ from app.jobs.pipeline_common import (
     _score_local_candidates,
     _selection_with_fallback_titles,
     _selection_with_refined_boundaries,
+    _filter_user_rejections,
     _set_status,
     _settings_with_source_history,
     _transcript_text,
@@ -491,6 +493,8 @@ def _restore_clip_plan_after_reselection_failure(
                 clip_id for clip_id in requested_keep_ids
                 if isinstance(clip_id, str) and clip_id in valid_clip_ids
             ]
+        if REJECTED_RANGES_SETTING in (job.settings_json or {}):
+            previous_plan.settings[REJECTED_RANGES_SETTING] = list(job.settings_json[REJECTED_RANGES_SETTING])
         write_clip_plan(previous_plan, clip_plan_output_path(job_dir))
         job.settings_json = dict(previous_plan.settings)
     job.status = "awaiting_clip_review"
@@ -1117,13 +1121,14 @@ def run_clip_plan_reselection(
                 manual_normal_candidates=(normal_candidates if normal_manual_ranges else []),
                 manual_short_candidates=(short_candidates if short_manual_ranges else []),
             )
+            selection, scored_candidates = _filter_user_rejections(selection, scored_candidates, settings)
             selection, scored_candidates = _selection_with_fallback_titles(
                 selection,
                 scored_candidates,
                 transcript_segments,
             )
             if kept_candidates:
-                if not automatic_selection.normal_clips and not automatic_selection.shorts and not manual_candidates:
+                if not selection.normal_clips and not selection.shorts:
                     raise PipelineExpectedError(
                         "reselection_no_alternatives",
                         "キープ以外の新しい候補が見つかりませんでした。前の候補を保持しています。",
