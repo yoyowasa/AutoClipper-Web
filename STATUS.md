@@ -10540,4 +10540,5 @@ pip check: pass
 - 文字列検索の補足: `git grep -i "openai"` はAPI参照以外にも、CodexのWindowsインストール先の会社名、既存文字起こしの表記を維持する辞書、PNG内の生成メタデータ、STATUSと日付付きの過去仕様/検証記録に一致する。これらはAPI呼び出しではなく、辞書・Codex起動・既存画像・過去記録を壊さないため保持した。現行Windows手順/v1チェックリストのAPI有効化手順は更新済み。アプリ/launcher/scriptsにSDKのimportはないことをASTでも確認。
 - 検証: Python 3.11.9で `python -m pytest` は1173 passed・1 skipped。旧キーを含むGET/再選定/retry、旧採点JSON、旧provider依頼のCodex実行、SDK/実装の不存在、low_cost/high_qualityのローカル書き出し・ZIP・字幕保存を確認。frontend全16テスト・lint・typecheck・build、`git diff --check` 成功。
 - lintの環境差: 主作業フォルダで `ruff check . ../launcher ../scripts` を実行すると、Git管理外の `scripts/make_plotwith_solar_finished_variants.py` に既存F841が出る。このファイルは変更せず、実装コミット `476cb8c` のクリーンなcheckoutで指定コマンドが成功したことを確認。
-- 未確認: CI（Python 3.11・3.12とfrontend）、稼働Dockerでの実動画処理と画面表示。Dockerのbuild・再起動・反映は行っていない。
+- CI: PR #100のコミット `c7d34c2` でbackend（Python 3.11・3.12）とfrontendがすべて成功。
+- 未確認: 稼働Dockerでの実動画処理と画面表示。Dockerのbuild・再起動・反映は行っていない。
