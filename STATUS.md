@@ -10523,5 +10523,6 @@ pip check: pass
 - 変更ファイル: `backend/app/{api/jobs.py,candidates/codex_initial_selection.py,candidates/used_ranges.py,jobs/runner.py,schemas.py}`、`backend/tests/{test_api_routes.py,test_real_pipeline.py,test_reselection_exclusions.py,test_reselection_keep.py,test_source_clip_history.py}`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/lib/{initialSelectionStatus.ts,types.ts}`、`frontend/tests/initialSelectionStatus.test.ts`、本ファイル。既存WIPの尺設定・過去候補除外・キープ復元・失敗時表示の変更と、許可された文字起こし記録を含む。
 - 内容: 過去提案範囲を結合し、長い順に最大15件と省略件数をCodexへ渡す。ユーザー指示が1000文字でも保持できるよう、`guidance` と自動補足の `contextGuidance` を別欄にし、それぞれ1000文字以内で検証する。重複判定に使う `_previousProposedRanges` は個々の全範囲を保持し、結合は指示の要約と完全除外用だけで行う。設定から決めた拡張フラグを制約文書へ保存し、通常候補数を単一の期待値と照合する。除外OFFの90%以上重複する自動通常候補をCodexと字幕候補へのfallbackで除外し、330秒→600秒の拡張、ショート、手動指定は許す。失敗時は最新の有効なキープIDを保持する。
 - 検証: 関連131 passed。39範囲を15件＋「ほか24件」にまとめること、1000文字のユーザー指示の保持、文字数上限、再選定を繰り返した場合の個々の全範囲保持、候補数不一致の拒否、重複除外と尺拡張・ショート・手動指定の例外、キープ解除を含む最新IDの復元を確認。Python 3.11.9の `python -m pytest` は1226 passed・1 skipped。`ruff check . ../launcher ../scripts`、frontend全16テスト・lint・typecheck・build、`git diff --check` 成功。
-- 未確認: PRのCI結果、実動画での新ロジックによる再選定と映像品質。稼働環境は以前のWIPからbuildされた状態で、今回のDocker再build・反映・実ジョブ再実行は行っていない。
+- CI: PR #99の実装コミット `0bc0ea7` でbackend（Python 3.11・3.12）とfrontendがすべて成功。
+- 未確認: 実動画での新ロジックによる再選定と映像品質。稼働環境は以前のWIPからbuildされた状態で、今回のDocker再build・反映・実ジョブ再実行は行っていない。
 - 大規模アップデート方針（2026-09-30決定）: (a) 9/27確定事項から実装する。順番は task-165 → 有料API経路の削除 → 触る範囲の分割 → 尺ルール → 不採用理由 → 本数の自動振り分け。別動画からの補完、統合の形、Codexのモデル統一は後で決める。
