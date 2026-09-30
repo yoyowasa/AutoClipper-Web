@@ -10555,5 +10555,5 @@ pip check: pass
 - 変更内容の照合: API/jobsとrunnerに元からある199個の関数/クラスの本文が、移動後も一字単位で一致することを確認。新しい処理関数の追加・既存処理関数の削除はない。既存テストのassert全文も変更していない。アプリの差分は移動・import・router登録・JSXのprops接続だけで、テストと記録は今回の指示分を追加した。
 - API確認: 移動前に保存したOpenAPIの55 paths・62組のpath/methodが追加テストで完全一致。OpenAPI全体と62件のルート登録順も移動前の記録と一致した。
 - 検証: Python 3.11.9で関連212 passed、全件`python -m pytest`は1175 passed・1 skipped（移動前1173 passed・1 skippedに追加2テスト）。backend/app・backend/tests・launcherのruff、frontend全16テスト・lint・typecheck・build、`git diff --check`成功。
-- lintの環境差: 主作業フォルダで`ruff check . ../launcher ../scripts`は、Git管理外の`scripts/make_plotwith_solar_finished_variants.py`の既存F841で失敗した。このファイルとruff設定は変更していない。クリーンなcheckoutでの指定コマンドとCIは続けて確認する。
+- lintの環境差: 主作業フォルダで`ruff check . ../launcher ../scripts`は、Git管理外の`scripts/make_plotwith_solar_finished_variants.py`の既存F841で失敗した。このファイルとruff設定は変更せず、実装コミット`27ded43`のクリーンなcheckoutで指定コマンドが成功したことを確認。
 - 未確認: CI（Python 3.11・3.12、frontend）はPR作成後に確認する。稼働Dockerの実動画処理・画面操作と既存RQキューの実行は未確認。Dockerのbuild・再起動・反映、実ジョブの再実行は行っていない。
