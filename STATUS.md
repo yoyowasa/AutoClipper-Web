@@ -10570,5 +10570,5 @@ pip check: pass
 - 自動補足: 過去提案の説明に残り文字数が足りない場合は、範囲一覧0件＋「過去の提案範囲がほかN件あります」まで縮め、それも入らなければ補足を省略する。既存の自動補足・ユーザー指示・重複判定用の全範囲は保持する。
 - 検証: Python 3.11.9の全件python -m pytestは1234 passed・1 skipped（移動後1175件に今回の59件を追加）。通常89/90/600/601秒、ショート上限0/1/180/181秒、min>max、0.5秒のショート、各編集窓口の422とファイル不変・キュー未登録、範囲外の既存clipの修正、字幕確認からの再編集、旧設定のGET・retry、Codex候補の補正前後の却下・フック追加後の上限、狭い文字数予算と全範囲の保持、backend/frontend定数一致を確認。frontend全17テスト・lint・typecheck・build成功。backend/app・backend/tests・launcherのruffとgit diff --check成功。
 - lintの環境差: 主作業フォルダのruff check . ../launcher ../scriptsは、Git管理外のscripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗する。このファイルとruff設定は変更せず、実装コミットad4a054のクリーンなcheckoutで指定コマンドが成功したことを確認。
-- CI: PR作成後にbackend（Python 3.11・3.12）とfrontendを確認する。
+- CI: PR #102のコミット71586daでbackend（Python 3.11・3.12）とfrontendがすべて成功。
 - 未確認: 稼働Dockerの実動画生成・映像品質・ブラウザでの実操作。Dockerのbuild・再起動・反映、実ジョブの再実行は行っていない。
