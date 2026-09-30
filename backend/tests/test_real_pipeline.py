@@ -1145,7 +1145,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
                 "normalClipCount": 1,
                 "shortCount": 2,
                 "normalClipTimeRanges": [
-                    {"startSeconds": 5, "endSeconds": 55},
+                    {"startSeconds": 5, "endSeconds": 95},
                 ],
                 "shortClipTimeRanges": [
                     {"startSeconds": 60, "endSeconds": 75},
@@ -1226,7 +1226,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
 
     selected = json.loads((storage.job_outputs(created["jobId"]) / "selected_clips.json").read_text(encoding="utf-8"))
     assert [(clip["start"], clip["end"], clip["selection_reason"]) for clip in selected["normalClips"]] == [
-        (5.0, 55.0, "manual_time_range")
+        (5.0, 95.0, "manual_time_range")
     ]
     assert [(clip["start"], clip["end"], clip["selection_reason"]) for clip in selected["shorts"]] == [
         (60.0, 75.0, "manual_time_range"),
@@ -1247,7 +1247,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     assert plan["revision"] == 1
     assert plan["sourceDuration"] == 240.0
     assert [(clip["start"], clip["end"]) for clip in plan["clips"]] == [
-        (5.0, 55.0),
+        (5.0, 95.0),
         (60.0, 75.0),
         (150.0, 180.0),
     ]
@@ -1353,7 +1353,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     app.dependency_overrides[get_enqueue_clip_plan_boundary_update] = lambda: fail_boundary_enqueue
     failed_boundary_response = client.patch(
         (f"/api/jobs/{created['jobId']}/clip-plan/clips/{revised_plan['clips'][0]['id']}/boundary"),
-        json={"start": 2, "end": 58},
+        json={"start": 2, "end": 98},
     )
     assert failed_boundary_response.status_code == 503
     assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == ("awaiting_clip_review")
@@ -1366,17 +1366,17 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     adjusted_clip_id = revised_plan["clips"][0]["id"]
     boundary_response = client.patch(
         f"/api/jobs/{created['jobId']}/clip-plan/clips/{adjusted_clip_id}/boundary",
-        json={"start": 2, "end": 58},
+        json={"start": 2, "end": 98},
     )
     assert boundary_response.status_code == 202
     assert boundary_response.json()["status"] == "preparing_clip_review"
-    assert queued_boundary_updates == [(created["jobId"], adjusted_clip_id, 2.0, 58.0)]
+    assert queued_boundary_updates == [(created["jobId"], adjusted_clip_id, 2.0, 98.0)]
 
     boundary_statuses = run_clip_plan_boundary_update(
         created["jobId"],
         adjusted_clip_id,
         2.0,
-        58.0,
+        98.0,
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
         dependencies=dependencies,
@@ -1387,19 +1387,19 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     ]
     adjusted_plan = client.get(f"/api/jobs/{created['jobId']}/clip-plan").json()
     adjusted_item = next(clip for clip in adjusted_plan["clips"] if clip["id"] == adjusted_clip_id)
-    assert (adjusted_item["start"], adjusted_item["end"]) == (2.0, 58.0)
-    assert adjusted_item["duration"] == 56.0
+    assert (adjusted_item["start"], adjusted_item["end"]) == (2.0, 98.0)
+    assert adjusted_item["duration"] == 96.0
     assert adjusted_item["recommendedStart"] == 5.0
-    assert adjusted_item["recommendedEnd"] == 55.0
+    assert adjusted_item["recommendedEnd"] == 95.0
     assert adjusted_item["manuallyAdjusted"] is True
     selected_after_boundary = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
     assert (
         selected_after_boundary["normalClips"][0]["start"],
         selected_after_boundary["normalClips"][0]["end"],
-    ) == (2.0, 58.0)
+    ) == (2.0, 98.0)
     assert selected_after_boundary["normalClips"][0]["clip_plan_boundary_adjusted"] is True
     assert len(preview_render_calls) == 4
-    assert preview_render_calls[-1][1:] == (2.0, 56.0)
+    assert preview_render_calls[-1][1:] == (2.0, 96.0)
 
     short_clip = next(clip for clip in adjusted_plan["clips"] if clip["type"] == "short")
     queued_hook_updates: list[tuple[str, str, float | None, float | None]] = []
@@ -1461,7 +1461,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
     )
     review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
     assert [(clip["start"], clip["end"]) for clip in review["clips"]] == [
-        (2.0, 58.0),
+        (2.0, 98.0),
         (60.0, 75.0),
         (150.0, 180.0),
     ]
@@ -1871,7 +1871,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     ).exists()
 
 
-def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_duration_settings(
+def test_real_pipeline_does_not_backfill_normal_clip_from_60_second_video(
     client: TestClient,
 ) -> None:
     upload = client.post(
@@ -1885,8 +1885,8 @@ def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_d
             "settings": {
                 "normalClipCount": 1,
                 "shortCount": 0,
-                "normalMinDuration": 20,
-                "normalMaxDuration": 60,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 120,
                 "selectionPolicy": "fill_requested",
                 "burnSubtitles": False,
             },
@@ -1928,36 +1928,17 @@ def test_real_pipeline_can_generate_normal_clip_for_60_second_video_with_short_d
         short_renderer=fake_render,
     )
 
-    visited_statuses = run_autoclipper_job(
-        created["jobId"],
-        session_factory=lambda: next(app.dependency_overrides[get_db]()),
-        paths=storage,
-        dependencies=dependencies,
+    statuses = run_autoclipper_job(
+        created["jobId"], session_factory=lambda: next(app.dependency_overrides[get_db]()),
+        paths=storage, dependencies=dependencies,
     )
-
-    assert visited_statuses == SUCCESS_STATUSES[1:]
-    results_response = client.get(f"/api/jobs/{created['jobId']}/results")
-    assert results_response.status_code == 200
-    results = results_response.json()
-    assert len(results["normalClips"]) == 1
-    assert results["shorts"] == []
-    assert results["normalClips"][0]["duration"] == 60.0
-
-    job_dir = storage.outputs / created["jobId"]
-    candidate_summary = json.loads((job_dir / "candidate_summary.json").read_text(encoding="utf-8"))
-    assert candidate_summary["normal_candidates"] > 0
-    assert candidate_summary["selected_below_threshold_backfill_count"] == 1
-    selected_summary = json.loads((job_dir / "selected_clips_summary.json").read_text(encoding="utf-8"))
-    assert selected_summary["selected_normal_count"] == 1
-    assert selected_summary["selected_short_count"] == 0
-    assert selected_summary["selected_below_threshold_backfill_count"] == 1
-    selected_payload = json.loads((job_dir / "selected_clips.json").read_text(encoding="utf-8"))
-    selected_normal = selected_payload["normalClips"][0]
-    assert selected_normal["hard_gate_passed"] is True
-    assert selected_normal["below_quality_threshold"] is True
-    assert selected_normal["quality_warning"] == "below_min_final_score"
-    assert selected_normal["selection_reason"] == "backfill_below_quality_threshold"
-
+    assert statuses[-1] == "selecting_clips"
+    selected_path = storage.job_outputs(created["jobId"]) / "selected_clips.json"
+    if selected_path.is_file():
+        selected = json.loads(selected_path.read_text(encoding="utf-8"))
+        assert selected["normalClips"] == []
+    with next(app.dependency_overrides[get_db]()) as db:
+        assert db.get(Job, created["jobId"]).status == "failed"
 
 def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: TestClient) -> None:
     upload = client.post(

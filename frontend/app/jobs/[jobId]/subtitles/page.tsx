@@ -3295,7 +3295,7 @@ export default function SubtitleReviewPage() {
                                 dirtySegmentIds.size > 0 ||
                                 hasDirtyClipContent
                               }
-                              enforceMaximumDuration={false}
+                              enforceMaximumDuration={selectedClip.type === "short"}
                               key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
                               playheadSourceTime={absolutePlaybackTime}
                               saving={isUpdatingHookScene}

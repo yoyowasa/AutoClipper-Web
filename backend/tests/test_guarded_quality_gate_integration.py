@@ -143,7 +143,7 @@ def _create_review_job(
                 "initialSelectionProvider": "legacy",
                 "normalClipCount": 1,
                 "shortCount": 0,
-                "normalMinDuration": 60,
+                "normalMinDuration": 90,
                 "normalMaxDuration": 120,
                 "normalClipTimeRanges": [
                     {"startSeconds": 5, "endSeconds": 95},

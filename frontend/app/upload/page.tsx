@@ -21,6 +21,7 @@ import {
   saveYouTubePostingProfile,
   uploadVideo
 } from "../../lib/api";
+import { durationSettingsError } from "../../lib/durationRules";
 import { manualRangeValidationError } from "../../lib/manualClipRanges";
 import type { ClipSettings, StorageStatusResponse } from "../../lib/types";
 import { parseYouTubeSourceFromFilename } from "../../lib/youtubePosting";
@@ -181,6 +182,8 @@ function UploadForm() {
       return;
     }
     if (uploadMode === "new") {
+      const durationError = durationSettingsError(settings);
+      if (durationError) { setError(durationError); return; }
       if (settings.heatmapIntervalMode && !heatmapFile) {
         setError("人気度JSONを参考にするには、対応するJSONを選択してください。");
         return;
@@ -297,7 +300,8 @@ function UploadForm() {
     !file ||
     isSubmitting ||
     isCleaningStorage ||
-    (uploadMode === "new" && settings.heatmapIntervalMode && !heatmapFile);
+    (uploadMode === "new" && (durationSettingsError(settings) !== null || manualRangeValidationError(settings) !== null ||
+      (settings.heatmapIntervalMode && !heatmapFile)));
   const storageReasons = storageStatus?.warning
     ? storageStatus.reasons.length > 0
       ? storageStatus.reasons.map(readableStorageReason)

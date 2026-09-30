@@ -10,10 +10,12 @@ import {
   type BoundaryTimeParts
 } from "../lib/clipBoundaryTime";
 import type { ClipPlanClip } from "../lib/types";
+import { effectiveShortMax, SHORT_MAX_DEFAULT_SECONDS, validateClipDuration } from "../lib/durationRules";
 
 type ClipBoundaryEditorProps = {
   clip: ClipPlanClip;
   sourceDuration: number | null;
+  shortMaxDuration?: number;
   disabled?: boolean;
   saving?: boolean;
   onDraftChange?: (draft: ClipBoundaryDraft | null) => void;
@@ -104,6 +106,7 @@ export function ClipBoundaryEditor({
   sourceDuration,
   disabled = false,
   saving = false,
+  shortMaxDuration = SHORT_MAX_DEFAULT_SECONDS,
   onDraftChange,
   onSave
 }: ClipBoundaryEditorProps) {
@@ -121,14 +124,13 @@ export function ClipBoundaryEditor({
     if (end <= start) {
       return "終了は開始より後にしてください";
     }
-    if (end - start < 1) {
-      return "切り抜き範囲は1秒以上にしてください";
-    }
     if (sourceDuration !== null && end > sourceDuration + 0.001) {
       return `元動画の長さ ${formatTime(sourceDuration)} を超えています`;
     }
-    return null;
-  }, [end, sourceDuration, start]);
+    const hookDuration = clip.type === "short" && clip.hookSceneStart !== null && clip.hookSceneEnd !== null
+      ? clip.hookSceneEnd - clip.hookSceneStart : 0;
+    return validateClipDuration(clip.type, end - start + hookDuration, effectiveShortMax(shortMaxDuration));
+  }, [clip.hookSceneEnd, clip.hookSceneStart, clip.type, end, shortMaxDuration, sourceDuration, start]);
   const changed =
     start !== null &&
     end !== null &&

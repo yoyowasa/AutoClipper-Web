@@ -322,7 +322,7 @@ def test_duration_bands_are_constraints_not_single_target_lengths() -> None:
     assert [
         (band.minimum, band.maximum)
         for band in request.constraints.short.duration_bands
-    ] == [(20, 35), (35, 50), (50, 75)]
+    ] == [(0, 35), (35, 50), (50, 75)]
 
 
 def test_local_topic_blocks_split_at_semantic_boundary() -> None:
@@ -848,7 +848,7 @@ def test_invalid_normal_proposal_is_dropped_while_valid_normal_is_retained() -> 
         update={
             "proposal_id": "normal_valid_alternate",
             "topic_key": "closing_explanation",
-            "start": 90,
+            "start": 70,
             "end": 160,
             "evidence_segment_ids": ["seg_000004", "seg_000006"],
             "confidence": 0.85,

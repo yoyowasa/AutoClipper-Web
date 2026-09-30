@@ -79,8 +79,8 @@ def test_hard_gate_does_not_reject_low_final_score() -> None:
 
 def test_fill_requested_backfills_below_min_final_score_with_metadata() -> None:
     candidates = [
-        make_candidate("normal_low_best", "normal", 0.0, 60.0, "Complete low score one.", final_score=45.0),
-        make_candidate("normal_low_next", "normal", 70.0, 130.0, "Complete low score two.", final_score=35.0),
+        make_candidate("normal_low_best", "normal", 0.0, 90.0, "Complete low score one.", final_score=45.0),
+        make_candidate("normal_low_next", "normal", 100.0, 190.0, "Complete low score two.", final_score=35.0),
     ]
 
     selection = select_candidates(
@@ -111,7 +111,7 @@ def test_missing_selection_policy_defaults_to_strict_quality() -> None:
         "normal_low_default_strict",
         "normal",
         0.0,
-        60.0,
+        90.0,
         "Complete but low scoring normal candidate.",
         final_score=45.0,
     )
@@ -133,7 +133,7 @@ def test_missing_selection_policy_defaults_to_strict_quality() -> None:
 
 def test_strict_quality_preserves_low_score_rejection() -> None:
     candidates = [
-        make_candidate("normal_low", "normal", 0.0, 60.0, "Complete low score.", final_score=45.0),
+        make_candidate("normal_low", "normal", 0.0, 90.0, "Complete low score.", final_score=45.0),
     ]
 
     selection = select_candidates(

@@ -14,6 +14,10 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.duration_rules import (
+    NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_CEILING_SECONDS,
+    duration_search_settings, validate_clip_duration,
+)
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType, build_candidate
 from app.candidates.used_ranges import (
@@ -230,7 +234,7 @@ class CodexHeatmapInput(_StrictModel):
 
 
 class CodexDurationBand(_StrictModel):
-    minimum: float = Field(gt=0, allow_inf_nan=False, alias="minDuration")
+    minimum: float = Field(ge=0, allow_inf_nan=False, alias="minDuration")
     maximum: float = Field(gt=0, allow_inf_nan=False, alias="maxDuration")
 
     @model_validator(mode="after")
@@ -242,7 +246,7 @@ class CodexDurationBand(_StrictModel):
 
 class CodexClipTypeConstraints(_StrictModel):
     requested_count: int = Field(ge=0, le=24, alias="requestedCount")
-    min_duration: float = Field(gt=0, allow_inf_nan=False, alias="minDuration")
+    min_duration: float = Field(ge=0, allow_inf_nan=False, alias="minDuration")
     max_duration: float = Field(gt=0, allow_inf_nan=False, alias="maxDuration")
     preset: ClipSelectionPreset = "auto"
     guidance: str = Field(default="", max_length=1000)
@@ -890,9 +894,10 @@ def _duration_bands(
 
 
 def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
+    settings = duration_search_settings(settings)
     normal_minimum = _float_setting(settings, "normalMinDuration", 90.0)
     normal_maximum = _float_setting(settings, "normalMaxDuration", 600.0)
-    short_minimum = _float_setting(settings, "shortMinDuration", 20.0)
+    short_minimum = 0.0
     short_maximum = _float_setting(settings, "shortMaxDuration", 75.0)
     normal_requested_count = _int_setting(settings, "normalClipCount", 2)
     short_requested_count = _int_setting(settings, "shortCount", 3)
@@ -902,12 +907,12 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
     normal_duration_bands = _duration_bands(
         normal_minimum,
         normal_maximum,
-        ((90.0, 180.0), (180.0, 300.0), (300.0, 600.0)),
+        ((NORMAL_MIN_SECONDS, 180.0), (180.0, 300.0), (300.0, NORMAL_MAX_SECONDS)),
     )
     short_duration_bands = _duration_bands(
         short_minimum,
         short_maximum,
-        ((20.0, 35.0), (35.0, 50.0), (50.0, 75.0)),
+        ((0.0, 35.0), (35.0, 50.0), (50.0, SHORT_MAX_CEILING_SECONDS)),
     )
     return CodexSelectionConstraints(
         normal=CodexClipTypeConstraints(
@@ -924,6 +929,7 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
             maxDuration=short_maximum,
             preset=_preset_setting(settings, "shortClipSelectionPreset"),
             guidance=_text_setting(settings, "shortClipGuidance"),
+            contextGuidance=f"探索の目安は{settings['shortMinDuration']:g}秒以上です。最低尺の制限ではなく、短い候補も採用できます。",
             durationBands=short_duration_bands,
         ),
         normalCandidateCount=min(
@@ -970,7 +976,8 @@ def _previous_proposal_guidance(ranges: Sequence[tuple[float, float]], *, max_le
         text = f"過去の提案範囲（元動画の秒、長い順）: {intervals}{suffix}。{advice}"
         if len(text) <= max_length:
             return text
-    raise ValueError("past proposal guidance exceeds its character budget")
+    summary = f"過去の提案範囲がほか{len(ranked)}件あります"
+    return summary if len(summary) <= max_length else ""
 
 
 def build_codex_initial_selection_request(
@@ -1011,7 +1018,7 @@ def build_codex_initial_selection_request(
         guidance = "過去に使用した場面は入力から除外済みです。欠落した時間帯をまたがず、未使用の連続した区間だけを選んでください。"
         constraints = constraints.model_copy(update={
             clip_type: getattr(constraints, clip_type).model_copy(update={
-                "context_guidance": guidance,
+                "context_guidance": "\n".join(filter(None, (getattr(constraints, clip_type).context_guidance, guidance))),
             })
             for clip_type in ("normal", "short")
         })
@@ -1022,7 +1029,7 @@ def build_codex_initial_selection_request(
         guidance = _previous_proposal_guidance(previous_ranges, max_length=1000 - len(prefix))
         constraints = constraints.model_copy(update={
             "normal": normal.model_copy(update={
-                "context_guidance": prefix + guidance,
+                "context_guidance": prefix + guidance if guidance else normal.context_guidance,
             }),
         })
     request = CodexInitialSelectionRequest(
@@ -2016,10 +2023,11 @@ def _proposal_candidate(
         )
     type_constraints = request.constraints.normal if proposal.type == "normal" else request.constraints.short
     duration = proposal.end - proposal.start
-    if duration < type_constraints.min_duration - 0.001 or duration > type_constraints.max_duration + 0.001:
+    reason = validate_clip_duration(proposal.type, duration, short_max=request.constraints.short.max_duration)
+    if reason or (proposal.type == "normal" and duration < type_constraints.min_duration) or duration > type_constraints.max_duration:
         raise CodexInitialSelectionError(
-            "codex_initial_selection_duration_invalid",
-            "Codex初期選定の長さが設定範囲外です。",
+            "duration_out_of_range",
+            reason or "Codex初期選定の長さが設定範囲外です。",
         )
 
     transcript_by_id = {item.id: item for item in request.transcript}
@@ -2339,6 +2347,11 @@ def convert_codex_initial_selection_response(
         selectionPolicy=request.constraints.selection_policy,
         requestedNormalCount=request.constraints.normal.requested_count,
         requestedShortCount=request.constraints.short.requested_count,
+        rejectedCandidates=[
+            {"candidateId": item.proposal_id, "type": clip_type, "reasons": [item.code], "details": {"message": item.message}}
+            for clip_type, dropped in (("normal", dropped_normal_candidates), ("short", dropped_short_candidates))
+            for item in dropped
+        ],
     )
     summary_model = CodexInitialSelectionSummary(
         status="completed",

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { effectiveShortMax, validateClipDuration } from "../lib/durationRules";
 
 type HookSceneEditableClip = {
   start: number;
@@ -177,15 +178,14 @@ export function ClipHookSceneEditor({
     }
     if (
       enforceMaximumDuration &&
-      !clipAlreadyExceedsMaximum &&
-      clip.duration + duration > shortMaxDuration + 0.001
+      validateClipDuration("short", clip.end - clip.start + duration, effectiveShortMax(shortMaxDuration))
     ) {
-      return `完成尺が上限 ${formatTime(shortMaxDuration)} を超えます`;
+      return validateClipDuration("short", clip.end - clip.start + duration, effectiveShortMax(shortMaxDuration));
     }
     return null;
   }, [
-    clip.duration,
-    clipAlreadyExceedsMaximum,
+    clip.end,
+    clip.start,
     clipDuration,
     duration,
     end,
@@ -314,7 +314,8 @@ export function ClipHookSceneEditor({
           {hasSavedHook ? (
             <button
               className={`${compact ? "min-h-9" : "min-h-10"} border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-50`}
-              disabled={disabled}
+              disabled={disabled || (enforceMaximumDuration &&
+                validateClipDuration("short", clip.end - clip.start, effectiveShortMax(shortMaxDuration)) !== null)}
               type="button"
               onClick={() => onSave(null, null)}
             >

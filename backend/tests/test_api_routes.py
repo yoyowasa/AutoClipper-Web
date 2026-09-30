@@ -202,8 +202,8 @@ def test_clip_plan_converts_only_selected_short_to_normal(client: TestClient) ->
         id="candidate_short_2",
         type="short",
         start=50,
-        end=80,
-        duration=30,
+        end=140,
+        duration=90,
         transcript_text="通常へ変更するショート",
         title="変更対象",
         hook_text="解除されるフック",
@@ -222,6 +222,7 @@ def test_clip_plan_converts_only_selected_short_to_normal(client: TestClient) ->
     settings = {
         "normalClipCount": 0,
         "shortCount": 2,
+        "shortMaxDuration": 120,
         "requireClipPlanReview": True,
         "requireSubtitleReview": True,
     }
@@ -235,7 +236,7 @@ def test_clip_plan_converts_only_selected_short_to_normal(client: TestClient) ->
             job_id,
             selection,
             settings,
-            source_duration=120,
+            source_duration=240,
         ),
         preview_clip_ids=[],
     )
@@ -245,7 +246,7 @@ def test_clip_plan_converts_only_selected_short_to_normal(client: TestClient) ->
         json.dumps(
             [
                 {"start": 10, "end": 40, "text": "一つ目のショート", "confidence": 0.9},
-                {"start": 50, "end": 80, "text": "通常へ変更するショート", "confidence": 0.9},
+                {"start": 50, "end": 140, "text": "通常へ変更するショート", "confidence": 0.9},
             ],
             ensure_ascii=False,
         ),
@@ -256,7 +257,7 @@ def test_clip_plan_converts_only_selected_short_to_normal(client: TestClient) ->
             id=video_id,
             original_filename="source.mp4",
             stored_path=str(source_path),
-            duration=120,
+            duration=240,
             width=1920,
             height=1080,
             has_audio=True,
@@ -280,7 +281,7 @@ def test_clip_plan_converts_only_selected_short_to_normal(client: TestClient) ->
     assert response_item["type"] == "normal"
     assert (response_item["start"], response_item["end"], response_item["title"]) == (
         50.0,
-        80.0,
+        140.0,
         "変更対象",
     )
     assert response_item["hookSceneStart"] is None
@@ -1016,7 +1017,7 @@ def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
     assert persisted["segments"][0]["text"] == "OKでまとめて保存した字幕"
 
 
-def test_apply_subtitle_review_clip_allows_edited_short_past_duration_target(
+def test_apply_subtitle_review_clip_rejects_edited_short_past_duration_limit(
     client: TestClient,
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
@@ -1054,12 +1055,8 @@ def test_apply_subtitle_review_clip_allows_edited_short_past_duration_target(
         },
     )
 
-    assert applied.status_code == 200
-    clip = applied.json()["clips"][0]
-    assert clip["confirmed"] is True
-    assert clip["hookSceneStart"] == 10
-    assert clip["hookSceneEnd"] == 12
-
+    assert applied.status_code == 422
+    assert "ショートは75秒以内" in applied.json()["detail"]
 
 def test_apply_subtitle_review_clip_accepts_empty_overlay_title(
     client: TestClient,
@@ -3470,8 +3467,8 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
             "settings": {
                 "normalClipCount": 1,
                 "shortCount": 1,
-                "normalMinDuration": 20,
-                "normalMaxDuration": 60,
+                "normalMinDuration": 90,
+                "normalMaxDuration": 120,
                 "shortMinDuration": 15,
                 "shortMaxDuration": 45,
                 "normalClipSelectionPreset": "important",
@@ -3521,8 +3518,8 @@ def test_create_job_persists_advanced_duration_settings(client: TestClient) -> N
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, created["jobId"])
         assert job is not None
-        assert job.settings_json["normalMinDuration"] == 20.0
-        assert job.settings_json["normalMaxDuration"] == 60.0
+        assert job.settings_json["normalMinDuration"] == 90.0
+        assert job.settings_json["normalMaxDuration"] == 120.0
         assert job.settings_json["shortMinDuration"] == 15.0
         assert job.settings_json["shortMaxDuration"] == 45.0
         assert job.settings_json["normalClipSelectionPreset"] == "important"

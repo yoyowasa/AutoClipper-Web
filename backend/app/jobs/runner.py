@@ -1,4 +1,5 @@
 import json
+from app.duration_rules import duration_search_settings
 import re
 import unicodedata
 import shutil
@@ -1928,7 +1929,7 @@ def run_autoclipper_job(
         if video is None:
             raise ValueError(f"video not found for job: {job_id}")
 
-        settings = dict(job.settings_json or {})
+        settings = duration_search_settings(dict(job.settings_json or {}))
         automation_mode = str(settings.get("automationMode") or "manual").strip()
         manual_workflow = is_manual_workflow(settings)
         active_manual_subtitle_mode = manual_subtitle_mode(settings)

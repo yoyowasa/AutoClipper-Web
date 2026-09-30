@@ -31,7 +31,7 @@ from app.jobs.clip_plan import (
     update_clip_plan_hook_scene as update_clip_plan_hook_scene_document,
     write_clip_plan,
 )
-from app.jobs.hook_scene import hook_scene_newly_exceeds_short_limit
+from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration
 from app.jobs.manual_workflow import (
     is_manual_workflow,
     manual_plan_settings,
@@ -70,6 +70,7 @@ from app.schemas import (
     ClipPlanTypeUpdateRequest,
     ManualClipCreateRequest,
     ManualClipUpdateRequest,
+    JobSettings,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
 
@@ -143,11 +144,14 @@ def _validate_manual_clip_range(
     *,
     start: float,
     end: float,
+    clip_type: str,
+    hook_start: float | None = None,
+    hook_end: float | None = None,
 ) -> None:
-    if end <= start or end - start < 1:
+    if end <= start:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="manual clip duration must be at least 1 second",
+            detail="切り抜きの終了は開始より後にしてください。",
         )
     source_duration = float(video.duration or document.source_duration or 0)
     if source_duration <= 0:
@@ -160,6 +164,30 @@ def _validate_manual_clip_range(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="clip end exceeds source video duration",
         )
+    _validate_proposed_duration(clip_type, start, end, document.settings, hook_start, hook_end)
+
+
+def _validate_proposed_duration(
+    clip_type: str, start: float, end: float, settings: dict,
+    hook_start: float | None = None, hook_end: float | None = None,
+) -> None:
+    reason = validate_clip_duration(
+        clip_type, completed_clip_duration(clip_type, start, end, hook_start, hook_end),
+        short_max=effective_short_max(settings),
+    )
+    if reason:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, reason)
+    reason = validate_clip_duration(
+        clip_type,
+        completed_clip_duration(
+            clip_type, round(start, 3), round(end, 3),
+            round(hook_start, 3) if hook_start is not None else None,
+            round(hook_end, 3) if hook_end is not None else None,
+        ),
+        short_max=effective_short_max(settings),
+    )
+    if reason:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, reason)
 
 def _persist_subtitle_review(document: SubtitleReviewDocument, paths: StoragePaths) -> None:
     output_dir = paths.job_outputs(document.job_id)
@@ -192,6 +220,7 @@ def create_manual_clip(
         document,
         start=request.start,
         end=request.end,
+        clip_type=request.type,
     )
     type_index = sum(clip.type == request.type for clip in document.clips) + 1
     default_title = "通常切り抜き" if request.type == "normal" else "ショート"
@@ -245,7 +274,10 @@ def update_manual_clip(
     start = current.start if request.start is None else request.start
     end = current.end if request.end is None else request.end
     clip_type = request.type or current.type
-    _validate_manual_clip_range(video, document, start=start, end=end)
+    _validate_manual_clip_range(
+        video, document, start=start, end=end, clip_type=clip_type,
+        hook_start=current.hook_scene_start, hook_end=current.hook_scene_end,
+    )
     payload = current.model_dump()
     payload.update(
         {
@@ -395,6 +427,7 @@ def update_clip_plan_clip_type(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="clip plan item not found",
         )
+    _validate_proposed_duration(request.type, planned_clip.start, planned_clip.end, dict(job.settings_json or {}))
     output_dir = paths.job_outputs(job_id)
     selected_path = output_dir / "selected_clips.json"
     selected_payload = _read_json_if_exists(selected_path)
@@ -418,12 +451,6 @@ def update_clip_plan_clip_type(
     if request.type == "short" and planned_clip.type == "normal":
         if len(selection.shorts) >= 24:
             raise HTTPException(status_code=422, detail="short clip count cannot exceed 24")
-        limit = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
-        if planned_clip.duration > limit + 0.001:
-            raise HTTPException(
-                status_code=422,
-                detail=f"ショートの上限は{limit:g}秒です。開始・終了を調整し、プレビュー更新後に変更してください。",
-            )
     try:
         if request.type == "normal":
             converted_selection = convert_selected_clip_to_normal(selection, clip_id)
@@ -549,6 +576,10 @@ def update_clip_plan_clip_boundary(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="clip end exceeds source video duration",
         )
+    _validate_proposed_duration(
+        planned_clip.type, request.start, request.end, dict(job.settings_json or {}),
+        planned_clip.hook_scene_start, planned_clip.hook_scene_end,
+    )
     if (
         planned_clip.hook_scene_start is not None
         and planned_clip.hook_scene_end is not None
@@ -674,16 +705,9 @@ def update_clip_plan_hook_scene(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="hook scene must stay within the selected clip",
             )
-        short_max_duration = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
-        if planned_clip.type == "short" and hook_scene_newly_exceeds_short_limit(
-            clip_duration=planned_clip.duration,
-            hook_duration=request.end - request.start,
-            short_max_duration=short_max_duration,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail=("hook scene would exceed the configured short maximum duration"),
-            )
+    _validate_proposed_duration(
+        planned_clip.type, planned_clip.start, planned_clip.end, dict(job.settings_json or {}), request.start, request.end,
+    )
 
     if manual_edit:
         try:
@@ -783,7 +807,9 @@ def reselect_clip_plan(
         )
     )
     try:
-        validated_settings = _validated_persisted_job_settings(settings_payload)
+        validated_settings = JobSettings.model_validate(
+            _validated_persisted_job_settings(settings_payload).model_dump(by_alias=True, mode="json")
+        )
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -913,6 +939,9 @@ def approve_clip_plan(
                 document,
                 start=clip.start,
                 end=clip.end,
+                clip_type=clip.type,
+                hook_start=clip.hook_scene_start,
+                hook_end=clip.hook_scene_end,
             )
         previous_settings = dict(job.settings_json or {})
         try:
