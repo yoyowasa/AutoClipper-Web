@@ -10556,4 +10556,5 @@ pip check: pass
 - API確認: 移動前に保存したOpenAPIの55 paths・62組のpath/methodが追加テストで完全一致。OpenAPI全体と62件のルート登録順も移動前の記録と一致した。
 - 検証: Python 3.11.9で関連212 passed、全件`python -m pytest`は1175 passed・1 skipped（移動前1173 passed・1 skippedに追加2テスト）。backend/app・backend/tests・launcherのruff、frontend全16テスト・lint・typecheck・build、`git diff --check`成功。
 - lintの環境差: 主作業フォルダで`ruff check . ../launcher ../scripts`は、Git管理外の`scripts/make_plotwith_solar_finished_variants.py`の既存F841で失敗した。このファイルとruff設定は変更せず、実装コミット`27ded43`のクリーンなcheckoutで指定コマンドが成功したことを確認。
-- 未確認: CI（Python 3.11・3.12、frontend）はPR作成後に確認する。稼働Dockerの実動画処理・画面操作と既存RQキューの実行は未確認。Dockerのbuild・再起動・反映、実ジョブの再実行は行っていない。
+- CI: PR #101のコミット`722815a`でbackend（Python 3.11・3.12）とfrontendがすべて成功。
+- 未確認: 稼働Dockerの実動画処理・画面操作と既存RQキューの実行は未確認。Dockerのbuild・再起動・反映、実ジョブの再実行は行っていない。
