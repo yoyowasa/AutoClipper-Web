@@ -15,8 +15,10 @@ from app.audio.transcribe_faster_whisper import (
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection, write_selected_clips
 from app.db import Base
-from app.jobs.runner import (
+from app.jobs.pipeline_common import (
     AutoClipperPipelineDependencies,
+)
+from app.jobs.runner import (
     run_subtitle_review_hook_scene_update,
     run_subtitle_review_preview,
 )

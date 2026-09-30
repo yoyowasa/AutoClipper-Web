@@ -10,7 +10,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.candidates.select_candidates import CandidateSelection
 from app.db import Base, get_db
 from app.jobs.clip_plan import build_clip_plan, load_clip_plan
-from app.jobs.runner import AutoClipperPipelineDependencies, run_autoclipper_job
+from app.jobs.pipeline_common import (
+    AutoClipperPipelineDependencies,
+)
+from app.jobs.runner import (
+    run_autoclipper_job,
+)
 from app.main import app
 from app.models import Job, Video
 from app.render.render_manual_source_proxy import (

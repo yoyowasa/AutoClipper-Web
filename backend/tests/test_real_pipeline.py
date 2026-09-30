@@ -1,3 +1,5 @@
+import app.jobs.clip_plan_runner as clip_plan_runner_module
+import app.jobs.pipeline_common as pipeline_common_module
 import json
 import hashlib
 import unicodedata
@@ -28,16 +30,20 @@ from app.jobs.queue import (
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.codex_initial_selection import CodexInitialSelectionResult
 from app.candidates.select_candidates import CandidateSelection
-from app.jobs.runner import (
+from app.jobs.pipeline_common import (
     AutoClipperPipelineDependencies,
     PipelineExpectedError,
+)
+from app.jobs.clip_plan_runner import (
     _codex_selection_with_diverse_refined_shorts,
-    _transcript_quality_diagnostics,
-    _transcription_language_setting,
-    run_autoclipper_job,
     run_clip_plan_boundary_update,
     run_clip_plan_hook_scene_update,
     run_clip_plan_reselection,
+)
+from app.jobs.runner import (
+    _transcript_quality_diagnostics,
+    _transcription_language_setting,
+    run_autoclipper_job,
     run_subtitle_review_hook_scene_update,
     run_subtitle_review_preview,
     run_subtitle_review_render,
@@ -671,7 +677,7 @@ def test_stale_clip_plan_preview_cleanup_ignores_file_errors(
 
     monkeypatch.setattr(Path, "unlink", fail_one_unlink)
 
-    runner_module._cleanup_stale_clip_plan_previews(
+    pipeline_common_module._cleanup_stale_clip_plan_previews(
         preview_dir,
         {current_path.resolve()},
     )
@@ -881,6 +887,16 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
 
     monkeypatch.setattr(
         runner_module,
+        "write_clip_plan",
+        fail_final_clip_plan_write,
+    )
+    monkeypatch.setattr(
+        clip_plan_runner_module,
+        "write_clip_plan",
+        fail_final_clip_plan_write,
+    )
+    monkeypatch.setattr(
+        pipeline_common_module,
         "write_clip_plan",
         fail_final_clip_plan_write,
     )
@@ -2074,6 +2090,11 @@ def test_real_pipeline_reports_selection_failure_before_rendering(
         "select_candidates",
         lambda *_args, **_kwargs: CandidateSelection(),
     )
+    monkeypatch.setattr(
+        clip_plan_runner_module,
+        "select_candidates",
+        lambda *_args, **_kwargs: CandidateSelection(),
+    )
     dependencies = AutoClipperPipelineDependencies(
         probe_metadata=lambda _path: VideoMetadata(
             duration=240.0,
@@ -2477,8 +2498,12 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
         return Path(output_path)
 
     monkeypatch.setattr(runner_module, "generate_normal_candidates_with_summary", forbidden)
+    monkeypatch.setattr(clip_plan_runner_module, "generate_normal_candidates_with_summary", forbidden)
     monkeypatch.setattr(runner_module, "generate_short_candidates_with_summary", forbidden)
+    monkeypatch.setattr(clip_plan_runner_module, "generate_short_candidates_with_summary", forbidden)
     monkeypatch.setattr(runner_module, "_score_local_candidates", forbidden)
+    monkeypatch.setattr(clip_plan_runner_module, "_score_local_candidates", forbidden)
+    monkeypatch.setattr(pipeline_common_module, "_score_local_candidates", forbidden)
 
     visited = run_autoclipper_job(
         created["jobId"],
@@ -2697,7 +2722,7 @@ def test_codex_normal_pool_is_refined_and_reselected_by_quality(
         summary={},
     )
     refined_normal_ids: list[str] = []
-    original_refiner = runner_module._selection_with_refined_boundaries
+    original_refiner = clip_plan_runner_module._selection_with_refined_boundaries
 
     def capture_normal_pool(*args: Any, **kwargs: Any) -> Any:
         selection = args[0]
@@ -2705,7 +2730,12 @@ def test_codex_normal_pool_is_refined_and_reselected_by_quality(
         return original_refiner(*args, **kwargs)
 
     monkeypatch.setattr(
-        runner_module,
+        clip_plan_runner_module,
+        "_selection_with_refined_boundaries",
+        capture_normal_pool,
+    )
+    monkeypatch.setattr(
+        pipeline_common_module,
         "_selection_with_refined_boundaries",
         capture_normal_pool,
     )

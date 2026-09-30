@@ -2,7 +2,9 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.volume_features import AudioFeatures
 from app.candidates.manual_ranges import MANUAL_SELECTION_REASON
 from app.candidates.merge_boundaries import Candidate
-from app.jobs.runner import _automatic_selection_with_diverse_refined_shorts
+from app.jobs.clip_plan_runner import (
+    _automatic_selection_with_diverse_refined_shorts,
+)
 
 
 def _candidate(

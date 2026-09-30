@@ -1,3 +1,5 @@
+import app.api._job_common as job_common_api
+import app.api.clip_plan as clip_plan_api
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
@@ -5,7 +7,6 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-import app.api.jobs as jobs_api
 from app.db import get_db
 from app.jobs.queue import (
     get_enqueue_clip_plan_boundary_update,
@@ -57,7 +58,7 @@ def test_clip_plan_action_claim_rejects_second_request_before_writing(
         app.dependency_overrides[dependency] = lambda: lambda *args: queued.append(args)
     claimed = Event()
     release = Event()
-    original_claim = jobs_api._claim_job_status
+    original_claim = clip_plan_api._claim_job_status
 
     def pause_after_claim(*args, **kwargs) -> None:
         original_claim(*args, **kwargs)
@@ -65,7 +66,8 @@ def test_clip_plan_action_claim_rejects_second_request_before_writing(
             claimed.set()
             assert release.wait(10)
 
-    monkeypatch.setattr(jobs_api, "_claim_job_status", pause_after_claim)
+    monkeypatch.setattr(clip_plan_api, "_claim_job_status", pause_after_claim)
+    monkeypatch.setattr(job_common_api, "_claim_job_status", pause_after_claim)
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
             first = executor.submit(method, url, json=payload)
@@ -98,12 +100,12 @@ def test_claim_rejects_a_job_loaded_before_another_request_claimed_it(
             second_job = second_db.get(Job, job_id)
             assert first_job is not None and second_job is not None
             assert first_job.status == second_job.status == "awaiting_clip_review"
-            jobs_api._claim_job_status(
+            clip_plan_api._claim_job_status(
                 first_db, first_job, expected="awaiting_clip_review",
                 new_status="preparing_clip_review", current_step="processing",
             )
             with pytest.raises(HTTPException) as error:
-                jobs_api._claim_job_status(
+                clip_plan_api._claim_job_status(
                     second_db, second_job, expected="awaiting_clip_review",
                     new_status="preparing_clip_review", current_step="processing",
                 )

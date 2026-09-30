@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import app.jobs.clip_plan_runner as clip_plan_runner_module
+import app.jobs.pipeline_common as pipeline_common_module
+
 import hashlib
 import json
 from collections.abc import Generator
@@ -221,6 +224,8 @@ def test_rerender_completed_with_unresolved_marker_recovers_under_lease(
     monkeypatch.setattr(runner_module, "write_subtitle_review", lambda *_args: None)
     monkeypatch.setattr(runner_module, "write_subtitle_review_summary", lambda *_args: None)
     monkeypatch.setattr(runner_module, "_active_quality_gate_mode", lambda *_args: "guarded")
+    monkeypatch.setattr(clip_plan_runner_module, "_active_quality_gate_mode", lambda *_args: "guarded")
+    monkeypatch.setattr(pipeline_common_module, "_active_quality_gate_mode", lambda *_args: "guarded")
     monkeypatch.setattr(
         runner_module,
         "evaluate_content_quality_gate",
@@ -233,6 +238,11 @@ def test_rerender_completed_with_unresolved_marker_recovers_under_lease(
     )
     monkeypatch.setattr(
         runner_module,
+        "_try_write_quality_gate_decision",
+        lambda _decision, output_path: output_path,
+    )
+    monkeypatch.setattr(
+        pipeline_common_module,
         "_try_write_quality_gate_decision",
         lambda _decision, output_path: output_path,
     )
@@ -459,10 +469,14 @@ def test_guarded_rerender_failure_leaves_post_render_gate_missing(
     monkeypatch.setattr(runner_module, "write_subtitle_review", lambda *_args: None)
     monkeypatch.setattr(runner_module, "write_subtitle_review_summary", lambda *_args: None)
     monkeypatch.setattr(runner_module, "_read_transcript_segments", lambda _path: [])
+    monkeypatch.setattr(clip_plan_runner_module, "_read_transcript_segments", lambda _path: [])
+    monkeypatch.setattr(pipeline_common_module, "_read_transcript_segments", lambda _path: [])
     monkeypatch.setattr(runner_module, "apply_reviewed_text", lambda segments, _review: segments)
     monkeypatch.setattr(runner_module, "write_transcript_segments", lambda *_args: None)
     monkeypatch.setattr(runner_module, "apply_reviewed_clip_content", lambda current, _review: current)
     monkeypatch.setattr(runner_module, "_active_quality_gate_mode", lambda *_args: "guarded")
+    monkeypatch.setattr(clip_plan_runner_module, "_active_quality_gate_mode", lambda *_args: "guarded")
+    monkeypatch.setattr(pipeline_common_module, "_active_quality_gate_mode", lambda *_args: "guarded")
     monkeypatch.setattr(
         runner_module,
         "evaluate_content_quality_gate",
@@ -541,6 +555,11 @@ def test_guarded_rerender_failure_leaves_post_render_gate_missing(
 
         monkeypatch.setattr(
             runner_module,
+            "_try_write_quality_gate_decision",
+            fail_first_gate_write,
+        )
+        monkeypatch.setattr(
+            pipeline_common_module,
             "_try_write_quality_gate_decision",
             fail_first_gate_write,
         )
@@ -658,10 +677,14 @@ def test_guarded_rerender_hashes_projected_canonical_exports_before_promotion(
     monkeypatch.setattr(runner_module, "write_subtitle_review", lambda *_args: None)
     monkeypatch.setattr(runner_module, "write_subtitle_review_summary", lambda *_args: None)
     monkeypatch.setattr(runner_module, "_read_transcript_segments", lambda _path: [])
+    monkeypatch.setattr(clip_plan_runner_module, "_read_transcript_segments", lambda _path: [])
+    monkeypatch.setattr(pipeline_common_module, "_read_transcript_segments", lambda _path: [])
     monkeypatch.setattr(runner_module, "apply_reviewed_text", lambda segments, _review: segments)
     monkeypatch.setattr(runner_module, "write_transcript_segments", lambda *_args: None)
     monkeypatch.setattr(runner_module, "apply_reviewed_clip_content", lambda current, _review: current)
     monkeypatch.setattr(runner_module, "_active_quality_gate_mode", lambda *_args: "guarded")
+    monkeypatch.setattr(clip_plan_runner_module, "_active_quality_gate_mode", lambda *_args: "guarded")
+    monkeypatch.setattr(pipeline_common_module, "_active_quality_gate_mode", lambda *_args: "guarded")
     monkeypatch.setattr(
         runner_module,
         "evaluate_content_quality_gate",

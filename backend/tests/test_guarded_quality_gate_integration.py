@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import app.jobs.pipeline_common as pipeline_common_module
+
 import hashlib
 from collections.abc import Generator
 from datetime import UTC, datetime
@@ -29,8 +31,10 @@ from app.jobs.quality_gate import (
     write_quality_gate_decision,
 )
 from app.jobs.queue import get_enqueue_job
-from app.jobs.runner import (
+from app.jobs.pipeline_common import (
     AutoClipperPipelineDependencies,
+)
+from app.jobs.runner import (
     run_autoclipper_job,
     run_subtitle_review_render,
 )
@@ -249,7 +253,7 @@ def test_guarded_selection_pass_skips_clip_review_and_stops_at_content_unknown(
     client, storage, session_factory = guarded_client
     job_id = _create_review_job(client)
     monkeypatch.setattr(
-        runner_module,
+        pipeline_common_module,
         "evaluate_selection_quality_gate",
         lambda **kwargs: _decision(str(kwargs["job_id"]), stage="selection", outcome="pass"),
     )
@@ -288,7 +292,7 @@ def test_guarded_selection_non_pass_routes_to_clip_review(
     client, storage, session_factory = guarded_client
     job_id = _create_review_job(client)
     monkeypatch.setattr(
-        runner_module,
+        pipeline_common_module,
         "evaluate_selection_quality_gate",
         lambda **kwargs: _decision(
             str(kwargs["job_id"]),
@@ -453,7 +457,7 @@ def test_guarded_content_pass_can_continue_to_completed(
     client, storage, session_factory = guarded_client
     job_id = _create_review_job(client)
     monkeypatch.setattr(
-        runner_module,
+        pipeline_common_module,
         "evaluate_selection_quality_gate",
         lambda **kwargs: _decision(
             str(kwargs["job_id"]),
@@ -497,7 +501,7 @@ def test_guarded_review_render_content_non_pass_returns_before_render(
     client, storage, session_factory = guarded_client
     job_id = _create_review_job(client)
     monkeypatch.setattr(
-        runner_module,
+        pipeline_common_module,
         "evaluate_selection_quality_gate",
         lambda **kwargs: _decision(
             str(kwargs["job_id"]),
@@ -587,7 +591,7 @@ def test_guarded_review_render_content_pass_continues_to_renderer(
     client, storage, session_factory = guarded_client
     job_id = _create_review_job(client)
     monkeypatch.setattr(
-        runner_module,
+        pipeline_common_module,
         "evaluate_selection_quality_gate",
         lambda **kwargs: _decision(
             str(kwargs["job_id"]),
@@ -682,7 +686,7 @@ def test_guarded_rejected_initial_outputs_are_not_exposed(
     client, storage, session_factory = guarded_client
     job_id = _create_review_job(client)
     monkeypatch.setattr(
-        runner_module,
+        pipeline_common_module,
         "evaluate_selection_quality_gate",
         lambda **kwargs: _decision(
             str(kwargs["job_id"]),
@@ -725,6 +729,11 @@ def test_guarded_rejected_initial_outputs_are_not_exposed(
             "_try_write_quality_gate_decision",
             reject_post_render_record,
         )
+        monkeypatch.setattr(
+            pipeline_common_module,
+            "_try_write_quality_gate_decision",
+            reject_post_render_record,
+        )
 
     run_autoclipper_job(
         job_id,
@@ -760,6 +769,11 @@ def test_quality_gate_record_failure_keeps_existing_review_fallback(
         "_try_write_quality_gate_decision",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        pipeline_common_module,
+        "_try_write_quality_gate_decision",
+        lambda *_args, **_kwargs: None,
+    )
 
     statuses = run_autoclipper_job(
         job_id,
@@ -783,7 +797,7 @@ def _patch_auto_gate_outcomes(
     post_render: str = "pass",
 ) -> None:
     monkeypatch.setattr(
-        runner_module,
+        pipeline_common_module,
         "evaluate_selection_quality_gate",
         lambda **kwargs: _decision(
             str(kwargs["job_id"]),

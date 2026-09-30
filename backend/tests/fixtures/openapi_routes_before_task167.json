@@ -1,0 +1,174 @@
+{
+  "/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/framing-guide": [
+    "post"
+  ],
+  "/api/videos/upload": [
+    "post"
+  ],
+  "/api/jobs/reedit-upload": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/clips/{clip_id}/reedit": [
+    "post"
+  ],
+  "/api/jobs": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/retry": [
+    "post"
+  ],
+  "/api/jobs/{job_id}": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/source-video": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/editor-video": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/clip-plan": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/clip-plan/clips": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/clip-plan/clips/{clip_id}": [
+    "delete",
+    "patch"
+  ],
+  "/api/jobs/{job_id}/clip-plan/clips/{clip_id}/transcript-segments": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/clip-plan/clips/{clip_id}/preview-video": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/clip-plan/clips/{clip_id}/type": [
+    "patch"
+  ],
+  "/api/jobs/{job_id}/clip-plan/clips/{clip_id}/boundary": [
+    "patch"
+  ],
+  "/api/jobs/{job_id}/clip-plan/clips/{clip_id}/hook-scene": [
+    "patch"
+  ],
+  "/api/jobs/{job_id}/clip-plan/reselect": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/reopen-clip-plan": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/clip-plan/approve": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/subtitle-review": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/title-hook-suggestions": [
+    "get",
+    "post"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/banner-assets/{position}": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/settings": [
+    "patch"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/preview-video": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/live-preview-video": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/preview/retry": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/hook-scene": [
+    "patch"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/framing": [
+    "patch"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/apply": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/segment-structure": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/segments": [
+    "patch"
+  ],
+  "/api/jobs/{job_id}/subtitle-review/finalize": [
+    "post"
+  ],
+  "/api/jobs/{job_id}/results": [
+    "get"
+  ],
+  "/api/jobs/{job_id}/download.zip": [
+    "get"
+  ],
+  "/api/exports/{export_id}/download": [
+    "get"
+  ],
+  "/api/exports/{export_id}/thumbnail/copy": [
+    "get",
+    "post"
+  ],
+  "/api/exports/{export_id}/metadata": [
+    "get"
+  ],
+  "/api/exports/{export_id}/subtitle": [
+    "get"
+  ],
+  "/api/exports/{export_id}/thumbnail/preview/prepare": [
+    "post"
+  ],
+  "/api/exports/{export_id}/thumbnail/preview": [
+    "post"
+  ],
+  "/api/exports/{export_id}/thumbnail": [
+    "get"
+  ],
+  "/api/exports/{export_id}/thumbnail/download": [
+    "get"
+  ],
+  "/api/exports/{export_id}/thumbnail/regenerate": [
+    "post"
+  ],
+  "/api/preferences/subtitle-style-presets": [
+    "get",
+    "put"
+  ],
+  "/api/preferences/youtube-posting-profile": [
+    "get",
+    "put"
+  ],
+  "/api/preferences/character-presets": [
+    "get",
+    "put"
+  ],
+  "/api/preferences/short-banner-presets": [
+    "get",
+    "put"
+  ],
+  "/api/preferences/short-banner-assets": [
+    "post"
+  ],
+  "/api/preferences/short-banner-assets/{asset_id}": [
+    "get"
+  ],
+  "/api/storage/status": [
+    "get"
+  ],
+  "/api/storage/cleanup": [
+    "post"
+  ],
+  "/health": [
+    "get"
+  ],
+  "/api/runtime-profile": [
+    "get"
+  ],
+  "/api/health": [
+    "get"
+  ]
+}
