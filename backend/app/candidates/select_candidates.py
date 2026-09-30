@@ -34,6 +34,11 @@ class CandidateRejection(BaseModel):
 
 
 class CandidateSelection(BaseModel):
+    requested_total: int | None = Field(default=None, alias="requestedTotal")
+    selected_total: int | None = Field(default=None, alias="selectedTotal")
+    selected_by_type: dict[str, int] = Field(default_factory=dict, alias="selectedByType")
+    shortfall_reasons: dict[str, int] = Field(default_factory=dict, alias="shortfallReasons")
+    minimum_shortfall: dict[str, int] = Field(default_factory=dict, alias="minimumShortfall")
     normal_clips: list[Candidate] = Field(default_factory=list, alias="normalClips")
     shorts: list[Candidate] = Field(default_factory=list)
     rejected_candidates: list[CandidateRejection] = Field(default_factory=list, alias="rejectedCandidates")
@@ -125,6 +130,11 @@ def parse_selection_settings(
     if quality_gate:
         normalized["quality_gate"] = quality_gate
 
+    from app.clip_allocation import is_ai_allocation, candidate_pool_counts
+    if is_ai_allocation(settings):
+        normalized['normal_clip_count'], normalized['short_count'] = candidate_pool_counts(settings)
+        normalized['cross_type_overlap_dedupe'] = False
+        normalized['selection_policy'] = 'strict_quality'
     return CandidateSelectionSettings(**normalized)
 
 

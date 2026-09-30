@@ -1,6 +1,7 @@
 "use client";
 
 import { durationSettingsError, NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_DEFAULT_SECONDS, SHORT_MAX_CEILING_SECONDS } from "../lib/durationRules";
+import { isAIAllocation, allocationSettingsError } from "../lib/clipAllocation";
 import type { ClipSettings } from "../lib/types";
 import { ClipSelectionEditor } from "./ClipSelectionEditor";
 import { ManualClipRangeEditor } from "./ManualClipRangeEditor";
@@ -21,6 +22,10 @@ type SettingsPanelProps = {
 };
 
 export const DEFAULT_SETTINGS: ClipSettings = {
+  clipAllocationMode: "ai",
+  totalClipCount: 5,
+  minNormalClipCount: 0,
+  minShortCount: 0,
   workflowMode: "automatic",
   automationMode: "manual",
   manualSubtitleMode: "auto",
@@ -137,6 +142,8 @@ export function SettingsPanel({
   revealManualRanges = 0,
   onChange
 }: SettingsPanelProps) {
+  const ai = isAIAllocation(settings);
+  const allocationError = allocationSettingsError(settings);
   const outputMode = outputModeForSettings(settings);
   const exceptionOnlyAutomation = isExceptionOnlyAutomationMode(settings.automationMode);
   const automationDescription =
@@ -198,6 +205,25 @@ export function SettingsPanel({
           </select>
         </label>
 
+        {ai ? <>
+          <label className="flex flex-col gap-2 text-sm">合計本数（必須）
+            <input className="min-h-10 rounded-md border border-neutral-300 px-3" type="number" required min={1} max={36}
+              disabled={disabled} value={settings.totalClipCount ?? 5}
+              onChange={event => onChange({ ...settings, totalClipCount: Number(event.target.value) })} />
+          </label>
+          <label className="flex flex-col gap-2 text-sm">通常の最低本数（任意）
+            <input className="min-h-10 rounded-md border border-neutral-300 px-3" type="number" min={0} max={12}
+              disabled={disabled} value={settings.minNormalClipCount ?? 0}
+              onChange={event => onChange({ ...settings, minNormalClipCount: Number(event.target.value) })} />
+          </label>
+          <label className="flex flex-col gap-2 text-sm">ショートの最低本数（任意）
+            <input className="min-h-10 rounded-md border border-neutral-300 px-3" type="number" min={0} max={24}
+              disabled={disabled} value={settings.minShortCount ?? 0}
+              onChange={event => onChange({ ...settings, minShortCount: Number(event.target.value) })} />
+          </label>
+          <p className="text-xs text-neutral-600">残りは場面の強さに応じてAIが振り分けます。同じ場面を両方の形式に使えます。強い候補が足りなければ、届いた分で確認に進みます。</p>
+          {allocationError ? <p className="text-sm text-red-700" role="alert">{allocationError}</p> : null}
+        </> : <>
         <fieldset className="min-w-0">
           <legend className="text-sm font-medium text-neutral-700">作成する動画</legend>
           <div
@@ -273,6 +299,7 @@ export function SettingsPanel({
             />
           </label>
         ) : null}
+        </>}
 
         </div>
 

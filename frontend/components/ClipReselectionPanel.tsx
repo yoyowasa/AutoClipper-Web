@@ -1,5 +1,6 @@
 "use client";
 
+import { allocationSettingsError, isAIAllocation } from "../lib/clipAllocation";
 import type { Dispatch, SetStateAction } from "react";
 
 import { rejectionLabels } from "../lib/clipRejections";
@@ -40,7 +41,7 @@ export function ClipReselectionPanel({
   job,
   handleReselect
 }: ClipReselectionPanelProps) {
-  const durationError = durationSettingsError(draftSettings);
+  const durationError = allocationSettingsError(draftSettings) ?? durationSettingsError(draftSettings);
   return (
     <details>
             <summary className="cursor-pointer text-sm font-semibold text-neutral-700">
@@ -50,7 +51,7 @@ export function ClipReselectionPanel({
               <h2 className="mt-1 text-lg font-semibold">狙う場面を調整</h2>
               <p className="mt-2 text-sm font-semibold text-sky-800">
                 {plan.clips.filter(clip => keptClipIds.includes(clip.id)).length}本キープ・
-                {remainingReselectionCount}本を再選定
+                {isAIAllocation(draftSettings) ? `残り${remainingReselectionCount}枠をAIが振り分け` : `${remainingReselectionCount}本を再選定`}
               </p>
               <label className="mt-3 flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={excludePreviousSelection} disabled={controlsDisabled}
@@ -167,7 +168,7 @@ export function ClipReselectionPanel({
             >
               {isReselecting
                 ? job?.currentStep || "再選定中"
-                : `キープ以外の${remainingReselectionCount}本を再選定`}
+                : `キープ以外の${isAIAllocation(draftSettings) ? `残り${remainingReselectionCount}枠をAIが振り分け` : `${remainingReselectionCount}本を再選定`}`}
             </button>
     </details>
   );

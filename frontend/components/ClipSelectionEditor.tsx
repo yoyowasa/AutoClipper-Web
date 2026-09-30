@@ -1,5 +1,6 @@
 "use client";
 
+import { isAIAllocation } from "../lib/clipAllocation";
 import type { ClipSelectionPreset, ClipSettings } from "../lib/types";
 import { isManualTimeMode } from "../lib/manualClipRanges";
 
@@ -84,9 +85,10 @@ export function ClipSelectionEditor({
   workspace = false,
   onChange
 }: ClipSelectionEditorProps) {
-  const normalManual = isManualTimeMode(settings, "normal");
-  const shortManual = isManualTimeMode(settings, "short");
-  const hasAutomaticOutput =
+  const normalManual = !isAIAllocation(settings) && isManualTimeMode(settings, "normal");
+  const shortManual = !isAIAllocation(settings) && isManualTimeMode(settings, "short");
+  const ai = isAIAllocation(settings);
+  const hasAutomaticOutput = ai ||
     (settings.normalClipCount > 0 && !normalManual) ||
     (settings.shortCount > 0 && !shortManual);
   const usesCodexInitialSelection =
@@ -127,7 +129,7 @@ export function ClipSelectionEditor({
 
       <div className={`mt-4 grid gap-4 ${compact ? "" : "lg:grid-cols-2"}`}>
         <OutputPreference
-          disabled={disabled || settings.normalClipCount === 0 || normalManual}
+          disabled={disabled || (!ai && settings.normalClipCount === 0) || normalManual}
           guidance={settings.normalClipGuidance}
           label="通常切り抜き"
           manualTimeMode={normalManual}
@@ -139,7 +141,7 @@ export function ClipSelectionEditor({
           }
         />
         <OutputPreference
-          disabled={disabled || settings.shortCount === 0 || shortManual}
+          disabled={disabled || (!ai && settings.shortCount === 0) || shortManual}
           guidance={settings.shortClipGuidance}
           label="ショート"
           manualTimeMode={shortManual}

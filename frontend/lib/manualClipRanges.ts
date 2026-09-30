@@ -1,3 +1,4 @@
+import { isAIAllocation } from "./clipAllocation";
 import type { ClipSettings, ClipTimeRange } from "./types";
 import { effectiveShortMax, validateClipDuration } from "./durationRules";
 
@@ -10,6 +11,7 @@ function rangeKey(type: ClipOutputType) {
 }
 
 function requestedCount(settings: ClipSettings, type: ClipOutputType) {
+  if (isAIAllocation(settings)) return settings[rangeKey(type)].length || 1;
   return type === "normal" ? settings.normalClipCount : settings.shortCount;
 }
 

@@ -59,8 +59,12 @@ def with_reselection_exclusions(settings: dict[str, Any], previous_plan: Any) ->
     from app.candidates.user_rejections import REJECTED_RANGES_SETTING, missing_context_count
 
     judgments = settings.get(REJECTED_RANGES_SETTING, [])
+    # AI allocation can reuse a kept scene in the other format; same-format
+    # kept ranges are filtered separately after prepare_kept_candidates.
+    ai = settings.get('totalClipCount') is not None and settings.get('clipAllocationMode', 'ai') == 'ai'
+    kept_ranges = {(c.start, c.end) for c in previous_plan.clips if c.id in settings.get('keptClipIds', [])} if ai else set()
     # A first context rejection needs the old material as input for an expanded edit.
-    excluded = [item for item in ranges if not any(
+    excluded = [item for item in ranges if not (ai and item in kept_ranges) and not any(
         row["reason"] == "missing_context" and missing_context_count(row, judgments) == 1
         and abs(item[0] - row["start"]) <= 0.001 and abs(item[1] - row["end"]) <= 0.001
         for row in judgments

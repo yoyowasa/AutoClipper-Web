@@ -21,6 +21,7 @@ import {
   saveYouTubePostingProfile,
   uploadVideo
 } from "../../lib/api";
+import { allocationSettingsError } from "../../lib/clipAllocation";
 import { durationSettingsError } from "../../lib/durationRules";
 import { manualRangeValidationError } from "../../lib/manualClipRanges";
 import type { ClipSettings, StorageStatusResponse } from "../../lib/types";
@@ -182,6 +183,8 @@ function UploadForm() {
       return;
     }
     if (uploadMode === "new") {
+      const allocationError = allocationSettingsError(settings);
+      if (allocationError) { setError(allocationError); return; }
       const durationError = durationSettingsError(settings);
       if (durationError) { setError(durationError); return; }
       if (settings.heatmapIntervalMode && !heatmapFile) {
@@ -300,7 +303,7 @@ function UploadForm() {
     !file ||
     isSubmitting ||
     isCleaningStorage ||
-    (uploadMode === "new" && (durationSettingsError(settings) !== null || manualRangeValidationError(settings) !== null ||
+    (uploadMode === "new" && (allocationSettingsError(settings) !== null || durationSettingsError(settings) !== null || manualRangeValidationError(settings) !== null ||
       (settings.heatmapIntervalMode && !heatmapFile)));
   const storageReasons = storageStatus?.warning
     ? storageStatus.reasons.length > 0

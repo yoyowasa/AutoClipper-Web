@@ -275,6 +275,10 @@ class JobSettings(UploadTextStyles):
     )
     mode: ClipMode = "high_quality"
     profile: ClipProfile = "auto"
+    clip_allocation_mode: Literal["ai", "fixed"] = Field(default="fixed", alias="clipAllocationMode")
+    total_clip_count: int | None = Field(default=None, ge=1, le=36, alias="totalClipCount")
+    min_normal_clip_count: int = Field(default=0, ge=0, le=12, alias="minNormalClipCount")
+    min_short_count: int = Field(default=0, ge=0, le=24, alias="minShortCount")
     normal_clip_count: int = Field(default=2, ge=0, le=12, alias="normalClipCount")
     short_count: int = Field(default=3, ge=0, le=24, alias="shortCount")
     normal_min_duration: float = Field(default=NORMAL_MIN_SECONDS, ge=NORMAL_MIN_SECONDS, le=NORMAL_MAX_SECONDS, alias="normalMinDuration")
@@ -497,6 +501,14 @@ class JobSettings(UploadTextStyles):
             raise ValueError("youtubeSourceUrl must be an absolute HTTP(S) URL")
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def infer_allocation_mode(cls, value: Any) -> Any:
+        if isinstance(value, dict) and 'clipAllocationMode' not in value and 'clip_allocation_mode' not in value:
+            total = value.get('totalClipCount', value.get('total_clip_count'))
+            value = {**value, 'clipAllocationMode': 'ai' if total is not None else 'fixed'}
+        return value
+
     @model_validator(mode="after")
     def validate_duration_ranges(self, info: ValidationInfo) -> "JobSettings":
         if self.workflow_mode == "manual":
@@ -509,7 +521,16 @@ class JobSettings(UploadTextStyles):
             raise ValueError(
                 f"automationMode {self.automation_mode} requires subtitle burn-in and both review stops"
             )
-        if self.workflow_mode != "manual" and self.normal_clip_count + self.short_count <= 0:
+        ai = self.clip_allocation_mode == 'ai'
+        if ai:
+            if self.total_clip_count is None:
+                raise ValueError('totalClipCount is required for ai allocation')
+            if self.min_normal_clip_count + self.min_short_count > self.total_clip_count:
+                raise ValueError('形式ごとの最低本数の合計は合計本数以下にしてください。')
+            manual_count = len(self.normal_clip_time_ranges) + len(self.short_clip_time_ranges)
+            if manual_count > self.total_clip_count:
+                raise ValueError('手動指定の本数が合計本数を超えています。')
+        if not ai and self.workflow_mode != "manual" and self.normal_clip_count + self.short_count <= 0:
             raise ValueError("at least one normal clip or short must be requested")
         persisted = bool(info.context and info.context.get("persisted_job"))
         if not persisted and self.normal_max_duration < self.normal_min_duration:
@@ -520,12 +541,12 @@ class JobSettings(UploadTextStyles):
             raise ValueError("maxSubtitleDuration must be >= minSubtitleDuration")
         self._validate_clip_time_ranges(
             self.normal_clip_time_ranges,
-            requested_count=self.normal_clip_count,
+            requested_count=len(self.normal_clip_time_ranges) if ai else self.normal_clip_count,
             field_name="normalClipTimeRanges",
         )
         self._validate_clip_time_ranges(
             self.short_clip_time_ranges,
-            requested_count=self.short_count,
+            requested_count=len(self.short_clip_time_ranges) if ai else self.short_count,
             field_name="shortClipTimeRanges",
         )
         if not persisted:
@@ -542,7 +563,7 @@ class JobSettings(UploadTextStyles):
         has_manual_ranges = bool(
             self.normal_clip_time_ranges or self.short_clip_time_ranges
         )
-        if self.workflow_mode == "manual" or not has_automatic_output or has_manual_ranges:
+        if self.workflow_mode == "manual" or (not ai and (not has_automatic_output or has_manual_ranges)):
             self.initial_selection_provider = "legacy"
         return self
 
@@ -785,6 +806,10 @@ class ClipRejectionRead(BaseModel):
 
 
 class ClipPlanReselectionRequest(BaseModel):
+    clip_allocation_mode: Literal['ai', 'fixed'] | None = Field(default=None, alias='clipAllocationMode')
+    total_clip_count: int | None = Field(default=None, ge=1, le=36, alias='totalClipCount')
+    min_normal_clip_count: int | None = Field(default=None, ge=0, le=12, alias='minNormalClipCount')
+    min_short_count: int | None = Field(default=None, ge=0, le=24, alias='minShortCount')
     rejections: list[ClipRejectionRequest] = Field(default_factory=list, max_length=36)
     kept_clip_ids: list[str] = Field(default_factory=list, max_length=36, alias="keptClipIds")
     exclude_previous_selection: bool = Field(default=False, alias="excludePreviousSelection", strict=True)

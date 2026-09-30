@@ -70,6 +70,10 @@ export type ClipTimeRange = {
 };
 
 export type ClipSettings = {
+  clipAllocationMode?: "ai" | "fixed";
+  totalClipCount?: number | null;
+  minNormalClipCount?: number;
+  minShortCount?: number;
   keptClipIds?: string[];
   excludePreviousSelection?: boolean;
   characterPresetName?: string;
@@ -597,6 +601,11 @@ export type ClipPlanClip = {
 };
 
 export type ClipPlanDocument = {
+  requestedTotal?: number | null;
+  selectedTotal?: number | null;
+  selectedByType?: { normal: number; short: number };
+  shortfallReasons?: Record<string, number>;
+  minimumShortfall?: Record<string, number>;
   version: number;
   jobId: string;
   state: "preparing" | "manual_editing" | "awaiting_review" | "reselecting" | "approved";
@@ -622,6 +631,10 @@ export type ClipRejectionRead = {
 
 export type ClipPlanReselectionRequest = Pick<
   ClipSettings,
+  | "clipAllocationMode"
+  | "totalClipCount"
+  | "minNormalClipCount"
+  | "minShortCount"
   | "normalClipSelectionPreset"
   | "shortClipSelectionPreset"
   | "normalClipGuidance"

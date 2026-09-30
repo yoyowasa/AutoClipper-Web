@@ -1,3 +1,4 @@
+from app.clip_allocation import is_ai_allocation, allocate_selection, allocation_summary, candidate_pool_counts
 import json
 from app.duration_rules import duration_search_settings
 import re
@@ -48,6 +49,7 @@ from app.candidates.codex_initial_selection import (
 from app.candidates.generate_normal_candidates import generate_normal_candidates_with_summary
 from app.candidates.generate_short_candidates import generate_short_candidates_with_summary
 from app.candidates.manual_ranges import (
+    MANUAL_SELECTION_REASON,
     automatic_selection_settings,
     build_manual_candidates,
     manual_ranges_for_type,
@@ -205,6 +207,7 @@ from app.jobs.pipeline_common import (
     _read_transcript_segments,
     _score_local_candidates,
     _selection_with_fallback_titles,
+    _filter_user_rejections,
     _set_status,
     _settings_with_source_history,
     _transcript_text,
@@ -2598,7 +2601,8 @@ def run_autoclipper_job(
                         normal_manual_ranges,
                         transcript_segments,
                     )
-                    if manual_workflow or normal_manual_ranges
+                    if manual_workflow or (is_ai_allocation(settings) and not any(candidate_pool_counts(settings)))
+                    or (normal_manual_ranges and not is_ai_allocation(settings))
                     else generate_normal_candidates_with_summary(
                         unused_items(transcript_segments, settings),
                         scene_segments,
@@ -2631,7 +2635,8 @@ def run_autoclipper_job(
                         short_manual_ranges,
                         transcript_segments,
                     )
-                    if manual_workflow or short_manual_ranges
+                    if manual_workflow or (is_ai_allocation(settings) and not any(candidate_pool_counts(settings)))
+                    or (short_manual_ranges and not is_ai_allocation(settings))
                     else generate_short_candidates_with_summary(
                         unused_items(transcript_segments, settings),
                         scene_segments,
@@ -2667,6 +2672,14 @@ def run_autoclipper_job(
                     "candidate_generation_failed",
                     f"Could not generate clip candidates: {exc}",
                 ) from exc
+            if is_ai_allocation(settings) and not manual_workflow:
+                normal_candidates = list({c.id: c for c in [*normal_candidates,
+                    *annotate_candidates_with_heatmap(
+                        build_manual_candidates('normal', normal_manual_ranges, transcript_segments).candidates,
+                                                     heatmap_reference_segments)]}.values())
+                short_candidates = list({c.id: c for c in [*short_candidates,
+                    *annotate_candidates_with_heatmap(build_manual_candidates('short', short_manual_ranges, transcript_segments).candidates,
+                                                     heatmap_reference_segments)]}.values())
             if manual_workflow:
                 normal_candidates = apply_manual_clip_metadata(
                     normal_candidates,
@@ -2693,14 +2706,8 @@ def run_autoclipper_job(
                     if used_ranges(settings) else "No clip candidates were found for the selected settings.",
                 )
 
-            manual_candidates = [
-                *(normal_candidates if normal_manual_ranges else []),
-                *(short_candidates if short_manual_ranges else []),
-            ]
-            automatic_candidates = [
-                *(normal_candidates if not normal_manual_ranges else []),
-                *(short_candidates if not short_manual_ranges else []),
-            ]
+            manual_candidates = [c for c in [*normal_candidates, *short_candidates] if c.selection_reason == MANUAL_SELECTION_REASON]
+            automatic_candidates = [c for c in [*normal_candidates, *short_candidates] if c.selection_reason != MANUAL_SELECTION_REASON]
             if manual_workflow:
                 scored_candidates = list(manual_candidates)
                 selection = build_manual_selection(
@@ -2762,9 +2769,24 @@ def run_autoclipper_job(
                 selection = merge_manual_candidates_into_selection(
                     automatic_selection,
                     settings=settings,
-                    manual_normal_candidates=(normal_candidates if normal_manual_ranges else []),
-                    manual_short_candidates=(short_candidates if short_manual_ranges else []),
+                    manual_normal_candidates=[c for c in manual_candidates if c.type == "normal"],
+                    manual_short_candidates=[c for c in manual_candidates if c.type == "short"],
                 )
+            if is_ai_allocation(settings):
+                if codex_initial_selection_result is not None:
+                    selection = merge_manual_candidates_into_selection(selection, settings=settings,
+                        manual_normal_candidates=[c for c in manual_candidates if c.type == 'normal'],
+                        manual_short_candidates=[c for c in manual_candidates if c.type == 'short'])
+                    scored_candidates = [*scored_candidates, *manual_candidates]
+                selection, scored_candidates = _filter_user_rejections(selection, scored_candidates, settings)
+                selection = allocate_selection(selection, settings)
+                scored_by_id = {c.id: c for c in [*scored_candidates, *manual_candidates]}
+                scored_candidates = list(scored_by_id.values())
+                if codex_initial_selection_result is not None:
+                    write_codex_initial_selection_summary({
+                        **codex_initial_selection_result.summary, **allocation_summary(selection),
+                        'selectedNormalCount': len(selection.normal_clips), 'selectedShortCount': len(selection.shorts),
+                    }, codex_summary_path)
             selection, scored_candidates = _selection_with_fallback_titles(
                 selection,
                 scored_candidates,
@@ -2833,7 +2855,10 @@ def run_autoclipper_job(
                 and bool(settings.get("requireSubtitleReview", False))
                 and bool(settings.get("burnSubtitles", True))
             )
-            if guarded_selection_needs_review or manual_clip_plan_review:
+            allocation_needs_review = bool(
+                is_ai_allocation(settings) and selection.shortfall_reasons and not manual_workflow
+            )
+            if guarded_selection_needs_review or manual_clip_plan_review or allocation_needs_review:
                 plan_path = _prepare_clip_plan_review(
                     db=db,
                     job=job,

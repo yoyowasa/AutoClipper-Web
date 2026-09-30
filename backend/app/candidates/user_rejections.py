@@ -63,10 +63,11 @@ def user_rejection_reason(start: float, end: float, clip_type: str, settings: di
 
 def near_previous_except_context_expansion(start: float, end: float, clip_type: str, settings: dict[str, Any]) -> bool:
     rows = settings.get(REJECTED_RANGES_SETTING, [])
+    other_kept = settings.get("_allocationKeptRanges", {}).get("short" if clip_type == "normal" else "normal", [])
     previous = [
         old
         for old in settings.get(PREVIOUS_PROPOSALS_SETTING, [])
-        if not any(
+        if tuple(old) not in {tuple(item) for item in other_kept} and not any(
             row["reason"] == "missing_context"
             and row["type"] == clip_type
             and _same_range(*old, row)

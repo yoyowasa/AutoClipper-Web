@@ -10,6 +10,7 @@ import {
   manualRangeValidationError,
   updateManualRangeTime
 } from "../lib/manualClipRanges";
+import { isAIAllocation } from "../lib/clipAllocation";
 import type {
   ClipOutputType,
   TimeBoundary,
@@ -81,7 +82,9 @@ function ManualRangeGroup({
   type,
   onChange
 }: ManualClipRangeEditorProps & { type: ClipOutputType }) {
-  const count = type === "normal" ? settings.normalClipCount : settings.shortCount;
+  const ai = isAIAllocation(settings);
+  const key = type === 'normal' ? 'normalClipTimeRanges' : 'shortClipTimeRanges';
+  const count = ai ? (settings[key].length || 1) : type === "normal" ? settings.normalClipCount : settings.shortCount;
   if (count === 0) {
     return null;
   }
@@ -94,7 +97,7 @@ function ManualRangeGroup({
     const hasManualRanges =
       next.normalClipTimeRanges.length > 0 || next.shortClipTimeRanges.length > 0;
     onChange(
-      hasManualRanges
+      hasManualRanges && !ai
         ? {
             ...next,
             initialSelectionProvider: "legacy",
@@ -127,6 +130,12 @@ function ManualRangeGroup({
         </span>
       </div>
 
+      {ai ? <label className="mt-3 block text-xs">時間指定する本数（入力した分だけ固定）
+        <input type="number" min={1} max={Math.min(type === 'normal' ? 12 : 24, settings.totalClipCount ?? 36)}
+          disabled={disabled} value={count} className="ml-2 w-16 border px-2 py-1"
+          onChange={event => emit({ ...settings, [key]: Array.from({ length: Math.min(type === 'normal' ? 12 : 24,
+            Math.max(1, Number(event.target.value) || 1)) }, (_, i) => rows[i] ?? { startSeconds: null, endSeconds: null }) })} />
+      </label> : null}
       <div className="mt-3 space-y-2">
         {rows.map((range, index) => {
           const duration = rangeDuration(range);
@@ -212,7 +221,7 @@ function ManualRangeGroup({
       {isManual ? (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t border-neutral-200 pt-3">
           <p className="text-xs leading-5 text-amber-900">
-            この種類ではおすすめ・AI選定・境界の自動調整を使用しません。
+            {ai ? "指定した分は固定し、残りの枠をAIが振り分けます。指定分の境界は自動調整しません。" : "この種類ではおすすめ・AI選定・境界の自動調整を使用しません。"}
           </p>
           <button
             className="min-h-9 border border-neutral-400 bg-white px-3 text-xs font-semibold text-neutral-800"
