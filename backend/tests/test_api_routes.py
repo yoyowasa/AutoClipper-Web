@@ -1,3 +1,5 @@
+import app.api._job_common as job_common_api
+import app.api.clip_plan as clip_plan_api
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -397,6 +399,10 @@ def test_subtitle_review_can_return_to_boundaries_and_keep_saved_edits(
     selection.normal_clips[0] = first.model_copy(update={"end": 40, "duration": 30})
     write_selected_clips(selection, output_dir / "selected_clips.json")
     monkeypatch.setattr(jobs_api, "_refresh_subtitle_review_previews_unlocked",
+                        lambda **kwargs: (kwargs["document"], []))
+    monkeypatch.setattr(clip_plan_api, "_refresh_subtitle_review_previews_unlocked",
+                        lambda **kwargs: (kwargs["document"], []))
+    monkeypatch.setattr(job_common_api, "_refresh_subtitle_review_previews_unlocked",
                         lambda **kwargs: (kwargs["document"], []))
     approve = client.post(f"/api/jobs/{job_id}/clip-plan/approve")
     assert approve.status_code == 200, approve.text
@@ -1125,7 +1131,22 @@ def test_auto_clip_acceptance_queues_render_without_confirming_auto_passed_sibli
         lambda **kwargs: (kwargs["document"], []),
     )
     monkeypatch.setattr(
+        clip_plan_api,
+        "_refresh_subtitle_review_previews_unlocked",
+        lambda **kwargs: (kwargs["document"], []),
+    )
+    monkeypatch.setattr(
+        job_common_api,
+        "_refresh_subtitle_review_previews_unlocked",
+        lambda **kwargs: (kwargs["document"], []),
+    )
+    monkeypatch.setattr(
         jobs_api,
+        "_evaluate_and_write_content_quality_gate",
+        lambda **_kwargs: type("PassingDecision", (), {"route": "continue"})(),
+    )
+    monkeypatch.setattr(
+        job_common_api,
         "_evaluate_and_write_content_quality_gate",
         lambda **_kwargs: type("PassingDecision", (), {"route": "continue"})(),
     )
@@ -1553,6 +1574,16 @@ def test_retained_live_preview_revision_remains_playable_while_current_is_queued
         "_refresh_subtitle_review_previews_unlocked",
         lambda **kwargs: (kwargs["document"], []),
     )
+    monkeypatch.setattr(
+        clip_plan_api,
+        "_refresh_subtitle_review_previews_unlocked",
+        lambda **kwargs: (kwargs["document"], []),
+    )
+    monkeypatch.setattr(
+        job_common_api,
+        "_refresh_subtitle_review_previews_unlocked",
+        lambda **kwargs: (kwargs["document"], []),
+    )
     retained = client.get(
         f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/live-preview-video",
         params={"specHash": retained_hash},
@@ -1592,6 +1623,11 @@ def test_subtitle_review_get_poll_cannot_overwrite_concurrent_content_patch(
 
     monkeypatch.setattr(
         jobs_api,
+        "refresh_subtitle_review_preview_states",
+        blocking_refresh,
+    )
+    monkeypatch.setattr(
+        job_common_api,
         "refresh_subtitle_review_preview_states",
         blocking_refresh,
     )
@@ -1701,6 +1737,8 @@ def test_subtitle_review_poll_refreshes_job_status_after_waiting_for_hook_lock(
             yield
 
     monkeypatch.setattr(jobs_api, "subtitle_review_document_lock", delayed_first_lock)
+    monkeypatch.setattr(clip_plan_api, "subtitle_review_document_lock", delayed_first_lock)
+    monkeypatch.setattr(job_common_api, "subtitle_review_document_lock", delayed_first_lock)
     poll_path = (
         f"/api/jobs/{job_id}/subtitle-review"
         if poll_target == "review"

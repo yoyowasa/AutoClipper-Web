@@ -1,3 +1,5 @@
+import app.jobs.clip_plan_runner as clip_plan_runner_module
+import app.jobs.pipeline_common as pipeline_common_module
 import json
 from collections.abc import Generator
 from pathlib import Path
@@ -16,8 +18,10 @@ from app.candidates.select_candidates import CandidateSelection
 from app.db import Base, get_db
 from app.jobs.clip_plan import load_clip_plan
 from app.jobs.queue import get_enqueue_job
-from app.jobs.runner import (
+from app.jobs.pipeline_common import (
     AutoClipperPipelineDependencies,
+)
+from app.jobs.runner import (
     run_autoclipper_job,
     run_subtitle_review_render,
 )
@@ -319,8 +323,14 @@ def test_finalized_manual_job_skips_scene_scoring_and_preserves_identity(
         raise AssertionError("manual workflow must skip automatic analysis")
 
     monkeypatch.setattr(runner_module, "load_heatmap_for_video", must_not_run)
+    monkeypatch.setattr(clip_plan_runner_module, "load_heatmap_for_video", must_not_run)
     monkeypatch.setattr(
         runner_module,
+        "generate_normal_candidates_with_summary",
+        must_not_run,
+    )
+    monkeypatch.setattr(
+        clip_plan_runner_module,
         "generate_normal_candidates_with_summary",
         must_not_run,
     )
@@ -329,8 +339,16 @@ def test_finalized_manual_job_skips_scene_scoring_and_preserves_identity(
         "generate_short_candidates_with_summary",
         must_not_run,
     )
+    monkeypatch.setattr(
+        clip_plan_runner_module,
+        "generate_short_candidates_with_summary",
+        must_not_run,
+    )
     monkeypatch.setattr(runner_module, "_score_local_candidates", must_not_run)
+    monkeypatch.setattr(clip_plan_runner_module, "_score_local_candidates", must_not_run)
+    monkeypatch.setattr(pipeline_common_module, "_score_local_candidates", must_not_run)
     monkeypatch.setattr(runner_module, "select_candidates", must_not_run)
+    monkeypatch.setattr(clip_plan_runner_module, "select_candidates", must_not_run)
 
     visited = run_autoclipper_job(
         "job_manual",

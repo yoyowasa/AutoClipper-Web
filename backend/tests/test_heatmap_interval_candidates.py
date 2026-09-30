@@ -1,4 +1,6 @@
-from app.jobs.runner import _heatmap_summary_for_selection_mode
+from app.jobs.pipeline_common import (
+    _heatmap_summary_for_selection_mode,
+)
 from app.video.heatmap import HeatmapSegment
 
 

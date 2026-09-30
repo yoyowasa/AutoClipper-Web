@@ -12,7 +12,10 @@ from app.candidates.used_ranges import (
     with_reselection_exclusions,
     used_ranges,
 )
-from app.jobs.runner import _is_repeated_normal_proposal, _unused_candidates
+from app.jobs.pipeline_common import (
+    _is_repeated_normal_proposal,
+    _unused_candidates,
+)
 from app.candidates.manual_ranges import MANUAL_SELECTION_REASON
 
 

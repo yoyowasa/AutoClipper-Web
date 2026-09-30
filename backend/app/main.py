@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import character_presets, exports, framing_guide, jobs, preferences, short_banners, storage, videos
+from app.api import character_presets, clip_plan, exports, framing_guide, jobs, preferences, short_banners, storage, videos
 from app.config import Settings, get_settings
 from app.db import init_db
 
@@ -31,6 +31,8 @@ app.add_middleware(
 )
 
 app.include_router(videos.router)
+app.include_router(jobs.before_clip_plan_router)
+app.include_router(clip_plan.router)
 app.include_router(jobs.router)
 app.include_router(exports.router)
 app.include_router(preferences.router)

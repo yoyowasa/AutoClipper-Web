@@ -6,7 +6,9 @@ from app.candidates.select_candidates import CandidateSelection
 from app.candidates.used_ranges import used_ranges
 from app.jobs.clip_plan import build_clip_plan, clip_plan_output_path, load_clip_plan
 from app.jobs.reselection_keep import merge_kept_candidates, prepare_kept_candidates
-from app.jobs.runner import _restore_clip_plan_after_reselection_failure
+from app.jobs.clip_plan_runner import (
+    _restore_clip_plan_after_reselection_failure,
+)
 
 
 def candidate(index, kind="short"):

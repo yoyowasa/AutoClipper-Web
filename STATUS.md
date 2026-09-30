@@ -10542,3 +10542,18 @@ pip check: pass
 - lintの環境差: 主作業フォルダで `ruff check . ../launcher ../scripts` を実行すると、Git管理外の `scripts/make_plotwith_solar_finished_variants.py` に既存F841が出る。このファイルは変更せず、実装コミット `476cb8c` のクリーンなcheckoutで指定コマンドが成功したことを確認。
 - CI: PR #100のコミット `c7d34c2` でbackend（Python 3.11・3.12）とfrontendがすべて成功。
 - 未確認: 稼働Dockerでの実動画処理と画面表示。Dockerのbuild・再起動・反映は行っていない。
+
+## 2026-09-30 JST 候補確認・再選定の処理を分割（task-167）
+
+- 目的: 尺ルール・不採用理由・本数の自動振り分けで変更する範囲を先に分離する。処理・API・画面の動作は変更せず、既存の関数本文をそのまま移す。
+- 変更ファイル: `backend/app/api/{jobs.py,clip_plan.py,_job_common.py}`、`backend/app/jobs/{runner.py,clip_plan_runner.py,pipeline_common.py,queue.py}`、`backend/app/main.py`、import/monkeypatch先を更新した既存13テストファイル、`backend/tests/test_clip_plan_split_contract.py`、`backend/tests/fixtures/openapi_routes_before_task167.json`、`frontend/app/jobs/[jobId]/clips/page.tsx`、`frontend/components/ClipReselectionPanel.tsx`、本ファイル。
+- API移動: `get_clip_plan`、`create_manual_clip`、`update_manual_clip`、`delete_manual_clip`、`get_clip_plan_transcript_segments`、`get_clip_plan_preview_video`、`update_clip_plan_clip_type`、`update_clip_plan_clip_boundary`、`update_clip_plan_hook_scene`、`reselect_clip_plan`、`approve_clip_plan`と専用4補助関数を`api/clip_plan.py`へ移動。登録順を保つため、同じ連続ブロック内の`reopen_clip_plan_for_boundary_reedit`（URLは`subtitle-review/reopen-clip-plan`）も移動した。mainでは既存の前半router、新しいclip_plan router、既存の後半routerの順で登録する。
+- API共通処理: `_claim_job_status`、ジョブ/字幕確認の取得、保存・プレビュー・品質ゲートなど14関数を`api/_job_common.py`へ移動。既存の呼び出し元で必要な関数をimportする。
+- worker移動: `run_clip_plan_reselection`、`run_clip_plan_boundary_update`、`run_clip_plan_hook_scene_update`、`_restore_clip_plan_after_reselection_failure`、`_restore_clip_plan_after_boundary_failure`、`_candidate_with_clip_plan_boundary`、`_generate_candidates_for_reselection_mode`、`_codex_selection_with_diverse_refined_shorts`、`_automatic_selection_with_diverse_refined_shorts`の9関数を`jobs/clip_plan_runner.py`へ移動。選定2関数は本処理でも使うため、循環importを避ける共有28関数・2クラス・型別名9個を`jobs/pipeline_common.py`へ移動した。
+- RQ互換: runnerから移した`run_clip_plan_*`の3関数を再公開し、旧パスからのimportとRQの`import_attribute`で同一関数を取得できることを追加テストで確認。queueは新しいmoduleからimportし、新規の仕事は新しいパスを使う。
+- 画面移動: 再選定設定欄のJSXを`ClipReselectionPanel`へ移動。state、再選定APIへのpayload、キープID、送信処理は元のページに残してpropsで渡す。
+- 変更内容の照合: API/jobsとrunnerに元からある199個の関数/クラスの本文が、移動後も一字単位で一致することを確認。新しい処理関数の追加・既存処理関数の削除はない。既存テストのassert全文も変更していない。アプリの差分は移動・import・router登録・JSXのprops接続だけで、テストと記録は今回の指示分を追加した。
+- API確認: 移動前に保存したOpenAPIの55 paths・62組のpath/methodが追加テストで完全一致。OpenAPI全体と62件のルート登録順も移動前の記録と一致した。
+- 検証: Python 3.11.9で関連212 passed、全件`python -m pytest`は1175 passed・1 skipped（移動前1173 passed・1 skippedに追加2テスト）。backend/app・backend/tests・launcherのruff、frontend全16テスト・lint・typecheck・build、`git diff --check`成功。
+- lintの環境差: 主作業フォルダで`ruff check . ../launcher ../scripts`は、Git管理外の`scripts/make_plotwith_solar_finished_variants.py`の既存F841で失敗した。このファイルとruff設定は変更していない。クリーンなcheckoutでの指定コマンドとCIは続けて確認する。
+- 未確認: CI（Python 3.11・3.12、frontend）はPR作成後に確認する。稼働Dockerの実動画処理・画面操作と既存RQキューの実行は未確認。Dockerのbuild・再起動・反映、実ジョブの再実行は行っていない。

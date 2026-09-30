@@ -166,7 +166,9 @@ def test_both_selection_paths_exclude_used_ranges_after_boundary_refinement(monk
     def refine(items, **kwargs):
         return [item.model_copy(update={"start": 19, "duration": 31}) if item.id == "expands" else item for item in items]
 
-    monkeypatch.setattr(runner, "refine_selected_candidates", refine)
+    from app.jobs import pipeline_common
+
+    monkeypatch.setattr(pipeline_common, "refine_selected_candidates", refine)
     kwargs = dict(transcript_segments=[], silence_segments=[], scene_segments=[], settings=settings, timeline_duration=300)
     if provider == "codex":
         result = CodexInitialSelectionResult(

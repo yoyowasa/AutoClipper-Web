@@ -8,12 +8,14 @@ from rq.job import JobStatus
 from app.config import get_settings
 from app.jobs.runner import (
     run_autoclipper_job,
-    run_clip_plan_boundary_update,
-    run_clip_plan_hook_scene_update,
-    run_clip_plan_reselection,
     run_subtitle_review_preview,
     run_subtitle_review_hook_scene_update,
     run_subtitle_review_render,
+)
+from app.jobs.clip_plan_runner import (
+    run_clip_plan_boundary_update,
+    run_clip_plan_hook_scene_update,
+    run_clip_plan_reselection,
 )
 from app.jobs.title_hook_suggestions import run_title_hook_suggestion_generation
 from app.jobs.thumbnail_regeneration import run_export_thumbnail_regeneration
