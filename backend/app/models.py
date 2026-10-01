@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -62,6 +62,29 @@ class AppPreference(Base):
         onupdate=utc_now,
         nullable=False,
     )
+
+
+class CharacterAsset(Base):
+    """Preset images retained independently of job and preset-list cleanup."""
+
+    __tablename__ = "character_assets"
+    __table_args__ = (
+        UniqueConstraint("preset_id", "emotion", "slot"),
+        CheckConstraint("slot >= 1 AND slot <= 5"),
+        CheckConstraint("emotion IN ('joy', 'anger', 'sorrow', 'fun')"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    preset_id: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
+    emotion: Mapped[str] = mapped_column(String(16), nullable=False)
+    slot: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    face_box: Mapped[dict[str, float] | None] = mapped_column(JSON, nullable=True)
+    has_alpha: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    warnings: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
 class ExportItem(Base):

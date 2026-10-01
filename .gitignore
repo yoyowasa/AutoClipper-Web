@@ -26,6 +26,7 @@ storage/codex_bridge/*
 storage/fonts/*
 storage/transcripts/*
 storage/banner_assets/*
+storage/character_assets/*
 storage/qa/*
 storage/models/*
 storage/*.db

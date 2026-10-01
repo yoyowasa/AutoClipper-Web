@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import re
 
 from app.config import get_settings
 
@@ -27,6 +28,28 @@ class StoragePaths:
     @property
     def banner_assets(self) -> Path:
         return self.root / "banner_assets"
+
+    @property
+    def character_assets(self) -> Path:
+        return self.root / "character_assets"
+
+    @property
+    def models(self) -> Path:
+        return self.root / "models"
+
+    def character_asset(self, preset_id: str, emotion: str, asset_id: str) -> Path:
+        from app.character_asset_rules import CHARACTER_EMOTIONS
+
+        if (
+            not re.fullmatch(r"character_[0-9a-f]{32}", preset_id)
+            or emotion not in CHARACTER_EMOTIONS
+            or not re.fullmatch(r"asset_[0-9a-f]{32}", asset_id)
+        ):
+            raise ValueError("Invalid character asset identifier")
+        path = self.character_assets / preset_id / emotion / f"{asset_id}.png"
+        self.character_assets.resolve().relative_to(self.root.resolve())
+        path.resolve().relative_to(self.character_assets.resolve())
+        return path
 
     def ensure(self) -> None:
         self.uploads.mkdir(parents=True, exist_ok=True)

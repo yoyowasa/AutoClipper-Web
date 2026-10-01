@@ -10616,3 +10616,20 @@ pip check: pass
 - 検証: ruff check . ../launcher ../scripts成功。frontend全19テスト・lint・typecheck・build成功。ローカルはPython 3.11.9 / av 18.0.0 / faster-whisper 1.2.1。python -m pytestは1298 passed・1 skipped（96.81秒）。CI（Python 3.11・3.12・frontend）はPR作成後に確認する。
 - 反映: マージ後にRQ・実行中ジョブが0であることを確かめ、backend/workerだけをGPU構成でbuildし直す予定。反映結果は実施後に運用記録として追記する。DBのバックアップ、frontend/redisの作り直し、Codex中継の再起動は行わない。
 - 未確認: 稼働workerでの修正後decode_audioと実動画の文字起こし。job_79f82ac1603f4dc68cea4461e0f1afdbは再試行しない。
+
+
+## 2026-10-01 JST キャラごとの表情素材の登録・管理（task-172）
+
+- 目的: キャラ設定ごとに喜(joy)・怒(anger)・哀(sorrow)・楽(fun)の素材を各5枚まで登録・管理する。サムネ生成への適用はtask-173で行い、今回の生成処理は変更しない。
+- 変更ファイル: backend/app/{character_asset_rules.py,character_assets.py,models.py,main.py}、api/{character_assets.py,character_presets.py}、storage/paths.py、backend/tests/{test_character_assets.py,test_clip_plan_split_contract.py}、frontend/components/{CharacterAssetsManager.tsx,CharacterPresetManager.tsx}、lib/{characterAssets.ts,characterPresets.ts}、tests/characterAssets.test.ts、.gitignore、本ファイル。
+- 保存: StoragePathsで設定されたstorageルートからcharacter_assets/<preset_id>/<emotion>/<asset_id>.pngを組み立て、処理後のPNGだけを保存する。元ファイル・EXIF等の元画像メタデータは保存しない。素材のディレクトリはGit管理外とする。
+- DB: character_assetsはid、preset_id、emotion、slot(1〜5)、file_path（storageからの相対パス）、width、height、face_box、has_alpha、created_atに加え、登録時の注意文を再処理なしで表示するためwarnings(JSON)を持つ。同じpreset_id・emotion・slotの一意制約とslot/表情の制約を設け、storageの共通ロックで同時登録を直列化する。6枚目は422、削除後は最小の空き番号を再利用。init_db/create_allで既存DBに追加でき、既存のキャラ設定データは維持する。
+- キャラIDの互換性: 名前だけだった既存キャラには、GET時に名前から安定したIDを補完する（読み込みで保存済みJSONを書き換えない）。新規保存はUUIDのID、上書きは既存IDを維持。旧形式のIDなしPUTも既存名のIDと素材を維持し、現在の画面も上書き時にIDを引き継ぐ。
+- 登録時の処理: PNG・JPEG・WebP、1枚20MBまで。訂正後の画質基準「短い辺300px以上」をapp/character_asset_rules.pyの定数・判定関数に集約し、将来の自動採用にも使用できる。EXIFの向きを補正し、既存detect_anime_faceの中心座標を正規化した左上x/yとw/hへ変換して保存する。顔が無ければ保存した上で「顔を検出できません（配置を手で調整してください）」と表示する。
+- 透過・切り抜き: 実際に透過がある画像は再度切り抜かない。透過がない画像はstorage/models/isnet-anime.onnxの既存anime_character_maskで1回切り抜く。顔未検出の場合は最大の前景成分を使い、face_boxは未検出のまま。モデルが無ければ不透明なPNGとして保存し「背景付き（切り抜きモデル未導入）」を表示する。人物を切り抜けなかった場合も背景付きと理由を表示する。注意文は登録結果として保存し、一覧・画像配信でモデル処理を繰り返さない。
+- API・画面: /api/character-presets/{preset_id}/assetsのGET/POST、同/assets/{asset_id}のDELETE、/api/character-assets/{asset_id}/imageのGETを追加。管理画面に4列×5枠の画像プレビュー・削除・単枚/複数アップロードを追加し、利用条件の1行注意書き、画像の条件、未検出・背景付きの注意、処理結果を表示する。登録中はキャラの切替・削除を止め、失敗した素材の理由と成功した枚数を示す。PNG保存やDB commitが失敗したときは新規ファイルを片付け、削除のcommit失敗時はファイルを戻す。
+- キャラ削除時: 既存のキャラ削除は設定の保存一覧から外すだけで、作成済み動画・画像は残す仕様。今回も表情素材のDB行・PNGを残し、素材削除のAPIで個別に消す。削除したキャラの通常一覧APIは404だが既存素材の画像URLは残る。この扱いを画面の削除結果にも明記する。
+- 保全: character_assetsはジョブのoutputs/temp/uploads/heatmaps掃除の対象外。Dockerのbackend/workerはstorage全体をbind mountしており、GPU構成のモデルキャッシュ追加でも維持される。既存の移行・バックアップ手順でstorage全体をコピーすればPNGも含まれる。SQLiteだけのバックアップには画像ファイルは入らないため、素材の保全にはstorage全体も必要。
+- 検証: Python 3.11.9のpython -m pytestは1320 passed・1 skipped（今回22件追加、82.44秒）。実PNG/JPEG/WebPの登録・配信・削除、背景付き/透過済み、モデルなし、顔座標の変換・保存、既存anime_character_maskとの連携（推論結果をテスト用sessionで代用）、同時登録時の5枚制限、299/300px、20MB超/不正画像、空き枠再利用、既存DBへのテーブル追加、旧形式のIDなし保存・画像の維持、ジョブ掃除とstorageコピー後の画像保持、commit失敗の巻き戻しを確認。frontend全20テスト（4表情×5枠の複数ファイル入力・API multipart・削除・エラー表示の契約を含む）、lint・typecheck・build成功。backend/app・tests・launcherのruffとgit diff --check成功。
+- lintの環境差: 主フォルダのruff check . ../launcher ../scriptsはGit管理外scripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。同ファイルは変更しない。実装コミット66afce8のクリーンなコピーでruff check . ../launcher ../scripts成功。PR #106のコミット2261981でCI（run 36836739911）のPython 3.11・3.12・frontendがすべて成功。
+- 未確認: 実際のisnet-anime重みを使った人物切り抜きの品質、ブラウザでの実操作、Dockerへの反映。ブラウザ確認用の独立したローカルサーバー起動は自動承認レビューがblocked by policyで拒否したため実施できず、API・UI契約テストまで確認した。Dockerの再build・再起動、実DBへのテーブル追加、実キャラへの素材登録は行っていない。前回task-171のローカル運用記録はstashへ保全し、作業後に戻す。 自動承認レビューが検証用クリーンコピーの削除もblocked by policyで拒否したため、Git管理外.codex_tmp/task172-checkにコピーを残す（PRには含まない）。

@@ -8,7 +8,7 @@ export const CHARACTER_KEYS = ["channelName", "youtubePostingProfile", "normalTi
   "shortTopBannerAssetId", "shortBottomBannerAssetId", "shortTopBannerEnabled", "shortBottomBannerEnabled",
   "shortBannerPresetName", "normalClipCount", "shortCount"] as const satisfies readonly (keyof ClipSettings)[];
 export type CharacterSnapshot = Partial<Pick<ClipSettings, typeof CHARACTER_KEYS[number]>> & SubtitleStyleSnapshot;
-export type CharacterPreset = { name: string; settings: CharacterSnapshot };
+export type CharacterPreset = { id?: string; name: string; settings: CharacterSnapshot };
 export type CharacterPresetDocument = { presets: CharacterPreset[]; selectedName: string; legacyImport?: boolean };
 
 export function captureCharacter(settings: ClipSettings): CharacterSnapshot {
