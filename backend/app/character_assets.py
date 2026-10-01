@@ -68,7 +68,9 @@ class ProcessedCharacterAsset:
     warnings: list[str]
 
 
-def process_character_asset(data: bytes, paths: StoragePaths) -> ProcessedCharacterAsset:
+def process_character_asset(
+    data: bytes, paths: StoragePaths, *, known_face: tuple[float, float, float, float] | None = None,
+) -> ProcessedCharacterAsset:
     if len(data) > CHARACTER_ASSET_MAX_BYTES:
         raise ValueError("画像は1枚20MBまでです。")
     try:
@@ -86,7 +88,7 @@ def process_character_asset(data: bytes, paths: StoragePaths) -> ProcessedCharac
     except (Image.DecompressionBombError, Image.DecompressionBombWarning) as exc:
         raise ValueError("画像の画素数が大きすぎます。縮小して登録してください。") from exc
 
-    face = anime_subject.detect_anime_face(image)
+    face = known_face if known_face is not None else anime_subject.detect_anime_face(image)
     face_box = None
     notices = []
     if face is not None:

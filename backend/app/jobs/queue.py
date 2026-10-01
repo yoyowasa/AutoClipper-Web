@@ -3,7 +3,7 @@ from collections.abc import Callable
 from redis import Redis
 from rq import Queue, Retry
 from rq.exceptions import DuplicateJobError
-from rq.job import JobStatus
+from rq.job import Callback, JobStatus
 
 from app.config import get_settings
 from app.jobs.runner import (
@@ -46,6 +46,21 @@ ACTIVE_RETRY_RQ_STATUSES = {
     JobStatus.SCHEDULED,
 }
 MAX_RETRY_RQ_ATTEMPTS = 1000
+
+
+def enqueue_character_asset_harvest(harvest_id: str) -> None:
+    from uuid import uuid4
+    from app.jobs.character_asset_harvest import harvest_failure_callback, run_character_asset_harvest
+
+    get_queue().enqueue(
+        run_character_asset_harvest, harvest_id,
+        job_id=f"{harvest_id}-{uuid4().hex}", job_timeout=14400,
+        on_failure=Callback(harvest_failure_callback),
+    )
+
+
+def get_enqueue_character_asset_harvest() -> Callable[[str], None]:
+    return enqueue_character_asset_harvest
 
 
 def get_redis_connection() -> Redis:

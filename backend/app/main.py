@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
+    character_asset_candidates,
     character_assets, character_presets, clip_plan, exports, framing_guide, jobs, preferences, short_banners, storage, videos,
 )
 from app.config import Settings, get_settings
@@ -40,6 +41,7 @@ app.include_router(exports.router)
 app.include_router(preferences.router)
 app.include_router(character_presets.router)
 app.include_router(character_assets.router)
+app.include_router(character_asset_candidates.router)
 app.include_router(short_banners.router)
 app.include_router(storage.router)
 

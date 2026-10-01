@@ -29,7 +29,7 @@ def apply_review_character(
     # Output counts belong to selection; loading a design must not reselect clips.
     snapshot.pop("normalClipCount")
     snapshot.pop("shortCount")
-    updated = {**settings, **snapshot, "characterPresetName": preset.name}
+    updated = {**settings, **snapshot, "characterPresetName": preset.name, "characterPresetId": preset.id}
     for clip in document.clips:
         clip.title_style = None
         clip.hook_style = None

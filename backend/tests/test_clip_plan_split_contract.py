@@ -18,6 +18,14 @@ def test_openapi_paths_and_methods_match_before_clip_plan_split() -> None:
         "/api/character-presets/{preset_id}/assets": ["get", "post"],
         "/api/character-presets/{preset_id}/assets/{asset_id}": ["delete"],
         "/api/character-assets/{asset_id}/image": ["get"],
+        "/api/character-presets/{preset_id}/asset-candidates": ["get"],
+        "/api/character-presets/{preset_id}/harvest-videos": ["get"],
+        "/api/character-presets/{preset_id}/asset-harvests": ["post"],
+        "/api/character-presets/{preset_id}/asset-candidates/{candidate_id}/adopt": ["post"],
+        "/api/character-presets/{preset_id}/asset-candidates/{candidate_id}/reject": ["post"],
+        "/api/character-asset-candidates/{candidate_id}/image": ["get"],
+        "/api/character-presets/{preset_id}/asset-counts": ["get"],
+        "/api/character-presets/{preset_id}": ["delete"],
     }
 
 
