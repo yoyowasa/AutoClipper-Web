@@ -6,7 +6,7 @@ export const PLAIN_THUMBNAIL: NormalThumbnailStyle = {
 };
 export const CHARACTER_KEYS = ["channelName", "youtubePostingProfile", "normalTitleSuffix", "normalThumbnailStyle",
   "shortTopBannerAssetId", "shortBottomBannerAssetId", "shortTopBannerEnabled", "shortBottomBannerEnabled",
-  "shortBannerPresetName", "normalClipCount", "shortCount"] as const satisfies readonly (keyof ClipSettings)[];
+  "shortBannerPresetName", "normalClipCount", "shortCount", "autoHarvestCharacterAssets"] as const satisfies readonly (keyof ClipSettings)[];
 export type CharacterSnapshot = Partial<Pick<ClipSettings, typeof CHARACTER_KEYS[number]>> & SubtitleStyleSnapshot;
 export type CharacterPreset = { id?: string; name: string; settings: CharacterSnapshot };
 export type CharacterPresetDocument = { presets: CharacterPreset[]; selectedName: string; legacyImport?: boolean };
@@ -24,7 +24,7 @@ export function captureCharacter(settings: ClipSettings): CharacterSnapshot {
 
 export function newCharacter(settings: ClipSettings): ClipSettings {
   const cleared = applySubtitleStyle(settings, {});
-  return { ...cleared, characterPresetName: "", channelName: "", normalTitleSuffix: "",
+  return { ...cleared, characterPresetName: "", characterPresetId: "", autoHarvestCharacterAssets: true, channelName: "", normalTitleSuffix: "",
     normalThumbnailStyle: { ...PLAIN_THUMBNAIL }, normalClipCount: 0, shortCount: 3,
     normalClipTimeRanges: [], shortClipTimeRanges: [],
     youtubePostingProfile: { performerName: "", affiliation: "", baseHashtags: [], shortHashtags: ["#shortsfunny"], baseTags: [] },
@@ -38,5 +38,5 @@ export function applyCharacter(settings: ClipSettings, preset: CharacterPreset):
   for (const key of [...CHARACTER_KEYS, ...SUBTITLE_STYLE_KEYS]) {
     if (snapshot[key] !== undefined && snapshot[key] !== null) Object.assign(next, { [key]: snapshot[key] });
   }
-  return { ...next, characterPresetName: preset.name };
+  return { ...next, characterPresetName: preset.name, characterPresetId: preset.id ?? "" };
 }

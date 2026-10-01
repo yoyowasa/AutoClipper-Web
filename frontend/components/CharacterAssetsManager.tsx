@@ -7,8 +7,9 @@ import {
   getCharacterAssets, uploadCharacterAsset, type CharacterAssetList, type CharacterEmotion
 } from "../lib/characterAssets";
 
-export function CharacterAssetsManager({ presetId, disabled, onBusyChange }: {
+export function CharacterAssetsManager({ presetId, disabled, onBusyChange, revision = 0, onAssetsChange }: {
   presetId: string; disabled?: boolean; onBusyChange: (busy: boolean) => void;
+  revision?: number; onAssetsChange?: () => void;
 }) {
   const [data, setData] = useState<CharacterAssetList | null>(null);
   const [busy, setBusy] = useState(false);
@@ -23,7 +24,7 @@ export function CharacterAssetsManager({ presetId, disabled, onBusyChange }: {
       if (!cancelled) setError(reason instanceof Error ? reason.message : "素材を読み込めませんでした。");
     });
     return () => { cancelled = true; };
-  }, [presetId, reload]);
+  }, [presetId, reload, revision]);
 
   async function upload(emotion: CharacterEmotion, files: File[]) {
     if (!data || files.length === 0) return;
@@ -39,6 +40,7 @@ export function CharacterAssetsManager({ presetId, disabled, onBusyChange }: {
         catch (reason) { errors.push(`${file.name}: ${reason instanceof Error ? reason.message : "登録に失敗しました。"}`); }
       }
       setData(await getCharacterAssets(presetId));
+      onAssetsChange?.();
       if (uploaded) setNotice(`${uploaded}枚の素材を登録しました。`);
       if (errors.length) setError(errors.join("\n"));
     } catch (reason) {
@@ -52,6 +54,7 @@ export function CharacterAssetsManager({ presetId, disabled, onBusyChange }: {
       await deleteCharacterAsset(presetId, assetId);
       setData(await getCharacterAssets(presetId));
       setNotice("素材を削除しました。");
+      onAssetsChange?.();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "削除に失敗しました。一覧を再読込してください。"); }
     finally { setBusy(false); onBusyChange(false); }
   }

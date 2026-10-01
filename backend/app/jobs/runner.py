@@ -1,4 +1,5 @@
 from app.clip_allocation import is_ai_allocation, allocate_selection, allocation_summary, candidate_pool_counts
+from app.jobs.character_asset_harvest_state import enqueue_completed_job_harvest
 import json
 from app.duration_rules import duration_search_settings
 import re
@@ -3185,6 +3186,7 @@ def run_autoclipper_job(
 
             _set_status(db, job, "completed")
             visited_statuses.append("completed")
+            enqueue_completed_job_harvest(db, job, storage_paths)
         except PipelineExpectedError as exc:
             _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
         except Exception as exc:
@@ -3844,6 +3846,7 @@ def run_subtitle_review_render(
 
                 _set_status(db, job, "completed")
             visited_statuses.append("completed")
+            enqueue_completed_job_harvest(db, job, storage_paths)
         except PipelineExpectedError as exc:
             if pending_rerender_zip is not None:
                 pending_rerender_zip.unlink(missing_ok=True)

@@ -27,6 +27,8 @@ storage/fonts/*
 storage/transcripts/*
 storage/banner_assets/*
 storage/character_assets/*
+storage/character_asset_candidates/
+storage/backups/
 storage/qa/*
 storage/models/*
 storage/*.db

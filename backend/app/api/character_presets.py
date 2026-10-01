@@ -4,9 +4,10 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
+from sqlalchemy import select
 
 from app.db import get_db
-from app.models import AppPreference
+from app.models import AppPreference, CharacterAsset, CharacterAssetCandidate, CharacterAssetHarvest
 from app.posting_metadata import NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, YouTubePostingProfile
 from app.schemas import SubtitleStyleSnapshot
 from app.short_banners import BannerAssetId, banner_asset_path
@@ -31,6 +32,7 @@ class CharacterSettings(SubtitleStyleSnapshot):
     short_banner_preset_name: str = Field(default="", max_length=80, alias="shortBannerPresetName")
     normal_clip_count: int = Field(default=0, ge=0, le=12, alias="normalClipCount")
     short_count: int = Field(default=3, ge=0, le=24, alias="shortCount")
+    auto_harvest_character_assets: bool = Field(default=True, alias="autoHarvestCharacterAssets")
 
     @model_validator(mode="after")
     def require_output(self) -> "CharacterSettings":
@@ -123,6 +125,10 @@ def _save_presets(document: CharacterPresetDocument, db: Session, paths: Storage
     ids = [preset.id for preset in document.presets]
     if len(ids) != len(set(ids)):
         raise HTTPException(422, "キャラ設定のIDが重複しています。")
+    removed_ids = set(existing.values()) - set(ids)
+    if removed_ids and any(db.scalar(select(model.id).where(model.preset_id.in_(removed_ids)).limit(1))
+                           for model in (CharacterAsset, CharacterAssetCandidate, CharacterAssetHarvest)):
+        raise HTTPException(409, "素材も削除します。画面のキャラ設定削除で件数を確認してください。")
     for preset in document.presets:
         snapshot = preset.settings
         ids = [snapshot.short_top_banner_asset_id, snapshot.short_bottom_banner_asset_id]

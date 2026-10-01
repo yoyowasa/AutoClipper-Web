@@ -263,6 +263,8 @@ class YouTubePostingProfileDocument(BaseModel):
 
 class JobSettings(UploadTextStyles):
     character_preset_name: str = Field(default="", max_length=80, alias="characterPresetName")
+    character_preset_id: str = Field(default="", pattern=r"^(character_[0-9a-f]{32})?$", alias="characterPresetId")
+    auto_harvest_character_assets: bool = Field(default=True, alias="autoHarvestCharacterAssets")
     channel_name: str = Field(default="", max_length=120, alias="channelName")
     normal_title_suffix: str | None = Field(default=None, max_length=80, alias="normalTitleSuffix")
     normal_thumbnail_style: NormalThumbnailStyle | None = Field(default=None, alias="normalThumbnailStyle")

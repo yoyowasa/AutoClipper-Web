@@ -77,6 +77,8 @@ export type ClipSettings = {
   keptClipIds?: string[];
   excludePreviousSelection?: boolean;
   characterPresetName?: string;
+  characterPresetId?: string;
+  autoHarvestCharacterAssets?: boolean;
   channelName?: string;
   normalTitleSuffix?: string | null;
   normalThumbnailStyle?: NormalThumbnailStyle | null;

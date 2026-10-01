@@ -213,10 +213,11 @@ def test_old_preset_reading_and_overwriting_preserve_asset_ids_without_rewriting
     asset = _upload((api, preset_id, _paths)).json()
     assert api.put("/api/preferences/character-presets", json=legacy).json()["presets"][0]["id"] == preset_id
     assert api.get(f"/api/character-presets/{preset_id}/assets").json()["emotions"]["joy"] == [asset]
-    assert api.put("/api/preferences/character-presets", json={"presets": [], "selectedName": ""}).status_code == 200
-    assert api.get(asset["imageUrl"]).status_code == 200  # Existing images remain, like existing banner assets.
+    assert api.put("/api/preferences/character-presets", json={"presets": [], "selectedName": ""}).status_code == 409
+    assert api.request("DELETE", f"/api/character-presets/{preset_id}", json={"assets": 1, "candidates": 0}).status_code == 204
+    assert api.get(asset["imageUrl"]).status_code == 404
     assert api.get(f"/api/character-presets/{preset_id}/assets").status_code == 404
-    assert api.delete(f"/api/character-presets/{preset_id}/assets/{asset['id']}").status_code == 204
+    assert api.delete(f"/api/character-presets/{preset_id}/assets/{asset['id']}").status_code == 404
 
 
 def test_init_db_adds_character_assets_to_existing_database(tmp_path, monkeypatch):
