@@ -5,6 +5,7 @@ import { applyCharacter, captureCharacter, newCharacter, type CharacterPresetDoc
 import { bannerRequest } from "../lib/shortBanners";
 import { captureSubtitleStyle } from "../lib/subtitleStylePresets";
 import type { ClipSettings } from "../lib/types";
+import { CharacterAssetsManager } from "./CharacterAssetsManager";
 
 export function CharacterPresetManager({ settings, disabled, onChange }: {
   settings: ClipSettings; disabled?: boolean; onChange: (settings: ClipSettings) => void;
@@ -12,6 +13,7 @@ export function CharacterPresetManager({ settings, disabled, onChange }: {
   const [document, setDocument] = useState<CharacterPresetDocument>({ presets: [], selectedName: "" });
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [assetsBusy, setAssetsBusy] = useState(false);
   const [name, setName] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -60,7 +62,7 @@ export function CharacterPresetManager({ settings, disabled, onChange }: {
   async function save() {
     const savedName = name.trim();
     const snapshot = captureCharacter(latest.current.settings);
-    const next = { name: savedName, settings: snapshot };
+    const next = { id: document.presets.find(item => item.name === savedName)?.id, name: savedName, settings: snapshot };
     const presets = document.presets.some((item) => item.name === savedName)
       ? document.presets.map((item) => item.name === savedName ? next : item) : [...document.presets, next];
     if (await persist({ presets, selectedName: savedName })) {
@@ -69,7 +71,8 @@ export function CharacterPresetManager({ settings, disabled, onChange }: {
     }
   }
   const existing = document.presets.some((item) => item.name === name.trim());
-  return <fieldset disabled={disabled || busy || !ready} className="grid gap-2 border-t border-neutral-200 bg-sky-50 p-3 text-xs">
+  const selected = document.presets.find(item => item.name === document.selectedName);
+  return <fieldset disabled={disabled || busy || assetsBusy || !ready} className="grid gap-2 border-t border-neutral-200 bg-sky-50 p-3 text-xs">
     <legend className="sr-only">キャラ別一括設定</legend>
     <strong className="text-sm">キャラ別一括設定</strong>
     <label className="grid gap-1">使うキャラ設定
@@ -89,9 +92,11 @@ export function CharacterPresetManager({ settings, disabled, onChange }: {
     <span className="text-neutral-600">{document.presets.length} / 50 保存済み。元配信タイトル・URLは動画ごとの入力です。</span>
     {document.selectedName && <button type="button" className="text-left text-neutral-600" onClick={async () => {
       if (await persist({ presets: document.presets.filter((item) => item.name !== document.selectedName), selectedName: "" })) {
-        setName(""); onChange(newCharacter(latest.current.settings)); setNotice("保存一覧から削除しました。作成済み動画の設定・画像は残ります。");
+        setName(""); onChange(newCharacter(latest.current.settings)); setNotice("保存一覧から削除しました。作成済み動画の設定・画像と登録した表情素材は残ります。");
       }
     }}>このキャラ設定を保存一覧から削除</button>}
+    {selected?.id ? <CharacterAssetsManager key={selected.id} presetId={selected.id} disabled={disabled || busy}
+      onBusyChange={setAssetsBusy} /> : <p className="text-neutral-600">キャラ設定を保存・選択すると表情素材を登録できます。</p>}
     {notice && <p role="status" className="text-emerald-700">{notice}</p>}
     {error && <p role="alert" className="text-red-700">{error}</p>}
   </fieldset>;

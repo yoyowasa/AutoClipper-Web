@@ -1,3 +1,6 @@
+from hashlib import sha256
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.orm import Session
@@ -8,6 +11,7 @@ from app.posting_metadata import NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, YouTubePo
 from app.schemas import SubtitleStyleSnapshot
 from app.short_banners import BannerAssetId, banner_asset_path
 from app.storage.paths import StoragePaths, get_storage_paths
+from app.storage.locking import storage_mutation_lock
 from app.thumbnail_style import NormalThumbnailStyle
 
 router = APIRouter(prefix="/api/preferences", tags=["preferences"])
@@ -37,6 +41,7 @@ class CharacterSettings(SubtitleStyleSnapshot):
 
 class CharacterPreset(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
+    id: str | None = Field(default=None, pattern=r"^character_[0-9a-f]{32}$")
     name: str = Field(min_length=1, max_length=80, pattern=r"\S")
     settings: CharacterSettings
 
@@ -52,6 +57,9 @@ class CharacterPresetDocument(BaseModel):
         names = [preset.name for preset in self.presets]
         if len(names) != len(set(names)):
             raise ValueError("保存名が重複しています。")
+        ids = [preset.id for preset in self.presets if preset.id is not None]
+        if len(ids) != len(set(ids)):
+            raise ValueError("キャラ設定のIDが重複しています。")
         if self.selected_name and self.selected_name not in names:
             raise ValueError("選択したキャラ設定が見つかりません。")
         return self
@@ -61,7 +69,8 @@ class CharacterPresetDocument(BaseModel):
 def get_presets(db: Session = Depends(get_db)) -> CharacterPresetDocument:
     row = db.get(AppPreference, PRESETS_KEY)
     if row:
-        return CharacterPresetDocument.model_validate(row.value_json)
+        document = CharacterPresetDocument.model_validate(row.value_json)
+        return _with_legacy_ids(document)
     old = db.get(AppPreference, "youtube_posting_profile")
     if old is None:
         return CharacterPresetDocument()
@@ -78,7 +87,17 @@ def get_presets(db: Session = Depends(get_db)) -> CharacterPresetDocument:
         shortBottomBannerEnabled=is_raden,
         shortBannerPresetName="らでん用" if is_raden else "",
     )
-    return CharacterPresetDocument(presets=[CharacterPreset(name=name, settings=snapshot)], selectedName=name, legacyImport=True)
+    return _with_legacy_ids(
+        CharacterPresetDocument(presets=[CharacterPreset(name=name, settings=snapshot)], selectedName=name, legacyImport=True)
+    )
+
+
+def _with_legacy_ids(document: CharacterPresetDocument) -> CharacterPresetDocument:
+    # Stable on repeated GETs; do not rewrite old stored preferences while reading.
+    for preset in document.presets:
+        if preset.id is None:
+            preset.id = "character_" + sha256(preset.name.encode("utf-8")).hexdigest()[:32]
+    return document
 
 
 @router.put("/character-presets", response_model=CharacterPresetDocument, response_model_exclude_none=True)
@@ -87,6 +106,23 @@ def save_presets(
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
 ) -> CharacterPresetDocument:
+    with storage_mutation_lock(paths.root):
+        return _save_presets(document, db, paths)
+
+
+def _save_presets(document: CharacterPresetDocument, db: Session, paths: StoragePaths) -> CharacterPresetDocument:
+    existing = {preset.name: preset.id for preset in get_presets(db).presets}
+    for preset in document.presets:
+        # Old clients omit IDs when overwriting a name. Keep its asset association.
+        if preset.name in existing:
+            if preset.id is not None and preset.id != existing[preset.name]:
+                raise HTTPException(422, "保存済みキャラ設定のIDは変更できません。")
+            preset.id = existing[preset.name]
+        elif preset.id is None:
+            preset.id = "character_" + uuid4().hex
+    ids = [preset.id for preset in document.presets]
+    if len(ids) != len(set(ids)):
+        raise HTTPException(422, "キャラ設定のIDが重複しています。")
     for preset in document.presets:
         snapshot = preset.settings
         ids = [snapshot.short_top_banner_asset_id, snapshot.short_bottom_banner_asset_id]

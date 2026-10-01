@@ -11,8 +11,14 @@ def test_openapi_paths_and_methods_match_before_clip_plan_split() -> None:
     fixture = Path(__file__).parent / "fixtures" / "openapi_routes_before_task167.json"
     before = json.loads(fixture.read_text(encoding="utf-8"))
     after = {path: sorted(methods) for path, methods in app.openapi()["paths"].items()}
-    # task-169 explicitly adds the read-only rejection ledger endpoint.
-    assert after == {**before, "/api/jobs/{job_id}/clip-plan/rejections": ["get"]}
+    # Explicit additions after the split; the original routes remain identical.
+    assert after == {
+        **before,
+        "/api/jobs/{job_id}/clip-plan/rejections": ["get"],
+        "/api/character-presets/{preset_id}/assets": ["get", "post"],
+        "/api/character-presets/{preset_id}/assets/{asset_id}": ["delete"],
+        "/api/character-assets/{asset_id}/image": ["get"],
+    }
 
 
 def test_rq_can_import_clip_plan_jobs_using_legacy_runner_paths() -> None:
