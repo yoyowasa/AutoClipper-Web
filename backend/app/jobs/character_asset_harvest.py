@@ -128,7 +128,7 @@ def run_character_asset_harvest(
                             return
                         sheet = contact_sheet(
                             [storage.character_candidate(preset_id, video_id, identifier) for identifier in batch],
-                            work / "sheet.jpg",
+                            work / f"sheet_{start // 8}.jpg",
                         )
                     try:
                         classified = active_classifier.classify(sheet, count=len(batch), reference=reference)

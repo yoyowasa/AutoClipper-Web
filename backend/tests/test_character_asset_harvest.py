@@ -234,9 +234,11 @@ def test_worker_batches_by_8_saves_fallback_and_rescan_does_not_duplicate(contex
         _image(), 400, 300, {"x": .3, "y": .2, "w": .3, "h": .2}, True, [],
     ))
     batches = []
+    sheets = []
     class Classifier:
         def classify(self, sheet, *, count, reference):
             batches.append((count, reference is not None))
+            sheets.append(sheet)
             assert sheet.is_file()
             if fail:
                 raise RuntimeError("Codex unavailable")
@@ -245,6 +247,7 @@ def test_worker_batches_by_8_saves_fallback_and_rescan_does_not_duplicate(contex
     identifier = start(context)
     harvesting.run_character_asset_harvest(identifier, session_factory=context.factory, paths=context.paths, classifier=Classifier())
     assert batches == [(8, reference), (8, reference), (2, reference)]
+    assert len(set(sheets)) == 3  # A timed-out request must never see a later batch's sheet.
     result = context.api.get(f"/api/character-presets/{context.preset}/asset-candidates").json()
     assert len(result["candidates"]) == 18
     assert all(row["suggestedEmotion"] == (None if fail else "joy") for row in result["candidates"])
