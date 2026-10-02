@@ -26,6 +26,10 @@ from app.candidates.select_candidates import (
 )
 from app.config import Settings, get_settings
 from app.db import get_db
+from app.downloads import (
+    TemporaryArchiveResponse, create_download_archive, export_download_name, temporary_archive_path, thumbnail_extension,
+)
+from app.storage.locking import storage_mutation_lock
 from app.ids import make_id
 from app.jobs.automation import (
     automation_manifest_path,
@@ -407,6 +411,7 @@ def _result_item(
     selected = selected or {}
     metadata = metadata or {}
     audit_clip = audit_clip or {}
+    download_name = export_download_name(export)
     url = f"/api/exports/{export.id}/download"
     metadata_url = f"/api/exports/{export.id}/metadata" if export.metadata_path else None
     subtitle_url = f"/api/exports/{export.id}/subtitle" if export.subtitle_path else None
@@ -561,7 +566,10 @@ def _result_item(
         thumbnailDownloadUrl=thumbnail_download_url,
         thumbnailStatus=thumbnail_status,
         thumbnailErrorCode=metadata.get("thumbnail_error_code") if thumbnail_status == "failed" else None,
-        thumbnailFilename=thumbnail_filename,
+        thumbnailFilename=(download_name.stem + thumbnail_extension(thumbnail_path_value or thumbnail_filename))
+        if thumbnail_filename else None,
+        downloadFilename=download_name.stem + ".mp4",
+        downloadNameTruncated=download_name.truncated,
         thumbnailFrameSeconds=_number_or_none(
             _first_value(
                 metadata.get("thumbnail_frame_seconds"),
@@ -3209,6 +3217,24 @@ def download_job_zip(
             detail="zip is unavailable while re-render publication is unresolved",
         )
     zip_path = paths.zip_path(job_id)
-    if not zip_path.is_file():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="zip not found")
-    return FileResponse(zip_path, media_type="application/zip", filename=f"{job_id}.zip")
+    if zip_path.is_file():
+        return FileResponse(zip_path, media_type="application/zip", filename=f"{job_id}.zip")
+    output_dir = paths.job_outputs(job_id)
+    with storage_mutation_lock(output_dir):
+        db.refresh(job)
+        if _job_publication_unresolved(job, paths):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="zip publication is unresolved")
+        exports = list(db.scalars(select(ExportItem).where(ExportItem.job_id == job_id).order_by(ExportItem.created_at, ExportItem.id)))
+        if job.status != "completed" or not exports or not all(_export_is_published(export, output_dir, paths) for export in exports):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="completed exports not found")
+        if not all(Path(export.video_path).is_file() for export in exports):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="export video not found")
+        archive = temporary_archive_path(paths)
+        metadata_files = [path for path in output_dir.iterdir() if path.suffix.lower() in {".json", ".md"}]
+        metadata_files.extend((output_dir / "quality_gate").glob("*.json"))
+        try:
+            create_download_archive(archive, exports, job_dir=output_dir, metadata_files=metadata_files)
+            return TemporaryArchiveResponse(archive, media_type="application/zip", filename=f"{job_id}.zip")
+        except BaseException:
+            archive.unlink(missing_ok=True)
+            raise

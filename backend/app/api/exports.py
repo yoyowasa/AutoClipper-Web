@@ -1,13 +1,18 @@
 import json
 from pathlib import Path
 from collections.abc import Callable
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.downloads import (
+    TemporaryArchiveResponse, create_download_archive, export_download_name,
+    posting_set_manifest, posting_text, temporary_archive_path, thumbnail_extension,
+)
+from app.storage.locking import storage_mutation_lock
 from app.jobs.subtitle_review_preview import subtitle_review_document_lock
 from app.jobs.publication_state import rerender_publication_is_unresolved
 from app.jobs.queue import (
@@ -127,7 +132,7 @@ def download_export(
     if not video_path.is_file():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="export file not found")
 
-    return FileResponse(video_path, media_type="video/mp4", filename=video_path.name)
+    return FileResponse(video_path, media_type="video/mp4", filename=export_download_name(export).stem + ".mp4")
 
 
 @router.get("/{export_id}/thumbnail/copy", response_model=ThumbnailCopyState)
@@ -233,7 +238,7 @@ def view_export_thumbnail(
 ) -> FileResponse:
     export = _get_export_or_404(db, export_id, paths)
     thumbnail_path = _thumbnail_file_or_404(export, paths)
-    return FileResponse(thumbnail_path, media_type="image/jpeg")
+    return FileResponse(thumbnail_path, media_type="image/png" if thumbnail_extension(thumbnail_path) == ".png" else "image/jpeg")
 
 
 @router.get("/{export_id}/thumbnail/download")
@@ -246,9 +251,57 @@ def download_export_thumbnail(
     thumbnail_path = _thumbnail_file_or_404(export, paths)
     return FileResponse(
         thumbnail_path,
-        media_type="image/jpeg",
-        filename=thumbnail_path.name,
+        media_type="image/png" if thumbnail_extension(thumbnail_path) == ".png" else "image/jpeg",
+        filename=export_download_name(export).stem + thumbnail_extension(thumbnail_path),
     )
+
+
+@router.get("/{export_id}/posting-set")
+def get_posting_set(
+    export_id: str, db: Session = Depends(get_db), paths: StoragePaths = Depends(get_storage_paths),
+) -> dict[str, Any]:
+    export = _get_export_or_404(db, export_id, paths)
+    thumbnail = _thumbnail_file_or_404(export, paths)
+    if not Path(export.video_path).is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="export video not found")
+    return posting_set_manifest(export, thumbnail)
+
+
+@router.get("/{export_id}/posting-text")
+def download_posting_text(
+    export_id: str, db: Session = Depends(get_db), paths: StoragePaths = Depends(get_storage_paths),
+) -> Response:
+    from urllib.parse import quote
+
+    export = _get_export_or_404(db, export_id, paths)
+    filename = export_download_name(export).stem + "_投稿文.txt"
+    return Response(
+        posting_text(export), media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename*=utf-8''" + quote(filename)},
+    )
+
+
+@router.get("/{export_id}/posting-set.zip")
+def download_posting_set_zip(
+    export_id: str, db: Session = Depends(get_db), paths: StoragePaths = Depends(get_storage_paths),
+) -> FileResponse:
+    export = _get_export_or_404(db, export_id, paths)
+    job_dir = paths.job_outputs(export.job_id)
+    with storage_mutation_lock(job_dir):
+        db.expire_all()
+        export = _get_export_or_404(db, export_id, paths)
+        _thumbnail_file_or_404(export, paths)
+        if not Path(export.video_path).is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="export video not found")
+        archive = temporary_archive_path(paths)
+        try:
+            create_download_archive(archive, [export], job_dir=job_dir, posting_set=True)
+            return TemporaryArchiveResponse(
+                archive, media_type="application/zip", filename=export_download_name(export).stem + ".zip",
+            )
+        except BaseException:
+            archive.unlink(missing_ok=True)
+            raise
 
 
 @router.post(

@@ -5,6 +5,7 @@ import hashlib
 import unicodedata
 from collections.abc import Generator
 from pathlib import Path
+from io import BytesIO
 from typing import Any
 from zipfile import ZipFile
 
@@ -526,15 +527,21 @@ def test_real_pipeline_produces_results_metadata_and_zip(
     assert short_metadata["subtitle_path"].replace("\\", "/").endswith("/subtitles/shorts/short_01.ass")
 
     zip_path = storage.zip_path(created["jobId"])
-    assert zip_path.is_file()
-    with ZipFile(zip_path) as archive:
+    assert not zip_path.exists()
+    zip_response = client.get(f"/api/jobs/{created['jobId']}/download.zip")
+    assert zip_response.status_code == 200
+    assert not zip_path.exists()
+    results = client.get(f"/api/jobs/{created['jobId']}/results").json()
+    normal_stem = results['normalClips'][0]['downloadFilename'][:-4]
+    short_stem = results['shorts'][0]['downloadFilename'][:-4]
+    with ZipFile(BytesIO(zip_response.content)) as archive:
         names = set(archive.namelist())
-    assert "videos/normal/normal_01.mp4" in names
-    assert "videos/shorts/short_01.mp4" in names
-    assert "subtitles/normal/normal_01.ass" in names
-    assert "subtitles/shorts/short_01.ass" in names
-    assert "metadata/normal/normal_01.json" in names
-    assert "metadata/shorts/short_01.json" in names
+    assert f"videos/normal/{normal_stem}.mp4" in names
+    assert f"videos/shorts/{short_stem}.mp4" in names
+    assert f"subtitles/normal/{normal_stem}.ass" in names
+    assert f"subtitles/shorts/{short_stem}.ass" in names
+    assert f"metadata/normal/{normal_stem}.json" in names
+    assert f"metadata/shorts/{short_stem}.json" in names
     assert "metadata/selected_clips.json" in names
     assert "metadata/automation_manifest.json" in names
     assert "metadata/raw_transcript_segments.json" in names
@@ -1754,7 +1761,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert rendered_short["title"] == "魚は「耳石」で音を聞く？"
     assert rendered_short["title_source"] == "manual_review"
     assert rendered_short["hook_text"] == "魚の耳には、本当に「石」が入ってるらしい"
-    assert storage.zip_path(created["jobId"]).is_file()
+    assert not storage.zip_path(created["jobId"]).exists()
 
     first_results = client.get(f"/api/jobs/{created['jobId']}/results").json()
     assert first_results["canReopenForEditing"] is True

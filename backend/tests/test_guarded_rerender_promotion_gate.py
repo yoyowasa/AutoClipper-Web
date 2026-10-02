@@ -919,19 +919,17 @@ def test_partial_rerender_promotion_restores_old_files_and_database(
     engine.dispose()
 
 
-def test_rerender_promotion_rolls_back_zip_with_media(tmp_path: Path) -> None:
+def test_rerender_promotion_restores_invalidated_legacy_zip_with_media(tmp_path: Path) -> None:
     canonical_dir = tmp_path / "canonical"
     staging_dir = tmp_path / "staging"
     canonical_video = canonical_dir / "normal" / "normal_01.mp4"
     staged_video = staging_dir / "normal" / "normal_01.mp4"
     canonical_zip = canonical_dir / "download.zip"
-    pending_zip = canonical_dir / ".download.tmp.zip"
-    for path in (canonical_video, staged_video, canonical_zip, pending_zip):
+    for path in (canonical_video, staged_video, canonical_zip):
         path.parent.mkdir(parents=True, exist_ok=True)
     canonical_video.write_bytes(b"old-video")
     staged_video.write_bytes(b"new-video")
     canonical_zip.write_bytes(b"old-zip")
-    pending_zip.write_bytes(b"new-zip")
     promotion = runner_module._SubtitleRerenderPromotion(
         staging_root=staging_dir,
         canonical_job_dir=canonical_dir,
@@ -939,9 +937,9 @@ def test_rerender_promotion_rolls_back_zip_with_media(tmp_path: Path) -> None:
     )
 
     promotion.publish(staged_video, canonical_video)
-    promotion.publish(pending_zip, canonical_zip)
+    promotion.remove(canonical_zip)
     assert canonical_video.read_bytes() == b"new-video"
-    assert canonical_zip.read_bytes() == b"new-zip"
+    assert not canonical_zip.exists()
 
     promotion.rollback()
 

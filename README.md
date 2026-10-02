@@ -1133,8 +1133,14 @@ No usable clips after selection:
 
 ### Storage maintenance
 
-Completed jobs automatically discard subtitle/clip review preview videos and the manual editor proxy after successful ZIP publication.
-Final MP4/ZIP, subtitle review data, thumbnails and cached thumbnail frames are retained.
+Completed jobs automatically discard subtitle/clip review preview videos and the manual editor proxy after successful output publication.
+Final MP4, subtitle review data, thumbnails and cached thumbnail frames are retained. ZIP archives are created only when downloaded,
+and their temporary files are removed after sending; existing `download.zip` archives remain available without rebuilding.
+
+結果画面の動画・サムネの保存名は公開用タイトルを使います（Windows禁止文字を全角に置換、最大100文字）。
+「投稿セットを保存」は、動画・サムネ・投稿文を初回に選んだフォルダへ保存します。次回も同じフォルダを使い、
+ブラウザが許可を求めたら再度許可してください。保存先は選び直せます。同名ファイルは上書きを確認します。
+フォルダ保存に対応しないブラウザでは、3ファイルを含むZIPを保存します。サムネ未生成の場合は、生成後に保存できます。
 Completed subtitle review can play the final MP4; clip editing shows a link to the results screen.
 
 Run these commands inside the backend container. Both default to dry-run and list target paths and sizes without deleting data:

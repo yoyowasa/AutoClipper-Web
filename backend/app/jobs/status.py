@@ -56,7 +56,7 @@ CURRENT_STEP_MAP = {
     "awaiting_subtitle_review": "Waiting for subtitle review",
     "rendering_normal_clips": "Rendering normal clips",
     "rendering_shorts": "Rendering shorts",
-    "packaging_zip": "Packaging ZIP",
+    "packaging_zip": "Finalizing outputs",
     "completed": "Completed",
     "failed": "Failed",
 }

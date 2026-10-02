@@ -10743,3 +10743,15 @@ pip check: pass
 - DB・保護対象: jobs 22→15で承認した7件だけが減り、残った各jobの状態は削除前と一致。内訳はawaiting_clip_review 9→4、awaiting_subtitle_review 4→3、completed 7→7、failed 2→1。Video行22→15、物理的な元動画は承認した非共有4本を削除。export_itemsは52→52で残った完成版を書き出した行は保持。source_clip_usageは121→121、clip_rejectionsは10→10で、全行内容のSHA256も前後で一致。完成済み7件の出力570ファイル（プレビュー以外）はサイズ・更新時刻が一致して残っていることを確認した。
 - 完成済み結果の確認: GET /api/jobs/job_3e382e32e3d947d68d227c003ddd9bd4/resultsはHTTP 200、通常3件・Shorts5件。確認後もRQのキュー/実行中登録、実行中ジョブと中継の依頼は0件。実動画の新規ジョブ・再選定は実行しなかった。
 - 記録の保存: main e6e7e09からcodex/task-181-storage-cleanup-operationsを作成し、前回の未コミット運用記録にこの結果を追記する。変更ファイルはSTATUS.mdのみ。アプリ本体・設定・Docker・Codex中継の変更は無い。git diff --checkを確認し、小さなmain向けPRでコミットする。CIの結果はPR作成後に確認する。
+
+## 2026-10-02 task-182: 投稿用タイトルでの保存・投稿セット・都度ZIP
+
+- 目的: 結果画面から保存した動画を、ファイル名の手直しなしでYouTube Studioへ渡し、動画とサムネを同じ名前で対応付ける。
+- 保存名: 公開用タイトル（ExportItem.title）をbackendの `app/downloads.py` で変換する。Windows禁止文字は対応する全角文字へ置換し、制御文字と末尾の空白・ピリオドを除去する。Windows予約名は先頭に `_` を付けて回避し、最大100文字（Unicodeコードポイント）に収める。公開用タイトルが空なら元の連番名を使う。結果API・MP4/サムネのContent-Disposition・ZIP内の名前に同じ関数を使用し、公開用タイトルや実ファイルは書き換えない。切り詰めた場合は画面に表示する。
+- 投稿セット: 各動画のMP4・JPEG/PNGサムネ・タイトル/説明/タグ/ハッシュタグのUTF-8投稿文を保存する。投稿文名は `<同じ名前>_投稿文.txt`。showDirectoryPicker対応ブラウザでは初回に選んだフォルダへストリームで書き込み、以降も再利用する（IndexedDBにハンドルを保存し、再利用時は権限を確認）。保存先の変更と同名ファイルの上書き確認があり、複数カードからの書き込みも直列化する。非対応ブラウザは3ファイル入りのZIPを1つ保存する。サムネが無い場合は不完全なセットを作らず、画面で保存不可の理由を示す。既存の動画/サムネ単独保存は残し、保存先選択に非対応のブラウザでも通常のダウンロードを使える。
+- 全体ZIP: workerの完成時には作成しない。ZIPダウンロード時にジョブ単位のプロセス間ロックを取り、storage/tempにリクエスト固有の一時ZIPを作成する。送信完了・送信失敗・作成失敗で削除する。既存download.zipはそのまま配信する。同じ保存名になる動画が複数ある全体ZIPではclipごとのサブフォルダで区別し、ファイル名自体は変えない。従来の字幕/メタデータ/投稿文も収録する。
+- 完成・復旧: 完成判定のZIP依存を公開済みMP4へ置き換える。状態値packaging_zipは既存データ互換のため残し、進捗の文言をFinalizing outputsへ変更する。旧状態の同一ジョブ再書き出しでは、旧ZIPを動画と一緒に退避し、公開失敗時は復元する。成功した場合は古い内容のZIPを無効化し、次回ダウンロードで作成する。完成時のプレビュー削除・素材収集の導線は維持する。
+- 主な変更ファイル: backend/app/downloads.py（新規）、api/jobs.py、api/exports.py、jobs/runner.py、jobs/status.py、schemas.py、frontend/components/SavePostingSetButton.tsx（新規）、ResultVideoCard.tsx、SaveFileButton.tsx、frontend/lib/postingSetSave.ts（新規）、types.ts、README.md。保存/ZIPの回帰テストを新規追加し、既存のZIP完成前提のテストとAPI一覧の契約を更新した。
+- 検証: Python 3.11のロック済み環境で `cd backend; ruff check . ../launcher ../scripts` 成功、`python -m pytest -q` は1467 passed / 3 skipped（既存のスキップあり）。全件実行前後で稼働DBの更新時刻は同一。frontendはtest全24本・lint・typecheck・buildが成功。日本語のContent-Disposition、JPEG/PNGと動画の同名、予約名/100文字/タイトル無し、3ファイルの投稿セット、フォルダ再利用/上書き拒否/同時保存/権限拒否/キャンセル/書込失敗、ZIP同時作成の直列化、作成/送信失敗時の後片付け、旧ZIP配信、旧ZIPの巻き戻し、ZIP無しの完成済みジョブの再実行を確認した。
+- CI: PRでPython 3.11・3.12とfrontendを確認し、全て成功した後にmerge commitでマージする。実行結果はPRのchecksを参照する。
+- 未確認事項: 実ブラウザのネイティブのフォルダ選択・IndexedDBからの再読込復元・実際のYouTube Studioへのアップロードは未実施（フォルダ書込はAPI差し替えテスト）。Dockerの再build・コンテナの作り直し・稼働環境への反映は行っていない。稼働中のbackend healthy、worker/frontend起動は読み取りで確認した。
