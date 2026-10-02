@@ -2,7 +2,8 @@ import json
 from pathlib import Path
 from typing import Any
 from fastapi import HTTPException, status
-from sqlalchemy import update
+from fastapi.responses import FileResponse, JSONResponse, Response
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from app.jobs.automation import (
     automation_manifest_path,
@@ -38,7 +39,7 @@ from app.jobs.title_hook_suggestions import (
     load_title_hook_suggestions,
     title_hook_suggestions_path,
 )
-from app.models import Job, Video
+from app.models import ExportItem, Job, Video
 from app.models import utc_now
 from app.schemas import (
     JobSettings,
@@ -61,6 +62,17 @@ def _get_job_or_404(db: Session, job_id: str) -> Job:
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
     return job
+
+
+def _completed_clip_video(db: Session, job: Job, paths: StoragePaths, clip_id: str | None = None) -> Response:
+    """Completed review screens can play the final MP4 after preview pruning."""
+    if clip_id is not None:
+        export = db.scalar(select(ExportItem).where(ExportItem.job_id == job.id, ExportItem.candidate_id == clip_id))
+        if export is not None:
+            video_path = paths.resolve_stored_file(export.video_path)
+            if video_path.is_file():
+                return FileResponse(video_path, media_type="video/mp4", headers={"Cache-Control": "no-store"})
+    return JSONResponse({"status": "completed", "message": "完成済みです。結果画面で完成動画を確認してください。"})
 
 def _get_subtitle_review_or_404(job_id: str, paths: StoragePaths) -> SubtitleReviewDocument:
     review_path = subtitle_review_output_path(paths.job_outputs(job_id))

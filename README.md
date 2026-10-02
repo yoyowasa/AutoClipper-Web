@@ -1130,3 +1130,21 @@ No usable clips after selection:
 - The retry reuses the stored video, heatmap sidecar, and settings in a new job. No re-upload or setting re-entry is required.
 - A source job can create only one retry. A second deterministic failure does not offer another retry.
 - Render failures remain `no_usable_output` and do not use this full-pipeline retry path.
+
+### Storage maintenance
+
+Completed jobs automatically discard subtitle/clip review preview videos and the manual editor proxy after successful ZIP publication.
+Final MP4/ZIP, subtitle review data, thumbnails and cached thumbnail frames are retained.
+Completed subtitle review can play the final MP4; clip editing shows a link to the results screen.
+
+Run these commands inside the backend container. Both default to dry-run and list target paths and sizes without deleting data:
+
+```powershell
+docker compose exec backend python -m app.maintenance prune-completed-previews --dry-run
+docker compose exec backend python -m app.maintenance delete-jobs --job-id job_example1 job_example2 --dry-run
+```
+
+Only replace `--dry-run` with `--execute` after checking the listed targets and taking a DB backup.
+Active jobs are refused. Shared source videos, character assets and the permanent `source_clip_usage`/`clip_rejections` ledgers are retained.
+The commands acquire the storage mutation lock and refuse unsafe paths and unresolved publication.
+Filesystem failures are reported; DB deletion commits before file cleanup, as in the existing storage lifecycle.

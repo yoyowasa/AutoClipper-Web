@@ -5,7 +5,7 @@ from app.candidates.user_rejections import REJECTED_RANGES_SETTING
 from app.source_clip_history import source_key
 import json
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi.responses import Response, FileResponse
 from pydantic import ValidationError
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -80,6 +80,7 @@ from app.schemas import (
 from app.storage.paths import StoragePaths, get_storage_paths
 
 from app.api._job_common import (
+    _completed_clip_video,
     _claim_job_status,
     _enqueue_subtitle_review_previews,
     _get_job_or_404,
@@ -390,14 +391,16 @@ def get_clip_plan_preview_video(
     clip_id: str,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
-) -> FileResponse:
-    _get_job_or_404(db, job_id)
+) -> Response:
+    job = _get_job_or_404(db, job_id)
     document = _get_clip_plan_or_404(job_id, paths)
     if not any(clip.id == clip_id for clip in document.clips):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="clip plan item not found",
         )
+    if job.status == "completed":
+        return _completed_clip_video(db, job, paths, clip_id)
     preview_path = subtitle_review_preview_path(
         paths.job_outputs(job_id),
         clip_id,

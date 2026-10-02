@@ -1535,6 +1535,43 @@ def test_completed_legacy_preview_remains_playable_after_isolated_reedit(
     assert client.get(f"/api/jobs/{source_job_id}/subtitle-review").json()["clips"][0]["previewState"] == "ready"
 
 
+def test_completed_job_without_previews_plays_final_video(client: TestClient) -> None:
+    from app.storage.completed_previews import prune_job_previews_after_completion
+
+    job_id, candidate_id, rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    output = storage.outputs / job_id
+    original_review = (output / "subtitle_review.json").read_bytes()
+    queued = []
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: lambda *args: queued.append(args)
+    with next(app.dependency_overrides[get_db]()) as db:
+        prune_job_previews_after_completion(db, db.get(Job, job_id), storage)
+    review = client.get(f"/api/jobs/{job_id}/subtitle-review")
+    assert review.status_code == 200 and review.json()["state"] == "completed"
+    clip = review.json()["clips"][0]
+    assert clip["previewState"] == "ready" and clip["previewVideoUrl"]
+    assert client.get(clip["previewVideoUrl"]).content == rendered_bytes
+    live = client.get(f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/live-preview-video?specHash=retired")
+    assert live.status_code == 200 and live.content == rendered_bytes
+    assert client.get(f"/api/jobs/{job_id}/editor-video").json()["status"] == "completed"
+    assert client.get(f"/api/jobs/{job_id}/results").status_code == 200
+    assert queued == [] and (output / "subtitle_review.json").read_bytes() == original_review
+
+
+def test_completed_clip_plan_without_preview_plays_final_video(client: TestClient) -> None:
+    from app.jobs.clip_plan import ClipPlanClip, ClipPlanDocument
+
+    job_id, candidate_id, rendered_bytes = _seed_reeditable_export()
+    storage = app.dependency_overrides[get_storage_paths]()
+    document = ClipPlanDocument(jobId=job_id, state="approved", sourceVideoUrl=f"/api/jobs/{job_id}/source-video",
+                                settings={}, createdAt="2026-10-02", updatedAt="2026-10-02",
+                                clips=[ClipPlanClip(id=candidate_id, type="normal", start=0, end=90, duration=90, title="test", score=1)])
+    write_clip_plan(document, clip_plan_output_path(storage.outputs / job_id))
+    assert client.get(f"/api/jobs/{job_id}/clip-plan").status_code == 200
+    response = client.get(f"/api/jobs/{job_id}/clip-plan/clips/{candidate_id}/preview-video")
+    assert response.status_code == 200 and response.content == rendered_bytes
+
+
 def test_retained_live_preview_revision_remains_playable_while_current_is_queued(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

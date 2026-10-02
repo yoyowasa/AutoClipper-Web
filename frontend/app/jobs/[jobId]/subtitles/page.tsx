@@ -2728,7 +2728,9 @@ export default function SubtitleReviewPage() {
                       {!selectedPlayerReady ? (
                         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-neutral-950 px-5 text-center text-sm font-semibold">
                           <p>
-                            {selectedClip.previewState === "failed"
+                            {review.state === "completed"
+                              ? "完成済みです。結果画面で完成動画を確認してください。"
+                              : selectedClip.previewState === "failed"
                               ? "完成表示と同じプレビューの生成に失敗しました"
                               : "完成表示と同じプレビューを更新中"}
                           </p>
@@ -2750,8 +2752,8 @@ export default function SubtitleReviewPage() {
                                 : "プレビューを再生成"}
                             </button>
                           ) : null}
-                          {selectedClip.previewState === "queued" ||
-                          selectedClip.previewState === "rendering" ? (
+                          {review.state !== "completed" && (selectedClip.previewState === "queued" ||
+                          selectedClip.previewState === "rendering") ? (
                             <p className="text-xs font-normal text-neutral-300">
                               完成動画と同じ縦横比・画角・字幕・タイトル・帯を準備しています。
                             </p>
