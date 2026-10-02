@@ -10755,3 +10755,10 @@ pip check: pass
 - 検証: Python 3.11のロック済み環境で `cd backend; ruff check . ../launcher ../scripts` 成功、`python -m pytest -q` は1467 passed / 3 skipped（既存のスキップあり）。全件実行前後で稼働DBの更新時刻は同一。frontendはtest全24本・lint・typecheck・buildが成功。日本語のContent-Disposition、JPEG/PNGと動画の同名、予約名/100文字/タイトル無し、3ファイルの投稿セット、フォルダ再利用/上書き拒否/同時保存/権限拒否/キャンセル/書込失敗、ZIP同時作成の直列化、作成/送信失敗時の後片付け、旧ZIP配信、旧ZIPの巻き戻し、ZIP無しの完成済みジョブの再実行を確認した。
 - CI: PRでPython 3.11・3.12とfrontendを確認し、全て成功した後にmerge commitでマージする。実行結果はPRのchecksを参照する。
 - 未確認事項: 実ブラウザのネイティブのフォルダ選択・IndexedDBからの再読込復元・実際のYouTube Studioへのアップロードは未実施（フォルダ書込はAPI差し替えテスト）。Dockerの再build・コンテナの作り直し・稼働環境への反映は行っていない。稼働中のbackend healthy、worker/frontend起動は読み取りで確認した。
+
+## 2026-10-02 task-180: 主フォルダでのruffの誤検出を除外
+
+- 目的: 主フォルダで `cd backend; ruff check . ../launcher ../scripts` を実行したとき、Git管理外（.gitignore済み）の `scripts/make_plotwith_*.py` の既存F841で失敗する状態を解消する。CIには影響しない。
+- 変更ファイル: `backend/pyproject.toml`（`[tool.ruff]` に `extend-exclude = ["../scripts/make_plotwith_*.py"]` を追加）、本ファイル。コードの変更なし。
+- 検証: 主フォルダで `cd backend; ruff check . ../launcher ../scripts` が成功（ruff 0.15.4）。`--show-files` で、scripts配下の検査対象は17件、make_plotwith_* は0件。Git管理下のscriptsが引き続き検査されることを、一時的な違反ファイル（`import os` のみ）で検出を確認してから削除した。backend全件 `python -m pytest -q` は1467 passed / 3 skipped（既存のスキップ）。frontendのtest・lint・typecheck・buildも成功。
+- 未確認事項: なし（設定のみの変更）。Codexの利用制限のため、本タスクはClaude Codeが実施した。

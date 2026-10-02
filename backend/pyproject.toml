@@ -30,6 +30,7 @@ dev = [
 [tool.ruff]
 line-length = 140
 target-version = "py311"
+extend-exclude = ["../scripts/make_plotwith_*.py"]
 
 [tool.ruff.lint]
 select = ["E", "F"]
