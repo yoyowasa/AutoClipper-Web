@@ -150,7 +150,8 @@ export default function ResultsPage() {
     cropMode: "standard" | "close",
     textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean,
     design?: import("../../../lib/types").NormalThumbnailStyle["design"], selectWithCodex?: boolean,
-    placement?: import("../../../lib/types").ThumbnailSubjectPlacement
+    placement?: import("../../../lib/types").ThumbnailSubjectPlacement,
+    selection?: import("../../../lib/types").ThumbnailSubjectSelection
   ) {
     const frameSeconds = Math.min(
       item.duration,
@@ -167,6 +168,8 @@ export default function ResultsPage() {
         selectWithCodex: Boolean(selectWithCodex),
         cropMode,
         subjectPlacement: placement ?? item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 },
+        ...(selection ?? { subjectSource: item.thumbnailSubjectSource ?? "video",
+          characterAssetId: item.thumbnailCharacterAssetId ?? undefined }),
         ...(design ? { design } : {}),
         ...(textStyles ? { textStyles } : {}),
         ...(text ? { text } : {})

@@ -14,7 +14,8 @@ from app.jobs.thumbnails import (
 )
 from app.jobs.thumbnail_frame_selection import select_thumbnail_frame_seconds
 from app.jobs.codex_thumbnail_frame_selection import select_codex_thumbnail_frame_seconds
-from app.models import ExportItem, Video
+from app.models import ExportItem, Video, Job, utc_now
+from app.jobs.thumbnail_character_assets import choose_character_asset, video_subject_metadata
 from app.render.render_thumbnail import ThumbnailRenderResult, render_normal_thumbnail
 from app.thumbnail_style import (
     ThumbnailSubjectPlacement, resolve_export_thumbnail_style, resolve_thumbnail_text_styles,
@@ -88,6 +89,7 @@ def run_export_thumbnail_regeneration(
     normal_renderer: NormalThumbnailRenderer = render_normal_thumbnail,
     frame_selector: ThumbnailFrameSelector = select_thumbnail_frame_seconds,
     codex_frame_selector: CodexThumbnailFrameSelector = select_codex_thumbnail_frame_seconds,
+    emotion_selector: Any = None,
 ) -> None:
     """Rebuild one normal thumbnail without re-rendering its completed video."""
     storage = paths or get_storage_paths()
@@ -110,12 +112,25 @@ def run_export_thumbnail_regeneration(
             video = db.get(Video, export.video_id)
             if video is None:
                 raise FileNotFoundError("thumbnail source video record is unavailable")
-            source_path = _source_path(video, storage)
+            job = db.get(Job, export.job_id)
+            selected_asset = None
+            if payload.get("thumbnail_subject_source") == "asset":
+                if job is None:
+                    raise ValueError("キャラ設定を確認できません。")
+                selected_asset = choose_character_asset(
+                    db, storage, job, export, payload, selector=emotion_selector,
+                    emotion=payload.get("thumbnail_requested_emotion"),
+                    asset_id=payload.get("thumbnail_requested_asset_id"),
+                )
+                if selected_asset is None:
+                    raise ValueError("このキャラの素材がありません。動画のコマへ切り替えてください。")
+            source_path = storage.character_asset(
+                selected_asset.asset.preset_id, selected_asset.asset.emotion, selected_asset.asset.id,
+            ) if selected_asset else _source_path(video, storage)
             frame_seconds = float(payload.get("thumbnail_frame_seconds", 0.0))
             variant_index = max(0, int(payload.get("thumbnail_variant_index", 0)))
-            if bool(payload.get("thumbnail_select_with_codex")):
+            if not selected_asset and bool(payload.get("thumbnail_select_with_codex")):
                 from app.jobs.thumbnail_copy import build_copy_input
-                from app.models import Job
                 job = db.get(Job, export.job_id)
                 job_style = ((job.settings_json or {}).get("normalThumbnailStyle") or {}) if job else {}
                 try:
@@ -139,7 +154,7 @@ def run_export_thumbnail_regeneration(
                     design=str(payload.get("thumbnail_design") or job_style.get("design") or "raden"),
                     segments=segments,
                 )
-            elif bool(payload.get("thumbnail_advance_frame")):
+            elif not selected_asset and bool(payload.get("thumbnail_advance_frame")):
                 source_start = float(payload.get("start", 0.0))
                 frame_seconds = frame_selector(
                     source_path,
@@ -165,12 +180,12 @@ def run_export_thumbnail_regeneration(
             temp_output = output_path.with_name(
                 f".{output_path.stem}.r{revision}.tmp{output_path.suffix}"
             )
-            from app.models import Job
             job = db.get(Job, export.job_id)
             character_style = resolve_export_thumbnail_style(
                 (job.settings_json or {}).get("normalThumbnailStyle") if job else None,
                 payload.get("thumbnail_design"),
             )
+            asset_info: dict[str, Any] = {}
             result = normal_renderer(
                 source_path,
                 temp_output,
@@ -185,6 +200,8 @@ def run_export_thumbnail_regeneration(
                 subject_scale=subject_placement.scale,
                 subject_offset_x=subject_placement.offset_x,
                 subject_offset_y=subject_placement.offset_y,
+                **({"character_asset_path": source_path, "character_asset_face_box": selected_asset.asset.face_box,
+                    "asset_render_info": asset_info} if selected_asset else {}),
             )
             if result.path.resolve() != temp_output.resolve() or not temp_output.is_file():
                 raise RuntimeError("thumbnail renderer returned an unpublished path")
@@ -205,7 +222,7 @@ def run_export_thumbnail_regeneration(
                     "thumbnail_filename": output_path.name,
                     "thumbnail_status": "ready",
                     "thumbnail_source_time": round(result.source_timestamp, 3),
-                    "thumbnail_source_time_basis": "source_video_absolute",
+                    "thumbnail_source_time_basis": "character_asset" if selected_asset else "source_video_absolute",
                     "thumbnail_width": result.width,
                     "thumbnail_height": result.height,
                     "thumbnail_template_version": "character_normal_v1" if character_style is not None else "raden_normal_v4",
@@ -215,7 +232,8 @@ def run_export_thumbnail_regeneration(
                     "thumbnail_advance_frame": False,
                     "thumbnail_select_with_codex": False,
                     "thumbnail_frame_selection_source": (
-                        "codex" if payload.get("thumbnail_select_with_codex")
+                        "character_asset" if selected_asset
+                        else "codex" if payload.get("thumbnail_select_with_codex")
                         else "face" if payload.get("thumbnail_advance_frame")
                         else latest.get("thumbnail_frame_selection_source")
                     ),
@@ -224,6 +242,11 @@ def run_export_thumbnail_regeneration(
                     "thumbnail_text_styles": resolve_thumbnail_text_styles(
                         character_style, payload.get("thumbnail_text_styles")
                     ).model_dump(mode="json", by_alias=True),
+                    **({**selected_asset.metadata(),
+                        "thumbnail_warnings": selected_asset.warnings + asset_info.get("warnings", []),
+                        "thumbnail_character_asset_upscale": asset_info.get("upscale"),
+                        "thumbnail_character_asset_used_at": utc_now().isoformat(),
+                    } if selected_asset else video_subject_metadata()),
                 },
             )
         except Exception as exc:

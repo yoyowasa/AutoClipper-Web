@@ -26,6 +26,7 @@ def test_openapi_paths_and_methods_match_before_clip_plan_split() -> None:
         "/api/character-asset-candidates/{candidate_id}/image": ["get"],
         "/api/character-presets/{preset_id}/asset-counts": ["get"],
         "/api/character-presets/{preset_id}": ["delete"],
+        "/api/exports/{export_id}/thumbnail/assets": ["get"],
     }
 
 

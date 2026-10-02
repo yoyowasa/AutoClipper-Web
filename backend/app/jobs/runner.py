@@ -3112,6 +3112,7 @@ def run_autoclipper_job(
                 normal_renderer=deps.normal_thumbnail_renderer,
                 short_renderer=deps.short_thumbnail_renderer,
                 character_style=settings.get("normalThumbnailStyle"),
+                db=db, job=job, paths=storage_paths,
             )
             if guarded_content_auto_passed:
                 review_document = mark_review_completed(review_document)
@@ -3745,6 +3746,7 @@ def run_subtitle_review_render(
                 normal_renderer=deps.normal_thumbnail_renderer,
                 short_renderer=deps.short_thumbnail_renderer,
                 character_style=settings.get("normalThumbnailStyle"),
+                db=db, job=job, paths=storage_paths,
             )
             if rerender_staging_paths is not None:
                 exports, _render_failures_path, rerender_promotion = _promote_subtitle_rerender(

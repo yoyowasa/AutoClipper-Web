@@ -43,6 +43,7 @@ class _BridgeEnvelope(BaseModel):
     schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
     task: Literal[
         "title_hook_suggestions", "thumbnail_copy_suggestions", "thumbnail_frame_rank", "character_asset_classify",
+        "thumbnail_emotion_select",
     ] = "title_hook_suggestions"
     request_id: str = Field(pattern=r"^[0-9a-f]{32}$", alias="requestId")
     prompt: str = Field(min_length=1)

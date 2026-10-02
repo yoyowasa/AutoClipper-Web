@@ -50,10 +50,20 @@ export async function thumbnailCopyRequest(exportId: string, generate = false): 
     { method: generate ? "POST" : "GET", cache: "no-store" }));
 }
 
-export async function prepareThumbnailPreview(exportId: string, signal: AbortSignal, force = false): Promise<{
+export async function getThumbnailAssets(exportId: string): Promise<import("./characterAssets").CharacterAssetList> {
+  return parseJsonResponse(await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/assets`, { cache: "no-store" }));
+}
+
+export async function prepareThumbnailPreview(exportId: string, signal: AbortSignal, force = false,
+  selection?: import("./types").ThumbnailSubjectSelection): Promise<{
   state: "queued" | "ready" | "failed"; frameKey: string; error?: string;
 }> {
-  return parseJsonResponse(await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/preview/prepare?force=${force}`, {
+  const query = new URLSearchParams({ force: String(force) });
+  if (selection) {
+    query.set("subjectSource", selection.subjectSource);
+    if (selection.characterAssetId) query.set("characterAssetId", selection.characterAssetId);
+  }
+  return parseJsonResponse(await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/preview/prepare?${query}`, {
     method: "POST", signal, cache: "no-store",
   }));
 }
@@ -62,13 +72,16 @@ export async function renderThumbnailPreview(exportId: string, draft: {
   frameKey: string; text: import("./types").ThumbnailCopyText; textStyles: import("./types").ThumbnailTextStyles;
   design: import("./types").NormalThumbnailStyle["design"];
   subjectPlacement: import("./types").ThumbnailSubjectPlacement;
-}, signal: AbortSignal): Promise<{ blob: Blob; regions: import("./types").ThumbnailTextRegions }> {
+  subjectSource?: "video" | "asset";
+  characterAssetId?: string;
+}, signal: AbortSignal): Promise<{ blob: Blob; regions: import("./types").ThumbnailTextRegions; warnings: string[] }> {
   const response = await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/preview`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft), signal, cache: "no-store",
   });
   if (!response.ok) await parseJsonResponse(response);
   const regions = JSON.parse(response.headers.get("X-Thumbnail-Text-Regions") || "{}") as import("./types").ThumbnailTextRegions;
-  return { blob: await response.blob(), regions };
+  const warnings = JSON.parse(response.headers.get("X-Thumbnail-Warnings") || "[]") as string[];
+  return { blob: await response.blob(), regions, warnings };
 }
 
 export async function editSubtitleStructure(
@@ -584,6 +597,9 @@ export async function regenerateExportThumbnail(
     text?: import("./types").ThumbnailCopyText;
     design?: import("./types").NormalThumbnailStyle["design"];
     subjectPlacement?: import("./types").ThumbnailSubjectPlacement;
+    subjectSource?: "video" | "asset";
+    characterAssetId?: string;
+    emotion?: import("./characterAssets").CharacterEmotion;
   }
 ): Promise<ThumbnailRegenerationResponse> {
   const response = await fetch(

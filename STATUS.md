@@ -10662,3 +10662,15 @@ pip check: pass
 - ローカル検証: Python 3.11.9でpython -m pytestは1369 passed・2 skipped（123.22秒、追加10件）。全件実行の前後で稼働DBのmtime_ns・サイズ・SHA-256が一致し、ファイル不変を確認。2件のskipはホストにffmpeg/ffprobeがないための動画統合テスト。frontend全21テスト・lint・typecheck・build成功、git diff --check成功。
 - lint・CI: 主フォルダのruff check . ../launcher ../scriptsはGit管理外scripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。このファイルは変更しない。PR対象のクリーンコピーで同じruffコマンドは成功。PR #108の実装コミット8e4421eのCI（run 36953253092）はPython 3.11・3.12・frontendがすべて成功。両Python版で1367 passed・4 skipped（Windows専用テスト）となり、FFmpeg統合テストも実行して成功した。
 - 運用: テストだけの変更のためDockerへの反映・コンテナの再build・Codex中継の再起動は行わない。task-174のサムネ適用は今回に含めない。
+
+## 2026-10-02 JST 表情素材を通常動画のサムネに適用（task-174）
+
+- 目的・変更ファイル: 作成済みcodex/task-174-character-asset-thumbnailsへtask-176マージ後のmain 0486456を取り込み、通常サムネに登録済み表情素材を使う。backendのapi/exports.py・api/jobs.py・schemas.py、jobs/thumbnail_character_assets.py（新規）・thumbnails.py・thumbnail_regeneration.py・thumbnail_preview.py・runner.py、render/character_asset_layout.py（新規）・render_thumbnail.py、scoring/thumbnail_emotion.py（新規）・Codex依頼の共通型、main.pyの公開ヘッダー、launcher/codex_bridge.py、frontendの結果画面・サムネ編集/プレビュー・ThumbnailAssetPicker（新規）・API/型、関連テストと本記録を変更。
+- 表情の選択: 新しい仕事thumbnail_emotion_selectを追加。サムネ文言・公開動画タイトル・選んだ場面に近い字幕・登録済み表情の一覧だけを渡し、画像は送らない。中継側でもこの仕事への画像添付を拒否する。返答emotion/reasonを検証し、未登録の表情を採用しない。表情が1種類ならCodexを呼ばずその表情を使う。利用不可・失敗・不正な返答の場合は登録済み順（喜・怒・哀・楽）の先頭を仮に使い、「表情を自動で選べませんでした（仮に◯を使用）」を結果画面と編集欄に表示する。
+- 素材と履歴: 選んだ表情の素材を、同じキャラの書き出しメタデータに保存した使用日時から、未使用→最も古い使用順に選ぶ。同じ書き出しバッチ内の未公開素材も数え、連続して同じ素材を選ばない。asset_id・キャラID・emotion・理由・選択元（codex/single_emotion/fallback/manual）・使用日時・実拡大率・注意表示をメタデータへ保存。キャラIDの無い旧ジョブは設定名から照合する。素材が無ければ従来の動画のコマを使い、Shortsのサムネは変更しない。
+- 構図: 処理済みPNGのface_box（正規化した左上x/y・w/h）を使い、顔の中心を人物枠の上から30%へ配置。顔の中心から顔高2.75倍下を胸元の切り出し下端とし、画像の下端を越えないようにする。素材には動画用min_crop_height_ratio・再度の顔検出・切り抜きを適用しない。顔座標なしは画像の上から35%・左右中央を仮の顔中心とする。実拡大率が2倍を超える場合は「素材の解像度が足りず粗くなります」をプレビューと結果に表示する。幅320×高さ430pxの素材・720px高の人物枠では、テストの顔座標で約1.674倍となり警告なし。らでん・宙科の双方で確認。
+- 編集: 「素材 / 動画のコマ」、登録済み表情の切り替え、素材一覧からの直接選択を追加。未登録表情は選択不可。大きさ・左右・上下は素材にも反映し、プレビューと保存JPEGは同じ配置処理を使う。素材のプレビュー準備はRQでPNGをキャッシュし、HTTP内で動画を処理しない。動画のコマへ戻すと従来の場面選択を使い、素材専用メタデータと注意を消す。生成したMP4は変更しない。
+- ローカル検証: Python 3.11.9のpython -m pytestは1388 passed・2 skipped（119.62秒）。素材あり/なしの自動生成、1表情でCodex省略、登録済み表情だけの採用、失敗時の仮選択と結果APIの注意、近くの字幕と画像なしの依頼、履歴と未公開バッチの素材交替、両テンプレの胸元配置・顔なしの仮配置・2倍以下/超過、プレビューと保存JPEGの一致、手動選択・動画へ戻す操作・所有者/表情違いの422・キュー失敗時の復元・中継契約を確認。今回15ケース追加。2件はホストにffmpeg/ffprobeがないため動画統合テストをskip。frontend全22テスト・lint・typecheck・build成功、git diff --check成功。
+- DBとlint: task-176の隔離と安全装置を使い、全件実行前後で稼働DBの更新時刻（2026-10-02 01:44:02.0370453 UTC）とサイズ446464 bytesが一致。SHA-256の取得は他プロセスによるファイル使用で失敗したため、内容ハッシュの一致は未確認。主フォルダのruff check . ../launcher ../scriptsはGit管理外scripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。このファイルは変更せず、PR対象のクリーンコピーで同じruffコマンドが成功。
+- Codex中継・運用: 受け付ける仕事・返答schemaの固定ハッシュを更新したため、ホスト側のCodex中継の再起動が必要。今回Dockerへの反映・再build・中継の再起動は行わず、task-175と合わせた後の反映指示を待つ。
+- 未確認: 実キャラ素材・実動画での見た目、実Codexによる表情選択、ブラウザでの実操作、稼働コンテナでの生成は未実施。現時点の検証は隔離DB・生成したテストPNG・API/RQ・同一JPEGの比較・画面/API契約・ビルドまで。PRのCI（Python 3.11/3.12・frontend）はこれから確認する。

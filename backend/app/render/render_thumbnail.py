@@ -15,6 +15,7 @@ from app.render.anime_subject import Face, anime_character_mask, anime_matte_pat
 from app.thumbnail_style import NormalThumbnailStyle, ThumbnailTextStyles
 from app.render.thumbnail_fonts import thumbnail_font_path
 from app.short_banners import banner_asset_path
+from app.render.character_asset_layout import place_character_asset
 
 
 THUMBNAIL_TEMPLATE_DIR = (
@@ -489,6 +490,9 @@ def _compose_normal_thumbnail(
     text_styles: ThumbnailTextStyles | None = None,
     anime_subject: tuple[Face, Image.Image] | None = None,
     text_regions: dict[str, dict[str, int]] | None = None,
+    character_asset: bool = False,
+    character_asset_face_box: dict[str, float] | None = None,
+    asset_render_info: dict[str, Any] | None = None,
 ) -> Image.Image:
     canvas_config = template["canvas"]
     frame_config = template["frame"]
@@ -523,7 +527,13 @@ def _compose_normal_thumbnail(
         if subject_anchor_x is None
         else min(1.0, max(0.0, float(subject_anchor_x)))
     )
-    if anime_subject is not None:
+    if character_asset:
+        placement = place_character_asset(
+            frame, frame_config, character_asset_face_box, scale=subject_scale,
+            offset_x=subject_offset_x, offset_y=subject_offset_y, info=asset_render_info,
+        )
+        canvas.alpha_composite(placement, (frame_x, frame_y))
+    elif anime_subject is not None:
         face, subject_mask = anime_subject
         bounds = subject_mask.getbbox()
         if bounds is not None:
@@ -697,6 +707,9 @@ def render_normal_thumbnail(
     text_styles: dict[str, Any] | None = None,
     source_frame_path: str | Path | None = None,
     text_regions: dict[str, dict[str, int]] | None = None,
+    character_asset_path: str | Path | None = None,
+    character_asset_face_box: dict[str, float] | None = None,
+    asset_render_info: dict[str, Any] | None = None,
 ) -> ThumbnailRenderResult:
     """Render a 1280x720 normal thumbnail.
 
@@ -754,7 +767,9 @@ def render_normal_thumbnail(
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="autoclipper-thumbnail-") as temp_dir:
         frame_path = Path(temp_dir) / "frame.jpg"
-        if source_frame_path is not None:
+        if character_asset_path is not None:
+            frame_path = Path(character_asset_path)
+        elif source_frame_path is not None:
             # Live previews reuse a worker-extracted frame; no video work here.
             frame_path = Path(source_frame_path)
         else:
@@ -765,7 +780,10 @@ def render_normal_thumbnail(
                 ffmpeg_bin=ffmpeg_bin,
                 command_runner=command_runner,
             )
-        anime_subject = _anime_subject_for_frame(frame_path) if template.get("subject_mode") == "anime_cutout" else None
+        anime_subject = (
+            _anime_subject_for_frame(frame_path)
+            if character_asset_path is None and template.get("subject_mode") == "anime_cutout" else None
+        )
         with Image.open(frame_path) as source_frame:
             if background_image_path is not None:
                 with Image.open(background_image_path) as source_background:
@@ -785,6 +803,9 @@ def render_normal_thumbnail(
                         text_styles=resolved_text_styles,
                         anime_subject=anime_subject,
                         text_regions=text_regions,
+                        character_asset=character_asset_path is not None,
+                        character_asset_face_box=character_asset_face_box,
+                        asset_render_info=asset_render_info,
                     )
             else:
                 composed = _compose_normal_thumbnail(
@@ -803,6 +824,9 @@ def render_normal_thumbnail(
                     text_styles=resolved_text_styles,
                     anime_subject=anime_subject,
                     text_regions=text_regions,
+                    character_asset=character_asset_path is not None,
+                    character_asset_face_box=character_asset_face_box,
+                    asset_render_info=asset_render_info,
                 )
     composed.save(output, format="JPEG", quality=94, optimize=True, subsampling=0)
     return ThumbnailRenderResult(

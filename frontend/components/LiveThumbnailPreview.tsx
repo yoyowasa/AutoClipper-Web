@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { prepareThumbnailPreview, renderThumbnailPreview, toBrowserApiUrl } from "../lib/api";
 import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailSubjectPlacement, ThumbnailTextRegions, ThumbnailTextStyles } from "../lib/types";
 
-export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles; design: NormalThumbnailStyle["design"]; subjectPlacement: ThumbnailSubjectPlacement };
+export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles; design: NormalThumbnailStyle["design"]; subjectPlacement: ThumbnailSubjectPlacement; subjectSource?: "video" | "asset"; characterAssetId?: string };
 
 type TextRole = keyof ThumbnailTextStyles;
 type Drag = { role: TextRole; pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number; dx: number; dy: number };
@@ -56,14 +56,16 @@ export function LiveThumbnailPreview({ item, draft, active, onRegionsChange, onM
   onMoveText: (role: TextRole, dx: number, dy: number) => void;
 }) {
   const [source, setSource] = useState<{ key: string; frameKey: string } | null>(null);
-  const [image, setImage] = useState<{ url: string; key: string; regions: ThumbnailTextRegions } | null>(null);
+  const [image, setImage] = useState<{ url: string; key: string; regions: ThumbnailTextRegions; warnings: string[] } | null>(null);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
   const objectUrl = useRef("");
   const saving = item.thumbnailStatus === "generating";
-  const sourceContext = JSON.stringify([item.id, item.thumbnailRenderRevision, saving, retry]);
+  const subjectSource = draft.subjectSource ?? "video";
+  const characterAssetId = draft.characterAssetId;
+  const sourceContext = JSON.stringify([item.id, item.thumbnailRenderRevision, saving, retry, subjectSource, characterAssetId]);
   const frameKey = source?.key === sourceContext ? source.frameKey : "";
-  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles, design: draft.design, subjectPlacement: draft.subjectPlacement });
+  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles, design: draft.design, subjectPlacement: draft.subjectPlacement, subjectSource, characterAssetId });
 
   useEffect(() => { onRegionsChange(null); }, [requestKey, onRegionsChange]);
 
@@ -75,7 +77,7 @@ export function LiveThumbnailPreview({ item, draft, active, onRegionsChange, onM
     const started = Date.now();
     const prepare = async (force: boolean) => {
       try {
-        const state = await prepareThumbnailPreview(item.id, controller.signal, force);
+        const state = await prepareThumbnailPreview(item.id, controller.signal, force, { subjectSource, characterAssetId });
         if (cancelled) return;
         if (state.state === "ready") { setSource({ key: sourceContext, frameKey: state.frameKey }); setError(""); }
         else if (state.state === "failed") setError(state.error || "プレビューを準備できませんでした。");
@@ -87,7 +89,7 @@ export function LiveThumbnailPreview({ item, draft, active, onRegionsChange, onM
     };
     void prepare(retry > 0);
     return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
-  }, [active, item.id, item.thumbnailRenderRevision, saving, retry, sourceContext]);
+  }, [active, item.id, item.thumbnailRenderRevision, saving, retry, sourceContext, subjectSource, characterAssetId]);
 
   useEffect(() => {
     if (!active || saving || !frameKey) return;
@@ -95,12 +97,12 @@ export function LiveThumbnailPreview({ item, draft, active, onRegionsChange, onM
     let cancelled = false;
     const timer = setTimeout(async () => {
       try {
-        const { blob, regions } = await renderThumbnailPreview(item.id, JSON.parse(requestKey), controller.signal);
+        const { blob, regions, warnings } = await renderThumbnailPreview(item.id, JSON.parse(requestKey), controller.signal);
         if (cancelled) return;
         const url = URL.createObjectURL(blob);
         if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
         objectUrl.current = url;
-        setImage({ url, key: requestKey, regions }); onRegionsChange(regions); setError("");
+        setImage({ url, key: requestKey, regions, warnings }); onRegionsChange(regions); setError("");
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : "プレビューを描画できませんでした。");
       }
@@ -125,6 +127,7 @@ export function LiveThumbnailPreview({ item, draft, active, onRegionsChange, onM
       : <div className="aspect-video bg-neutral-950" />}
     <div className="shrink-0 border-t border-neutral-300 px-3 py-2 text-xs" role="status" aria-live="polite">
       <p className="font-semibold">{saving ? "サムネを保存中…" : error ? "プレビューを更新できませんでした" : !frameKey ? "場面を読み込み中…" : current ? "編集中のプレビュー" : "変更をプレビューへ反映中…"}</p>
+      {current && image?.warnings.map(warning => <p key={warning} className="mt-1 text-amber-800">{warning}</p>)}
       {error ? <><p className="mt-1 text-red-700">{error}</p><button type="button" onClick={() => setRetry(v => v + 1)}
         className="mt-2 min-h-9 border border-neutral-400 bg-white px-3">プレビューを再読み込み</button></>
         : <p className="mt-1 text-neutral-600">文言・書体・人物の大きさと位置は自動反映。確定するときだけ保存してください。</p>}

@@ -103,7 +103,8 @@ export function ResultVideoCard({
     cropMode: "standard" | "close",
     textStyles?: ThumbnailTextStyles, text?: ThumbnailCopyText, advanceFrame?: boolean,
     design?: import("../lib/types").NormalThumbnailStyle["design"], selectWithCodex?: boolean,
-    placement?: import("../lib/types").ThumbnailSubjectPlacement
+    placement?: import("../lib/types").ThumbnailSubjectPlacement,
+    selection?: import("../lib/types").ThumbnailSubjectSelection
   ) => void;
   isReediting?: boolean;
   isRegeneratingThumbnail?: boolean;
@@ -229,9 +230,10 @@ thumbnailIsDisplayable && thumbnailUrl ? (
           {thumbnailPreview}
           {item.type === "normal" && onRegenerateThumbnail ? (
             <ResultThumbnailWorkspace item={item} busy={isRegeneratingThumbnail}
-              onRender={(crop, styles, text, advance, design, selectWithCodex, placement) =>
-                onRegenerateThumbnail(item, crop, styles, text, advance, design, selectWithCodex, placement)} />
+              onRender={(crop, styles, text, advance, design, selectWithCodex, placement, selection) =>
+                onRegenerateThumbnail(item, crop, styles, text, advance, design, selectWithCodex, placement, selection)} />
           ) : null}
+          {item.thumbnailWarnings?.map(warning => <p key={warning} role="status" className="text-xs text-amber-800">{warning}</p>)}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
             <span>title: {readableToken(item.titleSource)}</span>
             <span>score source: {scoreSource}</span>
