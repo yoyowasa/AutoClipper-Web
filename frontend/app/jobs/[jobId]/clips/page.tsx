@@ -690,6 +690,16 @@ export default function ClipPlanReviewPage() {
     );
   }
 
+  if (job?.status === "completed") {
+    return (
+      <main className="min-h-screen bg-[#f7f7f4] p-5 text-neutral-950">
+        <h1 className="text-xl font-semibold">完成済み</h1>
+        <p className="my-3">候補確認用のプレビューは削除済みです。完成動画は結果画面で確認できます。</p>
+        <Link className="underline" href={`/results/${jobId}`}>結果画面へ</Link>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#f7f7f4] text-neutral-950">
       <header className="border-b border-neutral-300 bg-white px-5 py-4">

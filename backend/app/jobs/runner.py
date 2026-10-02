@@ -1,3 +1,4 @@
+from app.storage.completed_previews import prune_job_previews_after_completion
 from app.clip_allocation import is_ai_allocation, allocate_selection, allocation_summary, candidate_pool_counts
 from app.jobs.character_asset_harvest_state import enqueue_completed_job_harvest
 import json
@@ -3194,6 +3195,7 @@ def run_autoclipper_job(
 
             _set_status(db, job, "completed")
             visited_statuses.append("completed")
+            prune_job_previews_after_completion(db, job, storage_paths)
             enqueue_completed_job_harvest(db, job, storage_paths)
         except PipelineExpectedError as exc:
             _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
@@ -3227,6 +3229,8 @@ def run_subtitle_review_preview(
         job = db.get(Job, job_id)
         if job is None:
             raise ValueError(f"job not found: {job_id}")
+        if job.status == "completed":
+            return ["completed"]
         video = db.get(Video, job.video_id)
         if video is None:
             raise ValueError(f"video not found for job: {job_id}")
@@ -3855,6 +3859,7 @@ def run_subtitle_review_render(
 
                 _set_status(db, job, "completed")
             visited_statuses.append("completed")
+            prune_job_previews_after_completion(db, job, storage_paths)
             enqueue_completed_job_harvest(db, job, storage_paths)
         except PipelineExpectedError as exc:
             if pending_rerender_zip is not None:

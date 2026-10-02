@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import Response, FileResponse
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -144,6 +144,7 @@ from app.video.heatmap import HeatmapSidecarError, parse_heatmap_sidecar
 
 
 from app.api._job_common import (
+    _completed_clip_video,
     _enqueue_subtitle_review_previews,
     _evaluate_and_write_content_quality_gate,
     _get_job_or_404,
@@ -1756,8 +1757,10 @@ def get_job_editor_video(
     job_id: str,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
-) -> FileResponse:
-    _get_job_or_404(db, job_id)
+) -> Response:
+    job = _get_job_or_404(db, job_id)
+    if job.status == "completed":
+        return _completed_clip_video(db, job, paths)
     preview_path = manual_source_proxy_path(paths.job_outputs(job_id))
     if not preview_path.is_file():
         raise HTTPException(
@@ -1817,6 +1820,18 @@ def get_subtitle_review(
                 document,
                 paths,
             )
+            if job.status == "completed":
+                for clip in document.clips:
+                    clip.live_preview_video_url = None
+                    export = db.scalar(select(ExportItem).where(
+                        ExportItem.job_id == job.id, ExportItem.candidate_id == clip.id,
+                    ))
+                    if export is not None and paths.resolve_stored_file(export.video_path).is_file():
+                        clip.preview_state = "ready"
+                        clip.preview_error = None
+                        clip.preview_video_url = f"/api/jobs/{job.id}/subtitle-review/clips/{clip.id}/preview-video"
+                    elif not subtitle_review_preview_path(output_dir, clip.id).is_file():
+                        clip.preview_video_url = None
     document = _enqueue_subtitle_review_previews(
         job_id=job.id,
         document=document,
@@ -2134,8 +2149,16 @@ def get_subtitle_review_preview_video(
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
     enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
-) -> FileResponse:
+) -> Response:
     job = _get_job_or_404(db, job_id)
+    if job.status == "completed":
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if not any(clip.id == clip_id for clip in document.clips):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "subtitle review clip not found")
+        legacy = subtitle_review_preview_path(paths.outputs / job_id, clip_id)
+        if spec_hash is None and legacy.is_file():
+            return FileResponse(legacy, media_type="video/mp4")
+        return _completed_clip_video(db, job, paths, clip_id)
     video = db.get(Video, job.video_id)
     if video is None:
         raise HTTPException(
@@ -2227,8 +2250,13 @@ def get_subtitle_review_live_preview_video(
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
     enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
-) -> FileResponse:
+) -> Response:
     job = _get_job_or_404(db, job_id)
+    if job.status == "completed":
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if not any(clip.id == clip_id for clip in document.clips):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "subtitle review clip not found")
+        return _completed_clip_video(db, job, paths, clip_id)
     video = db.get(Video, job.video_id)
     if video is None:
         raise HTTPException(

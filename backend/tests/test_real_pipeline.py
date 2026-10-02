@@ -268,7 +268,11 @@ def _candidate(candidate_id: str, candidate_type: str, start: float, end: float,
 
 
 @pytest.mark.parametrize("mode", ["low_cost", "high_quality"])
-def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient, mode: str) -> None:
+@pytest.mark.parametrize("cleanup_failure", [False, True])
+def test_real_pipeline_produces_results_metadata_and_zip(
+    client: TestClient, mode: str, cleanup_failure: bool, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.storage.completed_previews as previews
     media = b"fake video bytes"
     sidecar = json.dumps(
         {
@@ -318,6 +322,12 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient, mod
         },
     ).json()
     storage = app.dependency_overrides[get_storage_paths]()
+    preview_dir, proxy = previews.completed_preview_paths(storage, created["jobId"])
+    preview_dir.mkdir(parents=True)
+    (preview_dir / "preview.mp4").write_bytes(b"temporary preview")
+    proxy.write_bytes(b"temporary proxy")
+    if cleanup_failure:
+        monkeypatch.setattr(previews, "_delete_path", lambda *_args: (0, "permission denied"))
 
     def fake_extract(_input_path: str | Path, output_path: str | Path) -> Path:
         Path(output_path).write_bytes(b"fake wav")
@@ -365,6 +375,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(client: TestClient, mod
     )
 
     assert visited_statuses == SUCCESS_STATUSES[1:]
+    assert preview_dir.exists() is cleanup_failure and proxy.exists() is cleanup_failure
     assert not (storage.temp / created["jobId"]).exists()
 
     status_response = client.get(f"/api/jobs/{created['jobId']}")
@@ -1723,6 +1734,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         "completed",
     ]
     assert harvest_completions == ["completed"]
+    assert not (storage.outputs / created["jobId"] / "subtitle_review_previews").exists()
     assert len(short_render_kwargs) == preview_short_render_count + 1
     assert Path(short_render_kwargs[-1]["top_banner_path"]).name == "short_top_banner.png"
     assert Path(short_render_kwargs[-1]["bottom_banner_path"]).name == "short_bottom_banner.png"
@@ -1755,6 +1767,9 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert reopened_review["confirmedClipCount"] == 0
     assert all(not clip["confirmed"] for clip in reopened_review["clips"])
     assert client.get(f"/api/jobs/{created['jobId']}").json()["status"] == ("awaiting_subtitle_review")
+
+    # Completed previews were pruned. A persisted legacy reopen must rebuild them.
+    reopened_review = render_queued_previews(reopened_review)
 
     reopened_short = next(clip for clip in reopened_review["clips"] if clip["type"] == "short")
     retitled = client.post(
@@ -1821,6 +1836,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         dependencies=dependencies,
     )
     assert rerender_statuses[-1] == "completed"
+    assert not (storage.outputs / created["jobId"] / "subtitle_review_previews").exists()
 
     rerendered_results = client.get(f"/api/jobs/{created['jobId']}/results").json()
     assert rerendered_results["canReopenForEditing"] is True
