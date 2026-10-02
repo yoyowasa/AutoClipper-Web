@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { getThumbnailAssets } from "../lib/api";
-import { CHARACTER_EMOTIONS, characterAssetImageUrl, type CharacterAssetList } from "../lib/characterAssets";
+import { CHARACTER_EMOTIONS, characterAssetImageUrl, visibleCharacterAssetWarnings, type CharacterAssetList } from "../lib/characterAssets";
 import type { ThumbnailSubjectSelection } from "../lib/types";
 
 export function ThumbnailAssetPicker({ exportId, value, onChange, disabled }: {
@@ -52,7 +52,7 @@ export function ThumbnailAssetPicker({ exportId, value, onChange, disabled }: {
         </button>)}
       </div>
       {assets && !selected && <p role="alert" className="mt-2 text-xs text-red-700">素材が見つかりません。表情と素材を選び直してください。</p>}
-      {selected?.warnings.map(warning => <p key={warning} className="mt-2 text-xs text-amber-800">{warning}</p>)}
+      {visibleCharacterAssetWarnings(selected?.warnings).map(warning => <p key={warning} className="mt-2 text-xs text-amber-800">{warning}</p>)}
     </>}
   </fieldset>;
 }

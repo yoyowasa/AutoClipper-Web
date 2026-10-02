@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { thumbnailCopyRequest } from "../lib/api";
+import { visibleCharacterAssetWarnings } from "../lib/characterAssets";
 import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailCopyState, ThumbnailSubjectPlacement, ThumbnailTextRegions, ThumbnailTextStyles } from "../lib/types";
 import { ThumbnailTextStyleEditor } from "./ThumbnailTextStyleEditor";
 import type { ThumbnailDraft } from "./LiveThumbnailPreview";
@@ -117,7 +118,7 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, sty
     <div aria-label="サムネの書式編集" tabIndex={0} className="min-h-0 min-w-0 xl:overflow-y-auto xl:overscroll-contain">
     <ThumbnailAssetPicker exportId={item.id} value={subject} onChange={setSubject} disabled={locked} />
     {subject.subjectSource === "asset" && subject.characterAssetId === item.thumbnailCharacterAssetId && <>
-      {item.thumbnailWarnings?.filter(warning => warning !== "素材の解像度が足りず粗くなります")
+      {visibleCharacterAssetWarnings(item.thumbnailWarnings).filter(warning => warning !== "素材の解像度が足りず粗くなります")
         .map(warning => <p key={warning} role="status" className="mt-2 text-xs text-amber-800">{warning}</p>)}
       {item.thumbnailEmotionReason && <p className="mt-2 text-xs text-neutral-600">表情の選択理由: {item.thumbnailEmotionReason}</p>}
     </>}
@@ -137,7 +138,7 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, sty
     </fieldset>
     <fieldset disabled={locked} className="mt-3 min-w-0 border border-amber-300 bg-white p-3">
       <legend className="px-1 text-xs font-bold">人物の画角・位置</legend>
-      <p className="text-xs text-neutral-600">{subject.subjectSource === "asset" ? "素材は顔を基準に胸から上を配置します。顔を検出できなかった素材も、大きさ・左右・上下で調整できます。" : "宙科テンプレでは切り抜きモデル導入時に人物だけを配置します。未導入時やほかのテンプレでは元映像の表示範囲を調整します。"}左のプレビューと保存画像は同じ配置になります。</p>
+      <p className="text-xs text-neutral-600">{subject.subjectSource === "asset" ? "素材は画像全体を人物枠に収め、下端を揃えます。大きさ・左右・上下で調整できます。" : "宙科テンプレでは切り抜きモデル導入時に人物だけを配置します。未導入時やほかのテンプレでは元映像の表示範囲を調整します。"}左のプレビューと保存画像は同じ配置になります。</p>
       <div className="mt-2 grid gap-2">
         {([
           ["scale", "大きさ", 0.5, 1.5, 0.05, `${Math.round(placement.scale * 100)}%`],
