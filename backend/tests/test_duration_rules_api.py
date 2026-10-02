@@ -13,13 +13,13 @@ from app.models import Job, Video
 def editable_plan(api, *, manual=False, clip_type='normal', duration=30, short_max=75):
     job_id, output = seed_plan(api, normal_count=1, short_count=1, duration=duration, short_max=short_max)
     document = load_clip_plan(output / 'clip_plan.json')
-    document.source_duration = 1000
+    document.source_duration = 2000
     if manual:
         document.state = 'manual_editing'
         document.settings['workflowMode'] = 'manual'
     with next(app.dependency_overrides[get_db]()) as db:
         job = db.get(Job, job_id)
-        db.get(Video, job.video_id).duration = 1000
+        db.get(Video, job.video_id).duration = 2000
         if manual:
             job.status = 'awaiting_manual_edit'
             job.settings_json = {**job.settings_json, 'workflowMode': 'manual'}
@@ -33,7 +33,7 @@ def editable_plan(api, *, manual=False, clip_type='normal', duration=30, short_m
 
 
 @pytest.mark.parametrize('action', ['create', 'update', 'boundary'])
-@pytest.mark.parametrize('duration,valid', [(89, False), (90, True), (600, True), (601, False)])
+@pytest.mark.parametrize('duration,valid', [(89, False), (90, True), (600, True), (601, True), (1800, True), (1801, False)])
 def test_normal_adjustment_endpoints(client, action, duration, valid):  # noqa: F811
     job_id, output = editable_plan(client, manual=action != 'boundary')
     before = (output / 'clip_plan.json').read_bytes()
@@ -48,7 +48,7 @@ def test_normal_adjustment_endpoints(client, action, duration, valid):  # noqa: 
         response = client.patch(prefix + '/normal0/boundary', json={'start': 0, 'end': duration})
     assert response.status_code == ({'create': 201, 'update': 200, 'boundary': 202}[action] if valid else 422), response.text
     if not valid:
-        assert '通常切り抜きは90秒〜10分' in response.json()['detail']
+        assert ('90秒以上' if duration < 90 else '最長30分') in response.json()['detail']
         assert (output / 'clip_plan.json').read_bytes() == before
         assert queued == []
     elif action == 'boundary':
@@ -70,7 +70,7 @@ def test_short_adjustment_endpoints(client, action, duration, valid):  # noqa: F
     assert response.status_code == ({'create': 201, 'update': 200, 'boundary': 202}[action] if valid else 422), response.text
 
 
-@pytest.mark.parametrize('duration,valid', [(89, False), (90, True), (600, True), (601, False)])
+@pytest.mark.parametrize('duration,valid', [(89, False), (90, True), (600, True), (601, True), (1800, True), (1801, False)])
 def test_type_change_checks_target_normal_duration(client, duration, valid):  # noqa: F811
     job_id, output = editable_plan(client, clip_type='short', duration=duration)
     before = (output / 'clip_plan.json').read_bytes()
@@ -128,7 +128,8 @@ def test_get_and_retry_accept_persisted_out_of_range_settings(client):  # noqa: 
         assert all(source.settings_json[key] == child.settings_json[key] == value for key, value in legacy.items())
 
 
-def test_boundary_reedit_from_subtitles_uses_same_duration_rules(client):  # noqa: F811
+@pytest.mark.parametrize('duration', [90, 1800])
+def test_boundary_reedit_from_subtitles_uses_same_duration_rules(client, duration):  # noqa: F811
     from app.candidates.select_candidates import CandidateSelection
     from app.jobs.subtitle_review import build_subtitle_review, write_subtitle_review
     job_id, output = editable_plan(client)
@@ -147,5 +148,6 @@ def test_boundary_reedit_from_subtitles_uses_same_duration_rules(client):  # noq
     app.dependency_overrides[get_enqueue_clip_plan_boundary_update] = lambda: lambda *args: queued.append(args)
     url = f'/api/jobs/{job_id}/clip-plan/clips/normal0/boundary'
     assert client.patch(url, json={'start': 0, 'end': 89}).status_code == 422
-    assert client.patch(url, json={'start': 0, 'end': 90}).status_code == 202
+    assert client.patch(url, json={'start': 0, 'end': 1801}).status_code == 422
+    assert client.patch(url, json={'start': 0, 'end': duration}).status_code == 202
     assert len(queued) == 1

@@ -1,5 +1,5 @@
 "use client";
-import { effectiveShortMax, validateClipDuration } from "../lib/durationRules";
+import { effectiveShortMax, validateClipDuration, longformLabel } from "../lib/durationRules";
 
 import { useEffect, useRef, useState } from "react";
 
@@ -211,6 +211,7 @@ function ManualRangeGroup({
               </div>
               <span className="min-w-16 pt-2 text-right text-xs text-neutral-500">
                 {duration ? `長さ ${duration}` : "未入力"}
+                {range.startSeconds !== null && range.endSeconds !== null && longformLabel(type, range.endSeconds - range.startSeconds)}
               </span>
               {durationError ? <p className="text-xs text-red-700 sm:col-span-4" role="alert">{durationError}</p> : null}
             </div>

@@ -614,6 +614,7 @@ export type ClipPlanClip = {
   ruleScore: number | null;
   aiScore: number | null;
   selectionReason: string | null;
+  longformReason?: string;
   boundaryRefined: boolean;
   recommendedStart: number | null;
   recommendedEnd: number | null;

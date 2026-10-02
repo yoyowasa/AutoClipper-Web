@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.db import SessionLocal
 from app.jobs.subtitle_review_preview import subtitle_review_document_lock
+from app.jobs.timeouts import media_timeout
 from app.models import ExportItem, Job, Video
 from app.render.anime_subject import detect_anime_face
 from app.render.render_thumbnail import extract_thumbnail_frame
@@ -172,7 +173,8 @@ def ensure_thumbnail_candidates(export, source, output_dir, *, extractor=None):
     from app.jobs.thumbnails import read_export_metadata, write_export_metadata
     directory = candidate_directory(Path(output_dir), export.id)
     # Polling HTTP requests lock only the short state transition, never the scan.
-    with subtitle_review_document_lock(directory / "scan", timeout_seconds=600, stale_seconds=900):
+    scan_budget = media_timeout(export.duration, minimum=600, factor=3)
+    with subtitle_review_document_lock(directory / "scan", timeout_seconds=scan_budget, stale_seconds=scan_budget + 300):
         payload = read_export_metadata(export)
         if payload.get("thumbnail_candidates_version") == 1:
             return payload.get("thumbnail_frame_candidates", [])

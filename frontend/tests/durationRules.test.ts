@@ -9,7 +9,7 @@ const fixture = JSON.parse(fs.readFileSync(path.resolve(path.dirname(fileURLToPa
 for (const [key, value] of Object.entries(fixture)) {
   assert.equal(rules[key as keyof typeof rules], value);
 }
-for (const [duration, valid] of [[89,false],[90,true],[600,true],[601,false]] as const) {
+for (const [duration, valid] of [[89,false],[90,true],[600,true],[601,true],[1800,true],[1801,false]] as const) {
   assert.equal(rules.validateClipDuration("normal", duration, 75) === null, valid);
 }
 assert.equal(rules.validateClipDuration("short", 0.1, 1), null);
@@ -33,3 +33,28 @@ assert.equal(halfSecond.shortClipTimeRanges[0].endSeconds, 0.5);
 assert.equal(manualRangeValidationError(halfSecond), null);
 assert.match(manualRangeValidationError({...settings, normalClipCount:1,
   normalClipTimeRanges:[{startSeconds:0, endSeconds:89}]})!, /90秒/);
+
+assert.equal(rules.longformLabel("normal", 600), null);
+assert.equal(rules.longformLabel("normal", 601), "長尺（10分超）");
+assert.equal(rules.longformLabel("short", 601), null);
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { ClipBoundaryEditor } from "../components/ClipBoundaryEditor";
+import type { ClipPlanClip } from "../lib/types";
+const longClip: ClipPlanClip = {
+  id: "long", type: "normal", title: "紹介", start: 0, end: 1800, duration: 1800, previewVideoUrl: null,
+  transcriptExcerpt: "", finalScore: null, ruleScore: null, aiScore: null, selectionReason: null,
+  boundaryRefined: false, recommendedStart: 0, recommendedEnd: 1800, manuallyAdjusted: false,
+  hookSceneStart: null, hookSceneEnd: null,
+};
+const editor = (end: number) => renderToStaticMarkup(createElement(ClipBoundaryEditor, {
+  clip: {...longClip, end, duration: end}, sourceDuration: 2100, onSave: () => {},
+}));
+assert.match(editor(1800), /長尺（10分超）/);
+assert.doesNotMatch(editor(1800), /最長30分/);
+assert.match(editor(1801), /最長30分/);
+assert.match(editor(1801), /disabled=""/);
+assert.equal(manualRangeValidationError({...settings, normalClipCount:1,
+  normalClipTimeRanges:[{startSeconds:0, endSeconds:1800}]}), null);
+assert.match(manualRangeValidationError({...settings, normalClipCount:1,
+  normalClipTimeRanges:[{startSeconds:0, endSeconds:1801}]})!, /最長30分/);

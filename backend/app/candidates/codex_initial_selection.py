@@ -17,8 +17,8 @@ from app.candidates.user_rejections import rejection_context_guidance
 from app.clip_allocation import is_ai_allocation, candidate_pool_counts, confirmed_counts
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.duration_rules import (
-    NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_CEILING_SECONDS,
-    duration_search_settings, validate_clip_duration,
+    NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, NORMAL_LONGFORM_MAX_SECONDS, SHORT_MAX_CEILING_SECONDS,
+    duration_search_settings, selection_duration_rejection,
 )
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType, build_candidate
@@ -36,7 +36,7 @@ from app.storage.json_io import write_json_atomic
 from app.video.heatmap import HeatmapSegment
 
 
-CODEX_INITIAL_SELECTION_PROMPT_VERSION = "codex_initial_selection_v6"
+CODEX_INITIAL_SELECTION_PROMPT_VERSION = "codex_initial_selection_v7"
 CODEX_INITIAL_SELECTION_SUMMARY_FILENAME = "codex_initial_selection_summary.json"
 CODEX_RESELECTION_SUMMARY_FILENAME = "codex_reselection_summary.json"
 CODEX_INITIAL_SELECTION_BRIDGE_DIRNAME = "codex_bridge"
@@ -97,7 +97,11 @@ CODEX_TOPIC_SELECTION_PROMPT = """あなたは日本語動画の構成編集者�
   例: 120秒のブロックに30秒の見せ場が含まれるなら、Short上限75秒でもそのブロックを選んでください。
 - 長いブロック内の一部分を切り出せます。部分の開始終了をこの段階で指定できなくても、ブロックを選べば次段階が元字幕から特定します。
   ブロックの長さがmaxDurationを超えることだけを理由に落とさないでください。
-- minDuration/maxDurationは制約であり目標尺ではありません。特定の尺へ寄せないでください。
+- minDuration/maxDurationは通常の探索範囲であり目標尺ではありません。Shortsの完成区間ではmaxDurationが上限です。
+- 通常は90秒〜10分を基本とする。内容がまとまった長さを必要とする場合（人物紹介、
+  一連の企画・ゲームの区切り、途切れずに続く1テーマ）に限り、最長30分まで選んでよい。
+  話題選定ではreasonにその長さが必要な具体的な理由を書く。次段階のlongformReasonで理由を説明する。
+  長さで本数を水増ししない。
 - durationBandsは長さの異なる良質話題を見落とさないための探索枠です。
   自然に各尺帯へ収まる良質話題があれば、各帯から少なくとも1件を候補プールに残してください。
 - 通常はnormalCandidateCount以下、ShortはshortCandidateCount以下で返してください。各枠を埋める目的で話題を伸縮・水増ししないでください。
@@ -122,13 +126,17 @@ CODEX_INITIAL_SELECTION_PROMPT = """あなたは日本語動画の切り抜き�
 - 開始は話題開始または質問の開始、終了は回答・具体例・結論の完了後の文節または無音に合わせてください。
 - 通常clip: 配信の主要テーマ、質問→説明→具体例→結論、単独での理解を重視します。名前読み、連続お礼、スパチャ読みだけは減点します。
 - Short: 冒頭の反応、驚き、オチ、短い完結を重視し、スパチャ・コメント由来も許可します。
-- minDuration/maxDurationは制約であり目標尺ではありません。特定の尺へ寄せないでください。
+- minDuration/maxDurationは通常の探索範囲であり目標尺ではありません。Shortsの完成区間ではmaxDurationが上限です。
+- 通常は90秒〜10分を基本とする。内容がまとまった長さを必要とする場合（人物紹介、
+  一連の企画・ゲームの区切り、途切れずに続く1テーマ）に限り、最長30分まで選んでよい。
+  その場合はlongformReasonに、なぜその長さが必要かを具体的に書く。長さで本数を水増ししない。
+  600秒以下およびShortsのlongformReasonは空にする。
 - durationBandsは探索元の尺帯です。自然に各尺帯へ収まる良質候補があれば、候補プール全体に各帯から少なくとも1件を残してください。
 - 境界は尺帯の中心ではなく、発話内容の自然な開始・完了へ合わせ、各帯を埋めるための伸縮・水増しはしないでください。
 - selectedTopicsと同じtype/topicKeyの候補だけを返し、通常候補はtopicKeyを重複させないでください。
 - selectedTopicsのwindowStart/windowEndが、その話題に使用できる元字幕範囲です。
 - selectedTopicsのstart/endは文脈範囲であり完成区間ではありません。
-  長い話題から、その一部分の完結した見せ場をminDuration/maxDuration内で切り出してください。
+  長い話題は完結した見せ場へ絞り、内容上不可欠な場合のみlongformMaxDurationまで許可します。
 - 挨拶、宣伝、長い前置き、文の途中で切れる区間は優先しません。
 - evidenceSegmentIds は選定理由を直接裏付け、選択範囲と重なる字幕IDだけを返してください。
 - 人気区間値は動画内の相対値0〜1で、再生数でも切り抜き境界でもありません。
@@ -261,6 +269,7 @@ class CodexDurationBand(_StrictModel):
 
 
 class CodexClipTypeConstraints(_StrictModel):
+    longform_max_duration: float | None = Field(default=None, alias="longformMaxDuration")
     requested_count: int = Field(ge=0, le=24, alias="requestedCount")
     min_duration: float = Field(ge=0, allow_inf_nan=False, alias="minDuration")
     max_duration: float = Field(gt=0, allow_inf_nan=False, alias="maxDuration")
@@ -528,6 +537,7 @@ class CodexInitialSelectionRequest(_StrictModel):
 
 
 class CodexClipProposal(_StrictModel):
+    longform_reason: str = Field(default="", max_length=1000, alias="longformReason")
     proposal_id: str = Field(min_length=1, max_length=40, alias="proposalId")
     type: CandidateType
     topic_key: str = Field(min_length=1, max_length=80, alias="topicKey")
@@ -822,7 +832,13 @@ def write_codex_initial_selection_summary(
 
 
 def codex_initial_selection_response_schema() -> dict[str, Any]:
-    return CodexInitialSelectionResponse.model_json_schema(by_alias=True)
+    schema = CodexInitialSelectionResponse.model_json_schema(by_alias=True)
+    # New Codex replies always supply this field. The model default still
+    # permits reading legacy stored replies without it.
+    proposal = schema["$defs"]["CodexClipProposal"]
+    proposal["required"].append("longformReason")
+    proposal["properties"]["longformReason"].pop("default", None)
+    return schema
 
 
 def codex_initial_selection_response_schema_sha256() -> str:
@@ -962,6 +978,7 @@ def _build_constraints(settings: dict[str, Any]) -> CodexSelectionConstraints:
         minNormalClipCount=settings.get('minNormalClipCount', 0), minShortCount=settings.get('minShortCount', 0),
         confirmedNormalCount=confirmed['normal'], confirmedShortCount=confirmed['short'],
         normal=CodexClipTypeConstraints(
+            longformMaxDuration=NORMAL_LONGFORM_MAX_SECONDS,
             requestedCount=normal_requested_count,
             minDuration=normal_minimum,
             maxDuration=normal_maximum,
@@ -2075,11 +2092,20 @@ def _proposal_candidate(
         )
     type_constraints = request.constraints.normal if proposal.type == "normal" else request.constraints.short
     duration = proposal.end - proposal.start
-    reason = validate_clip_duration(proposal.type, duration, short_max=request.constraints.short.max_duration)
-    if reason or (proposal.type == "normal" and duration < type_constraints.min_duration) or duration > type_constraints.max_duration:
+    rejection = selection_duration_rejection(
+        proposal.type, duration, short_max=request.constraints.short.max_duration, longform_reason=proposal.longform_reason,
+    )
+    if rejection:
+        raise CodexInitialSelectionError(
+            rejection,
+            "10分を超える通常切り抜きには、内容上その長さが必要な具体的な理由が必要です。"
+            if rejection == "longform_without_reason" else "Codex初期選定の長さが尺ルールの範囲外です。",
+        )
+    if ((proposal.type == "normal" and duration <= NORMAL_MAX_SECONDS and duration < type_constraints.min_duration)
+            or (duration > type_constraints.max_duration and not (proposal.type == "normal" and duration > NORMAL_MAX_SECONDS))):
         raise CodexInitialSelectionError(
             "duration_out_of_range",
-            reason or "Codex初期選定の長さが設定範囲外です。",
+            "Codex初期選定の長さが設定範囲外です。",
         )
 
     transcript_by_id = {item.id: item for item in request.transcript}
@@ -2150,6 +2176,7 @@ def _proposal_candidate(
             "final_score": score,
             "should_use": True,
             "reason": proposal.reason,
+            "longform_reason": proposal.longform_reason if proposal.type == "normal" and duration > NORMAL_MAX_SECONDS else "",
             "risk_flags": proposal.risk_flags,
             "moment_key": proposal.moment_key,
             "topic_key": proposal.topic_key,

@@ -3,6 +3,7 @@ from typing import Any
 
 NORMAL_MIN_SECONDS = 90.0
 NORMAL_MAX_SECONDS = 600.0
+NORMAL_LONGFORM_MAX_SECONDS = 1800.0
 SHORT_MAX_DEFAULT_SECONDS = 75.0
 SHORT_MAX_CEILING_SECONDS = 180.0
 
@@ -10,10 +11,23 @@ SHORT_MAX_CEILING_SECONDS = 180.0
 def validate_clip_duration(clip_type: str, duration: float, *, short_max: float) -> str | None:
     if not math.isfinite(duration) or duration <= 0:
         return "切り抜きの終了は開始より後にしてください。"
-    if clip_type == "normal" and not NORMAL_MIN_SECONDS <= duration <= NORMAL_MAX_SECONDS:
-        return "通常切り抜きは90秒〜10分です。"
+    if clip_type == "normal" and duration < NORMAL_MIN_SECONDS:
+        return "通常切り抜きは90秒以上です。"
+    if clip_type == "normal" and duration > NORMAL_LONGFORM_MAX_SECONDS:
+        return "通常切り抜きは最長30分です。"
     if clip_type == "short" and duration > short_max:
         return f"ショートは{short_max:g}秒以内です（設定の上限）。"
+    return None
+
+
+def selection_duration_rejection(
+    clip_type: str, duration: float, *, short_max: float, longform_reason: str = "", manual: bool = False,
+) -> str | None:
+    """Search settings are hints; automatic long clips require a content reason."""
+    if validate_clip_duration(clip_type, duration, short_max=short_max):
+        return "duration_out_of_range"
+    if clip_type == "normal" and duration > NORMAL_MAX_SECONDS and not manual and not longform_reason.strip():
+        return "longform_without_reason"
     return None
 
 

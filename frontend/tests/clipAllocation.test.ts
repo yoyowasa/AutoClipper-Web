@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { DEFAULT_SETTINGS } from "../components/SettingsPanel";
-import { allocationLabel, allocationSettingsError, isAIAllocation, remainingClipSlots } from "../lib/clipAllocation";
+import { allocationLabel, allocationSettingsError, isAIAllocation, remainingClipSlots, shortageLabels } from "../lib/clipAllocation";
 import { manualRangeValidationError } from "../lib/manualClipRanges";
 import type { ClipPlanDocument } from "../lib/types";
 
 assert.equal(DEFAULT_SETTINGS.clipAllocationMode, "ai");
+assert.equal(shortageLabels.longform_without_reason, "長尺にする理由が不足");
 for (const [total, valid] of [[0, false], [1, true], [36, true], [37, false]] as const) {
   assert.equal(allocationSettingsError({ ...DEFAULT_SETTINGS, totalClipCount: total }) === null, valid);
 }
