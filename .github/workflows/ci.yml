@@ -19,7 +19,19 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install backend dependencies
-        run: cd backend && python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.lock
+          python -m pip install --no-deps -e .
+
+      - name: Check backend dependency locks
+        run: |
+          cd backend
+          python -m pip install uv==0.12.22
+          uv pip compile pyproject.toml --universal --python-version 3.11 --constraint requirements-runtime-constraints.txt --output-file requirements.lock --custom-compile-command "uv pip compile pyproject.toml --universal --python-version 3.11 --constraint requirements-runtime-constraints.txt --output-file requirements.lock"
+          uv pip compile pyproject.toml --extra dev --universal --python-version 3.11 --constraint requirements-runtime-constraints.txt --constraint requirements.lock --output-file requirements-dev.lock --custom-compile-command "uv pip compile pyproject.toml --extra dev --universal --python-version 3.11 --constraint requirements-runtime-constraints.txt --constraint requirements.lock --output-file requirements-dev.lock"
+          git diff --exit-code -- requirements.lock requirements-dev.lock
 
       - name: Install FFmpeg for video integration tests
         run: sudo apt-get update && sudo apt-get install -y ffmpeg

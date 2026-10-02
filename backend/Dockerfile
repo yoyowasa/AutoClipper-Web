@@ -11,10 +11,12 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
+COPY requirements.lock ./
 COPY app ./app
 
 RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -e .
+    && pip install --no-cache-dir -r requirements.lock \
+    && pip install --no-cache-dir --no-deps -e .
 
 EXPOSE 8000
 

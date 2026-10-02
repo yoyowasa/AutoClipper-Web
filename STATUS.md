@@ -10698,3 +10698,23 @@ pip check: pass
 - 検証: Python 3.11でpython -m pytest全件は1410 passed・3 skipped（111.47秒）。候補の採点・類似間引き・12件上限・画像保存、半身/顔のアップと2倍の境界、3段階の優先と理由保存、古い書き出しの1回だけの抽出と0件理由、走査中の状態取得、候補だけを使うプレビュー/別場面/Codex順位付け、素材への切り替え、公開時の候補画像の移動と巻き戻しを確認。新しいFFmpegの実走査テストも追加したが、ホストにffmpeg/ffprobeが無いためローカルではskip（既存2件と合わせ3件）。frontend全23テスト・lint・typecheck・build、git diff --check成功。
 - lint・DB: 主フォルダからのruff check . ../launcher ../scriptsはGit管理外scripts/make_plotwith_solar_finished_variants.py:197の既存F841で失敗。このファイルは変更せず、Git管理対象と今回の新規ファイルだけを複製したコピーで同じコマンドが成功。全件実行前後の稼働DBは446464 bytes・更新時刻2026-10-02 01:44:02.0370453 UTCのまま。task-176の一時DBと接続先の安全装置を使用。
 - 画面確認・未確認: 稼働DBに接続しないモック画面で、候補一覧・選択、顔のアップ不可/可、別場面で次候補になること、構図/候補IDを保存操作に渡すこと、予備素材の表情一覧への切り替えを操作して確認した。実動画での走査・実キャラの見た目・実Codexによる順位付け・稼働コンテナでの生成は未確認。CIのPython 3.11・3.12・frontendすべての成功をマージ条件とし、merge commitで取り込む。Dockerへの反映・再build・中継再起動は行わない。
+
+## 2026-10-02 JST task-178の稼働環境への反映（運用）
+
+- 目的・許可: ユーザーが反映を承認。main c1f83314750c99c02e69d302dfd7b25f22289ac7・未コミット変更なしを確認し、backend・worker・frontendをGPU composeで再buildした。アプリのコードは変更せず、本運用記録だけを追記する。Redisは再作成していない。
+- 事前確認・保全: RQのキュー・実行中登録は0件、DBの実行中ジョブは0件、Codex中継のrequests/processingは空。SQLite backup()でstorage/backups/autoclipper-20261002-133629-before-task178-deploy.dbへ複製し、integrity_check=ok、jobs 22件・export_items 52件が元と一致した。
+- 反映確認: backend healthy、worker/frontend起動、/health・/api/healthは200、frontendの/は/uploadへ転送され200。backend/workerにthumbnail_candidates.pyがあり、候補APIのコードが反映されていることを確認。workerのavは18.1.0、faster-whisperは1.2.1で、0.5秒の無音WAVをdecode_audioで読み込めた。
+- Codex中継: task-174で追加した表情選択を含むmainと、稼働中継の契約指紋が不一致だった。依頼が空のままであることを確認し、LauncherController.stop_codex_bridge→ensure_codex_bridge_runningで再起動。ready、mainと同じcontractFingerprint、PID 25420の生存を確認した。実Codexの呼び出しは行っていない。
+- 実画面: job_8b672f77079a4a0da02990b42f560697の通常書き出しexp_3203811cb75a4a86be42837cfdd7dd13でサムネ編集を開き直し、「動画から/予備の素材から」「半身/顔のアップ」の新しい欄を確認。初回のRQ候補抽出はreadyで完了したが、条件に合う候補は0件で、半身にできる場面がない旨を画面に表示した。サムネの保存・更新は実行していない。動画候補の見た目・選び直し・実Codex順位付けの受入確認は未実施。
+- DB確認: 反映後もjobs 22件・export_items 52件、状態内訳（候補確認9・字幕確認4・完成7・失敗2）は反映前と一致。
+
+## 2026-10-02 JST backend依存のロック（task-179）
+
+- 目的・変更ファイル: main c1f8331からcodex/task-179-lock-backend-depsを作成。backend/requirements.lock（実行用）・requirements-dev.lock（実行用＋dev extra）・requirements-runtime-constraints.txt（稼働版の制約）を追加し、backend/Dockerfile・Dockerfile.gpu・.github/workflows/ci.yml・README.mdをロックからの導入へ変更。backend/tests/test_test_db_isolation.pyのURL比較を修正。本記録と前回の未コミットのtask-178運用記録を保存する。アプリ本体・pyproject.tomlの依存範囲は変更しない。
+- 基準: 稼働workerとbackendのpip freezeを比較し、55パッケージの版がすべて一致した。編集可能なアプリ自身の-e行は制約から外し、導入時に--no-deps -e .で別に入れる。av 18.1.0・faster-whisper 1.2.1・ctranslate2 4.8.2・onnxruntime 1.30.0・NumPy 2.5.3を含む全55件をPython 3.12/Linuxのロックとbuild済み両イメージで照合し、差分0件。
+- Python・OSの例外: 稼働版NumPy 2.5.3のRequires-Pythonが>=3.12で、同じ版のまま3.11を含むuniversal解決は失敗した。ユーザー承認により「3.11 は NumPy 2.4.6（開発・CI用）、本番の 3.12 は 2.5.3」として条件付きで固定。3.11/Linuxで版が変わるのはNumPyだけで、NumPyに引きずられた別パッケージの版変更は0件。Windowsでは既存依存のOS条件によりuvloop 0.23.0を入れずcolorama 0.4.6を追加する。3.11/Windowsの新規仮想環境でも、devロックの条件に合う59パッケージが全件同じ版で導入された。
+- 作成・更新: OSSのuv 0.12.22を使用。backendからuv pip compile pyproject.toml --universal --python-version 3.11 --constraint requirements-runtime-constraints.txt --output-file requirements.lockで作成し、devは--extra devと--constraint requirements.lockを加える。先頭のコマンドコメントを--custom-compile-commandで固定し、READMEにも同じ実行コマンドを記載。版を上げる場合はpyprojectの範囲と対象の基準制約を更新し、両ロックを再生成・差分確認→新しい仮想環境でテスト/lint→Docker buildを行う。devのみの更新は--upgrade-packageを使う。
+- CI: Python 3.11/3.12ともrequirements-dev.lock→--no-deps -e .の順に導入する。uvの版を固定し、両ロックを同じコマンドで再生成してgit diff --exit-codeで差分を拒否する手順を追加。手元で再生成後に両ファイルの全バイトが一致し、隔離コピーで依存を追加すると差分が出ることを確認。CIの実行結果はPR作成後に確認する。
+- Docker確認: docker compose -f docker-compose.yml -f docker-compose.gpu.yml build backend workerが成功。docker run --rmの一時コンテナでav/faster_whisper/ctranslate2/onnxruntimeのimport成功と全55件の一致を確認。backend・worker・frontend・redisのコンテナID、実行中イメージID、起動時刻はbuild前後で一致し、稼働コンテナの作り直し・Codex中継の再起動は行っていない。
+- テストの互換修正: ロックから作ったWindows Python 3.11環境の初回全件は1 failed・1409 passed・3 skipped。SQLAlchemy 2.1.2がWindowsのDB URLをC%3Aと表記し、設定のC:表記との文字列比較だけが失敗した。make_urlで解析したURL同士を比較し、同じDB接続先であるという検証内容を保つ。個別のDB隔離テストは10 passed。稼働DBの更新時刻2026-10-02 01:44:02.0370453 UTC・サイズ446464 bytesは初回全件の前後で一致。
+- 検証・未確認: 新規Python 3.11仮想環境の修正後のpython -m pytestは1410 passed・3 skipped（108.10秒）。3件はホストにFFmpeg/ffprobeが無いための既存動画統合テスト。再実行後も稼働DBの更新時刻・サイズは一致。pip check、ruff check . ../launcher ../scripts、frontend全23テスト・lint・typecheck・build、git diff --checkが成功。Python 3.12での全件テストとロック再生成はCIで確認し、全チェック成功後にmerge commitでマージする。実動画ジョブの実行と稼働環境への反映は行わない。

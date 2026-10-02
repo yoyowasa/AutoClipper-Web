@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 import pytest
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 import conftest as isolation
@@ -14,7 +15,7 @@ from app.main import app
 def test_settings_engine_and_sessions_use_session_storage(isolated_app_storage: Path) -> None:
     settings = get_settings()
     assert Path(settings.storage_root).resolve() == isolated_app_storage.resolve()
-    assert settings.database_url == db.engine.url.render_as_string(hide_password=False)
+    assert make_url(settings.database_url) == db.engine.url
     assert Path(db.engine.url.database).resolve() == isolated_app_storage / "autoclipper.db"
     with db.SessionLocal() as session:
         assert session.get_bind() is db.engine
