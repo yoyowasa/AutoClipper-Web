@@ -128,18 +128,46 @@ def test_asset_rotation_uses_last_publication_time_and_other_characters_do_not_c
 
 
 @pytest.mark.parametrize("design", ["raden", "sopia"])
-def test_chest_layout_and_430_by_320_resolution_ignore_video_crop_limit(design):
+@pytest.mark.parametrize("size", [(320, 430), (800, 320), (400, 400)], ids=["portrait", "landscape", "square"])
+def test_complete_asset_fits_frame_preserves_center_and_bottom_for_both_templates(design, size):
+    template = renderer._load_template(renderer.DEFAULT_NORMAL_TEMPLATE_PATH if design == "raden" else renderer.SOPIA_NORMAL_TEMPLATE_PATH)
+    frame = template["frame"]
+    layout = character_asset_layout(size, frame, FACE)
+    assert 0 <= layout.x and layout.x + layout.width <= frame["width"]
+    assert 0 <= layout.y and layout.y + layout.height == frame["height"]
+    assert layout.x + layout.width / 2 == pytest.approx(frame["width"] * frame["face_target_x"], abs=.5)
+    assert layout.width / layout.height == pytest.approx(size[0] / size[1], abs=.01)
+    image = Image.new("RGBA", size, (80, 180, 130, 255))
+    ImageDraw.Draw(image).rectangle((0, size[1] - 20, size[0] - 1, size[1] - 1), fill=(255, 0, 180, 255))
+    layer = place_character_asset(image, frame, FACE, scale=1, offset_x=0, offset_y=0, info=None)
+    box = (layout.x, layout.y, layout.x + layout.width, layout.y + layout.height)
+    assert layer.getbbox() == box
+    # Compare every pixel against the whole original, including its bottom marker.
+    assert layer.crop(box).tobytes() == image.resize((layout.width, layout.height), Image.Resampling.LANCZOS).tobytes()
+    assert character_asset_layout(size, frame, None) == layout
+    assert character_asset_layout(size, frame, {"x": .1, "y": .1, "w": .1, "h": .1}) == layout
+    assert character_asset_layout(size, {**frame, "min_crop_height_ratio": .99}, FACE) == layout
+
+
+def test_tall_asset_fits_height_first_and_scale_offsets_keep_bottom_anchor():
+    frame = {"width": 692, "height": 720, "face_target_x": .68}
+    size = (300, 1000)
+    base = character_asset_layout(size, frame, None)
+    assert base.scale == .72 and base.height == 720 and base.y == 0
+    enlarged = character_asset_layout(size, frame, FACE, scale=1.25)
+    assert enlarged.scale == pytest.approx(.9) and enlarged.height == 900 and enlarged.y == -180
+    assert enlarged.x + enlarged.width / 2 == pytest.approx(692 * .68, abs=.5)
+    moved = character_asset_layout(size, frame, None, scale=1.25, offset_x=35, offset_y=-20)
+    assert (moved.x, moved.y) == (enlarged.x + 35, enlarged.y - 20)
+    assert moved.y + moved.height == frame["height"] - 20
+
+
+@pytest.mark.parametrize("design,expected", [("raden", 1.384), ("sopia", 720 / 430)])
+def test_whole_asset_upscale_warning_still_uses_two_times_threshold(design, expected):
     template = renderer._load_template(renderer.DEFAULT_NORMAL_TEMPLATE_PATH if design == "raden" else renderer.SOPIA_NORMAL_TEMPLATE_PATH)
     frame = template["frame"]
     layout = character_asset_layout((320, 430), frame, FACE)
-    assert layout.scale == pytest.approx(1.6744, abs=.001)
-    assert layout.y + layout.face_center[1] * layout.scale == pytest.approx(frame["height"] * .3, abs=.5)
-    assert layout.x + layout.face_center[0] * layout.scale == pytest.approx(frame["width"] * frame["face_target_x"], abs=.5)
-    assert layout.y + layout.bottom * layout.scale == pytest.approx(720, abs=.5)
-    other = character_asset_layout((320, 430), {**frame, "min_crop_height_ratio": .99}, FACE)
-    assert other == layout
-    moved = character_asset_layout((320, 430), frame, FACE, offset_x=35, offset_y=-20)
-    assert (moved.x, moved.y) == (layout.x + 35, layout.y - 20)
+    assert layout.scale == pytest.approx(expected)
     info = {}
     place_character_asset(Image.new("RGBA", (320, 430)), frame, FACE, scale=1, offset_x=0, offset_y=0, info=info)
     assert info["warnings"] == []
@@ -148,15 +176,6 @@ def test_chest_layout_and_430_by_320_resolution_ignore_video_crop_limit(design):
     place_character_asset(Image.new("RGBA", (320, 430)), frame, FACE,
                           scale=2 / layout.scale, offset_x=0, offset_y=0, info=info)
     assert info["upscale"] == 2 and info["warnings"] == []
-
-
-def test_chest_crop_stops_at_275_percent_below_face_and_missing_face_uses_35_percent():
-    frame = {"width": 692, "height": 720}
-    layout = character_asset_layout((600, 1000), frame, {"x": .3, "y": .1, "w": .2, "h": .15})
-    assert layout.bottom == round(layout.face_center[1] + 2.75 * 150)
-    missing = character_asset_layout((320, 430), frame, None)
-    assert missing.face_center == (160, 430 * .35)
-    assert missing.y + missing.face_center[1] * missing.scale == pytest.approx(216, abs=.5)
 
 
 def forbidden(*args, **kwargs):

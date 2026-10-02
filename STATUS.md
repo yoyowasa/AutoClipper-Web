@@ -10675,3 +10675,13 @@ pip check: pass
 - Codex中継・運用: 受け付ける仕事・返答schemaの固定ハッシュを更新したため、ホスト側のCodex中継の再起動が必要。今回Dockerへの反映・再build・中継の再起動は行わず、task-175と合わせた後の反映指示を待つ。
 - CI・最終調整: PR #109の実装コミット76e1c1aのCI（run 36956589432）はPython 3.11・3.12・frontendがすべて成功。手元のテストPNGを使った配置画像も確認した。最終確認で、編集時の拡大警告に保存済みの値が残る問題を修正し、編集画面では現在のプレビューによる警告だけを表示する（結果一覧は保存済み画像の警告を表示）。この調整後もfrontend全22テスト・lint・typecheck・build成功。調整と本記録のコミットについても、CI成功を確認してからマージする。
 - 未確認: 実キャラ素材・実動画での見た目、実Codexによる表情選択、ブラウザでの実操作、稼働コンテナでの生成は未実施。検証は隔離DB・生成したテストPNG・API/RQ・同一JPEGの比較・画面/API契約・ビルドまで。
+
+## 2026-10-02 JST 素材画像全体を人物枠に収める構図（task-177）
+
+- 目的・退避: ユーザー決定でtask-175を中止。変更10ファイル・新規5ファイルと中止記録を、ローカルのcodex/task-175-asset-face-positionへ7330783（WIP: task-175 中止時点の退避）として保存した。push・PR・マージはしていない。main 873e514へ戻り、未コミット変更がないことを確認してcodex/task-177-asset-fit-layoutを作成。
+- 変更ファイル: backend/app/render/character_asset_layout.py、backend/tests/test_thumbnail_character_assets.py。frontendのCharacterAssetsManager・ThumbnailAssetPicker・ResultThumbnailEditor・ResultVideoCard、lib/characterAssets.tsと関連する2テスト、本ファイル。
+- 構図: 素材PNGの画像全体を縦横比を保って縮小・拡大し、下端の切り落としを廃止。基本は枠の高さに合わせ、横がはみ出す場合は左右の幅で縮小する。ユーザー確認により、中心位置をface_target_xに保ち、左右それぞれの端までの距離から収まる幅を計算する方式を採用。下端は人物枠の下に揃える。320×430pxの素材は、らでんで約1.384倍・宙科で約1.674倍。scaleとoffset_x/offset_yはこの配置へ適用し、手動で拡大・移動した結果の枠外部分は従来どおり見切れる。実拡大率が2倍を超えるASSET_ROUGH_WARNINGは維持。
+- 既存データ・表示: face_box引数は互換性のため受け取るが配置には使わず、保存済みの値を削除・更新しない。登録時の顔検出、背景切り抜き、動画の毎秒走査は変更しない。素材欄に「胸から上が写った画像を登録してください」を追加。顔未検出の旧注意は素材管理・サムネ素材選択・サムネ編集・結果の表示から除外し、保存データ自体は残す。背景付き・表情選択失敗・拡大率の注意は引き続き表示する。
+- 検証: Python 3.11.9でpython -m pytestの全件実行が終了コード0（1396件収集）。両テンプレで縦長・横長・正方形の画像全体と下端のマーカーが残ることを、リサイズした元画像との全ピクセル比較で確認。中心位置・下端揃え・高さ優先・scale/offset・face_boxの有無による同一配置・2倍ちょうど/超過の注意、プレビューと書き出しJPEGの一致を確認した。frontend全22テスト・lint・typecheck・build、git diff --check成功。隔離したブラウザ画面でも説明の追加・旧顔警告の非表示・背景付きの注意の維持を確認。
+- lint・DB: 主フォルダのruff check . ../launcher ../scriptsは、Git管理外scripts/make_plotwith_solar_finished_variants.py:197の既存F841で失敗。そのファイルは変更せず、PR対象をgit archiveで複製したコピーでは同じruffコマンドが成功。全件テスト前後で稼働DBの更新時刻2026-10-02 01:44:02.0370453 UTC・サイズ446464 bytesが一致。テストはtask-176の一時DBと接続先の安全装置を使う。
+- 未確認・運用: 実素材・実動画での見た目と稼働コンテナでの生成は未実施。CIのPython 3.11・3.12・frontendはPR作成後に確認し、すべて成功してからmerge commitでマージする。Dockerへの反映・再build・Codex中継の再起動は行わない。素材を動画のコマの予備として使う自動生成の変更はtask-178の対象。

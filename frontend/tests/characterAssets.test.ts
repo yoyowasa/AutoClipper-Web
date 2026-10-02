@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CharacterAssetsManager } from "../components/CharacterAssetsManager";
 import {
-  CHARACTER_EMOTIONS, characterAssetSlots, deleteCharacterAsset, getCharacterAssets, uploadCharacterAsset,
+  CHARACTER_EMOTIONS, characterAssetSlots, deleteCharacterAsset, getCharacterAssets, uploadCharacterAsset, visibleCharacterAssetWarnings,
   type CharacterAsset, type CharacterAssetList
 } from "../lib/characterAssets";
 
@@ -18,6 +18,12 @@ assert.equal((html.match(/type="file"/g) ?? []).length, 20);
 assert.equal((html.match(/ multiple=""/g) ?? []).length, 20);
 assert.match(html, /grid-cols-4/);
 assert.match(html, /使用が認められた素材だけ/);
+assert.match(html, /胸から上が写った画像を登録してください/);
+assert.match(html, /画像全体を人物枠に収めます/);
+const legacyWarnings = ["顔を検出できません（配置を手で調整してください）", "背景付き（切り抜きモデル未導入）", "素材の解像度が足りず粗くなります"];
+assert.deepEqual(visibleCharacterAssetWarnings(legacyWarnings), legacyWarnings.slice(1));
+assert.equal(legacyWarnings.length, 3); // Saved warnings are preserved; only their display changes.
+assert.deepEqual(visibleCharacterAssetWarnings(), []);
 for (const label of ["喜", "怒", "哀", "楽"]) {
   for (let slot = 1; slot <= 5; slot += 1) assert.ok(html.includes(`${label}の素材${slot}をアップロード`));
 }

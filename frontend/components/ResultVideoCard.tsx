@@ -7,6 +7,7 @@ import { SaveFileButton } from "./SaveFileButton";
 import { ResultThumbnailWorkspace } from "./ResultThumbnailWorkspace";
 import { formatDuration, formatScore } from "../lib/format";
 import { toBrowserApiUrl } from "../lib/api";
+import { visibleCharacterAssetWarnings } from "../lib/characterAssets";
 import type { PostTitleIntent, ResultExportItem, ThumbnailTextStyles, ThumbnailCopyText } from "../lib/types";
 import { descriptionWithHashtags, youtubeTagsText } from "../lib/youtubePosting";
 
@@ -233,7 +234,7 @@ thumbnailIsDisplayable && thumbnailUrl ? (
               onRender={(crop, styles, text, advance, design, selectWithCodex, placement, selection) =>
                 onRegenerateThumbnail(item, crop, styles, text, advance, design, selectWithCodex, placement, selection)} />
           ) : null}
-          {item.thumbnailWarnings?.map(warning => <p key={warning} role="status" className="text-xs text-amber-800">{warning}</p>)}
+          {visibleCharacterAssetWarnings(item.thumbnailWarnings).map(warning => <p key={warning} role="status" className="text-xs text-amber-800">{warning}</p>)}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
             <span>title: {readableToken(item.titleSource)}</span>
             <span>score source: {scoreSource}</span>

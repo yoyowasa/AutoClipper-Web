@@ -17,13 +17,16 @@ for (const label of ["喜", "怒", "哀", "楽"]) assert.ok(picker.includes(`dis
 const warning = "表情を自動で選べませんでした（仮に喜を使用）";
 const editor = renderToStaticMarkup(createElement(ResultThumbnailEditor, {
   item: { id: "exp_example", thumbnailRenderRevision: 1, thumbnailSubjectSource: "asset", thumbnailCharacterAssetId: "asset_example",
-    thumbnailEmotion: "joy", thumbnailWarnings: [warning, "素材の解像度が足りず粗くなります"], thumbnailEmotionReason: "自動選択に失敗しました。" } as ResultExportItem,
+    thumbnailEmotion: "joy", thumbnailWarnings: [warning, "素材の解像度が足りず粗くなります", "顔を検出できません（配置を手で調整してください）"],
+    thumbnailEmotionReason: "自動選択に失敗しました。" } as ResultExportItem,
   onRender: () => {}, onDraftChange: () => {}, styles: thumbnailTextDefaults(), setStyles: () => {}, regions: null
 }));
 assert.ok(editor.includes(warning) && editor.includes("表情の選択理由"));
 assert.ok(!editor.includes("素材の解像度が足りず粗くなります")); // The live preview supplies the current scale warning.
 assert.match(editor, /文言に合う表情を選び直す/);
-assert.match(editor, /顔を検出できなかった素材も、大きさ・左右・上下で調整/);
+assert.match(editor, /素材は画像全体を人物枠に収め、下端を揃えます/);
+assert.match(editor, /大きさ・左右・上下で調整/);
+assert.ok(!editor.includes("顔を検出できません") && !editor.includes("顔を基準"));
 
 async function main() {
   const originalFetch = globalThis.fetch;

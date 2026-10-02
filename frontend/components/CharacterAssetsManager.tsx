@@ -4,7 +4,7 @@ import Image from "next/image";
 import { useEffect, useState } from "react";
 import {
   CHARACTER_EMOTIONS, characterAssetImageUrl, characterAssetSlots, deleteCharacterAsset,
-  getCharacterAssets, uploadCharacterAsset, type CharacterAssetList, type CharacterEmotion
+  getCharacterAssets, uploadCharacterAsset, visibleCharacterAssetWarnings, type CharacterAssetList, type CharacterEmotion
 } from "../lib/characterAssets";
 
 export function CharacterAssetsManager({ presetId, disabled, onBusyChange, revision = 0, onAssetsChange }: {
@@ -62,6 +62,7 @@ export function CharacterAssetsManager({ presetId, disabled, onBusyChange, revis
   return <section aria-label="キャラの表情素材" className="grid gap-2 border-t border-sky-200 pt-3">
     <h3 className="text-sm font-semibold">サムネ用の表情素材（各5枚まで）</h3>
     <p>配信者・事務所の切り抜きガイドラインで使用が認められた素材だけを登録してください。</p>
+    <p>胸から上が写った画像を登録してください。サムネでは画像全体を人物枠に収めます。</p>
     {data && <p className="text-neutral-600">PNG・JPEG・WebP / 1枚20MBまで / 短い辺{data.minSidePixels}px以上。複数選択で空き枠へ順に登録できます。</p>}
     {!data && !error && <p role="status">素材を読み込み中…</p>}
     <div className="overflow-x-auto">
@@ -79,7 +80,7 @@ export function CharacterAssetsManager({ presetId, disabled, onBusyChange, revis
                     width={asset.width} height={asset.height} className="h-24 w-full object-contain" />
                 </a>
                 <span>{asset.width} × {asset.height}px{asset.hasAlpha ? " / 透過あり" : " / 背景付き"}</span>
-                {asset.warnings.map(warning => <p key={warning} className="text-amber-800">{warning}</p>)}
+                {visibleCharacterAssetWarnings(asset.warnings).map(warning => <p key={warning} className="text-amber-800">{warning}</p>)}
                 <button type="button" disabled={disabled || busy} className="min-h-9 border border-neutral-300 disabled:opacity-40"
                   onClick={() => void remove(asset.id)} aria-label={`${emotion.label}の素材${index + 1}を削除`}>削除</button>
               </> : <label className="grid min-h-24 content-center gap-1 bg-neutral-50 p-1">

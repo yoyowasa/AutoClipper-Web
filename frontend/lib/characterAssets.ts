@@ -15,6 +15,11 @@ export type CharacterAssetList = {
   minSidePixels: number; maxImageBytes: number; maxPerEmotion: number;
 };
 
+export function visibleCharacterAssetWarnings(warnings: string[] = []): string[] {
+  // Saved face coordinates and notices remain in old data, but asset layout no longer uses them.
+  return warnings.filter(warning => !warning.startsWith("顔を検出できません"));
+}
+
 function assetsPath(presetId: string): string {
   return `/api/character-presets/${encodeURIComponent(presetId)}/assets`;
 }
