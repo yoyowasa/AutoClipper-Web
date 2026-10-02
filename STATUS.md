@@ -10632,7 +10632,7 @@ pip check: pass
 - 保全: character_assetsはジョブのoutputs/temp/uploads/heatmaps掃除の対象外。Dockerのbackend/workerはstorage全体をbind mountしており、GPU構成のモデルキャッシュ追加でも維持される。既存の移行・バックアップ手順でstorage全体をコピーすればPNGも含まれる。SQLiteだけのバックアップには画像ファイルは入らないため、素材の保全にはstorage全体も必要。
 - 検証: Python 3.11.9のpython -m pytestは1320 passed・1 skipped（今回22件追加、82.44秒）。実PNG/JPEG/WebPの登録・配信・削除、背景付き/透過済み、モデルなし、顔座標の変換・保存、既存anime_character_maskとの連携（推論結果をテスト用sessionで代用）、同時登録時の5枚制限、299/300px、20MB超/不正画像、空き枠再利用、既存DBへのテーブル追加、旧形式のIDなし保存・画像の維持、ジョブ掃除とstorageコピー後の画像保持、commit失敗の巻き戻しを確認。frontend全20テスト（4表情×5枠の複数ファイル入力・API multipart・削除・エラー表示の契約を含む）、lint・typecheck・build成功。backend/app・tests・launcherのruffとgit diff --check成功。
 - lintの環境差: 主フォルダのruff check . ../launcher ../scriptsはGit管理外scripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。同ファイルは変更しない。実装コミット66afce8のクリーンなコピーでruff check . ../launcher ../scripts成功。PR #106のコミット2261981でCI（run 36836739911）のPython 3.11・3.12・frontendがすべて成功。
-- 未確認: 実際のisnet-anime重みを使った人物切り抜きの品質、ブラウザでの実操作、Dockerへの反映。ブラウザ確認用の独立したローカルサーバー起動は自動承認レビューがblocked by policyで拒否したため実施できず、API・UI契約テストまで確認した。Dockerの再build・再起動、実DBへのテーブル追加、実キャラへの素材登録は行っていない。前回task-171のローカル運用記録はstashへ保全し、作業後に戻す。 自動承認レビューが検証用クリーンコピーの削除もblocked by policyで拒否したため、Git管理外.codex_tmp/task172-checkにコピーを残す（PRには含まない）。
+- 未確認: 実際のisnet-anime重みを使った人物切り抜きの品質、ブラウザでの実操作、Dockerへの反映。ブラウザ確認用の独立したローカルサーバー起動は自動承認レビューがblocked by policyで拒否したため実施できず、API・UI契約テストまで確認した。Dockerの再build・再起動と実キャラへの素材登録は行っていない。実DBへのテーブル追加については、全件pytestの起動処理による追加を見落としていたため2026-10-02に訂正（task-176参照）。前回task-171のローカル運用記録はstashへ保全し、作業後に戻す。 自動承認レビューが検証用クリーンコピーの削除もblocked by policyで拒否したため、Git管理外.codex_tmp/task172-checkにコピーを残す（PRには含まない）。
 
 
 ## 2026-10-01 JST 元動画全体からのキャラ素材候補収集（task-173）
@@ -10650,3 +10650,15 @@ pip check: pass
 - lintの環境差: 主フォルダのruff check . ../launcher ../scriptsはGit管理外scripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。同ファイルを変更せず、PRに入るファイルのクリーンなコピーで同じruffコマンドが成功。backend/app・tests・launcherも直接確認して成功。
 - CI: PR #107の実装コミットf2b5c88で、run 36842901984のPython 3.11・3.12・frontendがすべて成功。各Python版は1357 passed・4 skipped。最初のCIにはffmpegがなく走査テストがskipされたため、ci.ymlにffmpegの導入手順を追加。修正後は今回の連続走査/元解像度3:4切り出しと既存FFmpeg統合テストがskipされず成功した。判定一覧画像はバッチごとに別ファイルにし、タイムアウトした古い依頼が次の8枚を参照しないこともテストで確認。
 - 未確認: 実配信動画を走査した候補の品質・閾値80の調整、実モデルの透過品質、実Codexの表情/同一キャラ判定、ブラウザでの実操作、Dockerへの反映は未実施。今回の検証はAPI・ローカル画像処理・生成したテスト動画・RQ登録・UI契約・ビルドまで。
+
+## 2026-10-02 JST テスト起動時のDB・storage隔離（task-176）
+
+- 目的・変更ファイル: main 174a862からcodex/task-176-test-db-isolationを作成。backend/tests/conftest.pyとtest_test_db_isolation.pyを追加し、起動処理を含むテストが稼働DB・storageへ接続しないようにする。アプリ本体・frontend・Docker構成は変更しない。本ファイルでtask-172の誤記も訂正する。
+- 原因: test_manual_workflow.pyのtest_manual_clip_crud_and_approve_preserve_user_valuesとtest_manual_subtitle_modes_skip_audio_and_prepare_reviewはwith TestClient(app)でlifespanを実行する。get_dbの差し替えはAPIの依存解決だけであり、init_dbが使うapp.db.engineには効かない。backendからの全件pytestで既定の../storage/autoclipper.dbへcreate_all・使用済み区間の補完・commitが走った。task-172（10月1日17:23 JST）とtask-173（18:14・18:19 JST）の実行記録に該当テストの成功が残る。task-172の「実DBへのテーブル追加は行っていない」はこの副作用を見落とした誤記だった。
+- 隔離: pytest_sessionstartでテスト収集・appのimportより前に、セッション単位のpytest一時ディレクトリを作りDATABASE_URL・STORAGE_ROOTを設定する。get_settingsのlru_cacheを消し、設定前にapp.db/app.mainがimport済みなら収集前に停止する。engineとSessionLocalがこの一時DBを使うことを回帰テストで確認。環境変数・キャッシュ・イベントの設定はpytest終了時に片付ける。
+- 安全装置: autouse fixtureでengineとSessionLocalの接続先を確認。セッション全体のSQLite do_connectイベントで物理接続より前に、Engine before_cursor_executeイベントでSQLより前に、リポジトリのstorage配下への接続をpytest.failで拒否する。一時的に差し替えたengineや既存プールの接続、相対パス・SQLite URIにも適用する。稼働ファイルの作成・変更を起こす前に止める。
+- 回帰テスト: セッション設定とengine/SessionLocalの一致、with TestClient(app)後も見立てた稼働DBが未作成のまま/既存ファイルの更新時刻・内容が不変、危険な接続先の事前拒否、起動処理のengineだけを差し替えた場合の拒否、プール済み接続の拒否、独自の一時DBとの併用、相対パス・URIの判定の10件を追加。既存の独自DB・storage・init_dbテストも含めて確認する。
+- 稼働台帳の調査（読み取り専用）: storage/backups/autoclipper-20261001-031413.dbのsource_clip_usageは116行、現在は121行。idを照合した全列の比較で追加5行・削除0行・既存行の変更0行。5行はすべてjob_8b672f77079a4a0da02990b42f560697（通常2・ショート3）で、作成時刻は10月1日06:54:28 UTC（15:54:28 JST）、実ジョブのcompleted更新時刻と対応し、task-172・173のテストより前。これらのテストのinit_dbによる補完で増えた行は見つからない。厳密なテーブル作成時刻はSQLiteに監査記録がないため未特定。稼働DB・バックアップは変更しない。
+- ローカル検証: Python 3.11.9でpython -m pytestは1369 passed・2 skipped（123.22秒、追加10件）。全件実行の前後で稼働DBのmtime_ns・サイズ・SHA-256が一致し、ファイル不変を確認。2件のskipはホストにffmpeg/ffprobeがないための動画統合テスト。frontend全21テスト・lint・typecheck・build成功、git diff --check成功。
+- lint・CI: 主フォルダのruff check . ../launcher ../scriptsはGit管理外scripts/make_plotwith_solar_finished_variants.pyの既存F841で失敗。このファイルは変更しない。PR対象のクリーンコピーで同じruffコマンドは成功。PR #108の実装コミット8e4421eのCI（run 36953253092）はPython 3.11・3.12・frontendがすべて成功。両Python版で1367 passed・4 skipped（Windows専用テスト）となり、FFmpeg統合テストも実行して成功した。
+- 運用: テストだけの変更のためDockerへの反映・コンテナの再build・Codex中継の再起動は行わない。task-174のサムネ適用は今回に含めない。
