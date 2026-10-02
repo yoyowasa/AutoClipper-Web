@@ -10,7 +10,7 @@ from app.audio.silence_detect import SilenceSegment
 from app.audio.volume_features import AudioFeatures
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType
-from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration, SHORT_MAX_DEFAULT_SECONDS
+from app.duration_rules import completed_clip_duration, effective_short_max, selection_duration_rejection, SHORT_MAX_DEFAULT_SECONDS
 from app.scoring.quality_gate import (
     QualityGateSettings,
     effective_final_score,
@@ -148,10 +148,13 @@ def partition_candidates_by_duration(
         duration = completed_clip_duration(
             candidate.type, candidate.start, candidate.end, candidate.hook_scene_start, candidate.hook_scene_end,
         )
-        reason = validate_clip_duration(candidate.type, duration, short_max=short_max)
+        reason = selection_duration_rejection(
+            candidate.type, duration, short_max=short_max, longform_reason=candidate.longform_reason,
+            manual=candidate.selection_reason in {"manual_time_range", "manual_edit"} or bool(candidate.clip_plan_boundary_adjusted),
+        )
         if reason:
             rejected.append(CandidateRejection(
-                candidateId=candidate.id, type=candidate.type, reasons=["duration_out_of_range"],
+                candidateId=candidate.id, type=candidate.type, reasons=[reason],
                 details={"duration": duration, "message": reason, "shortMaxDuration": short_max},
             ))
         else:
@@ -814,6 +817,7 @@ def convert_selected_clip_to_normal(
     converted = source.model_copy(
         update={
             "type": "normal",
+            "selection_reason": "manual_edit",
             "hook_text": None,
             "hook_duration_seconds": None,
             "hook_scene_start": None,
@@ -853,6 +857,7 @@ def convert_selected_clip_to_short(
         return selection
     converted = matching[0].model_copy(update={
         "type": "short",
+        "longform_reason": "",
         "hook_text": None,
         "hook_duration_seconds": None,
         "hook_scene_start": None,

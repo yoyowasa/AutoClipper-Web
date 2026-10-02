@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from app.audio.silence_detect import SilenceSegment
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, parse_generation_settings
+from app.duration_rules import NORMAL_MAX_SECONDS, NORMAL_LONGFORM_MAX_SECONDS
 from app.video.scene_detect import SceneSegment
 
 
@@ -110,6 +111,8 @@ def _constraints_for_candidate(
     else:
         min_duration = generation_settings.normal_min_duration
         max_duration = generation_settings.normal_max_duration
+        if candidate.duration > NORMAL_MAX_SECONDS and candidate.longform_reason.strip():
+            max_duration = NORMAL_LONGFORM_MAX_SECONDS
     return BoundaryConstraints(
         min_duration=float(min_duration),
         max_duration=float(max_duration),
@@ -300,6 +303,7 @@ def _metadata_update(
         "start": start,
         "end": end,
         "duration": duration,
+        "longform_reason": candidate.longform_reason if candidate.type == "normal" and duration > NORMAL_MAX_SECONDS else "",
         "transcript_text": transcript_text,
         "transcript_char_count": len(transcript_text),
         "speech_seconds": round(speech_seconds, 6) if speech_seconds > 0 else candidate.speech_seconds,

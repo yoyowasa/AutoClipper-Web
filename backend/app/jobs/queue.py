@@ -6,6 +6,7 @@ from rq.exceptions import DuplicateJobError
 from rq.job import Callback, JobStatus
 
 from app.config import get_settings
+from app.jobs.timeouts import job_media_timeout, thumbnail_candidates_timeout
 from app.jobs.runner import (
     run_autoclipper_job,
     run_subtitle_review_preview,
@@ -74,7 +75,7 @@ def get_queue() -> Queue:
 
 def enqueue_autoclipper_job(job_id: str) -> None:
     queue = get_queue()
-    queue.enqueue(run_autoclipper_job, job_id, job_timeout=3600)
+    queue.enqueue(run_autoclipper_job, job_id, job_timeout=job_media_timeout(job_id))
 
 
 def enqueue_autoclipper_retry_job(
@@ -98,7 +99,7 @@ def enqueue_autoclipper_retry_job(
             queue.enqueue(
                 run_autoclipper_job,
                 job_id,
-                job_timeout=3600,
+                job_timeout=job_media_timeout(job_id),
                 job_id=rq_job_id,
                 unique=True,
             )
@@ -140,7 +141,7 @@ def enqueue_subtitle_review_render(job_id: str, render_revision: int) -> None:
                 run_subtitle_review_render,
                 job_id,
                 render_revision=render_revision,
-                job_timeout=3600,
+                job_timeout=job_media_timeout(job_id),
                 job_id=rq_job_id,
                 retry=Retry(max=2),
                 unique=True,
@@ -220,7 +221,7 @@ def enqueue_subtitle_review_preview(
             job_id,
             clip_id,
             spec_hash,
-            job_timeout=3600,
+            job_timeout=job_media_timeout(job_id, clip_id=clip_id),
             job_id=rq_job_id,
             unique=True,
         )
@@ -303,7 +304,7 @@ def enqueue_export_thumbnail_regeneration(export_id: str, revision: int) -> None
 
 def enqueue_clip_plan_reselection(job_id: str) -> None:
     queue = get_queue()
-    queue.enqueue(run_clip_plan_reselection, job_id, job_timeout=3600)
+    queue.enqueue(run_clip_plan_reselection, job_id, job_timeout=job_media_timeout(job_id, selection=True))
 
 
 def enqueue_clip_plan_boundary_update(
@@ -319,7 +320,7 @@ def enqueue_clip_plan_boundary_update(
         clip_id,
         start,
         end,
-        job_timeout=3600,
+        job_timeout=job_media_timeout(job_id, proposed_duration=end - start),
     )
 
 
@@ -336,7 +337,7 @@ def enqueue_clip_plan_hook_scene_update(
         clip_id,
         start,
         end,
-        job_timeout=3600,
+        job_timeout=job_media_timeout(job_id, clip_id=clip_id),
     )
 
 
@@ -353,7 +354,7 @@ def enqueue_subtitle_review_hook_scene_update(
         clip_id,
         start,
         end,
-        job_timeout=3600,
+        job_timeout=job_media_timeout(job_id, clip_id=clip_id),
     )
 
 
@@ -417,7 +418,7 @@ def get_enqueue_thumbnail_preview() -> Callable[[str, str], None]:
 def enqueue_thumbnail_candidates(export_id: str, request_id: str) -> None:
     from app.jobs.thumbnail_candidates import run_thumbnail_candidate_extraction
     get_queue().enqueue(run_thumbnail_candidate_extraction, export_id, request_id,
-                        job_timeout=600, job_id=f"thumbnail-candidates-{request_id}")
+                        job_timeout=thumbnail_candidates_timeout(export_id), job_id=f"thumbnail-candidates-{request_id}")
 
 
 def get_enqueue_thumbnail_candidates() -> Callable[[str, str], None]:

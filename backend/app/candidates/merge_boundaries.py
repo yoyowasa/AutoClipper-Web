@@ -120,6 +120,7 @@ class SubtitleStyleOverride(BaseModel):
 
 
 class Candidate(BaseModel):
+    longform_reason: str = ""
     id: str
     type: CandidateType
     start: float = Field(ge=0)

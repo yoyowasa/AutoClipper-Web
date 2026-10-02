@@ -20,7 +20,7 @@ def test_duration_constants_match_shared_fixture():
 
 @pytest.mark.parametrize('duration,valid', [(89, False), (90, True), (600, True), (601, False)])
 def test_normal_duration_boundaries(duration, valid):
-    assert (rules.validate_clip_duration('normal', duration, short_max=75) is None) == valid
+    assert (rules.validate_clip_duration('normal', duration, short_max=75) is None) == (90 <= duration <= 1800)
     for field in ['normalMinDuration', 'normalMaxDuration']:
         if valid:
             JobSettings(**{field: duration})
@@ -107,7 +107,8 @@ def test_duration_checks_before_and_after_boundary_refinement(monkeypatch):
     )
     assert refined_ids == ['after']
     assert result.normal_clips == pool == []
-    assert {r.candidate_id for r in result.rejected_candidates if r.reasons == ['duration_out_of_range']} == {'before', 'after'}
+    assert {r.candidate_id for r in result.rejected_candidates} == {'before', 'after'}
+    assert next(r for r in result.rejected_candidates if r.candidate_id == 'after').reasons == ['longform_without_reason']
     assert result.unfilled_requested_counts['normal'] == 2
 
 

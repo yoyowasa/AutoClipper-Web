@@ -35,7 +35,7 @@ from app.jobs.clip_plan import (
     update_clip_plan_hook_scene as update_clip_plan_hook_scene_document,
     write_clip_plan,
 )
-from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration
+from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration, NORMAL_MAX_SECONDS
 from app.jobs.manual_workflow import (
     is_manual_workflow,
     manual_plan_settings,
@@ -303,6 +303,7 @@ def update_manual_clip(
             "start": round(start, 3),
             "end": round(end, 3),
             "duration": round(end - start, 3),
+            "longform_reason": current.longform_reason if clip_type == "normal" and end - start > NORMAL_MAX_SECONDS else "",
             "manually_adjusted": True,
         }
     )

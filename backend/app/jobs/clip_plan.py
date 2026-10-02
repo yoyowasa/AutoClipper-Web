@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.audio.transcript_postprocess import repair_known_transcript_artifact_text
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
+from app.duration_rules import NORMAL_MAX_SECONDS
 from app.storage.json_io import write_json_atomic
 
 
@@ -28,6 +29,7 @@ def _utc_iso() -> str:
 
 
 class ClipPlanClip(BaseModel):
+    longform_reason: str = Field(default="", alias="longformReason")
     id: str
     type: Literal["normal", "short"]
     title: str
@@ -148,6 +150,7 @@ def convert_clip_plan_clip_to_short(document: ClipPlanDocument, clip_id: str) ->
     if clip.type == "short":
         return clip
     clip.type = "short"
+    clip.longform_reason = ""
     clip.hook_scene_start = None
     clip.hook_scene_end = None
     document.settings = {
@@ -201,6 +204,7 @@ def build_clip_plan(
                 ruleScore=candidate.rule_score,
                 aiScore=candidate.ai_score,
                 selectionReason=candidate.selection_reason,
+                longformReason=candidate.longform_reason if candidate.type == "normal" and candidate.duration > NORMAL_MAX_SECONDS else "",
                 boundaryRefined=candidate.boundary_refined,
                 recommendedStart=candidate.start,
                 recommendedEnd=candidate.end,
@@ -269,6 +273,8 @@ def update_clip_plan_boundary(
     clip.start = round(float(start), 3)
     clip.end = round(float(end), 3)
     clip.duration = round(clip.end - clip.start, 3)
+    if clip.type != "normal" or clip.duration <= NORMAL_MAX_SECONDS:
+        clip.longform_reason = ""
     clip.transcript_excerpt = _excerpt(transcript_excerpt)
     clip.manually_adjusted = not (
         abs(clip.start - clip.recommended_start) < 0.001

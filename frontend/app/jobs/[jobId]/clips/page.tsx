@@ -1,5 +1,5 @@
 "use client";
-import { durationSettingsError, effectiveShortMax, validateClipDuration } from "../../../../lib/durationRules";
+import { durationSettingsError, effectiveShortMax, validateClipDuration, longformLabel } from "../../../../lib/durationRules";
 
 import { isAIAllocation, remainingClipSlots, allocationLabel, allocationSettingsError, shortageLabels } from "../../../../lib/clipAllocation";
 import Link from "next/link";
@@ -838,8 +838,11 @@ export default function ClipPlanReviewPage() {
                   >
                     元動画 {formatTime(clip.start)} - {formatTime(clip.end)}・
                     {formatTime(clip.duration)}
+                    {longformLabel(clip.type, clip.duration) && <span className="ml-2 font-semibold text-amber-600">長尺</span>}
                   </span>
                 </button>
+                {longformLabel(clip.type, clip.duration) && clip.longformReason &&
+                  <p className="px-4 pb-3 text-xs text-neutral-600">長尺の理由: {clip.longformReason}</p>}
                 {!plan.boundaryReedit && <label className="flex items-center gap-2 border-b border-neutral-300 bg-sky-50 px-4 py-2 text-xs font-semibold">
                   <input type="checkbox" checked={keptClipIds.includes(clip.id)} disabled={controlsDisabled}
                     onChange={event => setKeptClipIds(current => event.target.checked

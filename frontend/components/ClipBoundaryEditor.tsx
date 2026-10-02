@@ -10,7 +10,7 @@ import {
   type BoundaryTimeParts
 } from "../lib/clipBoundaryTime";
 import type { ClipPlanClip } from "../lib/types";
-import { effectiveShortMax, SHORT_MAX_DEFAULT_SECONDS, validateClipDuration } from "../lib/durationRules";
+import { effectiveShortMax, SHORT_MAX_DEFAULT_SECONDS, validateClipDuration, longformLabel } from "../lib/durationRules";
 
 type ClipBoundaryEditorProps = {
   clip: ClipPlanClip;
@@ -279,6 +279,7 @@ export function ClipBoundaryEditor({
             <p className="font-semibold text-neutral-950">
               変更後: {start === null ? "--" : formatTime(start)} -{" "}
               {end === null ? "--" : formatTime(end)}
+              {draftDuration !== null && longformLabel(clip.type, draftDuration)}
               {draftDuration === null
                 ? ""
                 : `（長さ ${formatTime(draftDuration)}）`}

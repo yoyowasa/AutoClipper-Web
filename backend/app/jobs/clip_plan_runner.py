@@ -3,7 +3,9 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
-from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration, duration_search_settings
+from app.duration_rules import (
+    completed_clip_duration, effective_short_max, validate_clip_duration, duration_search_settings, NORMAL_MAX_SECONDS,
+)
 from sqlalchemy.orm import Session
 from app.candidates.user_rejections import REJECTED_RANGES_SETTING
 from app.audio.silence_detect import SilenceSegment
@@ -526,6 +528,7 @@ def _candidate_with_clip_plan_boundary(
             "start": round(start, 3),
             "end": round(end, 3),
             "duration": round(end - start, 3),
+            "longform_reason": candidate.longform_reason if candidate.type == "normal" and end - start > NORMAL_MAX_SECONDS else "",
             "transcript_text": transcript_text,
             "segment_start_index": overlapping[0][0] if overlapping else None,
             "segment_end_index": overlapping[-1][0] + 1 if overlapping else None,

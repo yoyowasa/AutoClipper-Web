@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate
+from app.duration_rules import NORMAL_LONGFORM_MAX_SECONDS, NORMAL_MAX_SECONDS
 from app.candidates.select_candidates import CandidateSelection
 from app.candidates.short_diversity import (
     ShortDiversitySettings,
@@ -331,6 +332,10 @@ def _duration_bounds(
             float(settings.get("shortMinDuration", 20.0)),
             float(settings.get("shortMaxDuration", 75.0)),
         )
+    if (candidate.duration > NORMAL_MAX_SECONDS and candidate.longform_reason.strip()) or (
+        candidate.selection_reason in {"manual_time_range", "manual_edit"} or candidate.clip_plan_boundary_adjusted
+    ):
+        return 90.0, NORMAL_LONGFORM_MAX_SECONDS
     return (
         float(settings.get("normalMinDuration", 90.0)),
         float(settings.get("normalMaxDuration", 600.0)),

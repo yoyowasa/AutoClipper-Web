@@ -10762,3 +10762,15 @@ pip check: pass
 - 変更ファイル: `backend/pyproject.toml`（`[tool.ruff]` に `extend-exclude = ["../scripts/make_plotwith_*.py"]` を追加）、本ファイル。コードの変更なし。
 - 検証: 主フォルダで `cd backend; ruff check . ../launcher ../scripts` が成功（ruff 0.15.4）。`--show-files` で、scripts配下の検査対象は17件、make_plotwith_* は0件。Git管理下のscriptsが引き続き検査されることを、一時的な違反ファイル（`import os` のみ）で検出を確認してから削除した。backend全件 `python -m pytest -q` は1467 passed / 3 skipped（既存のスキップ）。frontendのtest・lint・typecheck・buildも成功。
 - 未確認事項: なし（設定のみの変更）。Codexの利用制限のため、本タスクはClaude Codeが実施した。
+
+## 2026-10-02 task-183 内容に応じた通常切り抜きの長尺
+
+- 目的・条件: 通常は90秒〜10分を基本とし、人物紹介、一連の企画・ゲームの区切り、途切れずに続く1テーマなど、内容上まとまった長さが必要な場合だけCodexが最長30分を選べる。探索設定normalMinDuration/normalMaxDurationは90〜600秒のまま。Shortsの既定75秒・設定1〜180秒は変更しない。
+- 変更ファイル: backendのduration_rules、candidates（codex_initial_selection・merge_boundaries・select_candidates・boundary_refinement・user_rejections）、jobs（clip_plan・clip_plan_runner・quality_gate・queue・thumbnail_candidates・新規timeouts）、api/clip_plan、関連テストと共通定数fixture。frontendのdurationRules・types・候補確認画面・境界/手動範囲編集とdurationRulesテスト。launcher/codex_bridgeと本ファイル。
+- AIの理由: 600秒を超える通常候補はlongformReasonを必須とし、空白のみを含む理由なしはlongform_without_reason、1800秒超はduration_out_of_rangeとして却下を記録する。選定後の境界補正・品質判定・文脈不足からの再選定にも適用する。Candidate.longform_reasonとclip planのlongformReasonに保存し、旧データは空として読める。600秒以下・Shortsでは理由を空にする。話題選定ではreasonに長さが必要な理由を書かせ、次段階でlongformReasonとして具体化する。
+- 人の調整: 境界変更、手動候補の作成/変更、形式変更、字幕確認から戻った境界変更は90〜1800秒を保存でき、理由の入力は不要。1801秒は422「通常切り抜きは最長30分です」。画面は600秒超に「長尺（10分超）」とAIの理由を表示し、1800秒を超える保存は無効にする。
+- 処理時間とRQ: 30分clipを固定の3600秒に収める保証はないため、確認動画・字幕確認プレビュー・本番書き出しをclip合計尺×6＋600秒（最低3600秒）の予算へ変更。1本30分は11400秒＝190分、2本は22200秒＝370分。想定はエンコードに尺の4倍、走査/入出力等に2倍、準備に10分を確保する計画値であり、実動画の実測値ではない。初期選定・再選定は選定前なので元動画の長さと依頼本数から最長30分の候補に備え、再選定前の短いclipだけで時間枠を決めない。
+- サムネ抽出: 尺×3＋600秒（最低600秒）へ変更。30分で6000秒＝100分（1秒2枚の3600枚、各コマ最大1秒＋実時間相当のデコード＋準備10分の予算）。走査ロックの期限も連動する。隔離した一時コンテナ（2 CPU・ネットワークなし・backend読取専用・稼働storage未接続）で、1080p/30fps/30分の単色合成MP4をFFmpegで走査し、3600枚を80.700秒で完了（顔なし・候補0件）。別途960pxのノイズ合成画像300枚の顔検出部分は3.969秒、3600枚換算47.624秒。3600枚を処理し上位12件と小画像を保存する回帰テストも成功した。
+- 検証: Python 3.11.9の全件python -m pytestは1492 passed / 3 skipped（既存のスキップ）。ruff check . ../launcher ../scripts成功。frontendのtest（24ファイル）・lint・typecheck・build成功。600/601の理由有無、1800/1801、却下記録、理由保存/旧データ、文脈不足の拡張、人の各窓口と字幕確認からの復帰、画面の長尺/上限表示、RQ時間枠、Codex中継の契約一致を確認した。CIはPRで3.11・3.12・frontendの成功を確認してからmerge commitでマージする。
+- Codex中継: promptVersionをcodex_initial_selection_v7へ更新し、話題選定・初期選定の固定schemaハッシュを更新した。ホスト側のCodex中継の再起動が必要。
+- 未確認事項: 実際に顔が写る30分動画での抽出・12枚の高解像度再抽出、字幕付き30分プレビュー/本番エンコードの実測、Codexでの実選定、稼働画面での確認は未実施。時間予算はCPU/GPUや入力によって十分とは限らない。Dockerへの反映とCodex中継の再起動は行わず、別途の指示で実施する。
