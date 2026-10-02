@@ -20,9 +20,11 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
+COPY requirements.lock ./
 COPY app ./app
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir -e .
+    && python -m pip install --no-cache-dir -r requirements.lock \
+    && python -m pip install --no-cache-dir --no-deps -e .
 
 CMD ["python", "-m", "app.jobs.worker"]

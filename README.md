@@ -993,7 +993,9 @@ python scripts/check_subtitle_sidecar_risk.py --job-id job_ID
 
 ## Runtime Requirements Inside Containers
 
-Backend and worker are built from `backend/Dockerfile`.
+Backend and CPU worker use `backend/Dockerfile`; GPU worker uses `backend/Dockerfile.gpu`.
+Both install the exact runtime dependencies from `backend/requirements.lock`, then install
+the application with `--no-deps -e .`.
 
 The Dockerfile installs:
 
@@ -1017,21 +1019,52 @@ Backend:
 
 ```powershell
 cd backend
-python -m pip install -e ".[dev]"
-ruff check .
-pytest
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.lock
+python -m pip install --no-deps -e .
+ruff check . ../launcher ../scripts
+python -m pytest
 ```
 
 Frontend:
 
 ```powershell
 npm ci
+npm --workspace frontend run test
 npm --workspace frontend run lint
 npm --workspace frontend run typecheck
 npm --workspace frontend run build
 ```
 
 CI runs on pull requests and pushes to `main`.
+
+### Backend dependency locks
+
+`backend/requirements.lock` is for execution and `backend/requirements-dev.lock` adds the
+test tools. Each file contains platform/Python markers and supports Windows/Linux with
+Python 3.11 and 3.12. The runtime baseline is the deployed worker's 55 pinned distributions
+captured on 2026-10-02; backend had the same versions. The editable application entry is
+excluded from `requirements-runtime-constraints.txt` because it is installed separately.
+NumPy is the one version exception: **3.11 uses 2.4.6 for development/CI; production 3.12
+uses the deployed 2.5.3** (which requires Python 3.12). `uvloop` is Linux-only and `colorama`
+is installed on Windows according to dependency markers.
+
+Regenerate from `backend` with the same OSS resolver version used by CI:
+
+```powershell
+python -m pip install uv==0.12.22
+uv pip compile pyproject.toml --universal --python-version 3.11 --constraint requirements-runtime-constraints.txt --output-file requirements.lock --custom-compile-command "uv pip compile pyproject.toml --universal --python-version 3.11 --constraint requirements-runtime-constraints.txt --output-file requirements.lock"
+uv pip compile pyproject.toml --extra dev --universal --python-version 3.11 --constraint requirements-runtime-constraints.txt --constraint requirements.lock --output-file requirements-dev.lock --custom-compile-command "uv pip compile pyproject.toml --extra dev --universal --python-version 3.11 --constraint requirements-runtime-constraints.txt --constraint requirements.lock --output-file requirements-dev.lock"
+```
+
+To upgrade, change the intended range in `pyproject.toml`, update that package's baseline
+pin in `requirements-runtime-constraints.txt` (and any necessary transitive pins), and
+regenerate both locks. For dev-only upgrades, pass `--upgrade-package PACKAGE` when
+regenerating the dev lock. Review the diff, create a fresh virtual environment from the
+dev lock, run tests and lint, then build backend/worker images. CI regenerates both files
+and fails if they differ. It also tests Python 3.11 and 3.12. Building images does not deploy
+them; container recreation requires a separate instruction.
 
 ## Troubleshooting
 
