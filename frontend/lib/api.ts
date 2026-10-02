@@ -62,6 +62,7 @@ export async function prepareThumbnailPreview(exportId: string, signal: AbortSig
   if (selection) {
     query.set("subjectSource", selection.subjectSource);
     if (selection.characterAssetId) query.set("characterAssetId", selection.characterAssetId);
+    if (selection.frameCandidateId) query.set("frameCandidateId", selection.frameCandidateId);
   }
   return parseJsonResponse(await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/preview/prepare?${query}`, {
     method: "POST", signal, cache: "no-store",
@@ -69,6 +70,7 @@ export async function prepareThumbnailPreview(exportId: string, signal: AbortSig
 }
 
 export async function renderThumbnailPreview(exportId: string, draft: {
+  frameCandidateId?: string; cropMode?: "standard" | "close";
   frameKey: string; text: import("./types").ThumbnailCopyText; textStyles: import("./types").ThumbnailTextStyles;
   design: import("./types").NormalThumbnailStyle["design"];
   subjectPlacement: import("./types").ThumbnailSubjectPlacement;
@@ -588,6 +590,7 @@ export async function retryJob(jobId: string): Promise<JobCreateResponse> {
 export async function regenerateExportThumbnail(
   exportId: string,
   request: {
+    frameCandidateId?: string;
     frameSeconds: number;
     subjectAnchorX: number;
     advanceFrame?: boolean;
@@ -703,4 +706,10 @@ export async function finalizeSubtitleReview(
     }
   );
   return parseJsonResponse<SubtitleReviewFinalizeResponse>(response);
+}
+
+export async function prepareThumbnailCandidates(exportId: string, force = false): Promise<import("./types").ThumbnailCandidateState> {
+  return parseJsonResponse(await fetch(`${API_BASE_URL}/api/exports/${exportId}/thumbnail/candidates/prepare${force ? "?force=true" : ""}`, {
+    method: "POST", cache: "no-store",
+  }));
 }

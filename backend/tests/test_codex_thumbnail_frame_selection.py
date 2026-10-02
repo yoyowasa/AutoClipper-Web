@@ -5,7 +5,6 @@ from PIL import Image
 
 from app.jobs.codex_thumbnail_frame_selection import select_codex_thumbnail_frame_seconds
 from app.scoring.thumbnail_frame_rank import ThumbnailFrameRanking
-from app.video.face_detect import FaceDetection
 
 
 class FakeRanker:
@@ -28,14 +27,17 @@ def test_codex_uses_real_frames_copy_and_nearby_subtitles_and_avoids_current(tmp
         Image.new("RGB", (1280, 720), (len(extracted) * 15, 20, 20)).save(path)
         return path
 
+    saved = [{"id": f"frame_{i:02d}", "second": second} for i, second in enumerate((5., 15., 25., 35., 45., 55., 65., 75.))]
+    for item in saved:
+        Image.new("RGB", (1280, 720), "white").save(tmp_path / f'{item["id"]}.jpg')
     selected = select_codex_thumbnail_frame_seconds(
         "source.mp4", clip_start=100, clip_end=180, current_frame_seconds=65,
         variant_index=0, storage_root=tmp_path, temp_root=tmp_path / "temp",
         job_id="job", export_id="exp", text={"heading": "北斎", "upper": "波の秘密", "lower": ""},
         design="sopia", segments=[{"start": 64, "end": 66, "text": "北斎の波について"}],
-        extractor=extractor, ranker=ranker,
+        extractor=extractor, ranker=ranker, saved_candidates=saved, candidate_directory=tmp_path,
     )
-    assert extracted == pytest.approx([105, 115, 125, 135, 145, 155, 165, 175])
+    assert extracted == []  # Ranking only opens persisted JPEGs.
     assert selected == pytest.approx(25)  # Top candidate 6 is the already saved frame.
     assert ranker.payload["thumbnailText"]["upper"] == "波の秘密"
     assert ranker.payload["candidateFrames"][6]["nearbySubtitles"] == ["北斎の波について"]
@@ -55,22 +57,15 @@ def test_codex_only_shows_verified_late_character_frames(tmp_path: Path) -> None
         Image.new("RGB", (1280, 720), "white").save(path)
         return path
 
-    def detector(_source, start, end, sample_count):
-        if sample_count == 24:
-            return [FaceDetection(start=95, end=95, center_x=0.5, center_y=0.4, width=0.2, height=0.2)]
-        assert sample_count == 7
-        return [
-            FaceDetection(start=second, end=second, center_x=0.5, center_y=0.4, width=0.2, height=0.2)
-            for second in (92, 93, 94, 95, 96, 97, 98)
-        ]
-
+    saved = [{"id": f"frame_{i:02d}", "second": float(second)} for i, second in enumerate(range(92, 99))]
+    for item in saved:
+        Image.new("RGB", (1280, 720), "white").save(tmp_path / f'{item["id"]}.jpg')
     selected = select_codex_thumbnail_frame_seconds(
         "source.mp4", clip_start=0, clip_end=100, current_frame_seconds=10,
         variant_index=0, storage_root=tmp_path, temp_root=tmp_path / "temp",
         job_id="job", export_id="exp", text={"heading": "", "upper": "", "lower": ""},
         design="sopia", segments=[], extractor=extractor, ranker=FakeRanker(),
-        face_detector=detector,
+        saved_candidates=saved, candidate_directory=tmp_path,
     )
-    assert len(extracted) == 8
-    assert all(92 <= second <= 98 for second in extracted)
+    assert extracted == []
     assert 92 <= selected <= 98

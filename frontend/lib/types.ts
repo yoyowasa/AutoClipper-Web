@@ -318,7 +318,9 @@ export type ResultExportItem = {
   thumbnailFrameSeconds: number | null;
   thumbnailSubjectAnchorX: number | null;
   thumbnailRenderRevision: number;
-  thumbnailSubjectSource?: "video" | "asset";
+  thumbnailSubjectSource?: "video" | "asset" | "legacy";
+  thumbnailSubjectReason?: string | null;
+  thumbnailFrameCandidateId?: string | null;
   thumbnailCharacterAssetId?: string | null;
   thumbnailEmotion?: import("./characterAssets").CharacterEmotion | null;
   thumbnailEmotionReason?: string | null;
@@ -326,7 +328,11 @@ export type ResultExportItem = {
   thumbnailWarnings?: string[];
 };
 
+export type ThumbnailFrameCandidate = { id: string; second: number; score: number; closeAvailable: boolean; imageUrl: string };
+export type ThumbnailCandidateState = { state: "idle" | "queued" | "ready" | "failed"; candidates: ThumbnailFrameCandidate[]; reason?: string | null };
+
 export type ThumbnailSubjectSelection = {
+  frameCandidateId?: string;
   subjectSource: "video" | "asset";
   characterAssetId?: string;
   emotion?: import("./characterAssets").CharacterEmotion;

@@ -994,7 +994,9 @@ class ResultExportItem(BaseModel):
     thumbnail_frame_seconds: float | None = Field(default=None, alias="thumbnailFrameSeconds")
     thumbnail_subject_anchor_x: float | None = Field(default=None, alias="thumbnailSubjectAnchorX")
     thumbnail_render_revision: int = Field(default=0, alias="thumbnailRenderRevision")
-    thumbnail_subject_source: Literal["video", "asset"] = Field(default="video", alias="thumbnailSubjectSource")
+    thumbnail_subject_source: Literal["video", "asset", "legacy"] = Field(default="video", alias="thumbnailSubjectSource")
+    thumbnail_subject_reason: str | None = Field(default=None, alias="thumbnailSubjectReason")
+    thumbnail_frame_candidate_id: str | None = Field(default=None, alias="thumbnailFrameCandidateId")
     thumbnail_character_asset_id: str | None = Field(default=None, alias="thumbnailCharacterAssetId")
     thumbnail_emotion: Literal["joy", "anger", "sorrow", "fun"] | None = Field(default=None, alias="thumbnailEmotion")
     thumbnail_emotion_reason: str | None = Field(default=None, alias="thumbnailEmotionReason")
@@ -1005,6 +1007,7 @@ class ResultExportItem(BaseModel):
 
 
 class ThumbnailRegenerationRequest(BaseModel):
+    frame_candidate_id: str | None = Field(default=None, alias="frameCandidateId", pattern=r"^frame_[0-9]{2}$")
     subject_source: Literal["video", "asset"] | None = Field(default=None, alias="subjectSource")
     character_asset_id: str | None = Field(default=None, alias="characterAssetId", pattern=r"^asset_[0-9a-f]{32}$")
     emotion: Literal["joy", "anger", "sorrow", "fun"] | None = None

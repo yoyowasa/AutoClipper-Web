@@ -26,10 +26,10 @@ export function ThumbnailAssetPicker({ exportId, value, onChange, disabled }: {
     <legend className="px-1 text-xs font-bold">人物の画像</legend>
     <div className="grid grid-cols-2 gap-2 text-sm">
       <button type="button" aria-pressed={value.subjectSource === "video"} onClick={() => onChange({ subjectSource: "video" })}
-        className="min-h-10 border border-sky-700 px-2 aria-pressed:bg-sky-100">動画のコマ</button>
+        className="min-h-10 border border-sky-700 px-2 aria-pressed:bg-sky-100">動画から</button>
       <button type="button" aria-pressed={value.subjectSource === "asset"} disabled={!all.length}
         onClick={() => onChange({ subjectSource: "asset", characterAssetId: all[0].id, emotion: all[0].emotion })}
-        className="min-h-10 border border-sky-700 px-2 aria-pressed:bg-sky-100 disabled:text-neutral-400">素材</button>
+        className="min-h-10 border border-sky-700 px-2 aria-pressed:bg-sky-100 disabled:text-neutral-400">予備の素材から</button>
     </div>
     {error ? <div role="alert" className="mt-2 text-xs text-red-700">{error}
       <button type="button" className="ml-2 underline" onClick={() => { setAssets(null); setError(""); setRetry(v => v + 1); }}>再読み込み</button></div>

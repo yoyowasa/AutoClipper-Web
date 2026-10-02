@@ -21,7 +21,8 @@ export function ResultThumbnailWorkspace({ item, busy, onRender }: {
     styles,
     design: item.thumbnailDesign ?? "raden",
     subjectPlacement: item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 },
-    subjectSource: item.thumbnailSubjectSource ?? "video", characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
+    subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" : "video",
+    frameCandidateId: item.thumbnailFrameCandidateId ?? undefined, cropMode: item.thumbnailCropMode ?? "standard", characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
   }));
 
   useEffect(() => {
@@ -65,7 +66,7 @@ export function ResultThumbnailWorkspace({ item, busy, onRender }: {
                 offsetY: Math.max(-250, Math.min(250, (current[role].offsetY ?? 0) + dy)),
               } }))} />
           </div>
-          <ResultThumbnailEditor item={item} busy={busy} onRender={onRender} onDraftChange={setDraft}
+          <ResultThumbnailEditor active={open} item={item} busy={busy} onRender={onRender} onDraftChange={setDraft}
             styles={styles} setStyles={setStyles} regions={regions} />
         </div>
       </div>

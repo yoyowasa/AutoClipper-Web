@@ -9,7 +9,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from app.render.anime_subject import Face, anime_character_mask, anime_matte_path, detect_anime_face
 from app.thumbnail_style import NormalThumbnailStyle, ThumbnailTextStyles
@@ -493,6 +493,8 @@ def _compose_normal_thumbnail(
     character_asset: bool = False,
     character_asset_face_box: dict[str, float] | None = None,
     asset_render_info: dict[str, Any] | None = None,
+    video_face: Face | None = None,
+    video_crop_mode: str = "standard",
 ) -> Image.Image:
     canvas_config = template["canvas"]
     frame_config = template["frame"]
@@ -532,6 +534,16 @@ def _compose_normal_thumbnail(
             frame, frame_config, character_asset_face_box, scale=subject_scale,
             offset_x=subject_offset_x, offset_y=subject_offset_y, info=asset_render_info,
         )
+        canvas.alpha_composite(placement, (frame_x, frame_y))
+    elif video_face is not None:
+        from app.render.video_subject_layout import place_video_subject
+        placement = place_video_subject(
+            frame, video_face, frame_config, mode=video_crop_mode, scale=subject_scale,
+            offset_x=subject_offset_x, offset_y=subject_offset_y,
+            mask=anime_subject[1] if anime_subject else None,
+        )
+        if anime_subject is None:
+            placement.putalpha(ImageChops.multiply(placement.getchannel("A"), _feather_mask(frame_width, frame_height, frame_config)))
         canvas.alpha_composite(placement, (frame_x, frame_y))
     elif anime_subject is not None:
         face, subject_mask = anime_subject
@@ -710,6 +722,8 @@ def render_normal_thumbnail(
     character_asset_path: str | Path | None = None,
     character_asset_face_box: dict[str, float] | None = None,
     asset_render_info: dict[str, Any] | None = None,
+    video_face: Face | None = None,
+    video_crop_mode: str = "standard",
 ) -> ThumbnailRenderResult:
     """Render a 1280x720 normal thumbnail.
 
@@ -806,6 +820,7 @@ def render_normal_thumbnail(
                         character_asset=character_asset_path is not None,
                         character_asset_face_box=character_asset_face_box,
                         asset_render_info=asset_render_info,
+                        video_face=video_face, video_crop_mode=video_crop_mode,
                     )
             else:
                 composed = _compose_normal_thumbnail(
@@ -827,6 +842,7 @@ def render_normal_thumbnail(
                     character_asset=character_asset_path is not None,
                     character_asset_face_box=character_asset_face_box,
                     asset_render_info=asset_render_info,
+                    video_face=video_face, video_crop_mode=video_crop_mode,
                 )
     composed.save(output, format="JPEG", quality=94, optimize=True, subsampling=0)
     return ThumbnailRenderResult(

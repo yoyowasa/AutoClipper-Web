@@ -189,7 +189,7 @@ def test_normal_thumbnail_empty_fields_match_preview_and_auto_frame(tmp_path: Pa
     assert received["title_second_line"] == ""
 
 
-def test_initial_thumbnail_replaces_blank_ai_frame_with_detected_person(tmp_path: Path) -> None:
+def test_initial_thumbnail_replaces_blank_ai_frame_with_detected_person(tmp_path: Path, monkeypatch) -> None:
     output_dir = tmp_path / "outputs" / "job_thumbnail"
     source_path = tmp_path / "source.mp4"
     source_path.write_bytes(b"source mp4")
@@ -210,17 +210,20 @@ def test_initial_thumbnail_replaces_blank_ai_frame_with_detected_person(tmp_path
             width=1280, height=720,
         )
 
+    monkeypatch.setattr("app.jobs.thumbnail_candidates.extract_thumbnail_candidates", lambda *args, **kwargs: [
+        {"id": "frame_00", "second": 190., "face": [.5, .3, .15, .18], "score": 10, "close_available": True}
+    ])
     result = generate_export_thumbnails(
         exports=[export], selection=CandidateSelection(normalClips=[candidate]),
         input_path=source_path, job_output_dir=output_dir,
         normal_renderer=fake_renderer,
-        normal_frame_selector=lambda *_args, **_kwargs: 190.0,
+
     )
     metadata = json.loads(Path(export.metadata_path).read_text(encoding="utf-8"))
     assert result.failures == []
     assert metadata["thumbnail_source_time"] == 290
     assert metadata["thumbnail_frame_seconds"] == 190
-    assert metadata["thumbnail_frame_selection_source"] == "face"
+    assert metadata["thumbnail_subject_source"] == "video" and metadata["thumbnail_frame_candidate_id"] == "frame_00"
 
 
 def test_short_thumbnail_uses_completed_mp4_and_hook_interval(tmp_path: Path) -> None:
@@ -676,6 +679,11 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
     metadata_path.write_text(
         json.dumps(
             {
+                "thumbnail_candidates_version": 1,
+                "thumbnail_frame_candidates": [
+                    {"id": "frame_00", "second": 12.5, "face": [.5, .3, .15, .18], "close_available": True},
+                    {"id": "frame_01", "second": 28., "face": [.5, .3, .15, .18], "close_available": True},
+                ],
                 "start": 3600.0,
                 "thumbnail_kicker": "見どころ",
                 "thumbnail_line1": "一行目",
@@ -766,10 +774,7 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
     assert received["frame_time"] == pytest.approx(3628.0)
     assert received["subject_anchor_x"] == pytest.approx(1)
     assert received["face_height_ratio"] == pytest.approx(0.34)
-    assert selected["input_path"] == source_path
-    assert selected["clip_start"] == pytest.approx(3600.0)
-    assert selected["clip_end"] == pytest.approx(3640.0)
-    assert selected["variant_index"] == 3
+    assert selected == {}  # The cached gallery replaces the old scanner.
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["thumbnail_status"] == "ready"
     assert metadata["thumbnail_render_revision"] == 2
@@ -778,3 +783,8 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
     assert metadata["thumbnail_crop_mode"] == "close"
     assert metadata["thumbnail_advance_frame"] is False
     engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def no_faces_in_placeholder_video(monkeypatch):
+    monkeypatch.setattr("app.jobs.thumbnail_candidates.extract_thumbnail_candidates", lambda *args, **kwargs: [])

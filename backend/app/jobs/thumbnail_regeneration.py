@@ -12,7 +12,10 @@ from app.jobs.thumbnails import (
     thumbnail_output_path,
     write_export_metadata,
 )
-from app.jobs.thumbnail_frame_selection import select_thumbnail_frame_seconds
+from app.jobs.subtitle_review_preview import subtitle_review_document_lock
+from app.jobs.thumbnail_candidates import (
+    candidate_directory, ensure_thumbnail_candidates, selected_frame, video_candidate_kwargs,
+)
 from app.jobs.codex_thumbnail_frame_selection import select_codex_thumbnail_frame_seconds
 from app.models import ExportItem, Video, Job, utc_now
 from app.jobs.thumbnail_character_assets import choose_character_asset, video_subject_metadata
@@ -87,7 +90,7 @@ def run_export_thumbnail_regeneration(
     session_factory: SessionFactory = SessionLocal,
     paths: StoragePaths | None = None,
     normal_renderer: NormalThumbnailRenderer = render_normal_thumbnail,
-    frame_selector: ThumbnailFrameSelector = select_thumbnail_frame_seconds,
+    frame_selector: ThumbnailFrameSelector | None = None,
     codex_frame_selector: CodexThumbnailFrameSelector = select_codex_thumbnail_frame_seconds,
     emotion_selector: Any = None,
 ) -> None:
@@ -126,10 +129,18 @@ def run_export_thumbnail_regeneration(
                     raise ValueError("このキャラの素材がありません。動画のコマへ切り替えてください。")
             source_path = storage.character_asset(
                 selected_asset.asset.preset_id, selected_asset.asset.emotion, selected_asset.asset.id,
-            ) if selected_asset else _source_path(video, storage)
+            ) if selected_asset else (storage.resolve_stored_file(video.stored_path)
+                                      if payload.get("thumbnail_frame_candidates") else _source_path(video, storage))
+            frames = []
+            if not selected_asset:
+                frames = ensure_thumbnail_candidates(export, source_path, storage.job_outputs(export.job_id))
+                payload = read_export_metadata(export)
             frame_seconds = float(payload.get("thumbnail_frame_seconds", 0.0))
             variant_index = max(0, int(payload.get("thumbnail_variant_index", 0)))
             if not selected_asset and bool(payload.get("thumbnail_select_with_codex")):
+                rank_frames = [c for c in frames if payload.get("thumbnail_crop_mode") != "close" or c["close_available"]]
+                if not rank_frames:
+                    raise ValueError("この構図に使える保存済みの人物候補がありません。")
                 from app.jobs.thumbnail_copy import build_copy_input
                 job = db.get(Job, export.job_id)
                 job_style = ((job.settings_json or {}).get("normalThumbnailStyle") or {}) if job else {}
@@ -153,15 +164,22 @@ def run_export_thumbnail_regeneration(
                           "lower": str(payload.get("thumbnail_line2") or "")},
                     design=str(payload.get("thumbnail_design") or job_style.get("design") or "raden"),
                     segments=segments,
+                    saved_candidates=rank_frames, candidate_directory=candidate_directory(storage.job_outputs(export.job_id), export.id),
                 )
             elif not selected_asset and bool(payload.get("thumbnail_advance_frame")):
-                source_start = float(payload.get("start", 0.0))
-                frame_seconds = frame_selector(
-                    source_path,
-                    clip_start=source_start,
-                    clip_end=source_start + float(export.duration),
-                    variant_index=variant_index,
-                )
+                if frames:
+                    current = selected_frame(payload)
+                    index = next((i for i, c in enumerate(frames) if current and c["id"] == current["id"]), -1)
+                    eligible = [c for c in frames if payload.get("thumbnail_crop_mode") != "close" or c["close_available"]]
+                    if not eligible:
+                        raise ValueError("顔のアップにできる候補がありません。")
+                    next_frame = next((c for c in frames[index + 1:] if c in eligible), eligible[0])
+                    frame_seconds = next_frame["second"]
+            chosen = next((c for c in frames if abs(c["second"] - frame_seconds) < .001), None)
+            if chosen:
+                payload["thumbnail_frame_candidate_id"] = chosen["id"]
+            else:
+                payload["thumbnail_frame_candidate_id"] = None
             if frame_seconds < 0 or frame_seconds > float(export.duration) + 0.001:
                 raise ValueError("thumbnail frame must stay within the completed clip")
             source_start = float(payload.get("start", 0.0))
@@ -186,6 +204,9 @@ def run_export_thumbnail_regeneration(
                 payload.get("thumbnail_design"),
             )
             asset_info: dict[str, Any] = {}
+            video_kwargs = video_candidate_kwargs(
+                payload, storage.job_outputs(export.job_id), export.id, mode=crop_mode,
+            ) if not selected_asset else {}
             result = normal_renderer(
                 source_path,
                 temp_output,
@@ -201,61 +222,69 @@ def run_export_thumbnail_regeneration(
                 subject_offset_x=subject_placement.offset_x,
                 subject_offset_y=subject_placement.offset_y,
                 **({"character_asset_path": source_path, "character_asset_face_box": selected_asset.asset.face_box,
-                    "asset_render_info": asset_info} if selected_asset else {}),
+                    "asset_render_info": asset_info} if selected_asset else video_kwargs),
             )
             if result.path.resolve() != temp_output.resolve() or not temp_output.is_file():
                 raise RuntimeError("thumbnail renderer returned an unpublished path")
-            latest = read_export_metadata(export)
-            if (
-                _current_revision(latest) != revision
-                or latest.get("thumbnail_status") != "generating"
-            ):
-                temp_output.unlink(missing_ok=True)
-                return
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            temp_output.replace(output_path)
-            write_export_metadata(
-                metadata_path,
-                {
-                    **latest,
-                    "thumbnail_path": str(output_path),
-                    "thumbnail_filename": output_path.name,
-                    "thumbnail_status": "ready",
-                    "thumbnail_source_time": round(result.source_timestamp, 3),
-                    "thumbnail_source_time_basis": "character_asset" if selected_asset else "source_video_absolute",
-                    "thumbnail_width": result.width,
-                    "thumbnail_height": result.height,
-                    "thumbnail_template_version": "character_normal_v1" if character_style is not None else "raden_normal_v4",
-                    "thumbnail_frame_seconds": round(frame_seconds, 3),
-                    "thumbnail_variant_index": variant_index,
-                    "thumbnail_crop_mode": crop_mode,
-                    "thumbnail_advance_frame": False,
-                    "thumbnail_select_with_codex": False,
-                    "thumbnail_frame_selection_source": (
-                        "character_asset" if selected_asset
-                        else "codex" if payload.get("thumbnail_select_with_codex")
-                        else "face" if payload.get("thumbnail_advance_frame")
-                        else latest.get("thumbnail_frame_selection_source")
-                    ),
-                    "thumbnail_render_revision": revision,
-                    "thumbnail_error_code": None,
-                    "thumbnail_text_styles": resolve_thumbnail_text_styles(
-                        character_style, payload.get("thumbnail_text_styles")
-                    ).model_dump(mode="json", by_alias=True),
-                    **({**selected_asset.metadata(),
-                        "thumbnail_warnings": selected_asset.warnings + asset_info.get("warnings", []),
-                        "thumbnail_character_asset_upscale": asset_info.get("upscale"),
-                        "thumbnail_character_asset_used_at": utc_now().isoformat(),
-                    } if selected_asset else video_subject_metadata()),
-                },
-            )
+            with subtitle_review_document_lock(candidate_directory(storage.job_outputs(export.job_id), export.id)):
+                latest = read_export_metadata(export)
+                if (
+                    _current_revision(latest) != revision
+                    or latest.get("thumbnail_status") != "generating"
+                ):
+                    temp_output.unlink(missing_ok=True)
+                    return
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                temp_output.replace(output_path)
+                write_export_metadata(
+                    metadata_path,
+                    {
+                        **latest,
+                        "thumbnail_path": str(output_path),
+                        "thumbnail_filename": output_path.name,
+                        "thumbnail_status": "ready",
+                        "thumbnail_source_time": round(result.source_timestamp, 3),
+                        "thumbnail_source_time_basis": "character_asset" if selected_asset else "source_video_absolute",
+                        "thumbnail_width": result.width,
+                        "thumbnail_height": result.height,
+                        "thumbnail_template_version": "character_normal_v1" if character_style is not None else "raden_normal_v4",
+                        "thumbnail_frame_seconds": round(frame_seconds, 3),
+                        "thumbnail_frame_candidate_id": payload.get("thumbnail_frame_candidate_id"),
+                        "thumbnail_variant_index": variant_index,
+                        "thumbnail_crop_mode": crop_mode,
+                        "thumbnail_advance_frame": False,
+                        "thumbnail_select_with_codex": False,
+                        "thumbnail_frame_selection_source": (
+                            "character_asset" if selected_asset
+                            else "codex" if payload.get("thumbnail_select_with_codex")
+                            else "face" if payload.get("thumbnail_advance_frame")
+                            else latest.get("thumbnail_frame_selection_source")
+                        ),
+                        "thumbnail_render_revision": revision,
+                        "thumbnail_error_code": None,
+                        "thumbnail_text_styles": resolve_thumbnail_text_styles(
+                            character_style, payload.get("thumbnail_text_styles")
+                        ).model_dump(mode="json", by_alias=True),
+                        **({**selected_asset.metadata(),
+                            "thumbnail_warnings": selected_asset.warnings + asset_info.get("warnings", []),
+                            "thumbnail_character_asset_upscale": asset_info.get("upscale"),
+                            "thumbnail_character_asset_used_at": utc_now().isoformat(),
+                        } if selected_asset else video_subject_metadata()),
+                        "thumbnail_subject_source": "asset" if selected_asset else "video" if chosen else "legacy",
+                        "thumbnail_subject_reason": (
+                            "予備の表情素材を使用しました。" if selected_asset else "この動画から人物を切り出しました。" if chosen
+                            else "半身にできる候補が無いため従来の動画のコマを使用しました。"
+                        ),
+                    },
+                )
         except Exception as exc:
             if temp_output is not None:
                 temp_output.unlink(missing_ok=True)
             if metadata_path is not None:
-                _mark_failed_if_current(
-                    export,
-                    metadata_path,
-                    revision=revision,
-                    error_code=str(getattr(exc, "code", exc.__class__.__name__)),
-                )
+                with subtitle_review_document_lock(candidate_directory(storage.job_outputs(export.job_id), export.id)):
+                    _mark_failed_if_current(
+                        export,
+                        metadata_path,
+                        revision=revision,
+                        error_code=str(getattr(exc, "code", exc.__class__.__name__)),
+                    )

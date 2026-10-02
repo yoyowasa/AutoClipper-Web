@@ -234,6 +234,7 @@ thumbnailIsDisplayable && thumbnailUrl ? (
               onRender={(crop, styles, text, advance, design, selectWithCodex, placement, selection) =>
                 onRegenerateThumbnail(item, crop, styles, text, advance, design, selectWithCodex, placement, selection)} />
           ) : null}
+          {item.thumbnailSubjectReason && <p className="text-xs text-neutral-600">人物: {item.thumbnailSubjectSource === "asset" ? "予備素材" : item.thumbnailSubjectSource === "legacy" ? "従来の動画のコマ" : "動画から"} — {item.thumbnailSubjectReason}</p>}
           {visibleCharacterAssetWarnings(item.thumbnailWarnings).map(warning => <p key={warning} role="status" className="text-xs text-amber-800">{warning}</p>)}
           <div className="grid gap-2 text-xs text-neutral-600 sm:grid-cols-2">
             <span>title: {readableToken(item.titleSource)}</span>

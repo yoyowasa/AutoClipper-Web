@@ -11,8 +11,8 @@ const selection: ThumbnailSubjectSelection = { subjectSource: "asset", character
 const picker = renderToStaticMarkup(createElement(ThumbnailAssetPicker, {
   exportId: "exp_example", value: selection, onChange: () => {}
 }));
-assert.match(picker, /動画のコマ/);
-assert.match(picker, />素材</);
+assert.match(picker, /動画から/);
+assert.match(picker, /予備の素材から/);
 for (const label of ["喜", "怒", "哀", "楽"]) assert.ok(picker.includes(`disabled="" class="min-h-9 border border-neutral-400 text-sm aria-pressed:bg-sky-100 disabled:text-neutral-400">${label}`));
 const warning = "表情を自動で選べませんでした（仮に喜を使用）";
 const editor = renderToStaticMarkup(createElement(ResultThumbnailEditor, {
@@ -24,7 +24,7 @@ const editor = renderToStaticMarkup(createElement(ResultThumbnailEditor, {
 assert.ok(editor.includes(warning) && editor.includes("表情の選択理由"));
 assert.ok(!editor.includes("素材の解像度が足りず粗くなります")); // The live preview supplies the current scale warning.
 assert.match(editor, /文言に合う表情を選び直す/);
-assert.match(editor, /素材は画像全体を人物枠に収め、下端を揃えます/);
+assert.match(editor, /素材は高さを枠に合わせ、左右のはみ出しを切り取ります/);
 assert.match(editor, /大きさ・左右・上下で調整/);
 assert.ok(!editor.includes("顔を検出できません") && !editor.includes("顔を基準"));
 

@@ -62,7 +62,7 @@ export function CharacterAssetsManager({ presetId, disabled, onBusyChange, revis
   return <section aria-label="キャラの表情素材" className="grid gap-2 border-t border-sky-200 pt-3">
     <h3 className="text-sm font-semibold">サムネ用の表情素材（各5枚まで）</h3>
     <p>配信者・事務所の切り抜きガイドラインで使用が認められた素材だけを登録してください。</p>
-    <p>胸から上が写った画像を登録してください。サムネでは画像全体を人物枠に収めます。</p>
+    <p>胸から上が写った画像を登録してください。サムネでは高さを人物枠に合わせます。</p>
     {data && <p className="text-neutral-600">PNG・JPEG・WebP / 1枚20MBまで / 短い辺{data.minSidePixels}px以上。複数選択で空き枠へ順に登録できます。</p>}
     {!data && !error && <p role="status">素材を読み込み中…</p>}
     <div className="overflow-x-auto">

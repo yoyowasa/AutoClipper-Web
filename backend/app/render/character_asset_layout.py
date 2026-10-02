@@ -1,4 +1,4 @@
-"""Fit the complete processed PNG in the character frame without using faces."""
+"""Height-first PNG placement; horizontal overflow is clipped by the character frame."""
 
 from dataclasses import dataclass
 from typing import Any
@@ -23,9 +23,11 @@ def character_asset_layout(size: tuple[int, int], frame: dict[str, Any], face_bo
                            *, scale: float = 1, offset_x: int = 0, offset_y: int = 0) -> CharacterAssetLayout:
     width, height = size
     target_x = frame["width"] * float(frame.get("face_target_x", .5))
-    # Keep the configured center while fitting both edges at the default scale.
-    available_width = 2 * min(target_x, frame["width"] - target_x)
-    fit = min(frame["height"] / height, available_width / width) * scale
+    # Fit height unless an unusually wide image exceeds 120% of the frame width.
+    fit = frame["height"] / height
+    if width * fit > frame["width"] * 1.2:
+        fit = frame["width"] / width
+    fit *= scale
     rendered_width, rendered_height = max(1, round(width * fit)), max(1, round(height * fit))
     x = round(target_x - rendered_width / 2 + offset_x)
     y = frame["height"] - rendered_height + offset_y

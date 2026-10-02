@@ -11,7 +11,6 @@ from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.queue import get_enqueue_thumbnail_preview, get_enqueue_thumbnail_regeneration
 from app.jobs.thumbnail_character_assets import choose_character_asset
-from app.jobs.thumbnail_preview import run_thumbnail_preview_prepare
 from app.jobs.thumbnail_regeneration import run_export_thumbnail_regeneration
 from app.jobs.thumbnails import generate_export_thumbnails, read_export_metadata, write_export_metadata
 from app.main import app
@@ -129,21 +128,23 @@ def test_asset_rotation_uses_last_publication_time_and_other_characters_do_not_c
 
 @pytest.mark.parametrize("design", ["raden", "sopia"])
 @pytest.mark.parametrize("size", [(320, 430), (800, 320), (400, 400)], ids=["portrait", "landscape", "square"])
-def test_complete_asset_fits_frame_preserves_center_and_bottom_for_both_templates(design, size):
+def test_height_first_asset_clips_sides_preserves_center_and_bottom_for_both_templates(design, size):
     template = renderer._load_template(renderer.DEFAULT_NORMAL_TEMPLATE_PATH if design == "raden" else renderer.SOPIA_NORMAL_TEMPLATE_PATH)
     frame = template["frame"]
     layout = character_asset_layout(size, frame, FACE)
-    assert 0 <= layout.x and layout.x + layout.width <= frame["width"]
+    expected_scale = frame["height"] / size[1]
+    if size[0] * expected_scale > frame["width"] * 1.2:
+        expected_scale = frame["width"] / size[0]
+    assert layout.scale == pytest.approx(expected_scale)
     assert 0 <= layout.y and layout.y + layout.height == frame["height"]
     assert layout.x + layout.width / 2 == pytest.approx(frame["width"] * frame["face_target_x"], abs=.5)
     assert layout.width / layout.height == pytest.approx(size[0] / size[1], abs=.01)
     image = Image.new("RGBA", size, (80, 180, 130, 255))
     ImageDraw.Draw(image).rectangle((0, size[1] - 20, size[0] - 1, size[1] - 1), fill=(255, 0, 180, 255))
     layer = place_character_asset(image, frame, FACE, scale=1, offset_x=0, offset_y=0, info=None)
-    box = (layout.x, layout.y, layout.x + layout.width, layout.y + layout.height)
-    assert layer.getbbox() == box
-    # Compare every pixel against the whole original, including its bottom marker.
-    assert layer.crop(box).tobytes() == image.resize((layout.width, layout.height), Image.Resampling.LANCZOS).tobytes()
+    expected = Image.new("RGBA", (frame["width"], frame["height"]))
+    expected.alpha_composite(image.resize((layout.width, layout.height), Image.Resampling.LANCZOS), (layout.x, layout.y))
+    assert layer.tobytes() == expected.tobytes()
     assert character_asset_layout(size, frame, None) == layout
     assert character_asset_layout(size, frame, {"x": .1, "y": .1, "w": .1, "h": .1}) == layout
     assert character_asset_layout(size, {**frame, "min_crop_height_ratio": .99}, FACE) == layout
@@ -162,7 +163,7 @@ def test_tall_asset_fits_height_first_and_scale_offsets_keep_bottom_anchor():
     assert moved.y + moved.height == frame["height"] - 20
 
 
-@pytest.mark.parametrize("design,expected", [("raden", 1.384), ("sopia", 720 / 430)])
+@pytest.mark.parametrize("design,expected", [("raden", 720 / 430), ("sopia", 720 / 430)])
 def test_whole_asset_upscale_warning_still_uses_two_times_threshold(design, expected):
     template = renderer._load_template(renderer.DEFAULT_NORMAL_TEMPLATE_PATH if design == "raden" else renderer.SOPIA_NORMAL_TEMPLATE_PATH)
     frame = template["frame"]
@@ -215,7 +216,7 @@ def generate_batch(context, *, with_assets, monkeypatch):
 @pytest.mark.parametrize("with_assets", [False, True])
 def test_auto_export_uses_assets_rotates_unpublished_batch_and_video_fallback(asset_thumbnail, monkeypatch, with_assets):
     ids, calls, saved = generate_batch(asset_thumbnail, with_assets=with_assets, monkeypatch=monkeypatch)
-    assert [data["thumbnail_subject_source"] for data in saved] == ["asset" if with_assets else "video"] * 2
+    assert [data["thumbnail_subject_source"] for data in saved] == ["asset" if with_assets else "legacy"] * 2
     if with_assets:
         assert [data["thumbnail_character_asset_id"] for data in saved] == ids
         assert all(data["thumbnail_emotion_selection_source"] == "single_emotion" for data in saved)
@@ -239,8 +240,7 @@ def test_asset_preview_and_manual_regeneration_match_preserve_video_and_switch_b
     listed = context.api.get(ENDPOINT + "/assets")
     assert listed.status_code == 200 and listed.json()["emotions"]["joy"][0]["id"] == identifier
     response = context.api.post(ENDPOINT + "/preview/prepare", params=source)
-    assert response.status_code == 200 and len(previews) == 1
-    run_thumbnail_preview_prepare(*previews[0], session_factory=context.factory, paths=context.storage, extractor=forbidden)
+    assert response.status_code == 200 and response.json()["state"] == "ready" and not previews
     key = context.api.post(ENDPOINT + "/preview/prepare", params=source).json()["frameKey"]
     text = {"heading": "見出し", "upper": "変更した上行", "lower": "下行"}
     placement = {"scale": 1.5, "offsetX": -35, "offsetY": 20}
@@ -266,6 +266,7 @@ def test_asset_preview_and_manual_regeneration_match_preserve_video_and_switch_b
     back = context.api.post(ENDPOINT + "/regenerate", json={"subjectSource": "video", "frameSeconds": 4})
     assert back.status_code == 202
     monkeypatch.undo()
+    monkeypatch.setattr("app.jobs.thumbnail_candidates.extract_thumbnail_candidates", lambda *args, **kwargs: [])
     run_export_thumbnail_regeneration(*queued[-1], session_factory=context.factory, paths=context.storage,
                                       normal_renderer=real_test_renderer)
     data = json.loads(context.metadata.read_text(encoding="utf-8"))
@@ -332,3 +333,20 @@ def test_text_only_emotion_bridge_contract_and_real_envelope(tmp_path):
     for output in ({"emotion": "neutral", "reason": "なし"}, {"emotion": "joy", "reason": ""}):
         with pytest.raises(ValueError):
             generator.parse_output(output)
+
+
+@pytest.fixture(autouse=True)
+def no_faces_in_placeholder_video(monkeypatch):
+    monkeypatch.setattr("app.jobs.thumbnail_candidates.extract_thumbnail_candidates", lambda *args, **kwargs: [])
+
+
+@pytest.mark.parametrize("design", ["raden", "sopia"])
+def test_registered_large_asset_fills_height_and_wide_asset_fits_width(design):
+    template = renderer._load_template(renderer.DEFAULT_NORMAL_TEMPLATE_PATH if design == "raden" else renderer.SOPIA_NORMAL_TEMPLATE_PATH)
+    frame = template["frame"]
+    layout = character_asset_layout((1047, 1117), frame, None)
+    assert layout.height == 720 and layout.y == 0 and layout.scale == pytest.approx(720 / 1117)
+    assert layout.x + layout.width / 2 == pytest.approx(frame["width"] * frame["face_target_x"], abs=.5)
+    wide = character_asset_layout((2000, 500), frame, None)
+    assert wide.width == frame["width"] and wide.height < frame["height"]
+    assert wide.y + wide.height == frame["height"]

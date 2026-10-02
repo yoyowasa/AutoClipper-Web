@@ -412,3 +412,13 @@ def enqueue_thumbnail_preview(export_id: str, request_id: str) -> None:
 
 def get_enqueue_thumbnail_preview() -> Callable[[str, str], None]:
     return enqueue_thumbnail_preview
+
+
+def enqueue_thumbnail_candidates(export_id: str, request_id: str) -> None:
+    from app.jobs.thumbnail_candidates import run_thumbnail_candidate_extraction
+    get_queue().enqueue(run_thumbnail_candidate_extraction, export_id, request_id,
+                        job_timeout=600, job_id=f"thumbnail-candidates-{request_id}")
+
+
+def get_enqueue_thumbnail_candidates() -> Callable[[str, str], None]:
+    return enqueue_thumbnail_candidates
