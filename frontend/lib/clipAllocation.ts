@@ -27,6 +27,7 @@ export function allocationLabel(plan: ClipPlanDocument): string {
 }
 export const shortageLabels: Record<string, string> = {
   insufficient_strong_candidates: "強い候補が不足", duration_out_of_range: "尺ルールの範囲外",
+  longform_without_reason: "長尺にする理由が不足",
   low_codex_confidence: "AIの確信度が不足", rejected_by_user_no_content: "内容がないと指定した区間",
   rejected_by_user_weak_highlight: "見どころが弱いと指定した区間", rejected_by_user_missing_context: "文脈不足で未拡張",
   rejected_by_user_missing_context_repeated: "繰り返し文脈不足と指定した区間",
