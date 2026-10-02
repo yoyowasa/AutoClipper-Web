@@ -933,6 +933,8 @@ class JobStatusResponse(BaseModel):
 
 
 class ResultExportItem(BaseModel):
+    download_filename: str | None = Field(default=None, alias="downloadFilename")
+    download_name_truncated: bool = Field(default=False, alias="downloadNameTruncated")
     thumbnail_design: ThumbnailDesign = Field(default="raden", alias="thumbnailDesign")
     thumbnail_can_use_custom_background: bool = Field(default=False, alias="thumbnailCanUseCustomBackground")
     thumbnail_text_styles: ThumbnailTextStyles | None = Field(default=None, alias="thumbnailTextStyles")

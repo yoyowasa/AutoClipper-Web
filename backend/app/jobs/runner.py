@@ -11,7 +11,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from zipfile import ZIP_DEFLATED, ZipFile
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -940,46 +939,6 @@ def _zip_type_dir(export_type: str) -> str:
     return "shorts" if export_type == "short" else "normal"
 
 
-def _zip_export_arcname(export: ExportItem, path: Path, source_value: str) -> str:
-    type_dir = _zip_type_dir(export.type)
-    if source_value == export.video_path:
-        return f"videos/{type_dir}/{path.name}"
-    if source_value == export.subtitle_path:
-        return f"subtitles/{type_dir}/{path.name}"
-    if source_value == export.metadata_path:
-        return f"metadata/{type_dir}/{path.name}"
-    return f"metadata/{path.name}"
-
-
-def _create_zip(zip_path: Path, exports: Sequence[ExportItem], metadata_files: Sequence[Path] | None = None) -> None:
-    zip_path.parent.mkdir(parents=True, exist_ok=True)
-    resolved_job_dir = zip_path.parent.resolve(strict=False)
-    with ZipFile(zip_path, "w", compression=ZIP_DEFLATED) as archive:
-        for export in exports:
-            for value in (export.video_path, export.subtitle_path, export.metadata_path):
-                if not value:
-                    continue
-                path = Path(value)
-                if path.is_file():
-                    archive.write(path, arcname=_zip_export_arcname(export, path, value))
-            thumbnail_path = thumbnail_path_from_export(export)
-            if thumbnail_path is not None:
-                try:
-                    thumbnail_path.resolve(strict=False).relative_to(resolved_job_dir)
-                except (OSError, ValueError):
-                    thumbnail_path = None
-            if thumbnail_path is not None and thumbnail_path.is_file():
-                archive.write(
-                    thumbnail_path,
-                    arcname=(
-                        f"thumbnails/{_zip_type_dir(export.type)}/{thumbnail_path.name}"
-                    ),
-                )
-        for metadata_file in metadata_files or []:
-            if metadata_file.is_file():
-                archive.write(metadata_file, arcname=f"metadata/{metadata_file.name}")
-
-
 def _render_selected_outputs(
     *,
     db: Session,
@@ -1499,22 +1458,6 @@ def _read_model_list(path: Path, model_type: type[Candidate]) -> list[Candidate]
     return [model_type.model_validate(item) for item in payload]
 
 
-def _top_level_metadata_files(job_dir: Path) -> list[Path]:
-    metadata_files = [
-        path
-        for path in job_dir.iterdir()
-        if path.is_file() and path.suffix.lower() in {".json", ".md"}
-    ]
-    quality_dir = job_dir / "quality_gate"
-    if quality_dir.is_dir():
-        metadata_files.extend(
-            path
-            for path in quality_dir.iterdir()
-            if path.is_file() and path.suffix.lower() == ".json"
-        )
-    return sorted(metadata_files, key=lambda path: (path.parent.name, path.name))
-
-
 def _render_exact_subtitle_review_preview_for_clip(
     *,
     dependencies: AutoClipperPipelineDependencies,
@@ -1771,12 +1714,15 @@ def _resume_auto_after_clip_review(
     review_path = subtitle_review_output_path(job_dir)
     review_document = load_subtitle_review(review_path)
     if review_document.state == "completed":
-        zip_path = storage_paths.zip_path(job.id)
+        completed_exports = list(db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)))
         try:
             publication_completed = (
                 job.status == "completed"
-                and zip_path.is_file()
-                and zip_path.stat().st_size > 0
+                and not rerender_publication_is_unresolved(job_dir)
+                and bool(completed_exports)
+                and all(Path(export.video_path).resolve().is_relative_to(job_dir.resolve())
+                        and Path(export.video_path).is_file() and Path(export.video_path).stat().st_size > 0
+                        for export in completed_exports)
             )
         except OSError:
             publication_completed = False
@@ -3191,7 +3137,6 @@ def run_autoclipper_job(
 
             _set_status(db, job, "packaging_zip")
             visited_statuses.append("packaging_zip")
-            _create_zip(storage_paths.zip_path(job.id), exports, metadata_files=metadata_files)
 
             _set_status(db, job, "completed")
             visited_statuses.append("completed")
@@ -3479,7 +3424,6 @@ def run_subtitle_review_render(
         previous_export_ids: set[str] = set()
         rerender_publication_committed = False
         is_rerender = False
-        pending_rerender_zip: Path | None = None
         rerender_publication_was_unresolved = False
         rerender_publication_lease: Any | None = None
         rerender_attempt_id: str | None = None
@@ -3825,19 +3769,12 @@ def run_subtitle_review_render(
                     exports,
                     job_dir=job_dir,
                 )
-            zip_path = storage_paths.zip_path(job.id)
             if is_rerender:
                 if rerender_promotion is None:
                     raise RuntimeError("subtitle rerender promotion is unavailable")
-                pending_rerender_zip = job_dir / f".download_revision_{review_document.render_revision}.tmp.zip"
-                pending_rerender_zip.unlink(missing_ok=True)
-                _create_zip(
-                    pending_rerender_zip,
-                    exports,
-                    metadata_files=_top_level_metadata_files(job_dir),
-                )
-                rerender_promotion.publish(pending_rerender_zip, zip_path)
-                pending_rerender_zip = None
+                # Keep a legacy archive on failed publication; invalidate it only with successful media publication.
+                # New archives are temporary downloads and are never built by the worker.
+                rerender_promotion.remove(storage_paths.zip_path(job.id))
                 _assign_status(job, "completed")
                 record_completed_exports(db, job, storage_paths)
                 db.commit()
@@ -3851,19 +3788,11 @@ def run_subtitle_review_render(
                         expected_attempt_id=rerender_attempt_id,
                     )
             else:
-                _create_zip(
-                    zip_path,
-                    exports,
-                    metadata_files=_top_level_metadata_files(job_dir),
-                )
-
                 _set_status(db, job, "completed")
             visited_statuses.append("completed")
             prune_job_previews_after_completion(db, job, storage_paths)
             enqueue_completed_job_harvest(db, job, storage_paths)
         except PipelineExpectedError as exc:
-            if pending_rerender_zip is not None:
-                pending_rerender_zip.unlink(missing_ok=True)
             if is_rerender and review_document is not None:
                 rollback_succeeded = True
                 if not rerender_publication_committed:
@@ -3909,8 +3838,6 @@ def run_subtitle_review_render(
             else:
                 _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
         except Exception as exc:
-            if pending_rerender_zip is not None:
-                pending_rerender_zip.unlink(missing_ok=True)
             if is_rerender and review_document is not None:
                 rollback_succeeded = True
                 if not rerender_publication_committed:

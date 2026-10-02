@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
 from app.db import Base, get_db
-from app.jobs.runner import _create_zip
+from app.downloads import create_download_archive
 from app.jobs.queue import get_enqueue_thumbnail_regeneration
 from app.jobs.thumbnail_regeneration import run_export_thumbnail_regeneration
 from app.jobs.thumbnails import generate_export_thumbnails
@@ -438,11 +438,11 @@ def test_zip_contains_thumbnail_in_type_directory(tmp_path: Path) -> None:
     )
     zip_path = output_dir / "download.zip"
 
-    _create_zip(zip_path, [export])
+    create_download_archive(zip_path, [export], job_dir=output_dir)
 
     with ZipFile(zip_path) as archive:
-        assert "thumbnails/normal/normal_01_thumbnail.jpg" in archive.namelist()
-        assert archive.read("thumbnails/normal/normal_01_thumbnail.jpg") == b"jpeg"
+        assert "thumbnails/normal/完成動画.jpg" in archive.namelist()
+        assert archive.read("thumbnails/normal/完成動画.jpg") == b"jpeg"
 
 
 def test_zip_rejects_thumbnail_from_sibling_job(tmp_path: Path) -> None:
@@ -472,7 +472,7 @@ def test_zip_rejects_thumbnail_from_sibling_job(tmp_path: Path) -> None:
     )
     zip_path = output_dir / "download.zip"
 
-    _create_zip(zip_path, [export])
+    create_download_archive(zip_path, [export], job_dir=output_dir)
 
     with ZipFile(zip_path) as archive:
         assert not any(name.startswith("thumbnails/") for name in archive.namelist())

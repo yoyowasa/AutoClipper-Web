@@ -315,6 +315,8 @@ export type ResultExportItem = {
   thumbnailStatus: "not_generated" | "generating" | "ready" | "failed" | null;
   thumbnailErrorCode?: string | null;
   thumbnailFilename: string | null;
+  downloadFilename?: string | null;
+  downloadNameTruncated?: boolean;
   thumbnailFrameSeconds: number | null;
   thumbnailSubjectAnchorX: number | null;
   thumbnailRenderRevision: number;

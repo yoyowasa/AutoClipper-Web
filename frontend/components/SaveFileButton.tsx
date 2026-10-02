@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
+import { downloadWithBrowser } from "../lib/postingSetSave";
 
 import {
   browserFileSaveSupported,
@@ -46,6 +47,11 @@ export function SaveFileButton({
     setStatus("saving");
     setError(null);
     try {
+      if (!browserFileSaveSupported()) {
+        downloadWithBrowser(url, suggestedName);
+        setStatus("idle");
+        return;
+      }
       const result = await saveBrowserFile({
         url,
         suggestedName,
@@ -71,7 +77,7 @@ export function SaveFileButton({
         data-save-picker-supported={
           supported === null ? "checking" : supported ? "true" : "false"
         }
-        disabled={status === "saving" || supported === false}
+        disabled={status === "saving"}
         type="button"
         onClick={() => void saveFile()}
       >
@@ -81,11 +87,6 @@ export function SaveFileButton({
             ? "保存完了"
             : label}
       </button>
-      {supported === false ? (
-        <span className="max-w-64 text-xs text-red-700" role="status">
-          このChromeでは保存先を選ぶ機能を利用できません
-        </span>
-      ) : null}
       {status === "error" && error ? (
         <span className="max-w-64 text-xs text-red-700" role="status">
           {error}

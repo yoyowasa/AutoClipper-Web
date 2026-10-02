@@ -854,7 +854,7 @@ def test_auto_pass_completes_and_packages_posting_artifacts(
     assert client.get(f"/api/jobs/{job_id}").json()["status"] == "completed"
     assert (output_dir / "youtube_posting_packages.json").is_file()
     assert (output_dir / "youtube_posts.md").is_file()
-    assert storage.zip_path(job_id).is_file()
+    assert not storage.zip_path(job_id).exists()
 
 
 def test_auto_content_attention_stops_before_rendering(
@@ -1050,12 +1050,13 @@ def test_auto_resume_regular_failure_restores_editable_review_and_consumes_marke
 
 
 @pytest.mark.parametrize(
-    ("review_state", "job_status", "expected_status"),
+    ("review_state", "job_status", "expected_status", "legacy_zip"),
     [
-        ("completed", "completed", "completed"),
-        ("completed", "packaging_zip", "awaiting_subtitle_review"),
-        ("rendering", "rendering_normal_clips", "awaiting_subtitle_review"),
-        ("render_queued", "queued", "awaiting_subtitle_review"),
+        ("completed", "completed", "completed", False),
+        ("completed", "completed", "completed", True),
+        ("completed", "packaging_zip", "awaiting_subtitle_review", False),
+        ("rendering", "rendering_normal_clips", "awaiting_subtitle_review", False),
+        ("render_queued", "queued", "awaiting_subtitle_review", False),
     ],
 )
 def test_auto_resume_retry_recovers_durable_review_state_without_reselection(
@@ -1065,6 +1066,7 @@ def test_auto_resume_retry_recovers_durable_review_state_without_reselection(
     review_state: str,
     job_status: str,
     expected_status: str,
+    legacy_zip: bool,
 ) -> None:
     client, storage, session_factory = guarded_client
     job_id = _create_review_job(client, automation_mode="auto")
@@ -1085,8 +1087,14 @@ def test_auto_resume_retry_recovers_durable_review_state_without_reselection(
         job = db.get(Job, job_id)
         assert job is not None
         job.status = job_status
+        if expected_status == "completed":
+            video_path = storage.job_outputs(job_id) / "normal" / "normal_01.mp4"
+            video_path.parent.mkdir(exist_ok=True)
+            video_path.write_bytes(b"published video")
+            db.add(ExportItem(id="exp_completed", job_id=job_id, video_id=job.video_id, type="normal",
+                              title="完成済み", duration=120, score=90, video_path=str(video_path)))
         db.commit()
-    if expected_status == "completed":
+    if legacy_zip:
         storage.zip_path(job_id).write_bytes(b"published zip")
 
     statuses = run_autoclipper_job(

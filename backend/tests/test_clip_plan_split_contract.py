@@ -30,6 +30,9 @@ def test_openapi_paths_and_methods_match_before_clip_plan_split() -> None:
         "/api/exports/{export_id}/thumbnail/candidates": ["get"],
         "/api/exports/{export_id}/thumbnail/candidates/prepare": ["post"],
         "/api/exports/{export_id}/thumbnail/candidates/{candidate_id}/image": ["get"],
+        "/api/exports/{export_id}/posting-set": ["get"],
+        "/api/exports/{export_id}/posting-text": ["get"],
+        "/api/exports/{export_id}/posting-set.zip": ["get"],
     }
 
 

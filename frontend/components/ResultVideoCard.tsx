@@ -4,6 +4,7 @@ import Image from "next/image";
 import { useState } from "react";
 
 import { SaveFileButton } from "./SaveFileButton";
+import { SavePostingSetButton } from "./SavePostingSetButton";
 import { ResultThumbnailWorkspace } from "./ResultThumbnailWorkspace";
 import { formatDuration, formatScore } from "../lib/format";
 import { toBrowserApiUrl } from "../lib/api";
@@ -113,6 +114,7 @@ export function ResultVideoCard({
   suggestedFilename: string;
 }) {
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const downloadFilename = item.downloadFilename ?? suggestedFilename;
   const [failedThumbnailUrl, setFailedThumbnailUrl] = useState<string | null>(null);
   const warnings = item.auditWarnings ?? [];
   const titleCandidates = item.titleCandidates ?? [];
@@ -136,7 +138,7 @@ export function ResultVideoCard({
     thumbnailUrl && failedThumbnailUrl !== thumbnailUrl
   );
   const thumbnailFilename =
-    item.thumbnailFilename ?? suggestedFilename.replace(/\.mp4$/iu, ".jpg");
+    item.thumbnailFilename ?? downloadFilename.replace(/\.mp4$/iu, ".jpg");
   const thumbnailIsPng = thumbnailFilename.toLowerCase().endsWith(".png");
   const thumbnailLabel = thumbnailStatusLabel(
     item.thumbnailStatus,
@@ -408,6 +410,7 @@ thumbnailIsDisplayable && thumbnailUrl ? (
         ) : null}
 
         <div className="flex flex-wrap gap-2">
+          <SavePostingSetButton exportId={item.id} filename={downloadFilename} available={Boolean(item.thumbnailDownloadUrl)} />
           {onReedit && item.candidateId ? (
             <button
               className="inline-flex min-h-10 items-center bg-sky-700 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
@@ -421,7 +424,7 @@ thumbnailIsDisplayable && thumbnailUrl ? (
           <SaveFileButton
             className="inline-flex min-h-10 items-center rounded-md bg-neutral-950 px-4 text-sm font-medium text-white"
             url={toBrowserApiUrl(item.downloadUrl)}
-            suggestedName={suggestedFilename}
+            suggestedName={downloadFilename}
             mimeType="video/mp4"
             extension=".mp4"
             description="MP4 video"
@@ -453,6 +456,8 @@ thumbnailIsDisplayable && thumbnailUrl ? (
             </a>
           ) : null}
         </div>
+        <p className="break-all text-xs text-neutral-500">保存名: {downloadFilename}</p>
+        {item.downloadNameTruncated && <p className="text-xs text-neutral-500">保存ファイル名は公開用タイトルの先頭100文字にしています。</p>}
       </div>
     </article>
   );
