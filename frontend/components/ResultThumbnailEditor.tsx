@@ -117,7 +117,8 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, sty
     <div aria-label="サムネの書式編集" tabIndex={0} className="min-h-0 min-w-0 xl:overflow-y-auto xl:overscroll-contain">
     <ThumbnailAssetPicker exportId={item.id} value={subject} onChange={setSubject} disabled={locked} />
     {subject.subjectSource === "asset" && subject.characterAssetId === item.thumbnailCharacterAssetId && <>
-      {item.thumbnailWarnings?.map(warning => <p key={warning} role="status" className="mt-2 text-xs text-amber-800">{warning}</p>)}
+      {item.thumbnailWarnings?.filter(warning => warning !== "素材の解像度が足りず粗くなります")
+        .map(warning => <p key={warning} role="status" className="mt-2 text-xs text-amber-800">{warning}</p>)}
       {item.thumbnailEmotionReason && <p className="mt-2 text-xs text-neutral-600">表情の選択理由: {item.thumbnailEmotionReason}</p>}
     </>}
     <fieldset disabled={locked} className="min-w-0 border border-amber-300 bg-white p-3">
