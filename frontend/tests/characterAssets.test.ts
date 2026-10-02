@@ -19,7 +19,7 @@ assert.equal((html.match(/ multiple=""/g) ?? []).length, 20);
 assert.match(html, /grid-cols-4/);
 assert.match(html, /使用が認められた素材だけ/);
 assert.match(html, /胸から上が写った画像を登録してください/);
-assert.match(html, /画像全体を人物枠に収めます/);
+assert.match(html, /高さを人物枠に合わせます/);
 const legacyWarnings = ["顔を検出できません（配置を手で調整してください）", "背景付き（切り抜きモデル未導入）", "素材の解像度が足りず粗くなります"];
 assert.deepEqual(visibleCharacterAssetWarnings(legacyWarnings), legacyWarnings.slice(1));
 assert.equal(legacyWarnings.length, 3); // Saved warnings are preserved; only their display changes.

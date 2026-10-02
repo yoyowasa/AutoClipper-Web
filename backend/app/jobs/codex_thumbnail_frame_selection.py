@@ -9,7 +9,7 @@ from typing import Any, Callable
 from PIL import Image, ImageDraw, ImageOps
 
 from app.jobs.thumbnail_frame_selection import (
-    FaceDetector, detect_thumbnail_faces_for_clip, thumbnail_frame_candidates,
+    FaceDetector, detect_thumbnail_faces_for_clip,
 )
 from app.render.render_thumbnail import extract_thumbnail_frame
 from app.scoring.thumbnail_frame_rank import CodexThumbnailFrameRanker, ThumbnailFrameRanking
@@ -64,21 +64,22 @@ def select_codex_thumbnail_frame_seconds(
     extractor: FrameExtractor = extract_thumbnail_frame,
     ranker: Any = None,
     face_detector: FaceDetector = detect_thumbnail_faces_for_clip,
+    saved_candidates: list[dict[str, Any]] | None = None,
+    candidate_directory: Path | None = None,
 ) -> float:
     """Return one clip-relative timestamp; do not change source video or presets."""
     duration = float(clip_end) - float(clip_start)
-    seconds = thumbnail_frame_candidates(
-        video_path, clip_start=clip_start, clip_end=clip_end,
-        count=FRAME_COUNT, face_detector=face_detector,
-    ) or _candidate_seconds(duration)
+    if not saved_candidates or candidate_directory is None:
+        raise ValueError("保存済みの人物候補がありません。")
+    top = saved_candidates[:FRAME_COUNT]
+    # Preserve the existing fixed-eight bridge contract by repeating verified frames.
+    chosen = [top[index % len(top)] for index in range(FRAME_COUNT)]
+    seconds = [candidate["second"] for candidate in chosen]
     temporary_root = Path(temp_root)
     temporary_root.mkdir(parents=True, exist_ok=True)
     with TemporaryDirectory(prefix="codex-thumbnail-", dir=temporary_root) as directory:
         work = Path(directory)
-        frames = [
-            extractor(video_path, work / f"frame_{index}.jpg", clip_start + second)
-            for index, second in enumerate(seconds)
-        ]
+        frames = [candidate_directory / f'{candidate["id"]}.jpg' for candidate in chosen]
         sheets = [
             _contact_sheet(frames[index:index + 4], work / f"sheet_{index // 4}.jpg", first_id=index)
             for index in (0, 4)

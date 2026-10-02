@@ -12,7 +12,8 @@ from app.candidates.select_candidates import CandidateSelection
 from app.models import ExportItem, Job, utc_now
 from sqlalchemy.orm import Session
 from app.storage.paths import StoragePaths
-from app.jobs.thumbnail_frame_selection import thumbnail_frame_near
+from app.jobs.thumbnail_candidates import ensure_thumbnail_candidates, video_candidate_kwargs
+from app.storage.json_io import write_json_atomic
 from app.render.render_thumbnail import (
     ThumbnailRenderResult,
     render_normal_thumbnail,
@@ -63,12 +64,7 @@ def thumbnail_path_from_export(export: ExportItem) -> Path | None:
 
 
 def _write_metadata(path: Path, payload: dict[str, Any]) -> None:
-    temporary = path.with_suffix(f"{path.suffix}.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
+    write_json_atomic(path, payload)
 
 
 def write_export_metadata(path: str | Path, payload: dict[str, Any]) -> None:
@@ -171,7 +167,7 @@ def generate_export_thumbnails(
     job_output_dir: str | Path,
     normal_renderer: NormalThumbnailRenderer = render_normal_thumbnail,
     short_renderer: ShortThumbnailRenderer = render_short_thumbnail,
-    normal_frame_selector: NormalThumbnailFrameSelector = thumbnail_frame_near,
+    normal_frame_selector: NormalThumbnailFrameSelector | None = None,
     character_style: dict[str, Any] | None = None,
     db: Session | None = None,
     job: Job | None = None,
@@ -202,24 +198,19 @@ def generate_export_thumbnails(
             if export.type == "normal":
                 from app.jobs.thumbnail_character_assets import choose_character_asset, video_subject_metadata
                 proposed = _normal_frame_seconds(candidate) - candidate.start
+                write_export_metadata(metadata_path, {**payload, "start": candidate.start, "end": candidate.end})
+                frames = ensure_thumbnail_candidates(export, input_path, output_dir)
+                payload = read_export_metadata(export)
                 selected_asset = choose_character_asset(
                     db, paths, job, export, {**payload,
                         "start": candidate.start, "end": candidate.end, "thumbnail_frame_seconds": proposed,
                         "thumbnail_kicker": candidate.thumbnail_kicker,
                         "thumbnail_line1": candidate.thumbnail_line1, "thumbnail_line2": candidate.thumbnail_line2},
-                    selector=emotion_selector,
-                    recent_asset_ids=recent_asset_ids,
-                ) if db is not None and job is not None and paths is not None else None
-                selected = proposed if selected_asset else normal_frame_selector(
-                    input_path, clip_start=candidate.start, clip_end=candidate.end,
-                    preferred_seconds=proposed,
-                )
-                if abs(selected - proposed) > 0.001:
-                    payload = {
-                        **payload,
-                        "thumbnail_frame_seconds": round(selected, 3),
-                        "thumbnail_frame_selection_source": "face",
-                    }
+                    selector=emotion_selector, recent_asset_ids=recent_asset_ids,
+                ) if not frames and db is not None and job is not None and paths is not None else None
+                selected = frames[0]["second"] if frames else proposed
+                payload.update(thumbnail_frame_seconds=round(selected, 3), thumbnail_crop_mode="standard",
+                               thumbnail_frame_candidate_id=frames[0]["id"] if frames else None)
                 asset_info: dict[str, Any] = {}
                 asset_kwargs = {
                     "character_asset_path": paths.character_asset(
@@ -227,7 +218,7 @@ def generate_export_thumbnails(
                     ),
                     "character_asset_face_box": selected_asset.asset.face_box,
                     "asset_render_info": asset_info,
-                } if selected_asset else {}
+                } if selected_asset else video_candidate_kwargs(payload, output_dir, export.id)
                 result = normal_renderer(
                     input_path,
                     output_path,
@@ -248,6 +239,12 @@ def generate_export_thumbnails(
                     recent_asset_ids.append(selected_asset.asset.id)
                 else:
                     payload.update(video_subject_metadata())
+                payload["thumbnail_subject_source"] = "asset" if selected_asset else "video" if frames else "legacy"
+                payload["thumbnail_subject_reason"] = (
+                    "この動画から半身を切り出しました。" if frames else
+                    "半身にできる場面が無いため予備素材を使用しました。" if selected_asset else
+                    "半身にできる場面と予備素材が無いため従来の動画のコマを使用しました。"
+                )
             elif export.type == "short":
                 hook_start, hook_end = _short_hook_range(candidate, export)
                 result = short_renderer(

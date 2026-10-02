@@ -1330,6 +1330,13 @@ def _promote_subtitle_rerender(
     try:
         for export in staged_exports:
             staged_thumbnail_path = thumbnail_path_from_export(export)
+            from app.jobs.thumbnail_candidates import candidate_directory
+            frame_directory = candidate_directory(staging_job_dir, export.id)
+            for cached_frame in sorted(frame_directory.glob("*.jpg")):
+                _promote_staged_export_file(
+                    str(cached_frame), staging_job_dir=staging_job_dir,
+                    canonical_job_dir=canonical_job_dir, promotion=promotion,
+                )
             expected_thumbnail_path = (
                 canonical_job_dir
                 / "thumbnails"

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { prepareThumbnailPreview, renderThumbnailPreview, toBrowserApiUrl } from "../lib/api";
 import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailSubjectPlacement, ThumbnailTextRegions, ThumbnailTextStyles } from "../lib/types";
 
-export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles; design: NormalThumbnailStyle["design"]; subjectPlacement: ThumbnailSubjectPlacement; subjectSource?: "video" | "asset"; characterAssetId?: string };
+export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles; design: NormalThumbnailStyle["design"]; subjectPlacement: ThumbnailSubjectPlacement; subjectSource?: "video" | "asset"; characterAssetId?: string; frameCandidateId?: string; cropMode?: "standard" | "close" };
 
 type TextRole = keyof ThumbnailTextStyles;
 type Drag = { role: TextRole; pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number; dx: number; dy: number };
@@ -63,9 +63,11 @@ export function LiveThumbnailPreview({ item, draft, active, onRegionsChange, onM
   const saving = item.thumbnailStatus === "generating";
   const subjectSource = draft.subjectSource ?? "video";
   const characterAssetId = draft.characterAssetId;
-  const sourceContext = JSON.stringify([item.id, item.thumbnailRenderRevision, saving, retry, subjectSource, characterAssetId]);
+  const frameCandidateId = draft.frameCandidateId;
+  const cropMode = draft.cropMode ?? "standard";
+  const sourceContext = JSON.stringify([item.id, item.thumbnailRenderRevision, saving, retry, subjectSource, characterAssetId, frameCandidateId]);
   const frameKey = source?.key === sourceContext ? source.frameKey : "";
-  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles, design: draft.design, subjectPlacement: draft.subjectPlacement, subjectSource, characterAssetId });
+  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles, design: draft.design, subjectPlacement: draft.subjectPlacement, subjectSource, characterAssetId, frameCandidateId, cropMode });
 
   useEffect(() => { onRegionsChange(null); }, [requestKey, onRegionsChange]);
 
@@ -77,7 +79,7 @@ export function LiveThumbnailPreview({ item, draft, active, onRegionsChange, onM
     const started = Date.now();
     const prepare = async (force: boolean) => {
       try {
-        const state = await prepareThumbnailPreview(item.id, controller.signal, force, { subjectSource, characterAssetId });
+        const state = await prepareThumbnailPreview(item.id, controller.signal, force, { subjectSource, characterAssetId, frameCandidateId });
         if (cancelled) return;
         if (state.state === "ready") { setSource({ key: sourceContext, frameKey: state.frameKey }); setError(""); }
         else if (state.state === "failed") setError(state.error || "プレビューを準備できませんでした。");
@@ -89,7 +91,7 @@ export function LiveThumbnailPreview({ item, draft, active, onRegionsChange, onM
     };
     void prepare(retry > 0);
     return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
-  }, [active, item.id, item.thumbnailRenderRevision, saving, retry, sourceContext, subjectSource, characterAssetId]);
+  }, [active, item.id, item.thumbnailRenderRevision, saving, retry, sourceContext, subjectSource, characterAssetId, frameCandidateId]);
 
   useEffect(() => {
     if (!active || saving || !frameKey) return;

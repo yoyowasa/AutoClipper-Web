@@ -8,12 +8,14 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.jobs.subtitle_review_preview import subtitle_review_document_lock
 from app.jobs.publication_state import rerender_publication_is_unresolved
 from app.jobs.queue import (
     ThumbnailRegenerationEnqueue,
     get_enqueue_thumbnail_regeneration,
     get_enqueue_thumbnail_copy,
     get_enqueue_thumbnail_preview,
+    get_enqueue_thumbnail_candidates,
 )
 from app.jobs.thumbnail_preview import (
     ThumbnailPreviewRequest, ThumbnailPreviewState, prepare_thumbnail_preview, render_thumbnail_preview,
@@ -26,6 +28,9 @@ from app.storage.paths import StoragePaths, get_storage_paths
 from app.jobs.thumbnail_character_assets import available_character_assets, explicit_character_asset
 from app.character_assets import CharacterAssetList, asset_read
 from app.character_asset_rules import CHARACTER_EMOTIONS
+from app.jobs.thumbnail_candidates import (
+    ThumbnailCandidatesState, candidate_directory, candidate_state, prepare_candidates, selected_frame,
+)
 
 
 router = APIRouter(prefix="/api/exports", tags=["exports"])
@@ -193,11 +198,12 @@ def export_thumbnail_assets(export_id: str, db: Session = Depends(get_db), paths
 def prepare_export_thumbnail_preview(export_id: str, force: bool = False, db: Session = Depends(get_db),
                                      paths: StoragePaths = Depends(get_storage_paths),
                                      enqueue: Callable[[str, str], None] = Depends(get_enqueue_thumbnail_preview),
-                                     subjectSource: Literal["video", "asset"] = "video", characterAssetId: str | None = None):
+                                     subjectSource: Literal["video", "asset"] = "video", characterAssetId: str | None = None,
+                                     frameCandidateId: str | None = None):
     export = _get_export_or_404(db, export_id, paths)
     try:
         return prepare_thumbnail_preview(db, paths, export, enqueue, force=force,
-                                         subject_source=subjectSource, character_asset_id=characterAssetId)
+                                         subject_source=subjectSource, character_asset_id=characterAssetId, candidate_id=frameCandidateId)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(409, "プレビューの元動画・サムネ設定を確認できません。") from exc
     except Exception as exc:
@@ -290,8 +296,19 @@ def regenerate_export_thumbnail(
             status_code=status.HTTP_409_CONFLICT,
             detail="thumbnail export metadata is unavailable",
         )
+    with subtitle_review_document_lock(candidate_directory(paths.job_outputs(export.job_id), export.id)):
+        return _queue_thumbnail_regeneration(export, metadata_path, request, db, paths, enqueue_thumbnail)
+
+
+def _queue_thumbnail_regeneration(export, metadata_path, request, db, paths, enqueue_thumbnail):
     previous = read_export_metadata(export)
     source = request.subject_source or previous.get("thumbnail_subject_source", "video")
+    candidate = selected_frame(previous, candidate_id=request.frame_candidate_id)
+    if request.frame_candidate_id and not candidate:
+        raise HTTPException(422, "保存済みの人物候補にありません。")
+    if (source != "asset" and candidate and request.crop_mode == "close" and not candidate["close_available"]
+            and not request.advance_frame and not request.select_with_codex):
+        raise HTTPException(422, "この候補は2倍以内の拡大で顔のアップにできません。")
     requested_id = request.character_asset_id
     requested_emotion = request.emotion
     if source == "asset":
@@ -325,7 +342,8 @@ def regenerate_export_thumbnail(
         "thumbnail_requested_asset_id": requested_id,
         "thumbnail_requested_emotion": requested_emotion,
         "thumbnail_status": "generating",
-        "thumbnail_frame_seconds": round(request.frame_seconds, 3),
+        "thumbnail_frame_seconds": round(candidate["second"] if candidate and request.frame_candidate_id else request.frame_seconds, 3),
+        "thumbnail_frame_candidate_id": request.frame_candidate_id,
         "thumbnail_subject_anchor_x": round(request.subject_anchor_x, 3),
         "thumbnail_advance_frame": request.advance_frame,
         "thumbnail_select_with_codex": request.select_with_codex,
@@ -366,3 +384,35 @@ def regenerate_export_thumbnail(
         status="generating",
         revision=revision,
     )
+
+
+@router.post("/{export_id}/thumbnail/candidates/prepare", response_model=ThumbnailCandidatesState)
+def prepare_export_thumbnail_candidates(export_id: str, db: Session = Depends(get_db),
+                                        paths: StoragePaths = Depends(get_storage_paths),
+                                        enqueue: Callable[[str, str], None] = Depends(get_enqueue_thumbnail_candidates),
+                                        force: bool = False):
+    export = _get_export_or_404(db, export_id, paths)
+    try:
+        return prepare_candidates(db, paths, export, enqueue, force=force)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(503, "サムネ候補の抽出を開始できませんでした。") from exc
+
+
+@router.get("/{export_id}/thumbnail/candidates/{candidate_id}/image")
+def view_thumbnail_candidate(export_id: str, candidate_id: str, db: Session = Depends(get_db),
+                             paths: StoragePaths = Depends(get_storage_paths)):
+    export = _get_export_or_404(db, export_id, paths)
+    if not selected_frame(read_export_metadata(export), candidate_id=candidate_id):
+        raise HTTPException(404, "サムネ候補がありません。")
+    path = candidate_directory(paths.job_outputs(export.job_id), export.id) / f"{candidate_id}.small.jpg"
+    if not path.is_file():
+        raise HTTPException(404, "サムネ候補の画像がありません。")
+    return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/{export_id}/thumbnail/candidates", response_model=ThumbnailCandidatesState)
+def get_export_thumbnail_candidates(export_id: str, db: Session = Depends(get_db), paths: StoragePaths = Depends(get_storage_paths)):
+    export = _get_export_or_404(db, export_id, paths)
+    return candidate_state(export, paths.job_outputs(export.job_id))

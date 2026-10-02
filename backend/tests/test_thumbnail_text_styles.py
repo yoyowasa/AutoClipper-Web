@@ -292,6 +292,8 @@ def test_subject_placement_is_saved_and_used_for_only_this_thumbnail(client):  #
 
 def test_codex_frame_selection_runs_only_in_worker_and_saves_selected_frame(client):  # noqa: F811
     storage, factory, metadata_path, _, video_path = seed_thumbnail(client)
+    from test_thumbnail_candidates import seed_frames
+    seed_frames(storage, metadata_path)
     queued = []
     calls = []
     app.dependency_overrides[get_enqueue_thumbnail_regeneration] = lambda: lambda *args: queued.append(args)
@@ -305,7 +307,7 @@ def test_codex_frame_selection_runs_only_in_worker_and_saves_selected_frame(clie
 
     def choose(_video_path, **kwargs):
         calls.append(kwargs)
-        return 8.5
+        return 8.0
 
     run_export_thumbnail_regeneration(
         *queued[-1], session_factory=factory, paths=storage,
@@ -316,8 +318,8 @@ def test_codex_frame_selection_runs_only_in_worker_and_saves_selected_frame(clie
     assert calls[0]["design"] == "sopia"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata["thumbnail_status"] == "ready"
-    assert metadata["thumbnail_frame_seconds"] == pytest.approx(8.5)
-    assert metadata["thumbnail_source_time"] == pytest.approx(18.5)
+    assert metadata["thumbnail_frame_seconds"] == pytest.approx(8.0)
+    assert metadata["thumbnail_source_time"] == pytest.approx(18.0)
     assert metadata["thumbnail_frame_selection_source"] == "codex"
     assert metadata["thumbnail_select_with_codex"] is False
     assert video_path.read_bytes() == b"completed video unchanged"
@@ -342,3 +344,8 @@ def test_character_presets_keep_all_three_text_styles(client):  # noqa: F811
     assert client.put("/api/preferences/character-presets", json=payload).status_code == 200
     saved = client.get("/api/preferences/character-presets").json()["presets"][0]["settings"]
     assert saved["normalThumbnailStyle"]["textStyles"] == TEXT_STYLES
+
+
+@pytest.fixture(autouse=True)
+def no_faces_in_placeholder_video(monkeypatch):
+    monkeypatch.setattr("app.jobs.thumbnail_candidates.extract_thumbnail_candidates", lambda *args, **kwargs: [])

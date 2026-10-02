@@ -1,16 +1,18 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { thumbnailCopyRequest } from "../lib/api";
+import { prepareThumbnailCandidates, thumbnailCopyRequest } from "../lib/api";
 import { visibleCharacterAssetWarnings } from "../lib/characterAssets";
 import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailCopyState, ThumbnailSubjectPlacement, ThumbnailTextRegions, ThumbnailTextStyles } from "../lib/types";
 import { ThumbnailTextStyleEditor } from "./ThumbnailTextStyleEditor";
 import type { ThumbnailDraft } from "./LiveThumbnailPreview";
 import type { ThumbnailSubjectSelection } from "../lib/types";
+import { ThumbnailFramePicker } from "./ThumbnailFramePicker";
+import type { ThumbnailCandidateState } from "../lib/types";
 import { ThumbnailAssetPicker } from "./ThumbnailAssetPicker";
 
-export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, styles, setStyles, regions }: {
-  item: ResultExportItem; busy?: boolean;
+export function ResultThumbnailEditor({ item, busy, active = true, onRender, onDraftChange, styles, setStyles, regions }: {
+  item: ResultExportItem; busy?: boolean; active?: boolean;
   onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"], selectWithCodex: boolean, placement: ThumbnailSubjectPlacement, selection?: ThumbnailSubjectSelection) => void;
   onDraftChange: (draft: ThumbnailDraft) => void;
   styles: ThumbnailTextStyles;
@@ -20,16 +22,23 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, sty
   const [text, setText] = useState<ThumbnailCopyText>(() => ({ heading: item.thumbnailKicker ?? "", upper: item.thumbnailLine1 ?? "", lower: item.thumbnailLine2 ?? "" }));
   const [design, setDesign] = useState<NormalThumbnailStyle["design"]>(() => item.thumbnailDesign ?? "raden");
   const [subject, setSubject] = useState<ThumbnailSubjectSelection>(() => ({
-    subjectSource: item.thumbnailSubjectSource ?? "video", characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
+    subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" : "video",
+    frameCandidateId: item.thumbnailFrameCandidateId ?? undefined, characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
     emotion: item.thumbnailEmotion ?? undefined,
   }));
+  const [cropMode, setCropMode] = useState<"standard" | "close">(item.thumbnailCropMode ?? "standard");
+  const [frameRetry, setFrameRetry] = useState(0);
+  const [frames, setFrames] = useState<ThumbnailCandidateState>({ state: "idle", candidates: [] });
   const subjectRevision = useRef(item.thumbnailRenderRevision);
   useEffect(() => {
     if (subjectRevision.current === item.thumbnailRenderRevision) return;
     subjectRevision.current = item.thumbnailRenderRevision;
-    setSubject({ subjectSource: item.thumbnailSubjectSource ?? "video", characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
+    setCropMode(item.thumbnailCropMode ?? "standard");
+    setSubject({ subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" : "video",
+    frameCandidateId: item.thumbnailFrameCandidateId ?? undefined, characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
       emotion: item.thumbnailEmotion ?? undefined });
-  }, [item.thumbnailRenderRevision, item.thumbnailSubjectSource, item.thumbnailCharacterAssetId, item.thumbnailEmotion]);
+  }, [item.thumbnailRenderRevision, item.thumbnailSubjectSource, item.thumbnailCharacterAssetId, item.thumbnailEmotion,
+    item.thumbnailCropMode, item.thumbnailFrameCandidateId]);
   const [placement, setPlacement] = useState<ThumbnailSubjectPlacement>(
     () => item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 }
   );
@@ -42,7 +51,22 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, sty
   const locked = busy || item.thumbnailStatus === "generating" || generating || requesting;
   const endpoint = item.id;
 
-  useEffect(() => { onDraftChange({ text, styles, design, subjectPlacement: placement, ...subject }); }, [text, styles, design, placement, subject, onDraftChange]);
+  useEffect(() => { onDraftChange({ text, styles, design, subjectPlacement: placement, cropMode, ...subject }); }, [text, styles, design, placement, subject, cropMode, onDraftChange]);
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const load = async (force = false) => {
+      try {
+        const next = await prepareThumbnailCandidates(item.id, force);
+        if (cancelled) return;
+        setFrames(next);
+        if (next.state === "queued") timer = setTimeout(() => void load(), 1000);
+      } catch (cause) { if (!cancelled) setError(cause instanceof Error ? cause.message : "候補を読み込めませんでした。"); }
+    };
+    void load(frameRetry > 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [active, item.id, frameRetry]);
 
   useEffect(() => {
     let cancelled = false;
@@ -116,7 +140,22 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, sty
     </fieldset>
     </div>
     <div aria-label="サムネの書式編集" tabIndex={0} className="min-h-0 min-w-0 xl:overflow-y-auto xl:overscroll-contain">
-    <ThumbnailAssetPicker exportId={item.id} value={subject} onChange={setSubject} disabled={locked} />
+    <ThumbnailAssetPicker exportId={item.id} value={subject} onChange={next => {
+      setSubject(next.subjectSource === "video" ? { ...next, frameCandidateId: frames.candidates[0]?.id } : next);
+      if (next.subjectSource === "video") setCropMode("standard");
+    }} disabled={locked} />
+    {subject.subjectSource === "video" && <>
+      {frames.state === "queued" && <p role="status" className="mt-2 text-xs">動画から人物候補を抽出中…（初回のみ）</p>}
+      {frames.reason && <p role="status" className="mt-2 text-xs text-amber-800">{frames.reason}</p>}
+      {frames.state === "failed" && <button type="button" disabled={locked} onClick={() => setFrameRetry(v => v + 1)}
+        className="mt-2 min-h-9 border border-neutral-400 bg-white px-3 text-xs">候補の抽出を再試行</button>}
+      <ThumbnailFramePicker candidates={frames.candidates} selectedId={subject.frameCandidateId} cropMode={cropMode}
+        disabled={locked || frames.state !== "ready"} onCropChange={setCropMode} onSelect={id => {
+          const candidate = frames.candidates.find(c => c.id === id);
+          setSubject({ subjectSource: "video", frameCandidateId: id });
+          if (!candidate?.closeAvailable) setCropMode("standard");
+        }} />
+    </>}
     {subject.subjectSource === "asset" && subject.characterAssetId === item.thumbnailCharacterAssetId && <>
       {visibleCharacterAssetWarnings(item.thumbnailWarnings).filter(warning => warning !== "素材の解像度が足りず粗くなります")
         .map(warning => <p key={warning} role="status" className="mt-2 text-xs text-amber-800">{warning}</p>)}
@@ -138,7 +177,7 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, sty
     </fieldset>
     <fieldset disabled={locked} className="mt-3 min-w-0 border border-amber-300 bg-white p-3">
       <legend className="px-1 text-xs font-bold">人物の画角・位置</legend>
-      <p className="text-xs text-neutral-600">{subject.subjectSource === "asset" ? "素材は画像全体を人物枠に収め、下端を揃えます。大きさ・左右・上下で調整できます。" : "宙科テンプレでは切り抜きモデル導入時に人物だけを配置します。未導入時やほかのテンプレでは元映像の表示範囲を調整します。"}左のプレビューと保存画像は同じ配置になります。</p>
+      <p className="text-xs text-neutral-600">{subject.subjectSource === "asset" ? "素材は高さを枠に合わせ、左右のはみ出しを切り取ります。下端を揃えます。大きさ・左右・上下で調整できます。" : "宙科テンプレでは切り抜きモデル導入時に人物だけを配置します。未導入時やほかのテンプレでは元映像の表示範囲を調整します。"}左のプレビューと保存画像は同じ配置になります。</p>
       <div className="mt-2 grid gap-2">
         {([
           ["scale", "大きさ", 0.5, 1.5, 0.05, `${Math.round(placement.scale * 100)}%`],
@@ -164,23 +203,25 @@ export function ResultThumbnailEditor({ item, busy, onRender, onDraftChange, sty
       <h4 className="text-sm font-semibold">書体・サイズ・色</h4>
       <div className="mt-3"><ThumbnailTextStyleEditor value={styles} onChange={setStyles} disabled={locked} texts={text} regions={regions} /></div>
     </section>
-    <button type="button" disabled={locked || (subject.subjectSource === "asset" && !subject.characterAssetId)} onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false, design, false, placement, subject)}
+    <button type="button" disabled={locked || (subject.subjectSource === "asset" && !subject.characterAssetId)} onClick={() => onRender(cropMode, styles, text, false, design, false, placement, subject)}
       className="mt-3 min-h-11 w-full bg-sky-700 px-3 text-sm font-semibold text-white disabled:bg-neutral-300">
       {item.thumbnailStatus === "generating" ? "サムネ更新中…" : "サムネを保存・更新"}
     </button>
     <p className="mt-2 text-xs text-neutral-600">プレビューは自動反映。保存するとサムネを確定します。</p>
-    <div className="mt-3 grid gap-2 sm:grid-cols-2">
-      <button type="button" disabled={locked || subject.subjectSource === "asset"} className="min-h-10 bg-amber-600 px-2 text-xs font-semibold text-white disabled:bg-neutral-300"
-        onClick={() => onRender("standard", styles, text, true, design, false, placement, subject)}>別場面で更新（上半身）</button>
-      <button type="button" disabled={locked || subject.subjectSource === "asset"} className="min-h-10 bg-neutral-950 px-2 text-xs font-semibold text-white disabled:bg-neutral-300"
-        onClick={() => onRender("close", styles, text, true, design, false, placement, subject)}>別場面で更新（顔寄り）</button>
-    </div>
-    <button type="button" disabled={locked}
+    <button type="button" disabled={locked || subject.subjectSource === "asset" || !frames.candidates.length}
+      className="mt-3 min-h-10 w-full bg-amber-600 px-2 text-xs font-semibold text-white disabled:bg-neutral-300"
+      onClick={() => {
+        const index = frames.candidates.findIndex(c => c.id === subject.frameCandidateId);
+        const next = frames.candidates[(index + 1) % frames.candidates.length];
+        setSubject({ subjectSource: "video", frameCandidateId: next.id });
+        if (!next.closeAvailable) setCropMode("standard");
+      }}>別場面（保存済みの次の候補）</button>
+    <button type="button" disabled={locked || (subject.subjectSource === "video" && !frames.candidates.length)}
       className="mt-3 min-h-11 w-full border border-violet-700 bg-violet-50 px-3 text-sm font-semibold text-violet-900 disabled:text-neutral-400"
-      onClick={() => onRender(item.thumbnailCropMode ?? "standard", styles, text, false, design, true, placement, { subjectSource: subject.subjectSource })}>
+      onClick={() => onRender("standard", styles, text, false, design, true, placement, { subjectSource: subject.subjectSource })}>
       {subject.subjectSource === "asset" ? "文言に合う表情を選び直す" : "Codexで文言に合う人物・場面を選び直す"}
     </button>
-    <p className="mt-1 text-xs text-neutral-600">{subject.subjectSource === "asset" ? "登録済みの表情からCodexで選びます。表情が1種類ならそのまま使います。" : "元動画の８場面と近くの字幕を比較します。中央の人物も対象です。選んだ場面でサムネを保存し直します。"}</p>
+    <p className="mt-1 text-xs text-neutral-600">{subject.subjectSource === "asset" ? "登録済みの表情からCodexで選びます。表情が1種類ならそのまま使います。" : "保存済みの上位８候補と近くの字幕を比較します。中央の人物も対象です。選んだ場面でサムネを保存し直します。"}</p>
     </div>
     </div>
   </section>;
