@@ -5,11 +5,12 @@ import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, Thumbna
 import { ResultThumbnailEditor } from "./ResultThumbnailEditor";
 import { LiveThumbnailPreview, type ThumbnailDraft } from "./LiveThumbnailPreview";
 import { thumbnailTextDefaults } from "../lib/thumbnailStyle";
+import type { ThumbnailSubjectSelection } from "../lib/types";
 
 export function ResultThumbnailWorkspace({ item, busy, onRender }: {
   item: ResultExportItem;
   busy?: boolean;
-  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"], selectWithCodex: boolean, placement: ThumbnailSubjectPlacement) => void;
+  onRender: (crop: "standard" | "close", styles: ThumbnailTextStyles, text: ThumbnailCopyText, advance: boolean, design: NormalThumbnailStyle["design"], selectWithCodex: boolean, placement: ThumbnailSubjectPlacement, selection?: ThumbnailSubjectSelection) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [open, setOpen] = useState(false);
@@ -20,6 +21,7 @@ export function ResultThumbnailWorkspace({ item, busy, onRender }: {
     styles,
     design: item.thumbnailDesign ?? "raden",
     subjectPlacement: item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 },
+    subjectSource: item.thumbnailSubjectSource ?? "video", characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
   }));
 
   useEffect(() => {

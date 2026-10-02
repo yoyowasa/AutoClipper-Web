@@ -571,6 +571,12 @@ def _result_item(
             _first_value(metadata.get("thumbnail_subject_anchor_x"), 1.0)
         ),
         thumbnailRenderRevision=thumbnail_render_revision,
+        thumbnailSubjectSource="asset" if metadata.get("thumbnail_subject_source") == "asset" else "video",
+        thumbnailCharacterAssetId=metadata.get("thumbnail_character_asset_id"),
+        thumbnailEmotion=metadata.get("thumbnail_emotion"),
+        thumbnailEmotionReason=metadata.get("thumbnail_emotion_reason"),
+        thumbnailEmotionSelectionSource=metadata.get("thumbnail_emotion_selection_source"),
+        thumbnailWarnings=metadata.get("thumbnail_warnings") or [],
     )
 
 

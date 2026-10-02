@@ -33,8 +33,10 @@ INITIAL_SELECTION_TASKS = frozenset(
 THUMBNAIL_COPY_TASK = "thumbnail_copy_suggestions"
 THUMBNAIL_FRAME_RANK_TASK = "thumbnail_frame_rank"
 CHARACTER_ASSET_CLASSIFY_TASK = "character_asset_classify"
+THUMBNAIL_EMOTION_SELECT_TASK = "thumbnail_emotion_select"
 ALLOWED_REQUEST_TASKS = frozenset({
     REQUEST_TASK, THUMBNAIL_COPY_TASK, THUMBNAIL_FRAME_RANK_TASK, CHARACTER_ASSET_CLASSIFY_TASK, *INITIAL_SELECTION_TASKS,
+    THUMBNAIL_EMOTION_SELECT_TASK,
 })
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -239,6 +241,7 @@ TITLE_HOOK_OUTPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 EXPECTED_RESPONSE_SCHEMA_SHA256 = {
+    THUMBNAIL_EMOTION_SELECT_TASK: "f0c2e24958ee144da98757ff6382790ddc4b6b8553e7a52a08fa9904617ddbcb",
     CHARACTER_ASSET_CLASSIFY_TASK: "0d4baaf7e17e83d4f42f8fac2685d6cfc8e0acd16fc93b186e29e4ba5efee7c6",
     THUMBNAIL_FRAME_RANK_TASK: "eb98de5fc047f2d5a8a8a9350108e9cb949ae6d4607c405966ec46cc46110097",
     THUMBNAIL_COPY_TASK: "5409bf1360dfa7d7a8a77865bbda1b2808db06b2a457314eb60feb9900896d56",
@@ -725,6 +728,8 @@ def validate_request(payload: dict[str, Any], storage_root: Path) -> BridgeReque
     raw_images = payload.get("images") or []
     if not isinstance(raw_images, list) or len(raw_images) > MAX_IMAGES:
         raise ValueError("images_invalid")
+    if task == THUMBNAIL_EMOTION_SELECT_TASK and raw_images:
+        raise ValueError("thumbnail_emotion_images_not_allowed")
     images = tuple(_resolve_storage_image(storage_root, value) for value in raw_images)
     raw_response_schema = payload.get("responseSchema")
     if raw_response_schema is None:

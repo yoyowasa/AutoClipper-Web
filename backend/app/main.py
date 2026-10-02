@@ -30,7 +30,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Thumbnail-Text-Regions"],
+    expose_headers=["X-Thumbnail-Text-Regions", "X-Thumbnail-Warnings"],
 )
 
 app.include_router(videos.router)

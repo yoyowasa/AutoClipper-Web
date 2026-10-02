@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 from collections.abc import Callable
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse, Response
@@ -22,6 +23,9 @@ from app.jobs.thumbnails import read_export_metadata, write_export_metadata
 from app.models import ExportItem, Job
 from app.schemas import ThumbnailRegenerationRequest, ThumbnailRegenerationResponse
 from app.storage.paths import StoragePaths, get_storage_paths
+from app.jobs.thumbnail_character_assets import available_character_assets, explicit_character_asset
+from app.character_assets import CharacterAssetList, asset_read
+from app.character_asset_rules import CHARACTER_EMOTIONS
 
 
 router = APIRouter(prefix="/api/exports", tags=["exports"])
@@ -174,13 +178,26 @@ def download_export_subtitle(
     )
 
 
+@router.get("/{export_id}/thumbnail/assets", response_model=CharacterAssetList)
+def export_thumbnail_assets(export_id: str, db: Session = Depends(get_db), paths: StoragePaths = Depends(get_storage_paths)):
+    export = _get_export_or_404(db, export_id, paths)
+    job = db.get(Job, export.job_id)
+    groups = {emotion: [] for emotion in CHARACTER_EMOTIONS}
+    if job and export.type == "normal":
+        for asset in available_character_assets(db, paths, job.settings_json or {}):
+            groups[asset.emotion].append(asset_read(asset))
+    return CharacterAssetList(emotions=groups)
+
+
 @router.post("/{export_id}/thumbnail/preview/prepare", response_model=ThumbnailPreviewState)
 def prepare_export_thumbnail_preview(export_id: str, force: bool = False, db: Session = Depends(get_db),
                                      paths: StoragePaths = Depends(get_storage_paths),
-                                     enqueue: Callable[[str, str], None] = Depends(get_enqueue_thumbnail_preview)):
+                                     enqueue: Callable[[str, str], None] = Depends(get_enqueue_thumbnail_preview),
+                                     subjectSource: Literal["video", "asset"] = "video", characterAssetId: str | None = None):
     export = _get_export_or_404(db, export_id, paths)
     try:
-        return prepare_thumbnail_preview(db, paths, export, enqueue, force=force)
+        return prepare_thumbnail_preview(db, paths, export, enqueue, force=force,
+                                         subject_source=subjectSource, character_asset_id=characterAssetId)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(409, "プレビューの元動画・サムネ設定を確認できません。") from exc
     except Exception as exc:
@@ -192,11 +209,13 @@ def preview_export_thumbnail(export_id: str, request: ThumbnailPreviewRequest, d
                              paths: StoragePaths = Depends(get_storage_paths)):
     export = _get_export_or_404(db, export_id, paths)
     try:
-        data, text_regions = render_thumbnail_preview(db, paths, export, request)
+        asset_info = {}
+        data, text_regions = render_thumbnail_preview(db, paths, export, request, asset_render_info=asset_info)
     except (ValueError, FileNotFoundError) as exc:
         raise HTTPException(409, "プレビューを読み込み直してください。") from exc
     return Response(data, media_type="image/jpeg", headers={
         "Cache-Control": "no-store", "X-Thumbnail-Text-Regions": json.dumps(text_regions),
+        "X-Thumbnail-Warnings": json.dumps(asset_info.get("warnings", [])),
     })
 
 
@@ -272,6 +291,21 @@ def regenerate_export_thumbnail(
             detail="thumbnail export metadata is unavailable",
         )
     previous = read_export_metadata(export)
+    source = request.subject_source or previous.get("thumbnail_subject_source", "video")
+    requested_id = request.character_asset_id
+    requested_emotion = request.emotion
+    if source == "asset":
+        job = db.get(Job, export.job_id)
+        if requested_id or requested_emotion or not request.select_with_codex:
+            requested_id = requested_id or (None if requested_emotion else previous.get("thumbnail_character_asset_id"))
+            try:
+                selected_asset = explicit_character_asset(db, paths, job.settings_json or {} if job else {},
+                                                          requested_id, requested_emotion)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+            requested_id, requested_emotion = selected_asset.id, selected_asset.emotion
+        elif not job or not available_character_assets(db, paths, job.settings_json or {}):
+            raise HTTPException(422, "このキャラの素材がありません。")
     try:
         revision = max(0, int(previous.get("thumbnail_request_revision", 0))) + 1
     except (TypeError, ValueError):
@@ -287,6 +321,9 @@ def regenerate_export_thumbnail(
     )
     pending = {
         **previous,
+        "thumbnail_subject_source": source,
+        "thumbnail_requested_asset_id": requested_id,
+        "thumbnail_requested_emotion": requested_emotion,
         "thumbnail_status": "generating",
         "thumbnail_frame_seconds": round(request.frame_seconds, 3),
         "thumbnail_subject_anchor_x": round(request.subject_anchor_x, 3),
@@ -300,7 +337,6 @@ def regenerate_export_thumbnail(
     if request.subject_placement is not None:
         pending["thumbnail_subject_placement"] = request.subject_placement.model_dump(mode="json", by_alias=True)
     if request.design is not None:
-        from app.models import Job
         from app.thumbnail_style import resolve_export_thumbnail_style
         job = db.get(Job, export.job_id)
         try:

@@ -318,6 +318,18 @@ export type ResultExportItem = {
   thumbnailFrameSeconds: number | null;
   thumbnailSubjectAnchorX: number | null;
   thumbnailRenderRevision: number;
+  thumbnailSubjectSource?: "video" | "asset";
+  thumbnailCharacterAssetId?: string | null;
+  thumbnailEmotion?: import("./characterAssets").CharacterEmotion | null;
+  thumbnailEmotionReason?: string | null;
+  thumbnailEmotionSelectionSource?: string | null;
+  thumbnailWarnings?: string[];
+};
+
+export type ThumbnailSubjectSelection = {
+  subjectSource: "video" | "asset";
+  characterAssetId?: string;
+  emotion?: import("./characterAssets").CharacterEmotion;
 };
 
 export type ThumbnailRegenerationResponse = {

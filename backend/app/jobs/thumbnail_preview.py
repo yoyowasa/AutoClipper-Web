@@ -4,6 +4,7 @@ import json
 import math
 import tempfile
 import time
+import shutil
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal
@@ -22,6 +23,7 @@ from app.storage.paths import get_storage_paths
 from app.thumbnail_style import (
     ThumbnailDesign, ThumbnailSubjectPlacement, ThumbnailTextStyles, resolve_export_thumbnail_style,
 )
+from app.jobs.thumbnail_character_assets import explicit_character_asset
 
 
 class ThumbnailPreviewState(BaseModel):
@@ -40,6 +42,8 @@ class ThumbnailPreviewRequest(BaseModel):
     subject_placement: ThumbnailSubjectPlacement = Field(
         default_factory=ThumbnailSubjectPlacement, alias="subjectPlacement"
     )
+    subject_source: Literal["video", "asset"] = Field(default="video", alias="subjectSource")
+    character_asset_id: str | None = Field(default=None, alias="characterAssetId", pattern=r"^asset_[0-9a-f]{32}$")
 
 
 def preview_cache_dir(paths, export):
@@ -58,7 +62,7 @@ def _write(directory, state):
     temp.replace(directory / "state.json")
 
 
-def preview_context(db, paths, export):
+def preview_context(db, paths, export, *, subject_source="video", character_asset_id=None):
     job = db.get(Job, export.job_id)
     if export.type != "normal" or not job or job.status != "completed":
         raise ValueError("完成した通常動画のサムネだけが対象です。")
@@ -66,27 +70,36 @@ def preview_context(db, paths, export):
     metadata = read_export_metadata(export)
     if metadata.get("thumbnail_status") == "generating":
         raise ValueError("保存したサムネを更新中です。完了後にプレビューします。")
-    video = db.get(Video, export.video_id)
-    if not video:
-        raise ValueError("元動画が見つかりません。")
-    source = paths.resolve_stored_file(video.stored_path)
+    asset = None
+    if subject_source == "asset":
+        asset = explicit_character_asset(db, paths, job.settings_json or {}, character_asset_id)
+        source = paths.character_asset(asset.preset_id, asset.emotion, asset.id)
+    else:
+        video = db.get(Video, export.video_id)
+        if not video:
+            raise ValueError("元動画が見つかりません。")
+        source = paths.resolve_stored_file(video.stored_path)
     source_stat = source.stat()
     start = float(metadata.get("start", 0))
     frame = float(metadata.get("thumbnail_frame_seconds", float(export.duration) * 0.38))
     if not all(math.isfinite(v) for v in (start, frame)) or start < 0 or not 0 <= frame <= float(export.duration) + 0.001:
         raise ValueError("サムネの場面を確認できません。")
     timestamp = start + min(frame, float(export.duration))
-    key = sha256(json.dumps([str(source.resolve()), source_stat.st_size, source_stat.st_mtime_ns, timestamp]).encode()).hexdigest()
+    key = sha256(json.dumps([
+        str(source.resolve()), source_stat.st_size, source_stat.st_mtime_ns, timestamp,
+        *([asset.id, asset.face_box] if asset else []),
+    ]).encode()).hexdigest()
     return {
         "frameKey": key, "source": source, "timestamp": timestamp,
         "anchor": min(1, max(0, float(metadata.get("thumbnail_subject_anchor_x", 1)))),
         "faceRatio": THUMBNAIL_FACE_HEIGHT_RATIOS.get(metadata.get("thumbnail_crop_mode"), 0.25),
         "characterStyle": (job.settings_json or {}).get("normalThumbnailStyle"),
+        "asset": asset,
     }
 
 
-def prepare_thumbnail_preview(db, paths, export, enqueue, *, force=False):
-    context = preview_context(db, paths, export)
+def prepare_thumbnail_preview(db, paths, export, enqueue, *, force=False, subject_source="video", character_asset_id=None):
+    context = preview_context(db, paths, export, subject_source=subject_source, character_asset_id=character_asset_id)
     directory = preview_cache_dir(paths, export)
     with subtitle_review_document_lock(directory):
         previous = _read(directory)
@@ -97,7 +110,8 @@ def prepare_thumbnail_preview(db, paths, export, enqueue, *, force=False):
                 return ThumbnailPreviewState.model_validate(previous)
             if previous.get("state") == "failed" and not force:
                 return ThumbnailPreviewState.model_validate(previous)
-        state = {"state": "queued", "frameKey": context["frameKey"], "requestId": uuid4().hex, "created": time.time()}
+        state = {"state": "queued", "frameKey": context["frameKey"], "requestId": uuid4().hex, "created": time.time(),
+                 "subjectSource": subject_source, "characterAssetId": character_asset_id}
         _write(directory, state)
         try:
             enqueue(export.id, state["requestId"])
@@ -120,14 +134,18 @@ def run_thumbnail_preview_prepare(export_id, request_id, *, session_factory=Sess
                 state = _read(directory)
                 if state.get("requestId") != request_id or state.get("state") != "queued":
                     return
-                context = preview_context(db, storage, export)
+                subject = {"subject_source": state.get("subjectSource", "video"), "character_asset_id": state.get("characterAssetId")}
+                context = preview_context(db, storage, export, **subject)
                 if context["frameKey"] != state["frameKey"]:
                     raise ValueError("サムネの場面が変更されました。再読み込みしてください。")
-            extractor(context["source"], temp_frame, context["timestamp"])
+            if context["asset"]:
+                shutil.copyfile(context["source"], temp_frame)
+            else:
+                extractor(context["source"], temp_frame, context["timestamp"])
             with subtitle_review_document_lock(directory):
                 if _read(directory).get("requestId") != request_id:
                     return
-                if preview_context(db, storage, export)["frameKey"] != state["frameKey"]:
+                if preview_context(db, storage, export, **subject)["frameKey"] != state["frameKey"]:
                     raise ValueError("サムネの場面が変更されました。再読み込みしてください。")
                 temp_frame.replace(directory / "frame.jpg")
                 _write(directory, {**state, "state": "ready"})
@@ -140,8 +158,8 @@ def run_thumbnail_preview_prepare(export_id, request_id, *, session_factory=Sess
             temp_frame.unlink(missing_ok=True)
 
 
-def render_thumbnail_preview(db, paths, export, request: ThumbnailPreviewRequest):
-    context = preview_context(db, paths, export)
+def render_thumbnail_preview(db, paths, export, request: ThumbnailPreviewRequest, *, asset_render_info=None):
+    context = preview_context(db, paths, export, subject_source=request.subject_source, character_asset_id=request.character_asset_id)
     directory = preview_cache_dir(paths, export)
     with subtitle_review_document_lock(directory):
         state = _read(directory)
@@ -162,5 +180,7 @@ def render_thumbnail_preview(db, paths, export, request: ThumbnailPreviewRequest
                 character_style=resolve_export_thumbnail_style(context["characterStyle"], request.design),
                 text_styles=request.text_styles.model_dump(mode="json", by_alias=True),
                 text_regions=text_regions,
+                **({"character_asset_path": directory / "frame.jpg", "character_asset_face_box": context["asset"].face_box,
+                    "asset_render_info": asset_render_info} if context["asset"] else {}),
             )
             return output.read_bytes(), text_regions

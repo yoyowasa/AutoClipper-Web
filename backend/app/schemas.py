@@ -994,11 +994,20 @@ class ResultExportItem(BaseModel):
     thumbnail_frame_seconds: float | None = Field(default=None, alias="thumbnailFrameSeconds")
     thumbnail_subject_anchor_x: float | None = Field(default=None, alias="thumbnailSubjectAnchorX")
     thumbnail_render_revision: int = Field(default=0, alias="thumbnailRenderRevision")
+    thumbnail_subject_source: Literal["video", "asset"] = Field(default="video", alias="thumbnailSubjectSource")
+    thumbnail_character_asset_id: str | None = Field(default=None, alias="thumbnailCharacterAssetId")
+    thumbnail_emotion: Literal["joy", "anger", "sorrow", "fun"] | None = Field(default=None, alias="thumbnailEmotion")
+    thumbnail_emotion_reason: str | None = Field(default=None, alias="thumbnailEmotionReason")
+    thumbnail_emotion_selection_source: str | None = Field(default=None, alias="thumbnailEmotionSelectionSource")
+    thumbnail_warnings: list[str] = Field(default_factory=list, alias="thumbnailWarnings")
     video_url: str = Field(alias="videoUrl")
     download_url: str = Field(alias="downloadUrl")
 
 
 class ThumbnailRegenerationRequest(BaseModel):
+    subject_source: Literal["video", "asset"] | None = Field(default=None, alias="subjectSource")
+    character_asset_id: str | None = Field(default=None, alias="characterAssetId", pattern=r"^asset_[0-9a-f]{32}$")
+    emotion: Literal["joy", "anger", "sorrow", "fun"] | None = None
     design: ThumbnailDesign | None = None
     text: "ThumbnailCopyText | None" = None
     text_styles: ThumbnailTextStyles | None = Field(default=None, alias="textStyles")
