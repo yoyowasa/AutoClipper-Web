@@ -10795,3 +10795,21 @@ pip check: pass
 - ローカル検証: Python 3.11.9でpython -m pytest全件1509 passed / 3 skipped（既存のスキップ）、ruff check . ../launcher ../scripts成功。frontendのtest（24ファイル）・lint・typecheck・build成功。人物名の字幕/タイトルでの表記一致、各案での名前抜け・下行のみの名前、1回の作り直し成功/失敗、空の名前、旧形式の読み込み、中継の固定schemaとbackendの一致を確認した。失敗理由はGET応答で確認し、画面の既存role=alertがこのerrorを表示することをコードで確認した。
 - Codex中継: thumbnail_copy_suggestionsの返答schemaにsubjectNameを追加し、固定schemaハッシュを更新した。ホスト側のCodex中継の再起動が必要。
 - 未確認事項: 実際のCodexによる人物中心の判断と3案の生成、稼働画面での表示は未実施。実ジョブ・保存済み文言は変更していない。Dockerへの反映と中継の再起動は行わない。CIはPRで3.11・3.12・frontendの成功を確認してからmerge commitでマージする。
+
+## 2026-10-03 task-184 の稼働環境への反映（運用作業）
+
+- 目的: main `b524e13`（サムネ文言で話の中心の人物名を隠さない）を稼働環境へ反映する。Codexの代わりにClaude Codeが実施。
+- 事前確認: main・HEAD `b524e13`、未コミット変更なし。RQのキュー0件・実行中の登録0件。Codex中継のrequests・processingは空。処理中の状態のジョブは、10/02にRQの時間切れで強制終了済みの `job_ea68be9806884d25aaa3dbd62a259f24`（DB上は detecting_scenes のまま、変更していない）のみ。
+- 実施: DBバックアップ `storage/backups/autoclipper-20261003-140951-before-task184-deploy.db`（integrity_check ok、jobs 17・export_items 51で元と一致）。`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker frontend`。Codex中継を `stop_codex_bridge` → `ensure_codex_bridge_running` で再起動。
+- 確認: backend healthy、`/health` 200、`/upload` 200、workerの av 18.1.0、稼働中のbackendに subjectName の処理が入っていることを確認。Codex中継は ready、契約の指紋がmainと一致。workerの起動ログにエラーなし。GET /api/jobs/{id} などの状態を変えうる取得は行っていない。
+- 未確認事項: 実際のCodexでのサムネ文言の生成結果（ユーザーが画面で確認する）。
+
+## 2026-10-03 task-185: 人物名をサムネの主見出しに入れる
+
+- 目的・理由: task-184では人物名が小さいheadingにだけ置かれても検証を通り、らでんテンプレの大きい主見出しで誰の話か分かりにくかった。全3案のupperかlowerに人物名を入れる決まりへ変更する。
+- 変更: THUMBNAIL_COPY_PROMPTをthumbnail_copy_v3へ更新。subjectNameがある場合はupper/lowerへの名前を必須とし、headingだけでは不可と明記。headingには人物名を繰り返さず、人物の補足や話題の切り口を置く。例も主見出しにイヴ・クラインを入れる形へ差し替えた。backendの検証と作り直し依頼も同じ決まりへ変更した。
+- 検証の扱い: 名前の字幕・公開タイトルでの表記一致、違反時に1回だけ作り直すこと、直らなければ候補を出さず理由付きfailedにすることはtask-184から維持。subjectNameが空なら人物名を要求しない。保存済みの旧返答は読めるまま残し、新たな生成依頼はv3の入力ハッシュによりv2のheadingのみの案をキャッシュとして再利用しない。
+- Codex中継: 返答schemaは変えず、thumbnail_copy_suggestionsの固定schemaハッシュ401d21265de2de201f89a4260b3f04980c564c94204ae25c59f109d6c35dd5eaとbackendの一致を確認。launcher/codex_bridge.pyは変更無し。プロンプトはbackendから依頼ごとに渡すため、このタスクによるホスト側Codex中継の再起動は不要。
+- 変更ファイル: backend/app/scoring/thumbnail_copy.py、backend/app/jobs/thumbnail_copy.py、backend/tests/test_thumbnail_copy.py、STATUS.md。既存の未コミットのtask-184反映記録もそのまま収録する。
+- ローカル検証: ruff check . ../launcher ../scripts成功。Python 3.11.9でpython -m pytest全件1511 passed / 3 skipped（既存のスキップ）。関連27件でheadingだけの案の拒否・1回の作り直し成功/失敗、upper/lowerそれぞれでの採用、空のsubjectName、旧形式の読み込み、旧v2キャッシュの再生成、中継の固定schema一致を確認。frontendのtest（24ファイル）・lint・typecheck・build成功。
+- 未確認事項: 実際のCodexでの生成、稼働画面での主見出しの見え方は未実施。保存済みの文言・実ジョブは変更しない。Dockerへの反映は行わない。CIはPRで3.11・3.12・frontendの成功を確認してからmerge commitでマージする。

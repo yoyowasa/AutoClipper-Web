@@ -202,15 +202,15 @@ def subject_result(payload, *, name="イヴ・クライン"):
     result = generated(payload)
     result.subject_name = name
     for index, item in enumerate(result.suggestions):
-        item.heading = name if index != 1 else "人物紹介"
-        item.upper = "絵の勉強より柔道!?" if index != 1 else f"{name}の青"
-        item.lower = "金屏風との接点"
+        item.heading = "天才芸術家の素顔"
+        item.upper = name if index != 1 else "絵の勉強より柔道!?"
+        item.lower = "金屏風との接点" if index != 1 else f"{name}の青"
         item.evidence[0].quote = "絵の勉強より柔道"
     return result
 
 
 @pytest.mark.parametrize("source", ["subtitle", "title"])
-def test_subject_name_uses_exact_input_and_all_three_headings_or_upper(source):
+def test_subject_name_uses_exact_input_and_all_three_main_lines(source):
     payload = {
         "segments": [{"segmentId": "seg", "text": "イヴ・クラインは絵の勉強より柔道を選んだ。"}],
         "publicationTitle": "イヴ・クラインの人物紹介",
@@ -230,9 +230,9 @@ def test_subject_name_uses_exact_input_and_all_three_headings_or_upper(source):
 def test_subject_name_is_required_in_each_suggestion(missing_index):
     payload = {"segments": [{"segmentId": "seg", "text": "イヴ・クラインは絵の勉強より柔道を選んだ。"}]}
     result = subject_result(payload)
-    result.suggestions[missing_index].heading = "人物紹介"
+    result.suggestions[missing_index].heading = "イヴ・クライン"
     result.suggestions[missing_index].upper = "青と金の正体"
-    result.suggestions[missing_index].lower = "イヴ・クライン"
+    result.suggestions[missing_index].lower = "顔料まで開発!?"
     with pytest.raises(ThumbnailCopySubjectError, match="3案すべて"):
         validate_copy_subject(result, payload["segments"], "")
 
@@ -247,7 +247,7 @@ def seed_subject(client):  # noqa: F811
     return case
 
 
-@pytest.mark.parametrize("violation", ["unknown_name", "missing_name", "lower_only"])
+@pytest.mark.parametrize("violation", ["unknown_name", "missing_name", "heading_only"])
 @pytest.mark.parametrize("repair", ["success", "still_invalid", "empty_name"])
 def test_subject_violation_retries_once_and_exposes_failure_reason(client, violation, repair):  # noqa: F811
     case = seed_subject(client)
@@ -264,13 +264,14 @@ def test_subject_violation_retries_once_and_exposes_failure_reason(client, viola
             for item in result.suggestions:
                 item.heading = "人物紹介"
                 item.upper = "絵の勉強より柔道!?"
+                item.lower = "金屏風との接点"
             return result
         if violation == "unknown_name":
             result = subject_result(payload, name="イブ・クライン")
         else:
-            result.suggestions[2].heading = "西洋彫刻のタブー"
+            result.suggestions[2].heading = "イヴ・クライン" if violation == "heading_only" else "西洋彫刻のタブー"
             result.suggestions[2].upper = "本物の人間から"
-            result.suggestions[2].lower = "イヴ・クライン" if violation == "lower_only" else "型を取った？"
+            result.suggestions[2].lower = "型を取った？"
         return result
 
     endpoint = "/api/exports/exp_thumbnail_style/thumbnail/copy"
@@ -283,12 +284,13 @@ def test_subject_violation_retries_once_and_exposes_failure_reason(client, viola
     assert calls[1]["publicationTitle"] == calls[0]["publicationTitle"]
     assert calls[1]["correction"]["reason"]
     assert calls[1]["correction"]["previousResponse"]["subjectName"]
+    assert "upperかlower" in calls[1]["correction"]["instruction"]
     state = client.get(endpoint).json()
     if repair == "success":
         assert state["state"] == "ready", state
         assert state["subjectName"] == "イヴ・クライン"
         assert state["error"] is None
-        assert all(state["subjectName"] in s["heading"] or state["subjectName"] in s["upper"] for s in state["suggestions"])
+        assert all(state["subjectName"] in s["upper"] or state["subjectName"] in s["lower"] for s in state["suggestions"])
     else:
         assert state["state"] == "failed", state
         assert state["suggestions"] == []
@@ -315,13 +317,18 @@ def test_no_subject_does_not_require_name_or_retry(client):  # noqa: F811
     assert state["subjectName"] == ""
 
 
-def test_valid_subject_is_saved_without_retry(client):  # noqa: F811
+@pytest.mark.parametrize("main_line", ["upper", "lower"])
+def test_valid_subject_is_saved_without_retry(client, main_line):  # noqa: F811
     case = seed_subject(client)
     calls = []
 
     def generate(payload, images):
         calls.append(payload)
-        return subject_result(payload)
+        result = subject_result(payload)
+        for item in result.suggestions:
+            item.upper = "イヴ・クライン" if main_line == "upper" else "絵の勉強より柔道!?"
+            item.lower = "イヴ・クライン" if main_line == "lower" else "金屏風との接点"
+        return result
 
     endpoint = "/api/exports/exp_thumbnail_style/thumbnail/copy"
     client.post(endpoint)
@@ -332,6 +339,34 @@ def test_valid_subject_is_saved_without_retry(client):  # noqa: F811
     state = client.get(endpoint).json()
     assert state["state"] == "ready"
     assert state["subjectName"] == "イヴ・クライン"
+    assert all(state["subjectName"] in item[main_line] for item in state["suggestions"])
+
+
+def test_v2_heading_only_cache_is_regenerated_for_v3(client, monkeypatch):  # noqa: F811
+    import app.jobs.thumbnail_copy as copy_jobs
+
+    case = seed_subject(client)
+    with case.factory() as db:
+        export = db.get(ExportItem, "exp_thumbnail_style")
+        with monkeypatch.context() as previous_version:
+            previous_version.setattr(copy_jobs, "THUMBNAIL_COPY_PROMPT_VERSION", "thumbnail_copy_v2")
+            old_request = build_copy_input(db, case.storage, export)
+        result = subject_result(old_request["payload"])
+        for item in result.suggestions:
+            item.heading = "イヴ・クライン"
+            item.upper = "絵の勉強より柔道!?"
+            item.lower = "金屏風との接点"
+        write_copy_state(
+            copy_state_path(case.storage, export),
+            {**old_request, **result.model_dump(by_alias=True), "state": "ready", "requestId": "old-v2"},
+        )
+    endpoint = "/api/exports/exp_thumbnail_style/thumbnail/copy"
+    assert client.get(endpoint).json()["requestId"] == "old-v2"
+    response = client.post(endpoint)
+    assert response.status_code == 202
+    assert response.json()["state"] == "queued"
+    assert response.json()["requestId"] != "old-v2"
+    assert len(case.queued) == 1
 
 
 def test_old_saved_copy_without_subject_name_is_readable(client):  # noqa: F811

@@ -167,7 +167,10 @@ def run_thumbnail_copy_generation(export_id: str, request_id: str, *, session_fa
                         "correction": {
                             "reason": str(exc),
                             "previousResponse": result.model_dump(by_alias=True),
-                            "instruction": "字幕・公開タイトルに実在する中心人物名をsubjectNameと全3案のheadingかupperに入れてください。",
+                            "instruction": (
+                                "字幕・公開タイトルに実在する中心人物名をsubjectNameと全3案のupperかlowerに入れてください。"
+                                "headingだけでは不可。"
+                            ),
                         },
                     }
                     continue
