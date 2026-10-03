@@ -10,11 +10,18 @@ from app.candidates.merge_boundaries import Candidate
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.queue import get_enqueue_thumbnail_copy, get_enqueue_thumbnail_regeneration
 from app.jobs.subtitle_review import build_subtitle_review, write_subtitle_review, subtitle_review_output_path
-from app.jobs.thumbnail_copy import build_copy_input, run_thumbnail_copy_generation
+from app.jobs.thumbnail_copy import build_copy_input, copy_state_path, run_thumbnail_copy_generation, write_copy_state
 from app.jobs.thumbnail_regeneration import run_export_thumbnail_regeneration
 from app.main import app
 from app.models import ExportItem, Job
-from app.scoring.thumbnail_copy import ThumbnailCopyResult, THUMBNAIL_COPY_SCHEMA, CodexThumbnailCopyGenerator
+from app.scoring.thumbnail_copy import (
+    THUMBNAIL_COPY_PROMPT_VERSION,
+    ThumbnailCopyResult,
+    THUMBNAIL_COPY_SCHEMA,
+    CodexThumbnailCopyGenerator,
+    ThumbnailCopySubjectError,
+    validate_copy_subject,
+)
 
 
 def seed(client):  # noqa: F811 - imported pytest fixture is passed to this helper
@@ -187,3 +194,159 @@ def test_thumbnail_copy_bridge_schema_is_allowlisted(tmp_path):
     generator = CodexThumbnailCopyGenerator(storage_root=tmp_path, job_id="job", clip_id="thumb_exp")
     assert generator.task == parsed.task
     assert generator.response_schema == THUMBNAIL_COPY_SCHEMA
+    assert "subjectName" in parsed.response_schema["required"]
+    assert THUMBNAIL_COPY_PROMPT_VERSION in generator.system_prompt
+
+
+def subject_result(payload, *, name="イヴ・クライン"):
+    result = generated(payload)
+    result.subject_name = name
+    for index, item in enumerate(result.suggestions):
+        item.heading = name if index != 1 else "人物紹介"
+        item.upper = "絵の勉強より柔道!?" if index != 1 else f"{name}の青"
+        item.lower = "金屏風との接点"
+        item.evidence[0].quote = "絵の勉強より柔道"
+    return result
+
+
+@pytest.mark.parametrize("source", ["subtitle", "title"])
+def test_subject_name_uses_exact_input_and_all_three_headings_or_upper(source):
+    payload = {
+        "segments": [{"segmentId": "seg", "text": "イヴ・クラインは絵の勉強より柔道を選んだ。"}],
+        "publicationTitle": "イヴ・クラインの人物紹介",
+    }
+    if source == "subtitle":
+        payload["publicationTitle"] = "現代アートの紹介"
+    else:
+        payload["segments"][0]["text"] = "絵の勉強より柔道を選んだ。"
+    result = subject_result(payload)
+    validate_copy_subject(result, payload["segments"], payload["publicationTitle"])
+    result.subject_name = "イブ・クライン"
+    with pytest.raises(ThumbnailCopySubjectError, match="表記と一致"):
+        validate_copy_subject(result, payload["segments"], payload["publicationTitle"])
+
+
+@pytest.mark.parametrize("missing_index", [0, 1, 2])
+def test_subject_name_is_required_in_each_suggestion(missing_index):
+    payload = {"segments": [{"segmentId": "seg", "text": "イヴ・クラインは絵の勉強より柔道を選んだ。"}]}
+    result = subject_result(payload)
+    result.suggestions[missing_index].heading = "人物紹介"
+    result.suggestions[missing_index].upper = "青と金の正体"
+    result.suggestions[missing_index].lower = "イヴ・クライン"
+    with pytest.raises(ThumbnailCopySubjectError, match="3案すべて"):
+        validate_copy_subject(result, payload["segments"], "")
+
+
+def seed_subject(client):  # noqa: F811
+    case = seed(client)
+    case.review.segments[0].text = "イヴ・クラインは絵の勉強より柔道を選んだ。金屏風との接点もあります。"
+    write_subtitle_review(case.review, case.review_path)
+    with case.factory() as db:
+        db.get(ExportItem, "exp_thumbnail_style").title = "イヴ・クラインの人物紹介"
+        db.commit()
+    return case
+
+
+@pytest.mark.parametrize("violation", ["unknown_name", "missing_name", "lower_only"])
+@pytest.mark.parametrize("repair", ["success", "still_invalid", "empty_name"])
+def test_subject_violation_retries_once_and_exposes_failure_reason(client, violation, repair):  # noqa: F811
+    case = seed_subject(client)
+    calls = []
+
+    def generate(payload, images):
+        assert images == []
+        calls.append(payload)
+        result = subject_result(payload)
+        if len(calls) == 2 and repair == "success":
+            return result
+        if len(calls) == 2 and repair == "empty_name":
+            result.subject_name = ""
+            for item in result.suggestions:
+                item.heading = "人物紹介"
+                item.upper = "絵の勉強より柔道!?"
+            return result
+        if violation == "unknown_name":
+            result = subject_result(payload, name="イブ・クライン")
+        else:
+            result.suggestions[2].heading = "西洋彫刻のタブー"
+            result.suggestions[2].upper = "本物の人間から"
+            result.suggestions[2].lower = "イヴ・クライン" if violation == "lower_only" else "型を取った？"
+        return result
+
+    endpoint = "/api/exports/exp_thumbnail_style/thumbnail/copy"
+    assert client.post(endpoint).status_code == 202
+    run_thumbnail_copy_generation(
+        *case.queued[-1], session_factory=case.factory, paths=case.storage, generator=SimpleNamespace(generate=generate)
+    )
+    assert len(calls) == 2
+    assert calls[1]["segments"] == calls[0]["segments"]
+    assert calls[1]["publicationTitle"] == calls[0]["publicationTitle"]
+    assert calls[1]["correction"]["reason"]
+    assert calls[1]["correction"]["previousResponse"]["subjectName"]
+    state = client.get(endpoint).json()
+    if repair == "success":
+        assert state["state"] == "ready", state
+        assert state["subjectName"] == "イヴ・クライン"
+        assert state["error"] is None
+        assert all(state["subjectName"] in s["heading"] or state["subjectName"] in s["upper"] for s in state["suggestions"])
+    else:
+        assert state["state"] == "failed", state
+        assert state["suggestions"] == []
+        assert "人物名" in state["error"]
+        assert "1回作り直し" in state["error"]
+
+
+def test_no_subject_does_not_require_name_or_retry(client):  # noqa: F811
+    case = seed(client)
+    calls = []
+
+    def generate(payload, images):
+        calls.append(payload)
+        return generated(payload)
+
+    endpoint = "/api/exports/exp_thumbnail_style/thumbnail/copy"
+    client.post(endpoint)
+    run_thumbnail_copy_generation(
+        *case.queued[-1], session_factory=case.factory, paths=case.storage, generator=SimpleNamespace(generate=generate)
+    )
+    assert len(calls) == 1
+    state = client.get(endpoint).json()
+    assert state["state"] == "ready"
+    assert state["subjectName"] == ""
+
+
+def test_valid_subject_is_saved_without_retry(client):  # noqa: F811
+    case = seed_subject(client)
+    calls = []
+
+    def generate(payload, images):
+        calls.append(payload)
+        return subject_result(payload)
+
+    endpoint = "/api/exports/exp_thumbnail_style/thumbnail/copy"
+    client.post(endpoint)
+    run_thumbnail_copy_generation(
+        *case.queued[-1], session_factory=case.factory, paths=case.storage, generator=SimpleNamespace(generate=generate)
+    )
+    assert len(calls) == 1
+    state = client.get(endpoint).json()
+    assert state["state"] == "ready"
+    assert state["subjectName"] == "イヴ・クライン"
+
+
+def test_old_saved_copy_without_subject_name_is_readable(client):  # noqa: F811
+    case = seed(client)
+    with case.factory() as db:
+        export = db.get(ExportItem, "exp_thumbnail_style")
+        payload = build_copy_input(db, case.storage, export)["payload"]
+        old = generated(payload).model_dump(by_alias=True)
+        old.pop("subjectName")
+        assert ThumbnailCopyResult.model_validate(old).subject_name == ""
+        path = copy_state_path(case.storage, export)
+        write_copy_state(path, {**old, "state": "ready", "inputHash": "legacy-v1"})
+        before = path.read_bytes()
+    state = client.get("/api/exports/exp_thumbnail_style/thumbnail/copy").json()
+    assert state["state"] == "ready"
+    assert state["subjectName"] == ""
+    assert len(state["suggestions"]) == 3
+    assert path.read_bytes() == before

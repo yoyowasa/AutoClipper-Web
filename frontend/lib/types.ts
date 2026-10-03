@@ -392,6 +392,7 @@ export type ThumbnailCopySuggestion = ThumbnailCopyText & {
 };
 export type ThumbnailCopyState = {
   state: "idle" | "queued" | "generating" | "ready" | "failed";
+  subjectName?: string;
   requestId?: string | null; suggestions: ThumbnailCopySuggestion[]; recommendedId?: string | null; error?: string | null;
 };
 
