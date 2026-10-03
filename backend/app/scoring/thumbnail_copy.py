@@ -7,7 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.scoring.codex_title_hook_suggestions import CodexTitleHookSuggestionGenerator
 
 
-THUMBNAIL_COPY_PROMPT = """確定済みの通常動画に使う日本語サムネイル文言を3案作成する。
+THUMBNAIL_COPY_PROMPT_VERSION = "thumbnail_copy_v2"
+THUMBNAIL_COPY_PROMPT = f"""プロンプト版: {THUMBNAIL_COPY_PROMPT_VERSION}
+確定済みの通常動画に使う日本語サムネイル文言を3案作成する。
 
 【目的】
 視聴者がサムネイルを見て「この動画を見たい」と思う文言を作る。
@@ -42,7 +44,16 @@ THUMBNAIL_COPY_PROMPT = """確定済みの通常動画に使う日本語サム�
 字幕にない人物・出来事・数字・感情を足さず、
 省略や組み合わせによって元の意味を変えない。
 不確かな固有名詞や数値は使わない。
+字幕・公開タイトルに実在する人物名の表記は「不確か」に当たらない。
 サムネで期待させる内容は、この完成動画の範囲内にあるものにする。
+
+【話の中心人物】
+動画の話の中心が特定の人物（作品や人物の紹介、ゲスト、本人の自己紹介など）の場合、
+subjectNameにその人物名を入れ、3案すべてで、その人物名をheadingかupperに入れる。
+名前は字幕か公開タイトルにある表記をそのまま使う。
+人物名は隠さない。隠して引き込むのは、その人物の何が意外か・何が起きたかの部分にする。
+例: heading「イヴ・クライン」、upper「絵の勉強より柔道!?」、lower「金屏風との接点」。
+話の中心が特定の人物でない場合は、subjectNameを空文字にし、人物名は必須ではない。
 
 【3案の作り分け】
 3案とも、視聴者が見たくなることを狙った案にする。
@@ -103,6 +114,7 @@ class ThumbnailCopySuggestion(ThumbnailCopyText):
 
 class ThumbnailCopyResult(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    subject_name: str = Field(default="", alias="subjectName", max_length=200)
     suggestions: list[ThumbnailCopySuggestion] = Field(min_length=3, max_length=3)
     recommended_id: str = Field(alias="recommendedId", pattern=r"^copy_[123]$")
 
@@ -113,6 +125,7 @@ def _object(properties: dict[str, Any]) -> dict[str, Any]:
 
 THUMBNAIL_COPY_SCHEMA = _object(
     {
+        "subjectName": {"type": "string", "maxLength": 200},
         "suggestions": {
             "type": "array",
             "minItems": 3,
@@ -150,6 +163,20 @@ class CodexThumbnailCopyGenerator(CodexTitleHookSuggestionGenerator):
 
     def parse_output(self, output: dict[str, Any]) -> ThumbnailCopyResult:
         return ThumbnailCopyResult.model_validate(output)
+
+
+class ThumbnailCopySubjectError(ValueError):
+    """The named subject is ungrounded or missing from a suggestion."""
+
+
+def validate_copy_subject(result: ThumbnailCopyResult, segments: list[dict], publication_title: str) -> None:
+    name = result.subject_name
+    if not name:
+        return
+    if not name.strip() or not (name in publication_title or any(name in segment["text"] for segment in segments)):
+        raise ThumbnailCopySubjectError("人物名が字幕・公開タイトルの表記と一致しません。")
+    if any(name not in item.heading and name not in item.upper for item in result.suggestions):
+        raise ThumbnailCopySubjectError("3案すべての小見出しか主見出し上行に、話の中心の人物名が必要です。")
 
 
 def validate_copy_evidence(result: ThumbnailCopyResult, segments: list[dict]) -> None:

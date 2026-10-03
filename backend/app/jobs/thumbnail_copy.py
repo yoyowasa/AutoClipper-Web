@@ -13,7 +13,15 @@ from app.jobs.subtitle_review import load_subtitle_review, reviewed_transcript_o
 from app.jobs.subtitle_review_preview import subtitle_review_document_lock
 from app.jobs.thumbnails import read_export_metadata
 from app.models import ExportItem, Job
-from app.scoring.thumbnail_copy import CodexThumbnailCopyGenerator, ThumbnailCopyResult, ThumbnailCopySuggestion, validate_copy_evidence
+from app.scoring.thumbnail_copy import (
+    THUMBNAIL_COPY_PROMPT_VERSION,
+    CodexThumbnailCopyGenerator,
+    ThumbnailCopyResult,
+    ThumbnailCopySubjectError,
+    ThumbnailCopySuggestion,
+    validate_copy_evidence,
+    validate_copy_subject,
+)
 from app.storage.paths import get_storage_paths
 
 
@@ -23,6 +31,7 @@ class ThumbnailCopyState(BaseModel):
     request_id: str | None = Field(default=None, alias="requestId")
     suggestions: list[ThumbnailCopySuggestion] = Field(default_factory=list)
     recommended_id: str | None = Field(default=None, alias="recommendedId")
+    subject_name: str = Field(default="", alias="subjectName")
     error: str | None = None
 
 
@@ -93,7 +102,7 @@ def build_copy_input(db, paths, export: ExportItem) -> dict:
             "end": end,
             "videoSize": video_stat.st_size,
             "videoModified": video_stat.st_mtime_ns,
-            "version": 1,
+            "version": THUMBNAIL_COPY_PROMPT_VERSION,
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -143,8 +152,27 @@ def run_thumbnail_copy_generation(export_id: str, request_id: str, *, session_fa
                 clip_id=f"thumb_{export.id}",
                 model=os.environ.get("CODEX_TITLE_HOOK_MODEL", "codex-default"),
             )
-            result = ThumbnailCopyResult.model_validate(active.generate(request["payload"], []).model_dump(by_alias=True))
-            validate_copy_evidence(result, request["payload"]["segments"])
+            payload = request["payload"]
+            for attempt in range(2):
+                result = ThumbnailCopyResult.model_validate(active.generate(payload, []).model_dump(by_alias=True))
+                try:
+                    if attempt and not result.subject_name:
+                        raise ThumbnailCopySubjectError("作り直した候補にも、話の中心の人物名がありません。")
+                    validate_copy_subject(result, payload["segments"], payload["publicationTitle"] or "")
+                except ThumbnailCopySubjectError as exc:
+                    if attempt:
+                        raise ThumbnailCopySubjectError(f"サムネ文言を1回作り直しましたが、{exc}") from exc
+                    payload = {
+                        **request["payload"],
+                        "correction": {
+                            "reason": str(exc),
+                            "previousResponse": result.model_dump(by_alias=True),
+                            "instruction": "字幕・公開タイトルに実在する中心人物名をsubjectNameと全3案のheadingかupperに入れてください。",
+                        },
+                    }
+                    continue
+                validate_copy_evidence(result, payload["segments"])
+                break
             with subtitle_review_document_lock(job_dir):
                 latest = read_copy_state(path)
                 if latest.get("requestId") != request_id:
@@ -159,6 +187,7 @@ def run_thumbnail_copy_generation(export_id: str, request_id: str, *, session_fa
                 if latest.get("requestId") != request_id:
                     return
                 error = (
-                    str(exc) if type(exc) is ValueError else "サムネ文言を生成できませんでした。Codexの接続を確認して再生成してください。"
+                    str(exc) if type(exc) is ValueError or isinstance(exc, ThumbnailCopySubjectError)
+                    else "サムネ文言を生成できませんでした。Codexの接続を確認して再生成してください。"
                 )
                 write_copy_state(path, {**latest, "state": "failed", "error": error, "suggestions": []})

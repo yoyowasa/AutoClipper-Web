@@ -10774,3 +10774,24 @@ pip check: pass
 - 検証: Python 3.11.9の全件python -m pytestは1492 passed / 3 skipped（既存のスキップ）。ruff check . ../launcher ../scripts成功。frontendのtest（24ファイル）・lint・typecheck・build成功。600/601の理由有無、1800/1801、却下記録、理由保存/旧データ、文脈不足の拡張、人の各窓口と字幕確認からの復帰、画面の長尺/上限表示、RQ時間枠、Codex中継の契約一致を確認した。CIはPRで3.11・3.12・frontendの成功を確認してからmerge commitでマージする。
 - Codex中継: promptVersionをcodex_initial_selection_v7へ更新し、話題選定・初期選定の固定schemaハッシュを更新した。ホスト側のCodex中継の再起動が必要。
 - 未確認事項: 実際に顔が写る30分動画での抽出・12枚の高解像度再抽出、字幕付き30分プレビュー/本番エンコードの実測、Codexでの実選定、稼働画面での確認は未実施。時間予算はCPU/GPUや入力によって十分とは限らない。Dockerへの反映とCodex中継の再起動は行わず、別途の指示で実施する。
+
+## 2026-10-02 運用: main b0f6402（task-183）の稼働環境への反映
+
+- 目的: task-183の内容をbackend・worker・frontendへ反映し、選定の返答変更に合わせてホスト側Codex中継を再起動する。アプリのコード変更は無し。
+- 事前確認: main / HEAD b0f6402c4359bcf6fe21230528feecae07632fec / 未コミット変更無し。RQキュー・実行中登録は各0件、中継requests・processingは空。DBは17ジョブ・45書き出し。指定された例外job_ea68be9806884d25aaa3dbd62a259f24だけdetecting_scenes（updated_at: 2026-10-02 10:27:32.691989）で、ユーザーの指示により実行中から除外し変更しない。
+- バックアップ: sqlite3.Connection.backup()でstorage/backups/autoclipper-20261002-123935-before-task183-deploy.dbを作成（ファイル名の時刻はUTC）。PRAGMA integrity_checkはok、jobs 17件・export_items 45件は元DBと一致。
+- 反映: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker frontend成功。RedisのコンテナID・起動時刻は変わらず、再作成・再起動していない。
+- Codex中継: LauncherController.stop_codex_bridge()→ensure_codex_bridge_running()成功。PID 25420→32304、state=ready、PID生存確認。contractFingerprint=ba9207fc8b68e44d0a5f70a40811982146f29ba028c8dfa1ca7c76b1bf739554、bridgeBuildFingerprint=9c597efd455ddde5f33a1e70d584cd379d6fd9eb755d4b2478f3cfa12553a12eがmainの値と一致。
+- 事後確認: backend healthy、worker・frontend running。GET http://localhost:8000/healthとhttp://localhost:3000/uploadは200。workerのavは18.1.0。RQは引き続き各0件。DB件数・状態内訳は変化無し（awaiting_clip_review 6 / awaiting_subtitle_review 3 / completed 6 / detecting_scenes 1 / failed 1）。例外ジョブの状態・updated_atは変化無し。
+- 未実施: GET /api/jobs/{id}・字幕確認の取得、実動画の選定・再選定・書き出しは行っていない。変更ファイルは運用記録のSTATUS.mdのみで、記録は未コミット。
+
+## 2026-10-03 task-184: サムネ文言に話の中心人物名を残す
+
+- 目的・原因: 人物紹介のサムネ3案から人物名が抜ける問題を修正する。従来のプロンプトは「対象を隠す」「情報ギャップ」を強く勧め、人物名の検証も無かった。キャラ設定の出演者名は入力に追加しない。
+- プロンプト: thumbnail_copy_v2に更新。人物紹介・ゲスト・本人の自己紹介など特定の人物が中心の場合は、字幕か公開タイトルにある表記をsubjectNameに入れ、全3案のheadingまたはupperにも入れる。人物名は隠さず、その人の何が意外か・何が起きたかで引き込む。中心人物がいない場合はsubjectNameを空にする。字幕にない人物を足さない決まりと不確かな固有名詞の禁止を維持し、字幕・公開タイトルに実在する名前の表記は不確かに当たらないことを明記した。
+- 検証・作り直し: subjectNameが空でなければ字幕か公開タイトルへの完全一致の部分文字列と、全3案のheading/upperへの挿入を確認する。違反時は同じ字幕・タイトルと前の返答・修正理由を渡して1回だけ作り直す。2回目も違反、または名前を空にして回避した場合はfailed・候補0件とし、理由を既存の画面のエラー表示へ返す。初回からsubjectNameが空なら名前は要求せず、人物が中心かの判断はCodexに委ねる。
+- 互換性: 保存済みのsubjectName無しの返答・状態は空として読み込み、GETでは書き換えない。生成の入力ハッシュにプロンプト版を含め、新たな生成依頼では旧版の候補をキャッシュとして再利用しない。
+- 変更ファイル: backend/app/scoring/thumbnail_copy.py、backend/app/jobs/thumbnail_copy.py、backend/tests/test_thumbnail_copy.py、frontend/lib/types.ts、launcher/codex_bridge.py、STATUS.md。前回の未コミットのtask-183反映記録も保持した。
+- ローカル検証: Python 3.11.9でpython -m pytest全件1509 passed / 3 skipped（既存のスキップ）、ruff check . ../launcher ../scripts成功。frontendのtest（24ファイル）・lint・typecheck・build成功。人物名の字幕/タイトルでの表記一致、各案での名前抜け・下行のみの名前、1回の作り直し成功/失敗、空の名前、旧形式の読み込み、中継の固定schemaとbackendの一致を確認した。失敗理由はGET応答で確認し、画面の既存role=alertがこのerrorを表示することをコードで確認した。
+- Codex中継: thumbnail_copy_suggestionsの返答schemaにsubjectNameを追加し、固定schemaハッシュを更新した。ホスト側のCodex中継の再起動が必要。
+- 未確認事項: 実際のCodexによる人物中心の判断と3案の生成、稼働画面での表示は未実施。実ジョブ・保存済み文言は変更していない。Dockerへの反映と中継の再起動は行わない。CIはPRで3.11・3.12・frontendの成功を確認してからmerge commitでマージする。
