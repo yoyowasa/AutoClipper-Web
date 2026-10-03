@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.scoring.codex_title_hook_suggestions import CodexTitleHookSuggestionGenerator
 
 
-THUMBNAIL_COPY_PROMPT_VERSION = "thumbnail_copy_v2"
+THUMBNAIL_COPY_PROMPT_VERSION = "thumbnail_copy_v3"
 THUMBNAIL_COPY_PROMPT = f"""プロンプト版: {THUMBNAIL_COPY_PROMPT_VERSION}
 確定済みの通常動画に使う日本語サムネイル文言を3案作成する。
 
@@ -49,10 +49,13 @@ THUMBNAIL_COPY_PROMPT = f"""プロンプト版: {THUMBNAIL_COPY_PROMPT_VERSION}
 
 【話の中心人物】
 動画の話の中心が特定の人物（作品や人物の紹介、ゲスト、本人の自己紹介など）の場合、
-subjectNameにその人物名を入れ、3案すべてで、その人物名をheadingかupperに入れる。
+subjectNameにその人物名を入れ、3案すべてで、その人物名をupperかlower（主見出し）に入れる。
+headingだけに入れるのは不可。
 名前は字幕か公開タイトルにある表記をそのまま使う。
+headingには人物名を繰り返さず、その人物を一言で表す補足や話題の切り口を置く（例:「天才芸術家の素顔」）。
 人物名は隠さない。隠して引き込むのは、その人物の何が意外か・何が起きたかの部分にする。
-例: heading「イヴ・クライン」、upper「絵の勉強より柔道!?」、lower「金屏風との接点」。
+例: upper「イヴ・クライン」、lower「青が好きすぎて顔料開発!?」。
+別案: upper「イヴ・クラインは」、lower「全員正装で来い!?」。
 話の中心が特定の人物でない場合は、subjectNameを空文字にし、人物名は必須ではない。
 
 【3案の作り分け】
@@ -175,8 +178,8 @@ def validate_copy_subject(result: ThumbnailCopyResult, segments: list[dict], pub
         return
     if not name.strip() or not (name in publication_title or any(name in segment["text"] for segment in segments)):
         raise ThumbnailCopySubjectError("人物名が字幕・公開タイトルの表記と一致しません。")
-    if any(name not in item.heading and name not in item.upper for item in result.suggestions):
-        raise ThumbnailCopySubjectError("3案すべての小見出しか主見出し上行に、話の中心の人物名が必要です。")
+    if any(name not in item.upper and name not in item.lower for item in result.suggestions):
+        raise ThumbnailCopySubjectError("3案すべての主見出し上行か下行に、話の中心の人物名が必要です。小見出しだけでは不十分です。")
 
 
 def validate_copy_evidence(result: ThumbnailCopyResult, segments: list[dict]) -> None:
