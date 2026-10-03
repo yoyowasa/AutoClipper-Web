@@ -17,26 +17,82 @@ def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleS
         content = (request.text or "").strip()
         if not content:
             raise ValueError("追加する字幕を入力してください。")
-        if any(segment.start < request.end - 0.001 and segment.end > request.start + 0.001 for segment in document.segments):
+        overlapping = [
+            segment for segment in document.segments
+            if segment.start < request.end and segment.end > request.start
+        ]
+        if any(
+            segment.text.strip() and segment.start < request.end - 0.001 and segment.end > request.start + 0.001
+            for segment in overlapping
+        ):
             raise ValueError("既存字幕と時間が重なっています。開始・終了時刻を空白区間に合わせてください。")
+        overlapping = [segment for segment in overlapping if not segment.text.strip()]
         if not document.segments:
             raise ValueError("元の文字起こしがないため、字幕を追加できません。")
-        nearest = min(document.segments, key=lambda segment: min(abs(request.start - segment.end), abs(segment.start - request.end)))
+        nearest = (
+            min(overlapping, key=lambda segment: (segment.start, segment.end))
+            if overlapping else
+            min(document.segments, key=lambda segment: min(abs(request.start - segment.end), abs(segment.start - request.end)))
+        )
         affected = {
             item.id for item in document.clips
             if item.start < request.end and item.end > request.start
         }
+        source_indices = sorted({
+            index for segment in (overlapping or [nearest])
+            for index in (segment.source_indices or [segment.index])
+        })
         new_segment = SubtitleReviewSegment(
             id=f"seg_{uuid4().hex}", index=nearest.index, start=request.start, end=request.end,
             originalText="", text=content, edited=True,
-            affectedClipIds=sorted(affected), sourceIndices=nearest.source_indices or [nearest.index],
+            affectedClipIds=sorted(affected), sourceIndices=source_indices,
             preserveSegmentation=True,
         )
-        document.segments = sorted([*document.segments, new_segment], key=lambda segment: (segment.start, segment.end))
+        # Empty rows still reserve their source-index space. Replace only the
+        # overlapping portion, preserving the blank remainder and its style.
+        remainder_by_id: dict[str, list[SubtitleReviewSegment]] = {}
+        for segment in overlapping:
+            affected.update(segment.affected_clip_ids)
+            remainders: list[SubtitleReviewSegment] = []
+            for start, end in ((segment.start, min(segment.end, request.start)), (max(segment.start, request.end), segment.end)):
+                if end <= start:
+                    continue
+                remainders.append(segment.model_copy(update={
+                    "id": f"seg_{uuid4().hex}", "start": start, "end": end,
+                    "source_indices": segment.source_indices or [segment.index],
+                    "preserve_segmentation": True, "edited": True,
+                    "affected_clip_ids": [
+                        item.id for item in document.clips
+                        if item.id in segment.affected_clip_ids and item.start < end and item.end > start
+                    ],
+                }))
+            remainder_by_id[segment.id] = remainders
+        removed = set(remainder_by_id)
+        document.segments = sorted([
+            *[segment for segment in document.segments if segment.id not in removed],
+            *[segment for remainders in remainder_by_id.values() for segment in remainders], new_segment,
+        ], key=lambda segment: (segment.start, segment.end))
         for item in document.clips:
             if item.id in affected:
                 item.confirmed = False
                 item.segment_ids = [segment.id for segment in document.segments if item.id in segment.affected_clip_ids]
+                old_styles = {(style.start, style.end): style.style for style in item.subtitle_styles}
+                removed_ranges = {(segment.start, segment.end) for segment in overlapping}
+                item.subtitle_styles = [style for style in item.subtitle_styles if (style.start, style.end) not in removed_ranges]
+                for segment in overlapping:
+                    style = old_styles.get((segment.start, segment.end))
+                    if style is not None:
+                        item.subtitle_styles.extend(
+                            SubtitleStyleOverride(start=remainder.start, end=remainder.end, style=style)
+                            for remainder in remainder_by_id[segment.id] if item.id in remainder.affected_clip_ids
+                        )
+                first_source = next((
+                    segment for segment in sorted(overlapping, key=lambda segment: (segment.start, segment.end))
+                    if item.id in segment.affected_clip_ids
+                ), None)
+                first_style = old_styles.get((first_source.start, first_source.end)) if first_source is not None else None
+                if first_style is not None and item.id in new_segment.affected_clip_ids:
+                    item.subtitle_styles.append(SubtitleStyleOverride(start=new_segment.start, end=new_segment.end, style=first_style))
         _refresh_counts(document)
         return affected
 

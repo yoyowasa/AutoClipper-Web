@@ -10813,3 +10813,14 @@ pip check: pass
 - 変更ファイル: backend/app/scoring/thumbnail_copy.py、backend/app/jobs/thumbnail_copy.py、backend/tests/test_thumbnail_copy.py、STATUS.md。既存の未コミットのtask-184反映記録もそのまま収録する。
 - ローカル検証: ruff check . ../launcher ../scripts成功。Python 3.11.9でpython -m pytest全件1511 passed / 3 skipped（既存のスキップ）。関連27件でheadingだけの案の拒否・1回の作り直し成功/失敗、upper/lowerそれぞれでの採用、空のsubjectName、旧形式の読み込み、旧v2キャッシュの再生成、中継の固定schema一致を確認。frontendのtest（24ファイル）・lint・typecheck・build成功。
 - 未確認事項: 実際のCodexでの生成、稼働画面での主見出しの見え方は未実施。保存済みの文言・実ジョブは変更しない。Dockerへの反映は行わない。CIはPRで3.11・3.12・frontendの成功を確認してからmerge commitでマージする。
+
+## 2026-10-03 task-187: 字幕確認で音ありの空白区間を示す
+
+- 目的: 文字起こしの取りこぼしや字幕編集で空いた区間を、字幕確認で見つけて確認・追加できるようにする。本番の文字起こし方式は変更しない。
+- 判定: clip内の非空字幕が覆っていない連続区間が3秒以上、silence_segments.jsonから算出した非無音の割合が60%以上ならgapsに追加する。無音の重複は結合し、clipの端で区間を切る。無音データが無い・読めない場合は判定しない。ショートの冒頭フック映像と、フック文言によって意図的に字幕を隠す区間は対象外。gapsのstart/endはフック映像の長さを含むプレイヤー内の時刻、sourceStart/sourceEndは元動画の時刻。
+- 保存・API: clip.gapsはレビューの読み込み・保存時に再計算する。各区間のsource/player時刻から作ったIDが同じときだけ確認済みを引き継ぎ、字幕追加や境界変更で区間が変われば再び未確認にする。確認状態はsubtitle_review.jsonへ保存する。PATCH /api/jobs/{job_id}/subtitle-review/clips/{clip_id}/gaps/{gap_id}を追加し、確認保存では字幕本文・clip確定・プレビューやキュー登録を変更しない。旧JSONにgapsが無くても読める。
+- 画面: 再生バーに橙色の区間、字幕一覧に「字幕なし（音あり）」の時系列行、clip見出しに未確認件数を表示する。クリックでその位置に移動して停止し、既存の停止位置からの字幕追加を使える。確認済みにすると印・行・件数から外す。確認APIの応答はgapsだけ反映し、字幕・タイトル・画角の未保存編集を維持する。
+- 字幕追加の整合: 空文字の既存行も判定対象となるため、そこへの追加時は重なる空行を残余へ分割して新字幕1行に置き換える。元のsourceIndices・共有clip・字幕の書式を保ち、非空字幕との重複は従来の1ms許容で拒否する。画面の個別書式も新しい区間へ移し、未保存の書式の変更・追加・削除や他の区間・タイトルの編集を維持する。挿入範囲に重なる未保存の字幕本文は先に保存を促し、下書きを失わないようにした。
+- 変更ファイル: backend/app/jobs/subtitle_gaps.py（新規）、subtitle_review.py、subtitle_structure.py、backend/app/api/jobs.py、schemas.py、backend/tests/test_subtitle_gaps.py（新規）、test_clip_plan_split_contract.py。frontendの字幕確認page、SubtitleGapMarkers.tsx（新規）、lib/subtitleGaps.ts（新規）、subtitleStructureDrafts.ts（新規）、subtitlePauseInsert.ts、api.ts、types.ts、tests/subtitleGaps.test.ts（新規）、subtitleStructure.test.ts、STATUS.md。
+- ローカル検証: Python 3.11.9でpython -m pytest全件1539 passed / 3 skipped、ruff check . ../launcher ../scripts成功。最初のsandbox内全件実行は既存Windows Job Objectテストだけ権限制約で失敗し、sandbox外の最終全件実行では成功した。稼働DBの更新時刻とサイズは最終全件実行の前後で一致。frontendのtest（25ファイル）・lint・typecheck・通常build成功。判定の3秒/60%境界、フック除外、無音データ欠如、編集後の再計算、確認保存、単一/複数空行への追加と共有clip・書式保護、未保存編集の保護を確認した。
+- 制限・未確認事項: 無音検出は発話検出ではなく、BGMだけでも「音あり」になり得るため、マーカーは確認用の目印とする。稼働画面と実動画での操作は未実施。稼働DB・ジョブファイルは変更していない。Dockerへの反映は行わない。CIはPRでPython 3.11・3.12・frontendの成功を確認してからmerge commitでマージする。

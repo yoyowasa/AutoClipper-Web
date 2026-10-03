@@ -5,6 +5,7 @@ import { ReviewCharacterPreset } from "../../../../components/ReviewCharacterPre
 import { ShortFramingWorkspace } from "../../../../components/ShortFramingWorkspace";
 import { LiveShortFramingPreview } from "../../../../components/LiveShortFramingPreview";
 import { SubtitleSegmentActions } from "../../../../components/SubtitleSegmentActions";
+import { SubtitleGapMarkers, SubtitleGapRow } from "../../../../components/SubtitleGapMarkers";
 import { editSubtitleStructure } from "../../../../lib/api";
 import type { SubtitleStructureRequest } from "../../../../lib/types";
 import { useParams, useRouter } from "next/navigation";
@@ -19,6 +20,7 @@ import { TitleHookSuggestionPanel } from "../../../../components/TitleHookSugges
 import { SubtitleBulkCorrection } from "../../../../components/SubtitleBulkCorrection";
 import type { CorrectionSelection, SubtitleBatchUpdate } from "../../../../lib/subtitleBulkCorrection";
 import {
+  acknowledgeSubtitleReviewGap,
   applySubtitleReviewClip,
   finalizeSubtitleReview,
   getJobStatus,
@@ -35,7 +37,18 @@ import {
 } from "../../../../lib/api";
 import { type ClipTextTarget } from "../../../../lib/clipTextStyle";
 import { subtitlePreviewEvents } from "../../../../lib/subtitlePreview";
-import { sourceTimeAtPlayback } from "../../../../lib/subtitlePauseInsert";
+import {
+  nextNonemptySubtitleStart,
+  sourceTimeAtPlayback,
+  subtitleInsertionConflict
+} from "../../../../lib/subtitlePauseInsert";
+import { remapInsertedSubtitleDraft, subtitleStructureSources } from "../../../../lib/subtitleStructureDrafts";
+import {
+  mergeSubtitleGapAcknowledgement,
+  seekAndPauseAtSubtitleGap,
+  subtitleTimeline,
+  unacknowledgedSubtitleGaps
+} from "../../../../lib/subtitleGaps";
 import type {
   ClipTextStyle,
   ExportType,
@@ -43,6 +56,7 @@ import type {
   SubtitleReviewClip,
   SubtitleReviewClipFramingUpdateRequest,
   SubtitleReviewDocument,
+  SubtitleReviewGap,
   SubtitleReviewSegment,
   TitleHookSuggestion,
   TitleHookSuggestionResponse
@@ -413,6 +427,7 @@ export default function SubtitleReviewPage() {
   const [bulkCorrectionSelection, setBulkCorrectionSelection] = useState<CorrectionSelection | null>(null);
   const [isSavingBulkCorrection, setIsSavingBulkCorrection] = useState(false);
   const [isSavingStructure, setIsSavingStructure] = useState(false);
+  const [acknowledgingGapId, setAcknowledgingGapId] = useState<string | null>(null);
   const [retainedLivePreviews, setRetainedLivePreviews] = useState<
     Record<string, { url: string; version: string }>
   >({});
@@ -645,6 +660,7 @@ export default function SubtitleReviewPage() {
   }, [hasPendingPreviews, isUpdatingHookScene, jobId]);
 
   const hasReviewMutationInFlight =
+    acknowledgingGapId !== null ||
     isSavingBulkCorrection ||
     isSavingStructure ||
     retryingPreviewClipId !== null ||
@@ -668,6 +684,7 @@ export default function SubtitleReviewPage() {
         .filter((segment): segment is SubtitleReviewSegment => Boolean(segment)) ?? [],
     [segmentsById, selectedClip]
   );
+  const selectedGaps = unacknowledgedSubtitleGaps(selectedClip?.gaps);
   const selectedSuggestionSegments = useMemo(
     () =>
       [...selectedSegments]
@@ -1071,6 +1088,9 @@ export default function SubtitleReviewPage() {
         )
       )
     : 0;
+  const selectedSubtitleTimeline = subtitleTimeline(
+    selectedSegments, selectedClip?.gaps, selectedClip?.start ?? 0, hookSceneDuration
+  );
   const isInHookSuppression = clipTime < hookSuppressionEnd;
   const absolutePlaybackTime = selectedClip
     ? hookSceneDuration > 0 &&
@@ -1131,9 +1151,9 @@ export default function SubtitleReviewPage() {
     }
     const previewAddedSubtitle = pausedSubtitleDraft?.clipId === selectedClip.id &&
       pausedSubtitleDraft.text.trim() && pausedSubtitleDraft.end - pausedSubtitleDraft.start >= 0.1 &&
-      !selectedSegments.some((segment) =>
-        segment.start < pausedSubtitleDraft.end - 0.001 && segment.end > pausedSubtitleDraft.start + 0.001
-      )
+      !subtitleInsertionConflict(selectedSegments.map((segment) => ({
+        ...segment, text: drafts[segment.id] ?? segment.text
+      })), pausedSubtitleDraft.start, pausedSubtitleDraft.end)
       ? [{ start: pausedSubtitleDraft.start, end: pausedSubtitleDraft.end,
           text: pausedSubtitleDraft.text, preserveSegmentation: true }] : [];
     return subtitlePreviewEvents({
@@ -1348,6 +1368,36 @@ export default function SubtitleReviewPage() {
     setIsPlaying(false);
   }
 
+  function seekToSubtitleGap(gap: SubtitleReviewGap) {
+    const video = videoRef.current;
+    if (!video || !selectedClip) return;
+    suggestionPlaybackEndRef.current = null;
+    setPreviewingSuggestionId(null);
+    setClipTime(seekAndPauseAtSubtitleGap(video, gap, clipDuration));
+    setIsPlaying(false);
+  }
+
+  async function acknowledgeGap(gap: SubtitleReviewGap) {
+    if (!selectedClip || !isEditable) return;
+    const clipId = selectedClip.id;
+    const generation = beginReviewMutation();
+    setAcknowledgingGapId(gap.id);
+    setError(null);
+    try {
+      const updated = await acknowledgeSubtitleReviewGap(jobId, clipId, gap.id);
+      if (isCurrentReviewMutation(generation)) {
+        setReview((current) => current ? mergeSubtitleGapAcknowledgement(current, updated, clipId) : current);
+      }
+    } catch (caught) {
+      if (isCurrentReviewMutation(generation)) {
+        setError(caught instanceof Error ? caught.message : "空白区間の確認を保存できませんでした");
+      }
+    } finally {
+      endReviewMutation();
+      setAcknowledgingGapId(null);
+    }
+  }
+
   function togglePlayback() {
     const video = videoRef.current;
     if (!video || !selectedClip) {
@@ -1389,7 +1439,7 @@ export default function SubtitleReviewPage() {
       setError("冒頭フック以外の動画内で、終了位置より前に停止してください。");
       return;
     }
-    const nextStart = selectedSegments.find((segment) => segment.start > start + 0.01)?.start ?? selectedClip.end;
+    const nextStart = nextNonemptySubtitleStart(selectedSegments, start, selectedClip.end);
     setPausedSubtitleDraft({
       clipId: selectedClip.id, start,
       end: Math.floor(Math.min(selectedClip.end, nextStart, start + 2) * 100 + 0.000001) / 100,
@@ -1410,9 +1460,14 @@ export default function SubtitleReviewPage() {
       setError("冒頭の字幕非表示区間を避け、動画内の0.1秒以上の範囲にしてください。");
       return;
     }
-    if (review?.segments.some((segment) =>
-      segment.start < pausedSubtitleDraft.end - 0.001 && segment.end > pausedSubtitleDraft.start + 0.001
-    )) {
+    const insertionConflict = subtitleInsertionConflict(
+      review?.segments ?? [], pausedSubtitleDraft.start, pausedSubtitleDraft.end, dirtySegmentIds
+    );
+    if (insertionConflict === "unsaved") {
+      setError("追加区間に未保存の字幕があります。先に保存してから字幕を追加してください。");
+      return;
+    }
+    if (insertionConflict === "overlap") {
       setError("既存字幕と時間が重なっています。空白区間に合わせてください。");
       return;
     }
@@ -2123,8 +2178,8 @@ export default function SubtitleReviewPage() {
   async function saveSubtitleStructure(request: SubtitleStructureRequest): Promise<boolean> {
     if (!review || !isEditable) return false;
     const oldDocument = review;
-    const targets = new Set(request.segments.map(item => item.segmentId));
-    const sourceSegments = oldDocument.segments.filter(segment => targets.has(segment.id));
+    const sourceSegments = subtitleStructureSources(oldDocument.segments, request);
+    const targets = new Set(sourceSegments.map((segment) => segment.id));
     const affected = new Set([...sourceSegments.flatMap(segment => segment.affectedClipIds), ...(request.clipId ? [request.clipId] : [])]);
     const first = sourceSegments[0];
     const oldIds = new Set(oldDocument.segments.map(segment => segment.id));
@@ -2146,6 +2201,15 @@ export default function SubtitleReviewPage() {
         for (const clip of updated.clips) {
           if (!affected.has(clip.id) || !next[clip.id]) continue;
           const draft = next[clip.id];
+          if (request.action === "insert_at_time" && request.start !== undefined && request.end !== undefined) {
+            const previousClip = oldDocument.clips.find((item) => item.id === clip.id);
+            if (previousClip) {
+              next[clip.id] = remapInsertedSubtitleDraft(
+                draft, previousClip, clip, sourceSegments, replacementSegments, request.start, request.end
+              );
+            }
+            continue;
+          }
           const firstStyle = first && draft.subtitleStyles.find(item => item.start === first.start && item.end === first.end)?.style;
           const keptStyles = draft.subtitleStyles.filter(item => !sourceSegments.some(segment => segment.start === item.start && segment.end === item.end));
           next[clip.id] = { ...draft, subtitleStyles: [...keptStyles, ...(firstStyle ? replacementSegments.map(segment =>
@@ -2157,7 +2221,7 @@ export default function SubtitleReviewPage() {
       setSegmentCursor(null);
       setBulkCorrectionSelection(null);
       const inserted = request.action === "insert_at_time"
-        ? updated.segments.find(segment => !oldIds.has(segment.id)) : null;
+        ? updated.segments.find(segment => !oldIds.has(segment.id) && segment.start === request.start && segment.end === request.end) : null;
       requestAnimationFrame(() => {
         const list = subtitleListRef.current;
         if (!list) return;
@@ -2483,6 +2547,11 @@ export default function SubtitleReviewPage() {
                     <span className="mt-2 block line-clamp-2 text-sm font-medium">
                       {clipDraft ? clipDraft.title : clip.title}
                     </span>
+                    {unacknowledgedSubtitleGaps(clip.gaps).length > 0 ? (
+                      <span className={`mt-1 block text-[11px] font-medium ${clip.id === selectedClipId ? "text-amber-200" : "text-amber-800"}`}>
+                        字幕なし {unacknowledgedSubtitleGaps(clip.gaps).length}か所
+                      </span>
+                    ) : null}
                     {!isPreviewReady(clip, review.state) ? (
                       <span
                         className={`mt-2 block text-[11px] font-semibold ${
@@ -2810,6 +2879,7 @@ export default function SubtitleReviewPage() {
                         ) : null}
                         </div>
                       </div>
+                      <SubtitleGapMarkers gaps={selectedClip.gaps} duration={clipDuration} onSelect={seekToSubtitleGap} />
                       <input
                         aria-label="clip再生位置"
                         className="block h-2 w-full cursor-pointer accent-sky-500"
@@ -3360,6 +3430,9 @@ export default function SubtitleReviewPage() {
                       <h3 className="text-base font-semibold">
                         {clipLabel(selectedClip, review.clips)} の字幕
                       </h3>
+                      {selectedGaps.length > 0 ? (
+                        <p className="mt-1 text-xs font-medium text-amber-800">字幕なし {selectedGaps.length}か所</p>
+                      ) : null}
                       <p className="mt-1 text-xs text-neutral-500">
                         再生中の字幕へ自動で追従します
                       </p>
@@ -3434,8 +3507,15 @@ export default function SubtitleReviewPage() {
                   className="relative min-h-0 flex-1 overflow-y-auto overscroll-y-contain"
                   ref={subtitleListRef}
                 >
-                  {selectedSegments.length > 0 ? (
-                    selectedSegments.map((segment, segmentIndex) => {
+                  {selectedSubtitleTimeline.length > 0 ? (
+                    selectedSubtitleTimeline.map((item) => {
+                      if (item.kind === "gap") {
+                        return <SubtitleGapRow key={`gap:${item.gap.id}`} gap={item.gap}
+                          editable={isEditable} saving={acknowledgingGapId === item.gap.id}
+                          canSeek={selectedPlayerReady && isPlayerReady}
+                          onSelect={seekToSubtitleGap} onAcknowledge={(gap) => void acknowledgeGap(gap)} />;
+                      }
+                      const { segment, segmentIndex } = item;
                       const isDirty = dirtySegmentIds.has(segment.id);
                       const isActive = activeSegmentId === segment.id;
                       const relativeStart = clamp(

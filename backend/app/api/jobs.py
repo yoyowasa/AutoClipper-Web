@@ -141,6 +141,7 @@ from app.schemas import (
     SubtitleReviewClipFramingUpdateRequest,
     SubtitleReviewSettingsUpdateRequest,
     SubtitleReviewBatchUpdateRequest,
+    SubtitleReviewGapUpdateRequest,
     TitleHookSuggestionRequest,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
@@ -1857,6 +1858,39 @@ def get_subtitle_review(
             document=document,
             output_dir=output_dir,
         )
+    return document
+
+
+@router.patch(
+    "/{job_id}/subtitle-review/clips/{clip_id}/gaps/{gap_id}",
+    response_model=SubtitleReviewDocument,
+)
+def update_subtitle_review_gap(
+    job_id: str,
+    clip_id: str,
+    gap_id: str,
+    request: SubtitleReviewGapUpdateRequest,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    output_dir = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output_dir):
+        db.refresh(job)
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if job.status != "awaiting_subtitle_review" or document.state != "awaiting_review":
+            raise HTTPException(409, "字幕を編集できる状態ではありません。")
+        clip = next((item for item in document.clips if item.id == clip_id), None)
+        if clip is None:
+            raise HTTPException(404, "subtitle review clip not found")
+        gap = next((item for item in clip.gaps if item.id == gap_id), None)
+        if gap is None:
+            raise HTTPException(404, "字幕の空白区間が変わっています。画面を読み直してください。")
+        gap.acknowledged = request.acknowledged
+        document.updated_at = utc_now().isoformat() + "+00:00"
+        # Acknowledging a marker does not change captions, clip confirmation,
+        # content quality decisions, or any preview render contract.
+        write_subtitle_review(document, subtitle_review_output_path(output_dir))
     return document
 
 
