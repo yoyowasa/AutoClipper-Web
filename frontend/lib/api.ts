@@ -444,6 +444,21 @@ export async function getSubtitleReview(jobId: string): Promise<SubtitleReviewDo
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
+export async function acknowledgeSubtitleReviewGap(
+  jobId: string,
+  clipId: string,
+  gapId: string
+): Promise<SubtitleReviewDocument> {
+  return parseJsonResponse<SubtitleReviewDocument>(await fetch(
+    `${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/gaps/${gapId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ acknowledged: true })
+    }
+  ));
+}
+
 export async function saveYouTubePostingProfile(
   profile: YouTubePostingProfile
 ): Promise<YouTubePostingProfileDocument> {

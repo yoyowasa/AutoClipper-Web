@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, SubtitleStyleOverride, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
+from app.jobs.subtitle_gaps import SubtitleGap, refresh_review_gaps
 from app.overlay_text import normalize_overlay_text
 from app.posting_metadata import (
     NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX,
@@ -220,6 +221,7 @@ class SubtitleReviewClip(BaseModel):
         alias="livePreviewSpecHash",
     )
     segment_ids: list[str] = Field(default_factory=list, alias="segmentIds")
+    gaps: list[SubtitleGap] = Field(default_factory=list)
     confirmed: bool = False
     edited_segment_count: int = Field(default=0, ge=0, alias="editedSegmentCount")
 
@@ -800,6 +802,7 @@ def retain_review_after_boundary_reedit(
 
 
 def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | Path) -> Path:
+    refresh_review_gaps(document, Path(output_path).parent)
     return write_json_atomic(
         Path(output_path),
         document.model_dump(by_alias=True, mode="json"),
@@ -808,7 +811,9 @@ def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | P
 
 def load_subtitle_review(path: str | Path) -> SubtitleReviewDocument:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    return SubtitleReviewDocument.model_validate(payload)
+    document = SubtitleReviewDocument.model_validate(payload)
+    refresh_review_gaps(document, Path(path).parent)
+    return document
 
 
 def update_review_segment(

@@ -606,6 +606,12 @@ class SubtitleReviewSegmentUpdateRequest(BaseModel):
     text: str = Field(max_length=4000)
 
 
+class SubtitleReviewGapUpdateRequest(BaseModel):
+    acknowledged: bool
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class SubtitleReviewBatchSegmentUpdate(SubtitleReviewSegmentUpdateRequest):
     segment_id: str = Field(alias="segmentId", min_length=1, max_length=200)
     before: str = Field(max_length=4000)

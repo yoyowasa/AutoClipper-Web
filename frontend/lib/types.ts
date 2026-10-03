@@ -462,7 +462,17 @@ export type ResolvedClipTextStyle = {
 
 export type SubtitleStyleOverride = { start: number; end: number; style: ClipTextStyle };
 
+export type SubtitleReviewGap = {
+  id: string;
+  start: number;
+  end: number;
+  sourceStart: number;
+  sourceEnd: number;
+  acknowledged: boolean;
+};
+
 export type SubtitleReviewClip = {
+  gaps?: SubtitleReviewGap[];
   subtitleStyles?: SubtitleStyleOverride[];
   id: string;
   type: ExportType;
