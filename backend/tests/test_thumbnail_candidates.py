@@ -112,6 +112,24 @@ def test_extraction_range_score_order_and_cached_images(tmp_path, monkeypatch):
     assert Image.open(tmp_path / "frame_00.small.jpg").size == (240, 135)
 
 
+def test_numpy_detector_values_are_saved_as_plain_json(tmp_path, monkeypatch):
+    # OpenCV-backed detectors yield NumPy scalars; comparisons on them produce numpy.bool, which json cannot encode.
+    numpy_face = tuple(np.float64(value) for value in FACE)
+    assert type(video_subject_layout((1920, 1080), numpy_face, candidates.PERSON_FRAME, mode="close").fits) is bool
+    monkeypatch.setattr(candidates, "probe_metadata", lambda _: SimpleNamespace(width=1920, height=1080))
+    def scanner(source, start, end, size):
+        yield 0., noisy_image()
+    def extractor(source, path, second):
+        noisy_image((1920, 1080)).save(path)
+    saved = candidates.extract_thumbnail_candidates("source", clip_start=0, clip_end=10, directory=tmp_path,
+                                                   scanner=scanner, extractor=extractor, detector=lambda _: numpy_face)
+    assert len(saved) == 1
+    json.dumps(saved)
+    candidate = saved[0]
+    assert type(candidate["close_available"]) is bool
+    assert all(type(value) is float for value in [candidate["second"], candidate["score"], *candidate["face"]])
+
+
 def test_legacy_export_queues_once_worker_persists_even_empty_and_http_never_scans(client, monkeypatch):  # noqa: F811
     storage, factory, metadata, thumbnail, video = seed_thumbnail(client)
     queue, scans = [], []

@@ -10814,6 +10814,14 @@ pip check: pass
 - ローカル検証: ruff check . ../launcher ../scripts成功。Python 3.11.9でpython -m pytest全件1511 passed / 3 skipped（既存のスキップ）。関連27件でheadingだけの案の拒否・1回の作り直し成功/失敗、upper/lowerそれぞれでの採用、空のsubjectName、旧形式の読み込み、旧v2キャッシュの再生成、中継の固定schema一致を確認。frontendのtest（24ファイル）・lint・typecheck・build成功。
 - 未確認事項: 実際のCodexでの生成、稼働画面での主見出しの見え方は未実施。保存済みの文言・実ジョブは変更しない。Dockerへの反映は行わない。CIはPRで3.11・3.12・frontendの成功を確認してからmerge commitでマージする。
 
+## 2026-10-03 task-185 の稼働環境への反映（運用作業）
+
+- 目的: main `4f8da8f`（人物名をサムネの主見出しに必須化）を稼働環境へ反映する。Claude Codeが実施。
+- 事前確認: main・HEAD `4f8da8f`、未コミット変更なし。RQのキュー0件・実行中の登録0件。Codex中継のrequests・processingは空。処理中の状態のジョブは、RQの時間切れで強制終了済みの `job_ea68be9806884d25aaa3dbd62a259f24` のみ（変更していない）。
+- 実施: DBバックアップ `storage/backups/autoclipper-20261003-143425-before-task185-deploy.db`（integrity_check ok、jobs 17・export_items 51で元と一致）。`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker frontend`。返答の形とlauncherに変更が無いため、Codex中継は再起動していない（ready、契約の指紋がmainと一致を確認）。
+- 確認: backend healthy、`/health` 200、`/upload` 200、workerの av 18.1.0、稼働中のbackendに新しいプロンプトの決まりが入っていることを確認。workerの起動ログにエラーなし。
+- 未確認事項: 実際のCodexでのサムネ文言の生成結果（ユーザーが画面で確認する）。
+
 ## 2026-10-03 task-187: 字幕確認で音ありの空白区間を示す
 
 - 目的: 文字起こしの取りこぼしや字幕編集で空いた区間を、字幕確認で見つけて確認・追加できるようにする。本番の文字起こし方式は変更しない。
@@ -10824,3 +10832,11 @@ pip check: pass
 - 変更ファイル: backend/app/jobs/subtitle_gaps.py（新規）、subtitle_review.py、subtitle_structure.py、backend/app/api/jobs.py、schemas.py、backend/tests/test_subtitle_gaps.py（新規）、test_clip_plan_split_contract.py。frontendの字幕確認page、SubtitleGapMarkers.tsx（新規）、lib/subtitleGaps.ts（新規）、subtitleStructureDrafts.ts（新規）、subtitlePauseInsert.ts、api.ts、types.ts、tests/subtitleGaps.test.ts（新規）、subtitleStructure.test.ts、STATUS.md。
 - ローカル検証: Python 3.11.9でpython -m pytest全件1539 passed / 3 skipped、ruff check . ../launcher ../scripts成功。最初のsandbox内全件実行は既存Windows Job Objectテストだけ権限制約で失敗し、sandbox外の最終全件実行では成功した。稼働DBの更新時刻とサイズは最終全件実行の前後で一致。frontendのtest（25ファイル）・lint・typecheck・通常build成功。判定の3秒/60%境界、フック除外、無音データ欠如、編集後の再計算、確認保存、単一/複数空行への追加と共有clip・書式保護、未保存編集の保護を確認した。
 - 制限・未確認事項: 無音検出は発話検出ではなく、BGMだけでも「音あり」になり得るため、マーカーは確認用の目印とする。稼働画面と実動画での操作は未実施。稼働DB・ジョブファイルは変更していない。Dockerへの反映は行わない。CIはPRでPython 3.11・3.12・frontendの成功を確認してからmerge commitでマージする。
+
+## 2026-10-05 task-188: サムネ候補が見つかると保存に失敗する不具合を修正
+
+- 症状: 宙科テンプレの通常サムネで「保存」（再生成）が毎回 `thumbnail_status=failed`、`thumbnail_error_code=TypeError` になる（export `exp_66d89b22b40d426ea676f18d64208369`）。候補抽出の状態も「候補を抽出できませんでした。」。
+- 原因: task-178 の候補抽出で、アニメ顔検出（OpenCV）がNumPyの数値を返し、それを使った構図計算の `fits` が `numpy.bool` になる。保存する候補の `close_available` に `numpy.bool` が入り、書き出しメタデータのJSON保存で `TypeError: Object of type bool is not JSON serializable` になる。動画から候補が1件以上見つかる書き出しでだけ起き、これまでの候補0件の動画では表に出なかった。稼働中のworkerで再現と型を確認した。
+- 修正: `backend/app/render/anime_subject.py`（検出結果を通常の float に変換）、`backend/app/render/video_subject_layout.py`（`fits` を bool に変換）、`backend/app/jobs/thumbnail_candidates.py`（保存する候補の値を float・int・bool に揃える）。回帰テスト `test_numpy_detector_values_are_saved_as_plain_json` を追加（修正前のコードで失敗し、修正後に成功することを確認）。
+- 検証: Python 3.11.9 の全件 `python -m pytest -q` は 1540 passed / 3 skipped（既存のスキップ）。ロックファイルと同じ ruff 0.16.10 で `ruff check . ../launcher ../scripts` 成功（手元に入っていた ruff 0.15.4 では、既存の tests/test_subtitle_gaps.py に F811 の誤検出が出るが、0.16.10 と CI では出ない）。frontend は変更なし。
+- 未確認事項: 稼働環境への反映後に、対象の書き出しで候補の抽出とサムネの保存ができること。Codexの利用状況により、Claude Code が実施した。
