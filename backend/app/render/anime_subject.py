@@ -43,9 +43,10 @@ def detect_anime_face(image: Image.Image) -> Face | None:
         source = cv2.resize(source, (round(width * scale), round(height * scale)), interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
     boxes = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(24, 24))
+    # OpenCV returns NumPy integers; keep plain floats so derived flags stay JSON-serializable.
     faces = [
-        ((x + box_width / 2) / gray.shape[1], (y + box_height / 2) / gray.shape[0],
-         box_width / gray.shape[1], box_height / gray.shape[0])
+        (float((x + box_width / 2) / gray.shape[1]), float((y + box_height / 2) / gray.shape[0]),
+         float(box_width / gray.shape[1]), float(box_height / gray.shape[0]))
         for x, y, box_width, box_height in boxes
     ]
     usable = [face for face in faces if 0.08 <= face[1] <= 0.85 and face[2] >= 0.035 and face[3] >= 0.06]
