@@ -163,9 +163,10 @@ def extract_thumbnail_candidates(source, *, clip_start, clip_end, directory, sca
             small = frame.convert("RGB")
             small.thumbnail((240, 135))
             small.save(directory / f"{candidate_id}.small.jpg", "JPEG", quality=85)
-            saved.append({"id": candidate_id, "second": candidate.second, "face": list(face), "score": round(candidate.score, 4),
-                          "width": frame.width, "height": frame.height,
-                          "close_available": video_subject_layout(frame.size, face, PERSON_FRAME, mode="close").fits})
+            # Saved into JSON metadata: never leak NumPy scalars from detectors or layout math.
+            saved.append({"id": candidate_id, "second": float(candidate.second), "face": [float(value) for value in face],
+                          "score": round(float(candidate.score), 4), "width": int(frame.width), "height": int(frame.height),
+                          "close_available": bool(video_subject_layout(frame.size, face, PERSON_FRAME, mode="close").fits)})
     return saved
 
 
