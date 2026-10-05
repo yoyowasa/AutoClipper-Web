@@ -10851,3 +10851,15 @@ pip check: pass
 - 修正: `backend/app/render/anime_subject.py`（検出結果を通常の float に変換）、`backend/app/render/video_subject_layout.py`（`fits` を bool に変換）、`backend/app/jobs/thumbnail_candidates.py`（保存する候補の値を float・int・bool に揃える）。回帰テスト `test_numpy_detector_values_are_saved_as_plain_json` を追加（修正前のコードで失敗し、修正後に成功することを確認）。
 - 検証: Python 3.11.9 の全件 `python -m pytest -q` は 1540 passed / 3 skipped（既存のスキップ）。ロックファイルと同じ ruff 0.16.10 で `ruff check . ../launcher ../scripts` 成功（手元に入っていた ruff 0.15.4 では、既存の tests/test_subtitle_gaps.py に F811 の誤検出が出るが、0.16.10 と CI では出ない）。frontend は変更なし。
 - 未確認事項: 稼働環境への反映後に、対象の書き出しで候補の抽出とサムネの保存ができること。Codexの利用状況により、Claude Code が実施した。
+
+
+## 2026-10-05 task-189 文字起こしの音あり空白を1回補修
+
+- 目的・方針: ユーザー決定の A＋D を本番のバックグラウンド処理に組み込む。PR #121 を CI 3.11・3.12・frontend 成功後、merge commit `952dc92` で取り込み、その main から作成。先頭から読む本番 ASR の前文脈の既定値は変えず、B/C への切り替えや定番の誤認識の削除は行わない。既存の品質回復経路は維持する。
+- 組み込み: `runner.py` で最終的に採用した ASR 結果に対し、raw の保存・文字列後処理の直前に補修を1回行う。語時刻の空白から無音を差し引いた連続3秒以上の区間に前後2秒を足し、重なる読み直し区間を結合。読み直しだけ `condition_on_previous_text=False`・VAD なしとし、既存モデルを再利用する。品質回復の別モデルを読み込む前には旧モデルを解放し、補修後も選定・書き出しへモデルを持ち越さない。
+- 保存・安全性: D v2 の区間演算・マージを `audio/transcript_repair_merge.py` に移し、比較ツールと共有。`audio/transcript_gap_repair.py` の本番用マージは既存本文を変更・削除せず、字幕が覆っていない対象空白に入る語だけを追加。空白直後の同じ正規化文は、他の既存字幕と重ならず、読み直した区間内の有効な時刻の場合だけ時刻を補正する。語時刻のない一部の行はその行全体を保護し、全行に語時刻がない旧形式はスキップする。無音検出に失敗した場合も補修はスキップ。補修途中の失敗時は部分的な結果を採用せず、元の ASR 結果で続ける。
+- 由来・画面: `transcribe_faster_whisper.py` の語時刻、`repaired`、読み直した元動画の区間 `repairWindows` を保存。後処理、字幕確認の分割・結合・再書き出しでも由来を引き継ぐ。`subtitle_review.py`、`subtitle_structure.py`、frontend の字幕確認ページ・`lib/types.ts` に反映し、補った行と時刻を補正した行に「補修」を表示する。task-187 の印は現行字幕から再計算し、埋まった空白は消え、残った空白だけが表示される。
+- 要約: `summaries.py` の `transcript_summary.gap_repair` に状態、追加・時刻補正・補修の件数、追加文字数、計画/実際の読み直し区間数、読み直し秒数、経過時間、区間ごとの補正・拒否の理由を記録する。失敗時も状態と例外の種類を記録し、実際に採用した追加件数は0とする。
+- 処理時間の見積もり: task-186 の D 追加時間は4動画で約15〜163秒。2〜3時間の新規ジョブについて `jobs/timeouts.py` に既存の書き出し予算とは別に、元動画の長さ2回分（ASR と補修をそれぞれ実時間で行う余裕）を加える。結合済みの読み直し区間の合計は元動画の長さ以下。enqueue 時に未計測のアップロードは3時間を仮の予算として6時間を追加する。既定 fixed（通常2・Shorts3）では2時間の入力で約10時間33分、3時間/尺未計測で約12時間33分の RQ 枠。再選定・書き出しのみの枠は変更しない。これは予算の見積もりであり、CPU・全動画での完走保証ではない。
+- 検証: Python 3.11.9 の `ruff check . ../launcher ../scripts` 成功。`python -m pytest -q` 全件は 1587 passed / 3 skipped（既存の FFmpeg 不在によるスキップ）。その後追加した残存空白の印の回帰テストを含む `test_transcript_gap_repair.py` 24件も成功。共有した比較ツールの既存24件も成功。frontend の `test`（25ファイル）・`lint`・`typecheck`・`build` 成功。実行前後の稼働DBは 446464 bytes、更新時刻 2026-10-04T15:24:04.6925702Z で不変。CI はPRで Python 3.11・3.12・frontend を確認してからマージする。
+- 未確認事項: この版で実動画を本番実行した場合の補修品質・追加時間、ブラウザでの実際の印の確認。Dockerへの反映、実ジョブの再試行、稼働DB・既存字幕の変更はしていない。主フォルダの未コミットの task-188 反映記録は専用 worktree 外で保護し、このPRには混ぜていない。

@@ -372,6 +372,8 @@ export type JobResultsResponse = {
 };
 
 export type SubtitleReviewSegment = {
+  repaired?: boolean;
+  repairWindows?: { start: number; end: number }[];
   sourceIndices?: number[];
   preserveSegmentation?: boolean;
   singleLine?: boolean;

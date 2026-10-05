@@ -252,12 +252,7 @@ def repair_known_transcript_artifact_segments(
     segments: Sequence[TranscriptSegment],
 ) -> list[TranscriptSegment]:
     return [
-        TranscriptSegment(
-            start=segment.start,
-            end=segment.end,
-            text=repair_known_transcript_artifact_text(segment.text),
-            confidence=segment.confidence,
-        )
+        segment.model_copy(update={"text": repair_known_transcript_artifact_text(segment.text)})
         for segment in segments
     ]
 

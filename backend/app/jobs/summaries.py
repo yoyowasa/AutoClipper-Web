@@ -157,6 +157,7 @@ def build_transcript_summary(
         "transcription_model": transcription_model,
         "transcription_language": transcription_language,
         "transcription_runtime": transcription_diagnostics or {},
+        "gap_repair": (transcription_diagnostics or {}).get("gap_repair", {"status": "not_run"}),
         "used_fixture_transcript": used_fixture_transcript,
     }
 

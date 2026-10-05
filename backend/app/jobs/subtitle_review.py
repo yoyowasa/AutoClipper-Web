@@ -8,7 +8,7 @@ from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.audio.transcribe_faster_whisper import RepairWindow, TranscriptSegment
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, SubtitleStyleOverride, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.subtitle_gaps import SubtitleGap, refresh_review_gaps
@@ -55,6 +55,8 @@ class SubtitleReviewSegment(BaseModel):
     original_text: str = Field(alias="originalText")
     text: str
     confidence: float | None = Field(default=None, ge=0, le=1)
+    repaired: bool = False
+    repair_windows: list[RepairWindow] = Field(default_factory=list, alias="repairWindows")
     edited: bool = False
     affected_clip_ids: list[str] = Field(default_factory=list, alias="affectedClipIds")
     source_indices: list[int] = Field(default_factory=list, alias="sourceIndices")
@@ -361,6 +363,8 @@ def _review_segments_for_source(
     base = {
         "index": index,
         "confidence": segment.confidence,
+        "repaired": segment.repaired,
+        "repairWindows": segment.repair_windows,
         "affectedClipIds": affected_clip_ids,
     }
     if segment.preserve_segmentation or segment.single_line or not segment.text.strip():
@@ -1254,6 +1258,7 @@ def apply_reviewed_text(
                 "start": segment.start, "end": segment.end, "text": segment.text,
                 "preserve_segmentation": segment.preserve_segmentation,
                 "single_line": segment.single_line,
+                "repaired": segment.repaired, "repair_windows": segment.repair_windows,
             }))
         return sorted(output, key=lambda s: (s.start, s.end))
     reviewed_text = {segment.index: segment.text for segment in document.segments}

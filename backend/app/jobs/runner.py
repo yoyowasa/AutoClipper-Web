@@ -434,10 +434,13 @@ def _safe_silence_detection(
     wav_path: Path,
     duration: float | None,
     detector: DetectSilence,
+    failures: list[str] | None = None,
 ) -> list[SilenceSegment]:
     try:
         return detector(wav_path, duration)
-    except Exception:
+    except Exception as exc:
+        if failures is not None:
+            failures.append(type(exc).__name__)
         return []
 
 
@@ -706,7 +709,12 @@ def _transcribe_with_faster_whisper(
     language: str,
     device: str,
     compute_type: str,
+    engines: list[Any] | None = None,
 ) -> tuple[list[TranscriptSegment], dict[str, Any]]:
+    if engines:
+        release = getattr(engines[-1], "release_model", None)
+        if callable(release):
+            release()  # Do not retain two CUDA models during existing quality fallback.
     engine = factory(
         model_size=model,
         device=device,
@@ -714,6 +722,8 @@ def _transcribe_with_faster_whisper(
         language=language,
     )
     segments = engine.transcribe(audio_path)
+    if engines is not None:
+        engines[:] = [engine]
     return segments, dict(engine.diagnostics)
 
 
@@ -726,7 +736,12 @@ def _transcribe_with_faster_whisper_in_chunks(
     device: str,
     compute_type: str,
     progress_callback: Callable[[int, int], None] | None = None,
+    engines: list[Any] | None = None,
 ) -> tuple[list[TranscriptSegment], dict[str, Any]]:
+    if engines:
+        release = getattr(engines[-1], "release_model", None)
+        if callable(release):
+            release()  # Do not retain two CUDA models during existing quality fallback.
     engine = factory(
         model_size=model,
         device=device,
@@ -739,6 +754,8 @@ def _transcribe_with_faster_whisper_in_chunks(
         overlap_seconds=DEFAULT_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS,
         progress_callback=progress_callback,
     )
+    if engines is not None:
+        engines[:] = [engine]
     return segments, dict(engine.diagnostics)
 
 
@@ -1855,6 +1872,7 @@ def run_autoclipper_job(
     storage_paths = paths or get_storage_paths()
     deps = dependencies or AutoClipperPipelineDependencies()
     transcribe_audio = deps.transcribe_audio
+    transcription_engines: list[Any] = []
     detect_silence_for_audio = deps.detect_silence or _default_detect_silence
     visited_statuses: list[str] = []
     metadata_files: list[Path] = []
@@ -2152,7 +2170,8 @@ def run_autoclipper_job(
                         f"Could not extract audio: {exc}",
                     ) from exc
 
-                silence_segments = _safe_silence_detection(audio_path, duration, detect_silence_for_audio)
+                silence_failures: list[str] = []
+                silence_segments = _safe_silence_detection(audio_path, duration, detect_silence_for_audio, silence_failures)
                 silence_path = write_silence_segments(silence_segments, silence_output_path(job_dir))
                 metadata_files.append(silence_path)
                 audio_features = _safe_audio_features(
@@ -2203,6 +2222,7 @@ def run_autoclipper_job(
                             transcript_segments, transcription_diagnostics = _transcribe_with_faster_whisper(
                                 deps.transcription_engine_factory,
                                 audio_path,
+                                engines=transcription_engines,
                                 model=configured_transcription_model,
                                 language=configured_transcription_language,
                                 device=configured_transcription_device,
@@ -2262,6 +2282,7 @@ def run_autoclipper_job(
                             chunked_segments, chunked_diagnostics = _transcribe_with_faster_whisper_in_chunks(
                                 deps.transcription_engine_factory,
                                 audio_path,
+                                engines=transcription_engines,
                                 model=configured_transcription_model,
                                 language=configured_transcription_language,
                                 device=configured_transcription_device,
@@ -2321,6 +2342,7 @@ def run_autoclipper_job(
                                 fallback_segments, fallback_diagnostics = _transcribe_with_faster_whisper_in_chunks(
                                     deps.transcription_engine_factory,
                                     audio_path,
+                                    engines=transcription_engines,
                                     model="small",
                                     language="ja",
                                     device=configured_transcription_device,
@@ -2331,6 +2353,7 @@ def run_autoclipper_job(
                                 fallback_segments, fallback_diagnostics = _transcribe_with_faster_whisper(
                                     deps.transcription_engine_factory,
                                     audio_path,
+                                    engines=transcription_engines,
                                     model="small",
                                     language="ja",
                                     device=configured_transcription_device,
@@ -2404,6 +2427,26 @@ def run_autoclipper_job(
                             },
                         )
                         metadata_files.append(recovery_summary_path)
+                if transcription_engines:
+                    repair = getattr(transcription_engines[-1], "repair_gaps", None)
+                    if silence_failures:
+                        transcription_diagnostics = {**(transcription_diagnostics or {}), "gap_repair": {
+                            "status": "skipped", "reason": "silence_detection_failed", "error_type": silence_failures[0],
+                        }}
+                    elif callable(repair):
+                        job.current_step = "文字起こしの空白を補修中"
+                        _heartbeat_job(db, job)
+                        try:
+                            transcript_segments, repair_summary = repair(
+                                audio_path, transcript_segments, duration=duration,
+                                silence=[(item.start, item.end) for item in silence_segments],
+                            )
+                        except Exception as exc:
+                            # Custom engines must follow the same fail-open contract.
+                            repair_summary = {"status": "failed", "error_type": type(exc).__name__}
+                        transcription_diagnostics = {**(transcription_diagnostics or {}), "gap_repair": repair_summary}
+                    repair = None  # Release the bound method/model before selection and rendering.
+                    transcription_engines.clear()
                 raw_transcript_path = write_transcript_segments(transcript_segments, raw_transcript_output_path(job_dir))
                 metadata_files.append(raw_transcript_path)
                 postprocess_result = postprocess_transcript_segments(transcript_segments, settings)

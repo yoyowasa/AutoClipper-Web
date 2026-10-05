@@ -127,6 +127,8 @@ def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleS
                     "end": selected[-1].end,
                     "text": "".join(texts[s.id].strip() for s in selected),
                     "original_text": "".join(s.original_text for s in selected),
+                    "repaired": any(s.repaired for s in selected),
+                    "repair_windows": [window for s in selected for window in s.repair_windows],
                     "source_indices": sorted({i for s in selected for i in (s.source_indices or [s.index])}),
                     "preserve_segmentation": True,
                     "single_line": True,
