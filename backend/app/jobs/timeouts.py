@@ -52,7 +52,14 @@ def job_media_timeout(
         else:
             duration = (maximum * int(settings.get("normalClipCount", 2))
                         + effective_short_max(settings) * int(settings.get("shortCount", 3)))
-        return media_timeout(maximum if clip_id is not None else duration)
+        timeout = media_timeout(maximum if clip_id is not None else duration)
+        if clip_id is None and not selection:
+            # Reserve realtime for each of primary ASR and repair, in addition to the
+            # rendering budget. Uploads may not have probed duration at enqueue time:
+            # use three hours then, matching the long inputs measured in task-186.
+            source_duration = video.duration if video and video.duration else 3 * 3600
+            timeout += math.ceil(2 * source_duration)
+        return timeout
 
 
 def thumbnail_candidates_timeout(export_id: str) -> int:

@@ -19,11 +19,26 @@ DEFAULT_TRANSCRIPTION_CHUNK_SECONDS = 90.0
 DEFAULT_TRANSCRIPTION_CHUNK_OVERLAP_SECONDS = 5.0
 
 
+class TranscriptWord(BaseModel):
+    start: float = Field(ge=0)
+    end: float = Field(ge=0)
+    word: str
+    probability: float | None = Field(default=None, ge=0, le=1)
+
+
+class RepairWindow(BaseModel):
+    start: float = Field(ge=0)
+    end: float = Field(ge=0)
+
+
 class TranscriptSegment(BaseModel):
     start: float = Field(ge=0)
     end: float = Field(ge=0)
     text: str
     confidence: float | None = Field(default=None, ge=0, le=1)
+    words: list[TranscriptWord] | None = None
+    repaired: bool = False
+    repair_windows: list[RepairWindow] = Field(default_factory=list, alias="repairWindows")
     clip_id: str | None = Field(default=None, alias="clipId")
     preserve_segmentation: bool = Field(default=False, alias="preserveSegmentation")
     single_line: bool = Field(default=False, alias="singleLine")
@@ -149,6 +164,16 @@ class FasterWhisperTranscriptionEngine:
             return result
         finally:
             self._peak_vram_mb = memory_sampler.stop()
+
+    def release_model(self) -> None:
+        self._model = None
+
+    def repair_gaps(self, wav_path: Path, segments: Sequence[TranscriptSegment], *, duration: float,
+                    silence: Sequence[tuple[float, float]]) -> tuple[list[TranscriptSegment], dict[str, Any]]:
+        from app.audio.transcript_gap_repair import repair_transcript_gaps
+
+        return repair_transcript_gaps(wav_path, self._load_model, segments, duration=duration,
+                                      silence=silence, language=self.language, beam_size=self.beam_size)
 
     def transcribe_chunked(
         self,
@@ -326,6 +351,9 @@ def _transcribe_pcm_wav_in_chunks(
                             end=global_end,
                             text=segment.text,
                             confidence=segment.confidence,
+                            words=[word.model_copy(update={"start": min(media_duration, chunk_start + word.start),
+                                                          "end": min(media_duration, chunk_start + word.end)})
+                                   for word in segment.words] if segment.words is not None else None,
                         )
                     )
                 if progress_callback is not None:
@@ -371,6 +399,10 @@ def segment_from_faster_whisper(segment: Any) -> TranscriptSegment:
         end=float(segment.end),
         text=str(segment.text).strip(),
         confidence=confidence,
+        words=[TranscriptWord(start=float(word.start), end=float(word.end), word=str(word.word),
+                              probability=_float_or_none(getattr(word, "probability", None)))
+               for word in (getattr(segment, "words", None) or [])
+               if all(hasattr(word, key) for key in ("start", "end", "word"))] or None,
     )
 
 
@@ -380,7 +412,7 @@ def transcript_output_path(output_dir: str | Path) -> Path:
 
 def segments_to_jsonable(segments: Sequence[TranscriptSegment]) -> list[dict[str, Any]]:
     return [segment.model_dump(exclude_none=True, exclude={
-        key for key in ("preserve_segmentation", "single_line") if not getattr(segment, key)
+        key for key in ("preserve_segmentation", "single_line", "repaired", "repair_windows") if not getattr(segment, key)
     }) for segment in segments]
 
 

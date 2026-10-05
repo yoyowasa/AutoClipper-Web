@@ -3554,6 +3554,13 @@ export default function SubtitleReviewPage() {
                                   {isPlaying ? "再生中" : "現在位置"}
                                 </span>
                               ) : null}
+                              {segment.repaired ? (
+                                <span className="rounded bg-cyan-950 px-2 py-0.5 text-xs text-cyan-200"
+                                  title={segment.repairWindows?.map((window) =>
+                                    `読み直した元動画の区間: ${formatTime(window.start)}〜${formatTime(window.end)}`).join("\n")}>
+                                  補修
+                                </span>
+                              ) : null}
                               {segment.edited ? (
                                 <span className="bg-sky-100 px-2 py-1 font-medium text-sky-800">
                                   修正済み
