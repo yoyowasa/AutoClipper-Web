@@ -10863,3 +10863,19 @@ pip check: pass
 - 処理時間の見積もり: task-186 の D 追加時間は4動画で約15〜163秒。2〜3時間の新規ジョブについて `jobs/timeouts.py` に既存の書き出し予算とは別に、元動画の長さ2回分（ASR と補修をそれぞれ実時間で行う余裕）を加える。結合済みの読み直し区間の合計は元動画の長さ以下。enqueue 時に未計測のアップロードは3時間を仮の予算として6時間を追加する。既定 fixed（通常2・Shorts3）では2時間の入力で約10時間33分、3時間/尺未計測で約12時間33分の RQ 枠。再選定・書き出しのみの枠は変更しない。これは予算の見積もりであり、CPU・全動画での完走保証ではない。
 - 検証: Python 3.11.9 の `ruff check . ../launcher ../scripts` 成功。`python -m pytest -q` 全件は 1587 passed / 3 skipped（既存の FFmpeg 不在によるスキップ）。その後追加した残存空白の印の回帰テストを含む `test_transcript_gap_repair.py` 24件も成功。共有した比較ツールの既存24件も成功。frontend の `test`（25ファイル）・`lint`・`typecheck`・`build` 成功。実行前後の稼働DBは 446464 bytes、更新時刻 2026-10-04T15:24:04.6925702Z で不変。CI はPRで Python 3.11・3.12・frontend を確認してからマージする。
 - 未確認事項: この版で実動画を本番実行した場合の補修品質・追加時間、ブラウザでの実際の印の確認。Dockerへの反映、実ジョブの再試行、稼働DB・既存字幕の変更はしていない。主フォルダの未コミットの task-188 反映記録は専用 worktree 外で保護し、このPRには混ぜていない。
+
+## 2026-10-05 task-188 の稼働環境への反映（運用作業）
+
+- 目的: main `2880316`（サムネ候補のJSON保存の不具合修正）を稼働環境へ反映する。Claude Codeが実施。
+- 事前確認: RQのキュー0件・実行中の登録0件。Codex中継のrequests・processingは空。処理中の状態のジョブは、強制終了済みの `job_ea68be9806884d25aaa3dbd62a259f24` のみ（変更していない）。前回の反映からlauncherの変更なし。
+- 実施: DBバックアップ `storage/backups/autoclipper-20261005-012045-before-task188-deploy.db`（integrity_check ok、jobs 17・export_items 50で元と一致）。`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker frontend`。Codex中継は再起動していない（ready、契約の指紋がmainと一致を確認）。
+- 確認: backend healthy、`/health` 200、`/upload` 200、workerの av 18.1.0、稼働中のworkerに修正が入っていることを確認。workerの起動ログにエラーなし。
+- 未確認事項: 対象の書き出し（exp_66d89b22b40d426ea676f18d64208369）での候補の抽出とサムネの保存（ユーザーが画面で確認する）。
+
+## 2026-10-05 task-189 の稼働環境への反映（運用作業）
+
+- 目的: main `89a2374`（文字起こしの読み飛ばしの補修、PR #121・#123）を稼働環境へ反映する。Claude Codeが実施。
+- 事前確認: RQのキュー0件・実行中の登録0件。Codex中継のrequests・processingは空。処理中の状態のジョブは、強制終了済みの `job_ea68be9806884d25aaa3dbd62a259f24` のみ（変更していない）。前回の反映（`2880316`）からlauncherの変更なし。
+- 実施: DBバックアップ `storage/backups/autoclipper-20261005-150533-before-task189-deploy.db`（integrity_check ok、jobs 17・export_items 50で元と一致）。`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker frontend`。Codex中継は再起動していない（ready、契約の指紋がmainと一致を確認）。
+- 確認: backend healthy、`/health` 200、`/upload` 200、workerの av 18.1.0、補修の処理（app.audio.transcript_gap_repair）を読み込めることを確認。workerの起動ログにエラーなし。
+- 未確認事項: 新しいジョブでの補修の品質・処理時間、字幕確認の画面での「補修」の印の表示（ユーザーが確認する）。既存ジョブの字幕は変わらない。
