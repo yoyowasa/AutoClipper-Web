@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from app.scoring.title_hook_suggestions import (
     SYSTEM_PROMPT,
+    title_hook_system_prompt,
     TITLE_HOOK_GENERATION_SCHEMA,
     GeneratedTitleHookSuggestionResult,
     TitleHookSuggestionResult,
@@ -278,10 +279,17 @@ class CodexTitleHookSuggestionGenerator:
             separators=(",", ":"),
             allow_nan=False,
         )
+        system_prompt = self.system_prompt
+        if self.task == "title_hook_suggestions":
+            system_prompt = title_hook_system_prompt(
+                audience_familiarity=str(payload.get("audienceFamiliarity", "known")),
+                clip_type=str(payload.get("clipType", "short")),
+                base_prompt=self.system_prompt,
+            )
         envelope = _BridgeEnvelope(
             task=self.task,
             requestId=request_id,
-            prompt=f"{self.system_prompt}\n\n入力JSON:\n{prompt_payload}",
+            prompt=f"{system_prompt}\n\n入力JSON:\n{prompt_payload}",
             responseSchema=self.response_schema,
             images=self._relative_image_paths(frame_paths),
             model=self.model,

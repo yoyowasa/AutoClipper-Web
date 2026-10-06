@@ -1667,6 +1667,7 @@ def _generate_auto_title_hook_evidence(
                 source_path=input_path,
                 paths=paths,
                 model=model,
+                audience_familiarity="unknown" if posting_settings.get("audienceFamiliarity") == "unknown" else "known",
             )
             apply_recommended_title_hook_suggestions(
                 document,

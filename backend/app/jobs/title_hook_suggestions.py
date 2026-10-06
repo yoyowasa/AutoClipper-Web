@@ -37,6 +37,7 @@ from app.scoring.title_hook_suggestions import (
     TitleHookSuggestionResult,
     extract_representative_frames,
     normalize_title_hook_suggestions,
+    has_transcript_topic_word,
 )
 from app.storage.paths import StoragePaths, get_storage_paths
 from app.storage.json_io import write_json_atomic
@@ -50,6 +51,10 @@ TitleHookSuggestionState = Literal["queued", "generating", "ready", "failed"]
 
 
 class RepeatedTitleSuggestionsError(RuntimeError):
+    pass
+
+
+class MissingTopicHookError(RuntimeError):
     pass
 
 
@@ -76,6 +81,7 @@ class TitleHookSuggestionInputSegment(BaseModel):
 
 
 class TitleHookSuggestionInput(BaseModel):
+    audience_familiarity: Literal["known", "unknown"] = Field(default="known", alias="audienceFamiliarity")
     normal_title_suffix: str = Field(default=NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, max_length=80, alias="normalTitleSuffix")
     version: int = 1
     prompt_version: str = Field(alias="promptVersion")
@@ -109,6 +115,7 @@ class TitleHookSuggestionInput(BaseModel):
 
     def prompt_payload(self) -> dict[str, Any]:
         return {
+            "audienceFamiliarity": self.audience_familiarity,
             "clipType": self.clip_type,
             "normalTitleSuffix": self.normal_title_suffix,
             "clipDurationSeconds": self.clip_duration,
@@ -223,6 +230,7 @@ def build_title_hook_suggestion_input(
     *,
     model: str,
     provider: Literal["codex"] = "codex",
+    audience_familiarity: Literal["known", "unknown"] = "known",
 ) -> TitleHookSuggestionInput:
     if provider != "codex":
         raise ValueError("new title/hook requests must use codex")
@@ -268,6 +276,7 @@ def build_title_hook_suggestion_input(
         segments=input_segments,
     )
     hash_payload = {
+        "audienceFamiliarity": audience_familiarity,
         "promptVersion": TITLE_HOOK_PROMPT_VERSION,
         "normalTitleSuffix": clip.normal_title_suffix,
         "provider": provider,
@@ -295,6 +304,7 @@ def build_title_hook_suggestion_input(
         ).encode("utf-8")
     ).hexdigest()
     return TitleHookSuggestionInput(
+        audienceFamiliarity=audience_familiarity,
         promptVersion=TITLE_HOOK_PROMPT_VERSION,
         jobId=document.job_id,
         clipId=clip.id,
@@ -362,6 +372,8 @@ SessionFactory = Callable[[], Session]
 
 
 def _safe_generation_error(exc: Exception) -> str:
+    if isinstance(exc, MissingTopicHookError):
+        return "字幕にある題材語を含むフック案を生成できませんでした。字幕を確認して再試行するか、手入力してください。"
     if isinstance(exc, RepeatedTitleSuggestionsError):
         return "別の公開タイトル案を生成できませんでした。字幕を確認して再試行するか、手入力してください。"
     if isinstance(exc, CodexTitleHookSuggestionError):
@@ -456,6 +468,66 @@ def _same_generation_context(
     )
 
 
+def _topic_eligible_indices(result: TitleHookSuggestionResult, request: TitleHookSuggestionInput) -> list[int]:
+    if request.audience_familiarity != "unknown" or request.clip_type != "short":
+        return list(range(len(result.suggestions)))
+    transcript = "\n".join(item.text for item in request.segments)
+    return [index for index, item in enumerate(result.suggestions) if has_transcript_topic_word(item.hook_text, transcript)]
+
+
+def _generate_acceptable_result(
+    generator: TitleHookSuggestionGeneratorProtocol,
+    request: TitleHookSuggestionInput,
+    frame_paths: Sequence[Path],
+    *,
+    reject_repeated: bool = False,
+) -> TitleHookSuggestionResult:
+    payload = request.prompt_payload()
+    for attempt in range(2):
+        result = generator.generate(payload, frame_paths)
+        eligible = _topic_eligible_indices(result, request)
+        repeated = reject_repeated and _all_publication_titles_repeated(
+            result.suggestions, request.avoid_publication_titles, clip_type=request.clip_type, suffix=request.normal_title_suffix,
+        )
+        if eligible and not repeated:
+            return result
+        if attempt == 1:
+            if not eligible:
+                raise MissingTopicHookError("all three hook suggestions lack a subtitle-derived topic word")
+            raise RepeatedTitleSuggestionsError("title/hook regeneration returned only previous titles")
+        instructions: list[str] = []
+        if not eligible:
+            instructions.append(
+                "3案とも字幕由来の題材語がありません。hookTextとpublicationTitleの先頭に、"
+                "clip字幕にある2文字以上の漢字・カタカナ・英数字の題材語を置いて作り直してください。"
+                "それ、あれ、えー、あの、やばい、すごい等の指示語やフィラーだけは不可です。"
+            )
+        if repeated:
+            instructions.append(
+                "前回までと同じ公開タイトルしか出ていません。字幕に忠実な別の切り口で"
+                "新しい公開タイトルを少なくとも1件含む3案を作り直してください。"
+            )
+        payload = {**request.prompt_payload(), "retryInstruction": "\n".join(instructions)}
+    raise AssertionError("title/hook generation attempts exhausted")
+
+
+def _normalize_eligible_suggestions(
+    result: TitleHookSuggestionResult, request: TitleHookSuggestionInput,
+) -> tuple[list[TitleHookSuggestion], str]:
+    normalized = normalize_title_hook_suggestions(
+        result, clip_duration=request.clip_duration, clip_type=request.clip_type, suffix=request.normal_title_suffix,
+    )
+    eligible = _topic_eligible_indices(result, request)
+    if not eligible:
+        raise MissingTopicHookError("no eligible hook suggestion")
+    recommended_index = next(
+        (index for index, item in enumerate(result.suggestions) if item.id == result.recommended_suggestion_id), eligible[0],
+    )
+    if recommended_index not in eligible:
+        recommended_index = eligible[0]
+    return [normalized[index] for index in eligible], normalized[recommended_index].id
+
+
 def generate_title_hook_suggestions_for_auto(
     *,
     document: SubtitleReviewDocument,
@@ -465,6 +537,7 @@ def generate_title_hook_suggestions_for_auto(
     model: str,
     generator: TitleHookSuggestionGeneratorProtocol | None = None,
     frame_extractor: FrameExtractor = extract_representative_frames,
+    audience_familiarity: Literal["known", "unknown"] = "known",
 ) -> TitleHookSuggestionsDocument:
     """Generate a current Codex proposal without requiring an active review stop.
 
@@ -489,6 +562,7 @@ def generate_title_hook_suggestions_for_auto(
         ],
         model=model,
         provider="codex",
+        audience_familiarity=audience_familiarity,
     )
     job_dir = paths.job_outputs(document.job_id)
     state_path = title_hook_suggestions_path(job_dir, clip_id)
@@ -533,24 +607,15 @@ def generate_title_hook_suggestions_for_auto(
             raise ValueError(
                 "title/hook generation requires subtitles or representative frames"
             )
-        result = active_generator.generate(request.prompt_payload(), frame_paths)
+        try:
+            result = _generate_acceptable_result(active_generator, request, frame_paths)
+        except MissingTopicHookError as exc:
+            write_title_hook_suggestion_input(request, input_path)
+            write_title_hook_suggestions(failed_title_hook_suggestions(request, _safe_generation_error(exc)), state_path)
+            raise
 
     _validate_suggestion_evidence(result, request)
-    suggestions = normalize_title_hook_suggestions(
-        result,
-        clip_duration=request.clip_duration,
-        clip_type=request.clip_type,
-        suffix=request.normal_title_suffix,
-    )
-    recommended_index = next(
-        (
-            index
-            for index, suggestion in enumerate(result.suggestions)
-            if suggestion.id == result.recommended_suggestion_id
-        ),
-        0,
-    )
-    recommended_id = suggestions[recommended_index].id
+    suggestions, recommended_id = _normalize_eligible_suggestions(result, request)
     artifact = TitleHookSuggestionsDocument(
         clipId=clip_id,
         state="ready",
@@ -765,28 +830,7 @@ def run_title_hook_suggestion_generation(
                     model=request.model,
                     thread_id=generation_thread_id,
                 )
-            result = active_generator.generate(request.prompt_payload(), frame_paths)
-            if _all_publication_titles_repeated(
-                result.suggestions,
-                request.avoid_publication_titles,
-                clip_type=request.clip_type,
-                suffix=request.normal_title_suffix,
-            ):
-                retry_payload = request.prompt_payload()
-                retry_payload["retryInstruction"] = (
-                    "前回までと同じ公開タイトルしか出ていません。字幕に忠実な別の切り口で"
-                    "新しい公開タイトルを少なくとも1件含む3案を作り直してください。"
-                )
-                result = active_generator.generate(retry_payload, frame_paths)
-                if _all_publication_titles_repeated(
-                    result.suggestions,
-                    request.avoid_publication_titles,
-                    clip_type=request.clip_type,
-                    suffix=request.normal_title_suffix,
-                ):
-                    raise RepeatedTitleSuggestionsError(
-                        "title/hook regeneration returned only previous titles"
-                    )
+            result = _generate_acceptable_result(active_generator, request, frame_paths, reject_repeated=True)
             generation_thread_id = getattr(
                 active_generator,
                 "last_thread_id",
@@ -794,20 +838,7 @@ def run_title_hook_suggestion_generation(
             )
 
         _validate_suggestion_evidence(result, request)
-        suggestions = normalize_title_hook_suggestions(
-            result,
-            clip_duration=request.clip_duration,
-            clip_type=request.clip_type,
-            suffix=request.normal_title_suffix,
-        )
-        recommended_index = next(
-            (
-                index
-                for index, suggestion in enumerate(result.suggestions)
-                if suggestion.id == result.recommended_suggestion_id
-            ),
-            0,
-        )
+        suggestions, recommended_id = _normalize_eligible_suggestions(result, request)
         next_state = TitleHookSuggestionsDocument(
             clipId=clip_id,
             state="ready",
@@ -819,7 +850,7 @@ def run_title_hook_suggestion_generation(
             model=request.model,
             avoidPublicationTitles=request.avoid_publication_titles,
             suggestions=suggestions,
-            recommendedSuggestionId=suggestions[recommended_index].id,
+            recommendedSuggestionId=recommended_id,
             youtubeDescription=result.youtube_description,
             hashtags=result.hashtags,
             descriptionEvidenceSegmentIds=result.description_evidence_segment_ids,

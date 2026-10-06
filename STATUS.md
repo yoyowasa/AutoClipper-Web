@@ -10891,3 +10891,16 @@ pip check: pass
 - 検証: Python 3.11の全件pytest 1599 passed / 3 skipped、ruff check . ../launcher ../scripts 成功。frontend test（25本）・lint・typecheck・build 成功。knownの旧点数、Codex順位、境界補正後と合計配分、プリセット保存・ジョブへの引き継ぎを回帰テストで確認。
 - 稼働DBはテスト前後とも483328 bytes、更新時刻2026-10-06 01:52:20 UTCで不変。既存Dockerはbackend healthy・worker/frontend起動中を確認しただけで、変更の反映は行っていない。
 - 未確認事項: 実際の動画・画面操作での受入、engaged率の改善（目標40%超）は未確認。最大15点とCodex補正0.2はデータで決めた値ではなく仮の重み。そぴあの5〜10本で運用検証する。knownへの日本語減点は別タスクで判断する。
+
+## 2026-10-06 task-192 知名度低モードのタイトル・フック
+
+- 目的: 出演者を知らない視聴者にも、題材が先に伝わるショートの投稿タイトルとフックを生成する。前提のtask-191はPR #125（CI 3.11・3.12・frontend成功）としてmainへmerge commitで取り込み済み。
+- 変更ファイル: scoring/title_hook_suggestions.py・codex_title_hook_suggestions.py、jobs/title_hook_suggestions.py・runner.py、api/jobs.py、tests/test_unknown_audience_hooks.py・test_title_hook_suggestions.py・test_codex_title_hook_suggestions.py。
+- prompt versionをtitle_hook_suggestions_v11へ更新。unknownかつshortだけ、字幕由来の題材語をhookText/publicationTitleの先頭へ置く条項を追記する。knownのプロンプト本文はv10とUTF-8 SHA256で完全一致を確認。通常動画の本文も変えない。
+- audienceFamiliarityをジョブから自動生成・字幕確認での生成へ渡し、保存する入力モデル・payload・キャッシュのinput hashに含める。旧入力は未指定=knownとして読む。字幕と境界のrevision hashは維持し、既存投稿メタデータとの照合を壊さない。
+- unknownのshortだけ、hookTextにclip字幕と共通する2文字以上の漢字・カタカナ・英数字の連続があることを決定的に検証する（NFKC正規化、指示語・フィラーの定数を除外）。検証に落ちた案は提示・推薦しない。Codexの推薦が不合格なら、生成順で先頭の合格案を推薦する。返答は従来どおり3案要求し、合格した1〜3案のみを保存・提示する。
+- 全3案が不合格なら、既存の生成経路で1回だけ再試行する。タイトル重複による再試行と合計2回の生成を共有する。なお全案不合格ならfailedと日本語の理由を保存し、無理に採用しない。knownと通常動画では題材語検証を行わない。
+- 最初の全件テストで、共通生成器を継承するサムネ表情選択のプロンプトが置き換わる影響を1件検出。出し分けをtitle_hook_suggestionsの仕事だけに限定し、継承先固有のプロンプトを保持して修正した。
+- 最終検証: ruff check . ../launcher ../scripts、Python 3.11の全件pytest 1619 passed / 3 skipped、frontend test（25本）・lint・typecheck・build成功。題材語の有無・除外語、旧入力、キャッシュ更新、実際の中継へ送る本文、再試行の上限、失敗理由のAPIへの受け渡し、自動生成と推薦の変更を確認した。
+- テスト前後で稼働DBは483328 bytes、更新時刻2026-10-06 01:52:20 UTCのまま。quality_gateとlauncher/codex_bridge.pyは変更不要。返答スキーマ・中継の固定値は同じで、ホスト側Codex中継の再起動は不要。Dockerへの反映は行っていない。
+- 未確認事項: 実動画・画面操作での受入、そぴあの5〜10本によるengaged率40%超の効果検証は運用側で行う。task-191の最大15点・Codex補正0.2は仮の重みであり、効果を確認済みとはしない。
