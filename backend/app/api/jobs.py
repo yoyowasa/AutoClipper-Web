@@ -1993,6 +1993,7 @@ def create_title_hook_suggestions(
                     for segment in request.segments
                 ],
                 model=str((job.settings_json or {}).get("titleHookModel") or "codex-default"),
+                audience_familiarity="unknown" if (job.settings_json or {}).get("audienceFamiliarity") == "unknown" else "known",
             )
         except KeyError as exc:
             raise HTTPException(

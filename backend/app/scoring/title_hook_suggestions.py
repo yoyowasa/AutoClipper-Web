@@ -1,4 +1,6 @@
 import subprocess
+import re
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -8,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.posting_metadata import NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, PostTitleIntent, ensure_publication_title_suffix
 
 
-TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v10"
+TITLE_HOOK_PROMPT_VERSION = "title_hook_suggestions_v11"
 REPRESENTATIVE_FRAME_RATIOS = (0.12, 0.38, 0.62, 0.88)
 
 SYSTEM_PROMPT = """あなたは日本語動画の編集者です。
@@ -99,6 +101,48 @@ clipTypeがshortの場合は、次の基準をすべて適用する。
 - evidenceSegmentIds: その案を直接裏付ける入力字幕のsegmentIdだけを返す。
 画像と字幕が矛盾する場合は字幕を優先します。
 指定されたJSON schemaだけを返してください。"""
+
+UNKNOWN_AUDIENCE_SHORT_PROMPT = """【知名度低モードのショート基準】
+audienceFamiliarity が unknown のときは、視聴者が出演者を知らない前提で作る。
+以下の基準を、一般的な情報ギャップの基準より優先する。
+hookText と publicationTitle の先頭には、字幕由来の題材語（科学用語・数字・固有物・身近な疑問）を置く。
+セリフは題材を示した後に置く。題材語を含まないセリフだけの hookText は必須条件違反として不採用にする。
+題材語はclip字幕にも現れる2文字以上の漢字・カタカナ・英数字の連続とする。
+それ、あれ、えー、あの、やばい、すごい等の指示語やフィラーだけでは題材を示したことにならない。
+hookSceneStart / hookSceneEnd は、題材が画面か音声で分かる場面を優先する。
+字幕にない題材や人物は足さない。"""
+TOPIC_WORD_EXCLUSIONS = (
+    "それ", "あれ", "えー", "あの", "やばい", "すごい", "ええと", "えっと",
+    "ソレ", "アレ", "エー", "アノ", "ヤバイ", "スゴイ", "エエト", "エット",
+)
+TOPIC_WORD_PATTERN = re.compile(r"[\u3400-\u9fff々]{2,}|[ァ-ヶー]{2,}|[A-Za-z0-9]{2,}")
+
+
+def title_hook_system_prompt(
+    *, audience_familiarity: str = "known", clip_type: str = "short", base_prompt: str = SYSTEM_PROMPT,
+) -> str:
+    if audience_familiarity == "unknown" and clip_type == "short":
+        return base_prompt + "\n\n" + UNKNOWN_AUDIENCE_SHORT_PROMPT
+    return base_prompt
+
+
+def has_transcript_topic_word(hook_text: str, transcript: str) -> bool:
+    """Require at least two consecutive topic characters shared with the clip's subtitles."""
+    hook = unicodedata.normalize("NFKC", hook_text)
+    source = unicodedata.normalize("NFKC", transcript)
+    for excluded in TOPIC_WORD_EXCLUSIONS:
+        hook = hook.replace(excluded, " ")
+    for token in TOPIC_WORD_PATTERN.findall(hook):
+        for index in range(len(token) - 1):
+            pair = token[index:index + 2]
+            if any(pair in excluded for excluded in TOPIC_WORD_EXCLUSIONS):
+                continue
+            if not re.search(r"[\u3400-\u9fff々ァ-ヶA-Za-z0-9]", pair):
+                continue
+            if pair in source:
+                return True
+    return False
+
 
 class TitleHookSuggestion(BaseModel):
     id: str = Field(min_length=1, max_length=40)

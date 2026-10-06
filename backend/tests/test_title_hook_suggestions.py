@@ -131,7 +131,7 @@ def _suggestion_result() -> TitleHookSuggestionResult:
 
 
 def test_short_prompt_requires_scroll_stop_package_ranking() -> None:
-    assert TITLE_HOOK_PROMPT_VERSION == "title_hook_suggestions_v10"
+    assert TITLE_HOOK_PROMPT_VERSION == "title_hook_suggestions_v11"
     assert "【ショート専用のタイトル・フック基準】" in SYSTEM_PROMPT
     assert "最初の0.3〜1秒" in SYSTEM_PROMPT
     assert "少なくとも6つの異なる切り口" in SYSTEM_PROMPT
@@ -1308,6 +1308,7 @@ def test_worker_uses_text_only_fallback_and_normalizes_clip_relative_scene(
     assert generator.frames == []
     assert generator.payload is not None
     assert set(generator.payload) == {
+        "audienceFamiliarity",
         "normalTitleSuffix",
         "clipType",
         "clipDurationSeconds",

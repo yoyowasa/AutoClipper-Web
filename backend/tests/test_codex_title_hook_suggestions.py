@@ -4,11 +4,12 @@ import json
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+import pytest
 
 from app.scoring.codex_title_hook_suggestions import (
     CodexTitleHookSuggestionGenerator,
 )
-from app.scoring.title_hook_suggestions import TITLE_HOOK_GENERATION_SCHEMA
+from app.scoring.title_hook_suggestions import TITLE_HOOK_GENERATION_SCHEMA, title_hook_system_prompt
 
 
 def _generated_output() -> dict[str, Any]:
@@ -36,8 +37,10 @@ def _generated_output() -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize("familiarity", ["known", "unknown"])
 def test_codex_generator_writes_fixed_bridge_request_and_reads_response(
     tmp_path: Path,
+    familiarity: str,
 ) -> None:
     storage_root = tmp_path / "storage"
     frame_path = storage_root / "temp" / "job_1" / "frame.jpg"
@@ -85,6 +88,7 @@ def test_codex_generator_writes_fixed_bridge_request_and_reads_response(
 
     result = generator.generate(
         {
+            "audienceFamiliarity": familiarity,
             "clipType": "short",
             "clipDurationSeconds": 10,
             "segments": [
@@ -101,6 +105,7 @@ def test_codex_generator_writes_fixed_bridge_request_and_reads_response(
     assert captured["threadId"] == thread_id
     assert "model" not in captured
     assert "segment_1" in captured["prompt"]
+    assert captured["prompt"].split("\n\n入力JSON:\n")[0] == title_hook_system_prompt(audience_familiarity=familiarity)
     assert result.recommended_suggestion_id == "candidate-1"
     assert result.youtube_description
     assert result.hashtags == ["#会話", "#切り抜き", "#動画"]
