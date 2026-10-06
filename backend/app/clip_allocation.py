@@ -60,9 +60,13 @@ def allocate_selection(
         raise ValueError("手動・キープの本数が合計本数を超えています。")
 
     def rank(c: Candidate):
+        from app.scoring.rule_score import codex_opening_bonus
+
         confidence_score = c.ai_score if c.used_ai_score else None
+        bonus = (100 * codex_opening_bonus(c.opening_score, str(settings.get("audienceFamiliarity", "known")))
+                 if c.type == "short" and c.selection_reason == "codex_direct" else 0)
         return (
-            -(confidence_score if confidence_score is not None else c.final_score or c.rule_score or 0),
+            -((confidence_score if confidence_score is not None else c.final_score or c.rule_score or 0) + bonus),
             -(c.final_score or c.rule_score or 0),
             c.start,
             c.end,

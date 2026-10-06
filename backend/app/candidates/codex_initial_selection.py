@@ -32,6 +32,7 @@ from app.candidates.used_ranges import (
 from app.candidates.select_candidates import CandidateSelection, SelectionPolicy
 from app.scoring.clip_preferences import ClipSelectionPreset
 from app.scoring.heatmap import candidate_heatmap_features
+from app.scoring.rule_score import codex_opening_bonus, opening_score
 from app.storage.json_io import write_json_atomic
 from app.video.heatmap import HeatmapSegment
 
@@ -2239,12 +2240,14 @@ def _select_initial_short_pairs(
     normal_candidates: Sequence[Candidate],
     max_overlap_ratio: float,
     cross_type_overlap_dedupe: bool,
+    audience_familiarity: str = "known",
 ) -> list[tuple[CodexClipProposal, Candidate]]:
     selected: list[tuple[CodexClipProposal, Candidate]] = []
     used_moment_keys: set[str] = set()
     ranked_pairs = sorted(
         pairs,
-        key=lambda item: (-item[0].confidence, item[0].proposal_id),
+        key=lambda item: (-(item[0].confidence + codex_opening_bonus(item[1].opening_score, audience_familiarity)),
+                          item[0].proposal_id),
     )
     for proposal, candidate in ranked_pairs:
         if len(selected) >= requested_count:
@@ -2339,6 +2342,7 @@ def convert_codex_initial_selection_response(
     attempt_count: int = 1,
     topic_block_count: int = 0,
     topic_summary_char_count: int = 0,
+    audience_familiarity: str = "known",
 ) -> CodexInitialSelectionResult:
     if response.job_id != request.job_id:
         raise CodexInitialSelectionError(
@@ -2393,6 +2397,8 @@ def convert_codex_initial_selection_response(
                 )
             )
             continue
+        if candidate.type == "short":
+            candidate = candidate.model_copy(update={"opening_score": opening_score(candidate, request.transcript)})
         proposals.append(proposal)
         candidates.append(candidate)
     proposal_candidate_pairs = list(zip(proposals, candidates, strict=True))
@@ -2410,6 +2416,7 @@ def convert_codex_initial_selection_response(
         normal_candidates=normal_candidates,
         max_overlap_ratio=request.constraints.max_overlap_ratio,
         cross_type_overlap_dedupe=request.constraints.cross_type_overlap_dedupe,
+        audience_familiarity=audience_familiarity,
     )
     short_candidates = [item[1] for item in selected_short_pairs]
     retained_normal_pairs = _retain_duration_band_candidate_pool(
@@ -2659,6 +2666,7 @@ def request_codex_initial_selection(
                     attempt_count=max(topic_attempt, attempt),
                     topic_block_count=topic_block_count,
                     topic_summary_char_count=topic_summary_char_count,
+                    audience_familiarity=_text_setting(settings, "audienceFamiliarity", "known"),
                 )
                 result.summary["selectionStage"] = "boundary_refinement"
                 if heartbeat is not None:

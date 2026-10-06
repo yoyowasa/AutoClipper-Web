@@ -77,6 +77,7 @@ export type ClipSettings = {
   keptClipIds?: string[];
   excludePreviousSelection?: boolean;
   characterPresetName?: string;
+  audienceFamiliarity?: "known" | "unknown";
   characterPresetId?: string;
   autoHarvestCharacterAssets?: boolean;
   channelName?: string;

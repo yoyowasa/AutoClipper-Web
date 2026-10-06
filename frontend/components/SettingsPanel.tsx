@@ -49,6 +49,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   crossTypeOverlapDedupe: false,
   heatmapIntervalMode: false,
   initialSelectionProvider: "codex",
+  audienceFamiliarity: "known",
   enableBoundaryRefinement: true,
   boundaryLeadingPaddingSeconds: 0.4,
   boundaryTrailingPaddingSeconds: 0.6,

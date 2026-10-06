@@ -34,11 +34,13 @@ def test_character_presets_migration_switch_and_job_snapshot(client: TestClient)
     assert legacy["legacyImport"] is True
     raden = legacy["presets"][0]
     assert raden["settings"]["normalClipCount"] == 0
+    assert raden["settings"]["audienceFamiliarity"] == "known"
     assert raden["settings"]["normalTitleSuffix"] == NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX
     other = {
         "name": "別チャンネル／キャラB",
         "settings": {
             "channelName": "別チャンネル",
+            "audienceFamiliarity": "unknown",
             "youtubePostingProfile": {"performerName": "キャラB", "baseHashtags": ["#キャラB"], "vspoPermissionNumber": "TEST-0123"},
             "normalTitleSuffix": "【キャラB切り抜き】",
             "normalThumbnailStyle": {"design": "sopia", "backgroundColor": "#123456"},
@@ -51,6 +53,7 @@ def test_character_presets_migration_switch_and_job_snapshot(client: TestClient)
     loaded = client.get("/api/preferences/character-presets").json()
     assert loaded["selectedName"] == other["name"]
     snapshot = loaded["presets"][1]["settings"]
+    assert snapshot["audienceFamiliarity"] == "unknown"
     assert snapshot["youtubePostingProfile"]["vspoPermissionNumber"] == "TEST-0123"
     video = client.post("/api/videos/upload", files={"file": ("b.mp4", b"video", "video/mp4")}).json()
     created = client.post("/api/jobs", json={"videoId": video["videoId"], "settings": snapshot})
@@ -61,6 +64,7 @@ def test_character_presets_migration_switch_and_job_snapshot(client: TestClient)
         job = {"settings": db.get(Job, created.json()["jobId"]).settings_json}
     assert job["settings"]["youtubePostingProfile"]["performerName"] == "キャラB"
     assert job["settings"]["normalTitleSuffix"] == "【キャラB切り抜き】"
+    assert job["settings"]["audienceFamiliarity"] == "unknown"
     assert job["settings"]["normalThumbnailStyle"]["backgroundColor"] == "#123456"
     assert job["settings"]["normalThumbnailStyle"]["design"] == "sopia"
     assert job["settings"]["shortTopBannerEnabled"] is False

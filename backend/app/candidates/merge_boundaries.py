@@ -141,6 +141,7 @@ class Candidate(BaseModel):
     heatmap_seed_end: float | None = Field(default=None, ge=0)
     heatmap_seed_value: float | None = Field(default=None, ge=0, le=1)
     rule_score: float | None = Field(default=None, ge=0, le=100)
+    opening_score: float | None = Field(default=None, ge=0, le=15)
     ai_score: float | None = Field(default=None, ge=0, le=100)
     final_score: float | None = Field(default=None, ge=0, le=100)
     should_use: bool | None = None

@@ -422,10 +422,12 @@ def _replace_scored_candidates(
 def _score_local_candidates(
     candidates: Sequence[Candidate], settings: dict[str, Any],
     audio_features: AudioFeatures, silence_segments: Sequence[SilenceSegment],
+    transcript_segments: Sequence[TranscriptSegment] = (),
 ) -> list[Candidate]:
     scored = score_candidates(
         candidates, audio_features=audio_features, silence_segments=silence_segments,
         selection_preferences=build_clip_selection_preferences(settings),
+        transcript_segments=transcript_segments,
     )
     return [candidate.model_copy(update={"final_score": candidate.rule_score}) for candidate in scored]
 
