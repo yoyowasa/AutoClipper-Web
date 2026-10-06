@@ -10879,3 +10879,15 @@ pip check: pass
 - 実施: DBバックアップ `storage/backups/autoclipper-20261005-150533-before-task189-deploy.db`（integrity_check ok、jobs 17・export_items 50で元と一致）。`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker frontend`。Codex中継は再起動していない（ready、契約の指紋がmainと一致を確認）。
 - 確認: backend healthy、`/health` 200、`/upload` 200、workerの av 18.1.0、補修の処理（app.audio.transcript_gap_repair）を読み込めることを確認。workerの起動ログにエラーなし。
 - 未確認事項: 新しいジョブでの補修の品質・処理時間、字幕確認の画面での「補修」の印の表示（ユーザーが確認する）。既存ジョブの字幕は変わらない。
+
+## 2026-10-06 task-191 ショート冒頭評価とキャラ別認知度
+
+- 目的: 知名度低のキャラで、知らない視聴者にも題材が伝わるショート候補を優先する。既存・未指定のキャラは known とする。
+- 変更ファイル: api/character_presets.py、schemas.py、scoring/clip_preferences.py・rule_score.py、candidates/merge_boundaries.py・codex_initial_selection.py、jobs/pipeline_common.py・runner.py・clip_plan_runner.py、clip_allocation.py。frontend は CharacterPresetManager・SettingsPanel、types.ts・characterPresets.ts と対応テスト。
+- 冒頭3秒に重なる字幕segmentの文字（重なった時間に比例して切り出す）と発話秒数を使い、発話密度・具体語（数字、カタカナ、漢字2字以上の並び、既存のフック語）・弱い書き出しを0〜15点で評価する。語ごとの時刻は不要。漢字の並びは名詞の近似であり、形態素解析ではない。
+- unknown のShortsだけルール採点へ加点し、日本語の弱い書き出しを追加で10点減点する。known は点数・順位不変。通常候補の順位も変更しない。opening_score は候補に保存する。
+- Codexの選定プロンプト・返答スキーマは変更しない。unknown のShortsだけ confidence + 0.2 * opening_score / 15 で決定的に並べ替える。初期選定・再選定で共通処理を使い、境界補正後・多様性判定・合計本数の振り分けでも同じ補正を維持する。
+- キャラ設定の共通欄に認知度を追加。保存項目・JobSettingsへ引き継ぎ、旧プリセットに切り替えた場合は known に戻す。
+- 検証: Python 3.11の全件pytest 1599 passed / 3 skipped、ruff check . ../launcher ../scripts 成功。frontend test（25本）・lint・typecheck・build 成功。knownの旧点数、Codex順位、境界補正後と合計配分、プリセット保存・ジョブへの引き継ぎを回帰テストで確認。
+- 稼働DBはテスト前後とも483328 bytes、更新時刻2026-10-06 01:52:20 UTCで不変。既存Dockerはbackend healthy・worker/frontend起動中を確認しただけで、変更の反映は行っていない。
+- 未確認事項: 実際の動画・画面操作での受入、engaged率の改善（目標40%超）は未確認。最大15点とCodex補正0.2はデータで決めた値ではなく仮の重み。そぴあの5〜10本で運用検証する。knownへの日本語減点は別タスクで判断する。

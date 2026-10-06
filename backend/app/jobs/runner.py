@@ -2740,6 +2740,7 @@ def run_autoclipper_job(
                 automatic_scored = _score_local_candidates(
                     automatic_candidates, settings=automatic_settings,
                     audio_features=audio_features, silence_segments=silence_segments,
+                    transcript_segments=transcript_segments,
                 )
                 scored_candidates = [*automatic_scored, *manual_candidates]
 

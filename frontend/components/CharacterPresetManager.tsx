@@ -90,6 +90,13 @@ export function CharacterPresetManager({ settings, disabled, onChange }: {
     <label className="grid gap-1">保存名（チャンネル名＋キャラ名など）
       <input className="min-h-9 min-w-0 border border-neutral-300 px-2" maxLength={80} value={name} placeholder="例：切り抜きチャンネルA／キャラ名" onChange={(event) => setName(event.target.value)} />
     </label>
+    <label className="grid gap-1">視聴者の認知度
+      <select className="min-h-10 border border-neutral-300 bg-white px-2" value={settings.audienceFamiliarity ?? "known"}
+        onChange={event => onChange({ ...latest.current.settings, audienceFamiliarity: event.target.value as "known" | "unknown" })}>
+        <option value="known">知名度あり</option>
+        <option value="unknown">知名度低（題材優先）</option>
+      </select>
+    </label>
     <button className="min-h-10 bg-neutral-950 px-2 text-white disabled:opacity-40" type="button"
       disabled={!name.trim() || (!existing && document.presets.length >= 50)} onClick={() => void save()}>
       {existing ? "この名前のキャラ設定を上書き保存" : "現在の設定をキャラごと保存"}

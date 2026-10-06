@@ -5,6 +5,7 @@ from typing import Sequence
 from pydantic import BaseModel, Field
 
 from app.audio.silence_detect import SilenceSegment
+from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.audio.volume_features import AudioFeatures, silence_seconds
 from app.candidates.merge_boundaries import Candidate
 from app.scoring.clip_preferences import (
@@ -56,6 +57,51 @@ JAPANESE_HOOK_KEYWORDS = {
 }
 
 HEATMAP_SCORE_MAX = 10.0
+OPENING_SCORE_MAX = 15.0
+CODEX_OPENING_SCORE_WEIGHT = 0.2
+JA_INCOMPLETE_START_PREFIXES = ("で、", "で，", "だから", "それ", "あれ", "えー", "ええと", "えっと", "あの")
+
+
+def _weak_japanese_start(text: str) -> bool:
+    return unicodedata.normalize("NFKC", text).lstrip().startswith(JA_INCOMPLETE_START_PREFIXES)
+
+
+def opening_score(candidate: Candidate, segments: Sequence[TranscriptSegment]) -> float:
+    """Approximate the first three seconds from overlapping segment text and speech time."""
+    start, end = candidate.start, min(candidate.end, candidate.start + 3.0)
+    if end <= start:
+        return 0.0
+    spans: list[tuple[float, float]] = []
+    texts: list[str] = []
+    for segment in sorted(segments, key=lambda item: (item.start, item.end)):
+        left, right = max(start, segment.start), min(end, segment.end)
+        if right <= left or not segment.text.strip() or segment.end <= segment.start:
+            continue
+        spans.append((left, right))
+        # Segment timing is sufficient; proportional slicing keeps later topic words out of the opening.
+        length = len(segment.text)
+        first = int(length * (left - segment.start) / (segment.end - segment.start))
+        last = min(length, int(length * (right - segment.start) / (segment.end - segment.start) + 0.999999))
+        texts.append(segment.text[first:last])
+    text = unicodedata.normalize("NFKC", "".join(texts)).strip()
+    if not text:
+        return 0.0
+    speech = 0.0
+    covered_end = start
+    for left, right in sorted(spans):
+        speech += max(0.0, right - max(left, covered_end))
+        covered_end = max(covered_end, right)
+    density = min(1.0, speech / (end - start))
+    concrete = bool(re.search(r"\d|[ァ-ヶー]{2,}|[一-龯々]{2,}", text)) or any(
+        keyword in text for keyword in JAPANESE_HOOK_KEYWORDS
+    )
+    weak = _weak_japanese_start(text)
+    return round(_clamp(density * 5.0 + (5.0 if concrete else 0.0) + (0.0 if weak else 5.0)
+                        - (5.0 if weak else 0.0), maximum=OPENING_SCORE_MAX), 3)
+
+
+def codex_opening_bonus(score: float | None, audience_familiarity: str) -> float:
+    return CODEX_OPENING_SCORE_WEIGHT * (score or 0.0) / OPENING_SCORE_MAX if audience_familiarity == "unknown" else 0.0
 
 INCOMPLETE_START_WORDS = {
     "and",
@@ -85,6 +131,7 @@ INCOMPLETE_END_WORDS = {
 
 
 class RuleScoreBreakdown(BaseModel):
+    opening_score: float = Field(default=0, ge=0, le=OPENING_SCORE_MAX)
     hook_score: float = Field(ge=0, le=15)
     guidance_score: float = Field(ge=0, le=15)
     silence_score: float = Field(ge=0, le=15)
@@ -207,13 +254,15 @@ def heatmap_popularity_score(value: float | None) -> float:
     return _clamp(value, maximum=1.0) * HEATMAP_SCORE_MAX
 
 
-def incomplete_boundary_penalty(transcript_text: str) -> float:
+def incomplete_boundary_penalty(transcript_text: str, *, audience_familiarity: str = "known") -> float:
     text = unicodedata.normalize("NFKC", transcript_text).strip()
     if not text:
         return 25.0
 
     words = _words(text)
     penalty = 0.0
+    if audience_familiarity == "unknown" and _weak_japanese_start(text):
+        penalty += 10.0
     if words and words[0] in INCOMPLETE_START_WORDS:
         penalty += 10.0
     if words and words[-1] in INCOMPLETE_END_WORDS:
@@ -231,6 +280,7 @@ def score_candidate(
     silence_segments: Sequence[SilenceSegment] | None = None,
     hook_keywords: set[str] | None = None,
     selection_preference: CandidateClipPreference | None = None,
+    transcript_segments: Sequence[TranscriptSegment] = (),
 ) -> RuleScoreBreakdown:
     fallback_silence_ratio = audio_features.silence_ratio if audio_features else 0.0
     silence_ratio = _candidate_silence_ratio(candidate, silence_segments or [], fallback_silence_ratio)
@@ -252,7 +302,9 @@ def score_candidate(
     length = transcript_length_score(candidate)
     peak = audio_peak_score(volume_peak)
     heatmap = heatmap_popularity_score(candidate.heatmap_value)
-    penalty = incomplete_boundary_penalty(candidate.transcript_text)
+    opening = opening_score(candidate, transcript_segments) if candidate.type == "short" else 0.0
+    familiarity = preference.audience_familiarity if candidate.type == "short" else "known"
+    penalty = incomplete_boundary_penalty(candidate.transcript_text, audience_familiarity=familiarity)
     generic_penalty = selection_content_penalty(
         candidate.transcript_text,
         preference,
@@ -267,11 +319,13 @@ def score_candidate(
         + length
         + peak
         + heatmap
+        + (opening if familiarity == "unknown" else 0.0)
         - penalty
         - generic_penalty
     )
 
     return RuleScoreBreakdown(
+        opening_score=opening,
         hook_score=hook,
         guidance_score=guidance,
         silence_score=silence,
@@ -292,6 +346,7 @@ def apply_rule_score(
     silence_segments: Sequence[SilenceSegment] | None = None,
     hook_keywords: set[str] | None = None,
     selection_preference: CandidateClipPreference | None = None,
+    transcript_segments: Sequence[TranscriptSegment] = (),
 ) -> Candidate:
     breakdown = score_candidate(
         candidate,
@@ -299,6 +354,7 @@ def apply_rule_score(
         silence_segments=silence_segments,
         hook_keywords=hook_keywords,
         selection_preference=selection_preference,
+        transcript_segments=transcript_segments,
     )
     preference = selection_preference or CandidateClipPreference()
     flags = list(candidate.risk_flags)
@@ -312,6 +368,7 @@ def apply_rule_score(
     return candidate.model_copy(
         update={
             "rule_score": breakdown.final_score,
+            "opening_score": breakdown.opening_score if candidate.type == "short" else None,
             "heatmap_score": (
                 breakdown.heatmap_score if candidate.heatmap_value is not None else None
             ),
@@ -326,6 +383,7 @@ def score_candidates(
     silence_segments: Sequence[SilenceSegment] | None = None,
     hook_keywords: set[str] | None = None,
     selection_preferences: dict[str, CandidateClipPreference] | None = None,
+    transcript_segments: Sequence[TranscriptSegment] = (),
 ) -> list[Candidate]:
     return [
         apply_rule_score(
@@ -334,6 +392,7 @@ def score_candidates(
             silence_segments=silence_segments,
             hook_keywords=hook_keywords,
             selection_preference=(selection_preferences or {}).get(candidate.type),
+            transcript_segments=transcript_segments,
         )
         for candidate in candidates
     ]

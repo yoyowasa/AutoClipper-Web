@@ -171,6 +171,7 @@ class CandidateClipPreference:
     guidance: str = ""
     exclude_intro_outro: bool = True
     exclude_promotional_content: bool = False
+    audience_familiarity: Literal["known", "unknown"] = "known"
 
     def to_payload(self) -> dict[str, Any]:
         return asdict(self)
@@ -209,6 +210,7 @@ def build_clip_selection_preferences(
             exclude_promotional_content=exclude_promotional,
         ),
         "short": CandidateClipPreference(
+            audience_familiarity="unknown" if parsed.get("audienceFamiliarity") == "unknown" else "known",
             preset=_setting_preset(parsed, "shortClipSelectionPreset"),
             guidance=_setting_text(parsed, "shortClipGuidance"),
             exclude_intro_outro=exclude_intro_outro,

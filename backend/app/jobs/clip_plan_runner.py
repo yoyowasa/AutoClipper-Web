@@ -189,11 +189,15 @@ def _codex_selection_with_diverse_refined_shorts(
     timeline_duration: float,
     heatmap_segments: Sequence[HeatmapSegment] = (),
 ) -> tuple[CandidateSelection, list[Candidate], ShortDiversityResult]:
+    from app.scoring.rule_score import codex_opening_bonus, opening_score
+
     def rank_key(candidate: Candidate) -> tuple[float, str]:
         score = candidate.final_score
         if score is None:
             score = candidate.ai_score
-        return (-(score if score is not None else 0.0), candidate.id)
+        bonus = (100 * codex_opening_bonus(candidate.opening_score, str(settings.get("audienceFamiliarity", "known")))
+                 if candidate.type == "short" else 0)
+        return (-((score if score is not None else 0.0) + bonus), candidate.id)
 
     pool_normal_count, pool_short_count = candidate_pool_counts(settings) if is_ai_allocation(settings) else (
         result.selection.requested_normal_count, result.selection.requested_short_count)
@@ -288,6 +292,12 @@ def _codex_selection_with_diverse_refined_shorts(
             )
         )
 
+    eligible_shorts = [candidate.model_copy(update={"opening_score": opening_score(candidate, transcript_segments)})
+                       for candidate in eligible_shorts]
+    if settings.get("audienceFamiliarity") == "unknown":
+        eligible_shorts.sort(key=rank_key)
+    replacements = {candidate.id: candidate for candidate in eligible_shorts}
+    refined_candidates = [replacements.get(candidate.id, candidate) for candidate in refined_candidates]
     diversity = select_diverse_shorts(
         eligible_shorts,
         requested_count=pool_short_count,
@@ -1100,6 +1110,7 @@ def run_clip_plan_reselection(
                 automatic_scored = _score_local_candidates(
                     automatic_candidates, settings=automatic_settings,
                     audio_features=audio_features, silence_segments=silence_segments,
+                    transcript_segments=transcript_segments,
                 )
                 automatic_selection = select_candidates(
                     automatic_scored,
