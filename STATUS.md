@@ -10904,3 +10904,14 @@ pip check: pass
 - 最終検証: ruff check . ../launcher ../scripts、Python 3.11の全件pytest 1619 passed / 3 skipped、frontend test（25本）・lint・typecheck・build成功。題材語の有無・除外語、旧入力、キャッシュ更新、実際の中継へ送る本文、再試行の上限、失敗理由のAPIへの受け渡し、自動生成と推薦の変更を確認した。
 - テスト前後で稼働DBは483328 bytes、更新時刻2026-10-06 01:52:20 UTCのまま。quality_gateとlauncher/codex_bridge.pyは変更不要。返答スキーマ・中継の固定値は同じで、ホスト側Codex中継の再起動は不要。Dockerへの反映は行っていない。
 - 未確認事項: 実動画・画面操作での受入、そぴあの5〜10本によるengaged率40%超の効果検証は運用側で行う。task-191の最大15点・Codex補正0.2は仮の重みであり、効果を確認済みとはしない。
+
+## 2026-10-07 task-193 RQで失敗した仕事と孤立ジョブの状態同期
+
+- 目的: RQの時間切れ・work-horseの強制終了・通常例外で、アプリのジョブが処理中のまま残る問題を防ぐ。
+- 変更ファイル: `backend/app/jobs/worker.py`、新規 `worker_failures.py`・`worker_state.py`、`backend/app/api/jobs.py`、新規 `backend/tests/test_worker_failures.py`、`STATUS.md`。
+- 仕組み: 固定済みのRQ 2.12.0の `Worker.handle_job_failure` を拡張する。通常例外・時間切れは子プロセスから、SIGKILLや異常終了は生存する親workerの `monitor_work_horse` から同じ処理に到達する。enqueueの on_failure だけでは、親が検知する強制終了の経路に到達しないため、この共通の処理を使用する。RQ自身の失敗・再試行処理を先に実行し、終端の FAILED / STOPPED のときだけアプリの状態を更新する。
+- 対象: 元動画のジョブ実行・retry、字幕確定後の全体書き出し、候補の再選定。旧runner上の再選定関数パスも受け付ける。サムネ再生成・字幕の個別プレビュー・フックや境界の個別変更・タイトル案生成・素材収集はジョブ全体の失敗にしない。
+- エラー: 時間切れは `worker_timeout`、それ以外の強制終了は `worker_terminated_unexpectedly`、通常例外は `worker_execution_failed`。RQ親側watchdogが時間超過後にSIGKILLした場合も時間切れと判定する。メッセージには停止時の current_step と status を含める。UPDATEは状態・更新時刻・処理段階が読み取り時と一致することを条件にし、completed / failed や、同時に更新されたジョブを上書きしない。
+- 点検: workerの `run_maintenance_tasks` で、処理中かつ最終更新から既存APIと同じ期限を超え、対応するRQの仕事が無いジョブを失敗にする。期限は `workerHeartbeatTimeoutSeconds`、既定1800秒・最低60秒。境界値ちょうどでは失敗にしない。queued・uploaded・各確認待ち・完了・失敗、および既存の個別確認動画を準備する操作は対象外。キュー・実行中登録に加え、dequeue途中・scheduled / deferredの再試行待ちも保護し、UPDATE直前にも再点検する。Redisの状態や登録済み仕事を確認できない場合は点検を見送り、警告を出す。素材候補の期限切れ掃除も維持する。
+- 検証: Python 3.11.9の `python -m pytest` は1676 passed・3 skipped。追加57件の回帰テストも最終差分で成功。実際にインストールされたRQの親側監視を使い、SIGKILLのwaitpid結果とwatchdogの時間切れを模擬して、アプリ側の失敗記録への到達を検証した。通常例外、保護対象、条件付きUPDATE、点検期限、再試行、Redisを確認できない場合も確認した。`ruff check . ../launcher ../scripts`、frontendのtest（25ファイル）・lint・typecheck・buildが成功。CIのPython 3.11 / 3.12とfrontendはPRで確認する。
+- 稼働環境: DBのサイズ507904 bytes・更新時刻は全件テスト前後で一致。DBを読み取り専用で確認し、`job_ea68be9806884d25aaa3dbd62a259f24` はdetecting_scenesのまま。既存コンテナは正常起動中。Dockerへの反映、稼働ジョブの手動更新、実プロセスの強制終了による受入テストは行っていない。反映後の保守点検で対象ジョブが失敗に変わることは未確認。
