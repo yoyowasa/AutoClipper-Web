@@ -175,7 +175,6 @@ NON_WORKER_STATUSES = {
     "awaiting_clip_review",
     "awaiting_subtitle_review",
 }
-DEFAULT_STALE_WORKER_SECONDS = 1800
 RETRY_ENQUEUE_PENDING_STEP = "再処理を開始待ち"
 NO_USABLE_SELECTION_ERROR_CODE = "no_usable_selection"
 NO_USABLE_SELECTION_RETRY_EXHAUSTED_ERROR_CODE = "no_usable_selection_retry_exhausted"
@@ -1351,12 +1350,9 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
 
 
 def _stale_worker_timeout_seconds(job: Job) -> int:
-    value = (job.settings_json or {}).get("workerHeartbeatTimeoutSeconds", DEFAULT_STALE_WORKER_SECONDS)
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return DEFAULT_STALE_WORKER_SECONDS
-    return max(60, parsed)
+    from app.jobs.worker_state import stale_worker_timeout_seconds
+
+    return stale_worker_timeout_seconds(job.settings_json or {})
 
 
 def _mark_stale_running_job_failed(db: Session, job: Job) -> None:
