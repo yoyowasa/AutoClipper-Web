@@ -22,6 +22,7 @@ from app.duration_rules import (
 )
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType, build_candidate
+from app.candidates.short_parent_range import ShortParentRangeAdjustment, adjust_short_parent_range
 from app.candidates.used_ranges import (
     PREVIOUS_PROPOSALS_SETTING,
     merge_ranges,
@@ -713,6 +714,7 @@ CodexInitialSelectionSummaryStatus = Literal[
 
 
 class CodexInitialSelectionSummary(_StrictModel):
+    parent_range_adjustments: list[ShortParentRangeAdjustment] = Field(default_factory=list, alias="parentRangeAdjustments")
     requested_total: int | None = Field(default=None, alias='requestedTotal')
     selected_total: int | None = Field(default=None, alias='selectedTotal')
     selected_by_type: dict[str, int] = Field(default_factory=dict, alias='selectedByType')
@@ -726,6 +728,9 @@ class CodexInitialSelectionSummary(_StrictModel):
     @model_serializer(mode='wrap')
     def serialize_allocation(self, handler):
         result = handler(self)
+        if not self.parent_range_adjustments:
+            result.pop("parentRangeAdjustments", None)
+            result.pop("parent_range_adjustments", None)
         if self.requested_total is None:
             for key in ('requestedTotal', 'selectedTotal', 'selectedByType', 'shortfallReasons', 'minimumShortfall',
                         'requested_total', 'selected_total', 'selected_by_type', 'shortfall_reasons', 'minimum_shortfall'):
@@ -2037,13 +2042,6 @@ def _validate_proposal_moment_metadata(proposal: CodexClipProposal) -> None:
             "codex_initial_selection_parent_not_containing_final",
             "Codex初期選定のショート親区間が完成区間を含んでいません。",
         )
-    final_duration = proposal.end - proposal.start
-    parent_ratio = (proposal.parent_end - proposal.parent_start) / final_duration
-    if parent_ratio < 1.5 - 0.001 or parent_ratio > 3.0 + 0.001:
-        raise CodexInitialSelectionError(
-            "codex_initial_selection_parent_ratio_invalid",
-            "Codex初期選定のショート親区間が完成区間の1.5〜3倍ではありません。",
-        )
 
 
 def _validate_proposal_topic_metadata(
@@ -2074,13 +2072,7 @@ def _validate_proposal_topic_metadata(
         )
 
 
-def _proposal_candidate(
-    proposal: CodexClipProposal,
-    *,
-    request: CodexInitialSelectionRequest,
-) -> Candidate:
-    _validate_proposal_moment_metadata(proposal)
-    _validate_proposal_topic_metadata(proposal, request)
+def _validate_proposal_source_bounds(proposal: CodexClipProposal, request: CodexInitialSelectionRequest) -> None:
     if proposal.end > request.source_duration + 0.001:
         raise CodexInitialSelectionError(
             "codex_initial_selection_range_outside_source",
@@ -2091,6 +2083,36 @@ def _proposal_candidate(
             "codex_initial_selection_parent_outside_source",
             "Codex初期選定の親区間が元動画を超えています。",
         )
+
+
+def _normalize_proposal_parent_range(
+    proposal: CodexClipProposal, request: CodexInitialSelectionRequest,
+) -> tuple[CodexClipProposal, ShortParentRangeAdjustment | None]:
+    # Validate the original data first: clamping must not hide malformed or
+    # out-of-source proposals. All validation functions remain read-only.
+    _validate_proposal_moment_metadata(proposal)
+    _validate_proposal_topic_metadata(proposal, request)
+    _validate_proposal_source_bounds(proposal, request)
+    if proposal.type != "short":
+        return proposal, None
+    assert proposal.parent_start is not None and proposal.parent_end is not None
+    adjustment = adjust_short_parent_range(
+        proposal.proposal_id, start=proposal.start, end=proposal.end, parent_start=proposal.parent_start,
+        parent_end=proposal.parent_end, source_duration=request.source_duration,
+    )
+    if adjustment is None:
+        return proposal, None
+    return proposal.model_copy(update={"parent_start": adjustment.adjusted_start, "parent_end": adjustment.adjusted_end}), adjustment
+
+
+def _proposal_candidate(
+    proposal: CodexClipProposal,
+    *,
+    request: CodexInitialSelectionRequest,
+) -> Candidate:
+    _validate_proposal_moment_metadata(proposal)
+    _validate_proposal_topic_metadata(proposal, request)
+    _validate_proposal_source_bounds(proposal, request)
     type_constraints = request.constraints.normal if proposal.type == "normal" else request.constraints.short
     duration = proposal.end - proposal.start
     rejection = selection_duration_rejection(
@@ -2380,8 +2402,12 @@ def convert_codex_initial_selection_response(
     candidates: list[Candidate] = []
     dropped_normal_candidates: list[CodexDroppedShortCandidate] = []
     dropped_short_candidates: list[CodexDroppedShortCandidate] = []
+    parent_range_adjustments: list[ShortParentRangeAdjustment] = []
     for proposal in response.selected_clips:
         try:
+            proposal, adjustment = _normalize_proposal_parent_range(proposal, request)
+            if adjustment is not None:
+                parent_range_adjustments.append(adjustment)
             candidate = _proposal_candidate(proposal, request=request)
         except CodexInitialSelectionError as exc:
             dropped_candidates = (
@@ -2454,6 +2480,7 @@ def convert_codex_initial_selection_response(
         selectedShortCount=len(short_candidates),
         droppedNormalCandidates=dropped_normal_candidates,
         droppedShortCandidates=dropped_short_candidates,
+        parentRangeAdjustments=parent_range_adjustments,
         threadId=response.thread_id,
         promptVersion=request.prompt_version,
         requestId=request.request_id,
