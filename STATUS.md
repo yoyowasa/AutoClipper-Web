@@ -10905,6 +10905,16 @@ pip check: pass
 - テスト前後で稼働DBは483328 bytes、更新時刻2026-10-06 01:52:20 UTCのまま。quality_gateとlauncher/codex_bridge.pyは変更不要。返答スキーマ・中継の固定値は同じで、ホスト側Codex中継の再起動は不要。Dockerへの反映は行っていない。
 - 未確認事項: 実動画・画面操作での受入、そぴあの5〜10本によるengaged率40%超の効果検証は運用側で行う。task-191の最大15点・Codex補正0.2は仮の重みであり、効果を確認済みとはしない。
 
+## 2026-10-06 task-191・192 稼働環境への反映（運用）
+
+- 目的: main `d11936cccf8b80db7cd3d028d705c5d848522f06` の冒頭評価と低知名度向けタイトル・フック基準を、GPU構成の稼働環境へ反映する。アプリのコード変更は無し。
+- 事前確認: main・未コミット変更無し、RQキューと実行中登録はいずれも0件、Codex中継の requests / processing は空。`job_ea68be9806884d25aaa3dbd62a259f24` はユーザー指定の孤立行として除外し、`detecting_scenes` の状態を変更していない。
+- バックアップ: `storage/backups/autoclipper-20261006-055226-before-task191-192-deploy.db`。sqlite3 の backup() を使用し、integrity_check は ok。jobs 19件・export_items 48件が元DBと一致。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker frontend` が成功。redis は再作成していない。Codex中継の変更は無いため再起動していない。
+- 検証: backend は healthy、worker・frontend は Up。backend の `/health`・`/api/health` と frontend の `/upload` は200。worker の av は18.1.0。backend・worker の変更対象5ファイルと frontend の CharacterPresetManager のハッシュがmainと一致。worker起動ログに ERROR / Traceback は無し。反映後もRQキューと実行中登録は0件。
+- 設定: 画面に「視聴者の認知度」が表示され、宙科そぴあを「知名度低（題材優先）」で保存。再読み込み後も unknown。保存前後のAPI応答を比較し、変更はそぴあの audienceFamiliarity（known → unknown）1項目だけ。ジョブ件数は19件のまま。
+- 未確認: 実動画の確認に使う元動画の指定待ちで、新しいjobはまだ実行していない。冒頭・フックの実動画での受入、3案不採用による停止頻度、engaged率の改善は未確認。15点・0.2は引き続き仮の重み。
+
 ## 2026-10-07 task-193 RQで失敗した仕事と孤立ジョブの状態同期
 
 - 目的: RQの時間切れ・work-horseの強制終了・通常例外で、アプリのジョブが処理中のまま残る問題を防ぐ。
@@ -10915,3 +10925,11 @@ pip check: pass
 - 点検: workerの `run_maintenance_tasks` で、処理中かつ最終更新から既存APIと同じ期限を超え、対応するRQの仕事が無いジョブを失敗にする。期限は `workerHeartbeatTimeoutSeconds`、既定1800秒・最低60秒。境界値ちょうどでは失敗にしない。queued・uploaded・各確認待ち・完了・失敗、および既存の個別確認動画を準備する操作は対象外。キュー・実行中登録に加え、dequeue途中・scheduled / deferredの再試行待ちも保護し、UPDATE直前にも再点検する。Redisの状態や登録済み仕事を確認できない場合は点検を見送り、警告を出す。素材候補の期限切れ掃除も維持する。
 - 検証: Python 3.11.9の `python -m pytest` は1676 passed・3 skipped。追加57件の回帰テストも最終差分で成功。実際にインストールされたRQの親側監視を使い、SIGKILLのwaitpid結果とwatchdogの時間切れを模擬して、アプリ側の失敗記録への到達を検証した。通常例外、保護対象、条件付きUPDATE、点検期限、再試行、Redisを確認できない場合も確認した。`ruff check . ../launcher ../scripts`、frontendのtest（25ファイル）・lint・typecheck・buildが成功。CIのPython 3.11 / 3.12とfrontendはPRで確認する。
 - 稼働環境: DBのサイズ507904 bytes・更新時刻は全件テスト前後で一致。DBを読み取り専用で確認し、`job_ea68be9806884d25aaa3dbd62a259f24` はdetecting_scenesのまま。既存コンテナは正常起動中。Dockerへの反映、稼働ジョブの手動更新、実プロセスの強制終了による受入テストは行っていない。反映後の保守点検で対象ジョブが失敗に変わることは未確認。
+
+## 2026-10-08 task-194 ショート親区間の比率補正
+
+- 目的: 妥当な完成区間を持つ候補が、親区間の比率だけで却下される損失を防ぐ。10/06のtask-191・192反映記録10行も本PRに含める。
+- 実装前の調査: `job_5a1b8902200e4f34b6ec222e30d926f0` の保存済み応答（requestId `7d24634e194d4c628c9c33fe4a38ea7d`）の proposal_003 は、start=2992.08 / end=3066.72、parentStart=2960.44 / parentEnd=3071.4。完成区間74.64秒、親区間110.96秒、比率1.486602357985。DBを読み取り専用で確認した動画長は8235秒。
+- 後続用途: Candidateに親区間を保存し、境界補正後のショート多様化で親区間の重なり80%以上を high_parent_overlap として除外する。初期選定・再選定の両経路で使うため、補正によりその採否が変わり得る。moment_keyと完成区間は補正で変えない。字幕・フック・書き出しの区間計算は完成区間を使い、親区間を直接使わない。clip planのclipには親区間の専用項目は無い。
+- 制約: 現行コードの話題window検証は完成区間start/endに適用し、親区間には適用しない。親区間は完成区間を含み、順序が正しく、元動画の範囲内である必要がある。当時のrequestファイルは残っておらず、実例の話題windowの実値は未確認。
+- 状態: 調査をPR本文へ先に記載するための記録。補正の実装・テストはこの時点では未実施。プロンプトとlauncherは変更しない。
