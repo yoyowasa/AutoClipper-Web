@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import SessionLocal
 from app.jobs.publication_state import rerender_publication_is_unresolved
-from app.models import CharacterAssetHarvest, ExportItem, Job, Video
+from app.models import ExportItem, Job, Video
 from app.storage.completed_previews import completed_preview_paths
 from app.storage.lifecycle import (
     CLAIMED_JOB_STATUS,
@@ -141,7 +141,6 @@ def delete_jobs(db: Session, paths: StoragePaths, job_ids: list[str], *, execute
             Video.id.in_({job.video_id for job in jobs}),
             ~Video.jobs.any(Job.id.not_in(job_ids)),
             ~Video.exports.any(ExportItem.job_id.not_in(job_ids)),
-            Video.id.not_in(select(CharacterAssetHarvest.video_id).where(CharacterAssetHarvest.state.in_(["queued", "running"]))),
         )))
         video_ids = [video.id for video in videos]
         retained_source_paths = {
@@ -175,9 +174,6 @@ def delete_jobs(db: Session, paths: StoragePaths, job_ids: list[str], *, execute
             current_orphans = set(db.scalars(select(Video.id).where(
                 Video.id.in_(video_ids), ~Video.jobs.any(Job.id.not_in(job_ids)),
                 ~Video.exports.any(ExportItem.job_id.not_in(job_ids)),
-                Video.id.not_in(select(CharacterAssetHarvest.video_id).where(
-                    CharacterAssetHarvest.state.in_(["queued", "running"]),
-                )),
             )))
             current_retained = {
                 _normalized(_resolve_stored_path(value, paths.root))

@@ -87,46 +87,6 @@ class CharacterAsset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, nullable=False)
 
 
-class CharacterAssetCandidate(Base):
-    __tablename__ = "character_asset_candidates"
-    __table_args__ = (
-        UniqueConstraint("preset_id", "video_id", "source_second"),
-        CheckConstraint("status IN ('pending', 'adopted', 'rejected')"),
-    )
-
-    id: Mapped[str] = mapped_column(String(48), primary_key=True)
-    preset_id: Mapped[str] = mapped_column(String(48), index=True)
-    video_id: Mapped[str] = mapped_column(String(40), index=True)
-    source_second: Mapped[int] = mapped_column(Integer)
-    file_path: Mapped[str] = mapped_column(Text)
-    face_box: Mapped[dict[str, float]] = mapped_column(JSON)
-    suggested_emotion: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    usable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    issues: Mapped[list[str]] = mapped_column(JSON, default=list)
-    score: Mapped[float | None] = mapped_column(Float, nullable=True)
-    same_character: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
-    width: Mapped[int] = mapped_column(Integer)
-    height: Mapped[int] = mapped_column(Integer)
-    has_alpha: Mapped[bool] = mapped_column(Boolean)
-    warnings: Mapped[list[str]] = mapped_column(JSON, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, index=True)
-
-
-class CharacterAssetHarvest(Base):
-    """Persistent queue/progress information, including a scan that finds zero frames."""
-
-    __tablename__ = "character_asset_harvests"
-    __table_args__ = (UniqueConstraint("preset_id", "video_id"),)
-    id: Mapped[str] = mapped_column(String(48), primary_key=True)
-    preset_id: Mapped[str] = mapped_column(String(48), index=True)
-    video_id: Mapped[str] = mapped_column(String(40), index=True)
-    state: Mapped[str] = mapped_column(String(16), default="queued")
-    candidate_count: Mapped[int] = mapped_column(Integer, default=0)
-    message: Mapped[str] = mapped_column(Text, default="")
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now, onupdate=utc_now)
-
-
 class ExportItem(Base):
     __tablename__ = "export_items"
 

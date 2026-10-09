@@ -12,6 +12,14 @@ assert.equal(b.shortTopBannerEnabled, false);
 assert.deepEqual(b.youtubePostingProfile.baseTags, []);
 assert.equal(b.normalTitleSuffix, "");
 const snapshot = captureCharacter(a);
+const legacy = { ...a, autoHarvestCharacterAssets: true, auto_harvest_character_assets: false };
+assert.equal("autoHarvestCharacterAssets" in captureCharacter(legacy), false);
+assert.equal("autoHarvestCharacterAssets" in newCharacter(legacy), false);
+assert.equal("auto_harvest_character_assets" in newCharacter(legacy), false);
+assert.equal("autoHarvestCharacterAssets" in applyCharacter(legacy, {
+  name: "旧設定", settings: { ...snapshot, autoHarvestCharacterAssets: true } as typeof snapshot
+}), false);
+assert.equal(legacy.autoHarvestCharacterAssets, true); // Saved input is not mutated.
 const unknown = { ...a, audienceFamiliarity: "unknown" as const };
 assert.equal(captureCharacter(unknown).audienceFamiliarity, "unknown");
 assert.equal(newCharacter(unknown).audienceFamiliarity, "known");

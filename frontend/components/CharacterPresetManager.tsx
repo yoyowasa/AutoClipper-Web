@@ -6,8 +6,7 @@ import { bannerRequest } from "../lib/shortBanners";
 import { captureSubtitleStyle } from "../lib/subtitleStylePresets";
 import type { ClipSettings } from "../lib/types";
 import { CharacterAssetsManager } from "./CharacterAssetsManager";
-import { CharacterAssetCandidatesPanel } from "./CharacterAssetCandidatesPanel";
-import { candidateRequest, deleteCharacterPreset, type AssetCounts } from "../lib/characterAssetCandidates";
+import { getCharacterAssetCounts, deleteCharacterPreset } from "../lib/characterAssets";
 
 export function CharacterPresetManager({ settings, disabled, onChange }: {
   settings: ClipSettings; disabled?: boolean; onChange: (settings: ClipSettings) => void;
@@ -102,27 +101,21 @@ export function CharacterPresetManager({ settings, disabled, onChange }: {
       {existing ? "この名前のキャラ設定を上書き保存" : "現在の設定をキャラごと保存"}
     </button>
     <span className="text-neutral-600">{document.presets.length} / 50 保存済み。元配信タイトル・URLは動画ごとの入力です。</span>
-    <label className="flex items-start gap-2"><input type="checkbox" checked={settings.autoHarvestCharacterAssets ?? true}
-      onChange={event => onChange({ ...latest.current.settings, autoHarvestCharacterAssets: event.target.checked })} />
-      ジョブ完成時に動画から素材を自動収集（キャラ設定の保存で反映）</label>
     {selected?.id && <button type="button" className="text-left text-neutral-600" onClick={async () => {
       setBusy(true); setError("");
       try {
-        const counts = await candidateRequest<AssetCounts>(selected.id!, "/asset-counts");
-        if (!window.confirm(`このキャラの素材${counts.assets}枚と素材候補${counts.candidates}枚も削除します。よろしいですか？`)) return;
+        const counts = await getCharacterAssetCounts(selected.id!);
+        if (!window.confirm(`このキャラの素材${counts.assets}枚も削除します。よろしいですか？`)) return;
         await deleteCharacterPreset(selected.id!, counts);
         const result = await bannerRequest<CharacterPresetDocument>("character-presets");
         setDocument(result); setName(""); onChange(newCharacter(latest.current.settings));
-        setNotice("キャラ設定と素材・素材候補を削除しました。作成済み動画は残ります。");
+        setNotice("キャラ設定と素材を削除しました。作成済み動画は残ります。");
       } catch (reason) { setError(reason instanceof Error ? reason.message : "削除に失敗しました。"); }
       finally { setBusy(false); }
     }}>このキャラ設定を保存一覧から削除</button>}
     {selected?.id ? <CharacterAssetsManager key={selected.id} presetId={selected.id} disabled={disabled || busy}
       revision={assetRevision} onAssetsChange={() => setAssetRevision(value => value + 1)}
       onBusyChange={setAssetsBusy} /> : <p className="text-neutral-600">キャラ設定を保存・選択すると表情素材を登録できます。</p>}
-    {selected?.id && <CharacterAssetCandidatesPanel key={`candidates-${selected.id}`} presetId={selected.id}
-      disabled={disabled || busy} revision={assetRevision} onAssetsChange={() => setAssetRevision(value => value + 1)}
-      onBusyChange={setAssetsBusy} />}
     {notice && <p role="status" className="text-emerald-700">{notice}</p>}
     {error && <p role="alert" className="text-red-700">{error}</p>}
   </fieldset>;

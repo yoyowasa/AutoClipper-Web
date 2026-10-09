@@ -10,10 +10,6 @@ from app.jobs.worker_failures import mark_rq_failure, reconcile_orphaned_jobs
 from app.config import get_settings
 from app.jobs.queue import get_redis_connection
 from app.db import SessionLocal
-from app.models import utc_now
-from app.storage.character_asset_cleanup import expire_candidates
-from app.storage.locking import storage_mutation_lock
-from app.storage.paths import get_storage_paths
 
 
 class CharacterAssetWorker(Worker):
@@ -39,13 +35,6 @@ class CharacterAssetWorker(Worker):
                     logging.getLogger(__name__).warning("Marked orphaned application jobs failed: %s", ", ".join(failed))
         except Exception:
             logging.getLogger(__name__).warning("Orphan job reconciliation skipped: RQ or database state could not be checked")
-        # RQ maintenance also runs while idle; upload-time cleanup is optional.
-        try:
-            paths = get_storage_paths()
-            with storage_mutation_lock(paths.root), SessionLocal() as db:
-                expire_candidates(db, paths, utc_now())
-        except Exception:
-            logging.getLogger(__name__).warning("Expired character asset candidates could not be cleaned up")
 
 
 def main() -> None:

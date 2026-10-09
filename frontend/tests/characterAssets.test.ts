@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { CharacterAssetsManager } from "../components/CharacterAssetsManager";
 import {
   CHARACTER_EMOTIONS, characterAssetSlots, deleteCharacterAsset, getCharacterAssets, uploadCharacterAsset, visibleCharacterAssetWarnings,
-  type CharacterAsset, type CharacterAssetList
+  getCharacterAssetCounts, deleteCharacterPreset, type CharacterAsset, type CharacterAssetList
 } from "../lib/characterAssets";
 
 const asset: CharacterAsset = {
@@ -51,6 +51,17 @@ async function main() {
     assert.equal((form.get("file") as File).name, "a.png");
     assert.equal(await deleteCharacterAsset("preset", asset.id), undefined);
     assert.ok(calls[2].url.endsWith("/assets/asset_1"));
+    globalThis.fetch = async (input, init) => {
+      calls.push({ url: String(input), init });
+      return new Response(init?.method === "DELETE" ? null : JSON.stringify({ assets: 1 }), {
+        status: init?.method === "DELETE" ? 204 : 200
+      });
+    };
+    assert.deepEqual(await getCharacterAssetCounts("preset"), { assets: 1 });
+    assert.ok(calls[3].url.endsWith("/api/character-presets/preset/asset-counts"));
+    await deleteCharacterPreset("preset", { assets: 1 });
+    assert.ok(calls[4].url.endsWith("/api/character-presets/preset"));
+    assert.deepEqual(JSON.parse(String(calls[4].init?.body)), { assets: 1 });
     globalThis.fetch = async () => new Response(JSON.stringify({ detail: "同じ表情は5枚までです。" }), { status: 422 });
     await assert.rejects(uploadCharacterAsset("preset", "joy", file), /5枚まで/);
   } finally { globalThis.fetch = originalFetch; }
