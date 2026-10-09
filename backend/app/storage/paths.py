@@ -51,22 +51,6 @@ class StoragePaths:
         path.resolve().relative_to(self.character_assets.resolve())
         return path
 
-    @property
-    def character_asset_candidates(self) -> Path:
-        return self.root / "character_asset_candidates"
-
-    def character_candidate_directory(self, preset_id: str, video_id: str) -> Path:
-        if not re.fullmatch(r"character_[0-9a-f]{32}", preset_id) or not re.fullmatch(r"vid_[0-9a-f]{32}", video_id):
-            raise ValueError("Invalid character candidate identifier")
-        path = self.character_asset_candidates / preset_id / video_id
-        self.character_asset_candidates.resolve().relative_to(self.root.resolve())
-        path.resolve().relative_to(self.character_asset_candidates.resolve())
-        return path
-
-    def character_candidate(self, preset_id: str, video_id: str, candidate_id: str) -> Path:
-        if not re.fullmatch(r"candidate_[0-9a-f]{32}", candidate_id):
-            raise ValueError("Invalid character candidate identifier")
-        return self.character_candidate_directory(preset_id, video_id) / f"{candidate_id}.png"
 
     def ensure(self) -> None:
         self.uploads.mkdir(parents=True, exist_ok=True)

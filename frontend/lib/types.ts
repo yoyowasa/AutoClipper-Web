@@ -79,7 +79,6 @@ export type ClipSettings = {
   characterPresetName?: string;
   audienceFamiliarity?: "known" | "unknown";
   characterPresetId?: string;
-  autoHarvestCharacterAssets?: boolean;
   channelName?: string;
   normalTitleSuffix?: string | null;
   normalThumbnailStyle?: NormalThumbnailStyle | null;

@@ -1,6 +1,6 @@
 from hashlib import sha256
 from uuid import uuid4
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -8,8 +8,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.db import get_db
-from app.models import AppPreference, CharacterAsset, CharacterAssetCandidate, CharacterAssetHarvest
+from app.models import AppPreference, CharacterAsset
 from app.posting_metadata import NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, YouTubePostingProfile
+from app.legacy_settings import without_retired_harvest_settings
 from app.schemas import SubtitleStyleSnapshot
 from app.short_banners import BannerAssetId, banner_asset_path
 from app.storage.paths import StoragePaths, get_storage_paths
@@ -34,7 +35,13 @@ class CharacterSettings(SubtitleStyleSnapshot):
     short_banner_preset_name: str = Field(default="", max_length=80, alias="shortBannerPresetName")
     normal_clip_count: int = Field(default=0, ge=0, le=12, alias="normalClipCount")
     short_count: int = Field(default=3, ge=0, le=24, alias="shortCount")
-    auto_harvest_character_assets: bool = Field(default=True, alias="autoHarvestCharacterAssets")
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_retired_harvest_setting(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return without_retired_harvest_settings(value)
+        return value
 
     @model_validator(mode="after")
     def require_output(self) -> "CharacterSettings":
@@ -128,8 +135,7 @@ def _save_presets(document: CharacterPresetDocument, db: Session, paths: Storage
     if len(ids) != len(set(ids)):
         raise HTTPException(422, "キャラ設定のIDが重複しています。")
     removed_ids = set(existing.values()) - set(ids)
-    if removed_ids and any(db.scalar(select(model.id).where(model.preset_id.in_(removed_ids)).limit(1))
-                           for model in (CharacterAsset, CharacterAssetCandidate, CharacterAssetHarvest)):
+    if removed_ids and db.scalar(select(CharacterAsset.id).where(CharacterAsset.preset_id.in_(removed_ids)).limit(1)):
         raise HTTPException(409, "素材も削除します。画面のキャラ設定削除で件数を確認してください。")
     for preset in document.presets:
         snapshot = preset.settings

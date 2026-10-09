@@ -11,7 +11,7 @@ import app.storage.completed_previews as previews
 from app.db import Base, _create_engine
 from app.jobs.publication_state import mark_rerender_publication_unresolved
 from app.jobs.runner import run_subtitle_review_preview
-from app.models import CharacterAssetHarvest, ClipRejection, ExportItem, Job, SourceClipUsage, Video
+from app.models import ClipRejection, ExportItem, Job, SourceClipUsage, Video
 from app.storage.paths import StoragePaths
 
 
@@ -162,15 +162,6 @@ def test_active_job_is_refused(storage_db: tuple[Session, StoragePaths], status:
     with pytest.raises(ValueError, match="active"):
         maintenance.delete_jobs(db, paths, [job.id], execute=execute)
     assert blob.exists() and (paths.outputs / job.id).exists() and db.get(Job, job.id).status == status
-
-
-def test_source_in_active_harvest_is_kept(storage_db: tuple[Session, StoragePaths]) -> None:
-    db, paths = storage_db
-    job, blob = seed(db, paths)
-    db.add(CharacterAssetHarvest(id="harvest", preset_id="preset", video_id=job.video_id, state="running"))
-    db.commit()
-    report = maintenance.delete_jobs(db, paths, [job.id], execute=True)
-    assert report["videos"] == [] and db.get(Video, job.video_id) is not None and blob.exists()
 
 
 def test_publication_and_unsafe_identifiers_are_refused(storage_db: tuple[Session, StoragePaths]) -> None:

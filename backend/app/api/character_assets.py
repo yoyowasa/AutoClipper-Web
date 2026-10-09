@@ -4,7 +4,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from app.character_asset_rules import CHARACTER_ASSET_MAX_BYTES, CHARACTER_ASSET
 from app.character_assets import CharacterAssetList, CharacterAssetRead, asset_read, process_character_asset
 from app.db import get_db
 from app.models import CharacterAsset
+from app.storage.character_asset_cleanup import preset_files, retire_files
 from app.storage.locking import storage_mutation_lock
 from app.storage.paths import StoragePaths, get_storage_paths
 
@@ -122,3 +124,45 @@ def get_image(
     if not path.is_file():
         raise HTTPException(404, "素材の画像が見つかりません。")
     return FileResponse(path, media_type="image/png")
+
+
+@router.get("/character-presets/{preset_id}/asset-counts")
+def preset_asset_counts(preset_id: str, db: Session = Depends(get_db)) -> dict[str, int]:
+    _require_preset(preset_id, db)
+    return {
+        "assets": db.scalar(select(func.count(CharacterAsset.id)).where(CharacterAsset.preset_id == preset_id)) or 0,
+    }
+
+
+class DeletePresetRequest(BaseModel):
+    assets: int = Field(ge=0)
+
+
+@router.delete("/character-presets/{preset_id}", status_code=204)
+def delete_preset_with_assets(
+    preset_id: str, confirmation: DeletePresetRequest, db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> Response:
+    from app.api.character_presets import PRESETS_KEY, get_presets
+    from app.models import AppPreference
+
+    with storage_mutation_lock(paths.root):
+        counts = preset_asset_counts(preset_id, db)
+        if counts != confirmation.model_dump():
+            raise HTTPException(409, "素材の件数が変わりました。確認をやり直してください。")
+        document = get_presets(db)
+        removed = next(item for item in document.presets if item.id == preset_id)
+        document.presets = [item for item in document.presets if item.id != preset_id]
+        if document.selected_name == removed.name:
+            document.selected_name = ""
+        document.legacy_import = False
+        with retire_files(db, paths, preset_files(paths, preset_id)):
+            for row in db.scalars(select(CharacterAsset).where(CharacterAsset.preset_id == preset_id)):
+                db.delete(row)
+            preference = db.get(AppPreference, PRESETS_KEY)
+            payload = document.model_dump(by_alias=True, mode="json", exclude_none=True)
+            if preference is None:
+                db.add(AppPreference(key=PRESETS_KEY, value_json=payload))
+            else:
+                preference.value_json = payload
+    return Response(status_code=204)

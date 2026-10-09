@@ -16,7 +16,6 @@ from app.db import Base
 from app.jobs import worker, worker_failures
 from app.jobs.worker_state import stale_worker_timeout_seconds
 from app.models import Job, Video
-from app.storage.paths import StoragePaths
 
 NOW = datetime(2026, 10, 7, 1, 0)
 MAIN_FUNCTION = "app.jobs.runner.run_autoclipper_job"
@@ -151,7 +150,6 @@ def test_failure_preserves_terminal_and_review_states(factory, state):
     "app.jobs.thumbnail_regeneration.run_export_thumbnail_regeneration",
     "app.jobs.thumbnail_copy.run_thumbnail_copy_generation",
     "app.jobs.thumbnail_candidates.run_thumbnail_candidate_extraction",
-    "app.jobs.character_asset_harvest.run_character_asset_harvest",
     *sorted(worker_failures.PARTIAL_JOB_FUNCTIONS),
 ])
 def test_individual_clip_or_thumbnail_failure_does_not_fail_parent_job(factory, function):
@@ -273,16 +271,12 @@ def test_maintenance_fails_closed_when_redis_or_active_entry_is_unreadable(facto
         assert db.get(Job, "job_test").status == "detecting_scenes"
 
 
-def test_worker_maintenance_runs_reconciliation_and_preserves_existing_cleanup(factory, monkeypatch, tmp_path):
+def test_worker_maintenance_runs_reconciliation(factory, monkeypatch):
     seed(factory)
     value = instance(factory, monkeypatch)
     value.queues = [queue_with()]
     monkeypatch.setattr(Worker, "run_maintenance_tasks", lambda self: None)
     monkeypatch.setattr(worker_failures, "utc_now", lambda: NOW)
-    monkeypatch.setattr(worker, "get_storage_paths", lambda: StoragePaths(tmp_path))
-    cleanup = Mock()
-    monkeypatch.setattr(worker, "expire_candidates", cleanup)
     value.run_maintenance_tasks()
-    cleanup.assert_called_once()
     with factory() as db:
         assert db.get(Job, "job_test").status == "failed"

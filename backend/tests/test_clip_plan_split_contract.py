@@ -11,19 +11,13 @@ def test_openapi_paths_and_methods_match_before_clip_plan_split() -> None:
     fixture = Path(__file__).parent / "fixtures" / "openapi_routes_before_task167.json"
     before = json.loads(fixture.read_text(encoding="utf-8"))
     after = {path: sorted(methods) for path, methods in app.openapi()["paths"].items()}
-    # Explicit additions after the split; the original routes remain identical.
+    # Explicit additions after the split; task-195 retires the harvest/candidate routes.
     assert after == {
         **before,
         "/api/jobs/{job_id}/clip-plan/rejections": ["get"],
         "/api/character-presets/{preset_id}/assets": ["get", "post"],
         "/api/character-presets/{preset_id}/assets/{asset_id}": ["delete"],
         "/api/character-assets/{asset_id}/image": ["get"],
-        "/api/character-presets/{preset_id}/asset-candidates": ["get"],
-        "/api/character-presets/{preset_id}/harvest-videos": ["get"],
-        "/api/character-presets/{preset_id}/asset-harvests": ["post"],
-        "/api/character-presets/{preset_id}/asset-candidates/{candidate_id}/adopt": ["post"],
-        "/api/character-presets/{preset_id}/asset-candidates/{candidate_id}/reject": ["post"],
-        "/api/character-asset-candidates/{candidate_id}/image": ["get"],
         "/api/character-presets/{preset_id}/asset-counts": ["get"],
         "/api/character-presets/{preset_id}": ["delete"],
         "/api/exports/{export_id}/thumbnail/assets": ["get"],

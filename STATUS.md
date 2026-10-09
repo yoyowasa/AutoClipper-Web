@@ -10938,3 +10938,14 @@ pip check: pass
 - 記録: 初期選定・再選定の要約に `parentRangeAdjustments` を保存する。proposalId、理由parent_ratio_adjusted、補正前後の親区間と比率、動画長の制限を受けたか（sourceLimited）を記録する。保存済みの補正記録が無い要約も読み込め、補正の無い新しい要約は従来の書式を保つ。後続の多様化は補正後の親区間を使用する。
 - 検証: Python 3.11.9の `python -m pytest` は1699 passed・3 skipped（追加23件）。既存のcodex_initial_selection系44件も成功。比率1.2 / 1.4 / 1.5 / 3.0 / 3.1 / 4.0、動画端、短い動画、不正な包含・順序・動画外、検証と入力の非変更、話題window、両段階のログ保存、多様化の判定を確認した。実例と同じ座標の回帰テストでは親区間2973.42〜3085.38秒へ補正され、比率1.5で候補が残ることを確認した。ruff 0.16.10の `ruff check . ../launcher ../scripts`、frontendのtest（25ファイル）・lint・typecheck・buildが成功。CIの3.11・3.12・frontendはPRで確認する。
 - 制限・未確認: プロンプト・Codex入出力モデルのAST9項目がmainと一致し、launcherの差分は無い。中継の再起動は不要。稼働DBのサイズ・更新時刻はテスト前後で一致し、Dockerの稼働環境へ反映していない。実ジョブの再選定は行っておらず、6本すべてが採用されるかは未確認。他の品質・重複判定による却下は引き続きあり得る。
+## 2026-10-09 task-195 人物素材の自動・手動収集を削除
+
+- 目的: 元動画全体の素材収集が単一workerを占有して手動操作を待たせるため、ユーザー判断で収集機能を廃止する。
+- 変更ファイル: `jobs/character_asset_harvest.py`・`character_asset_harvest_state.py`・収集専用の`character_asset_frames.py`・`scoring/character_asset_classify.py`・候補APIと画面/通信/テストを削除。`runner.py`の完成時登録2か所、`queue.py`の入口、モデル、設定、router登録、保守/ストレージの収集保護・候補30日削除も除去した。
+- 維持: 手動素材の登録・一覧・削除・画像配信、動画区間の`thumbnail_candidates.py`、`anime_subject.py`、予備素材を選ぶ`choose_character_asset`は維持。キャラ設定の素材件数確認・削除APIは`api/character_assets.py`へ移し、確認・削除対象を採用済み素材だけにした。旧候補はキャラ設定削除時にも残す。
+- 互換: `legacy_settings.py`で`autoHarvestCharacterAssets`とsnake_caseの旧キーを読み捨て、`CharacterSettings`と`JobSettings`で読み込み/保存を受け付ける。GETは保存データを書き換えない。frontendでも旧キーを引き継がない。既存の収集/候補テーブルはdropせず、新規DBには作らない。
+- 保存データ: `storage/character_asset_candidates/<preset_id>/<video_id>/<candidate_id>.png`は93ファイル・45,262,717バイト（約43.2MiB）。稼働DBは素材33行・候補93行・収集4行。読み取りだけで確認し、削除していない。
+- 検証: Python 3.11.9で`cd backend; ruff check . ../launcher ../scripts`（ruff 0.16.10）成功、`python -m pytest`は1671 passed・2 skipped。新規回帰9件は旧設定GET/保存、新旧キー、既存テーブル/行と候補画像の保持、廃止API/キュー入口を確認。frontendのtest（24ファイル）・lint・typecheck・build成功。API一覧は明示廃止の6経路だけを除外して一致した。
+- 稼働DB保護: 全件テスト前後で`storage/autoclipper.db`のサイズ520,192バイト・更新時刻、素材/候補/収集の件数、候補画像の件数/容量が不変。Dockerは読み取りの起動状態確認だけ（backend healthy、worker/frontend running）。実動画処理・Dockerへの反映は行っていない。CIの3.11/3.12/frontendはPRで確認する。
+- 残るharvest参照: backendの旧キー除去関数・呼び出し、frontendの旧キー削除だけ。launcherは変更せず、使われなくなった`character_asset_classify`の受け付け宣言はそのまま。中継の再起動は不要。
+- 反映時の注意: 削除した関数を指すharvest仕事がRedisのキュー（予約/待機を含む）に残っていないことを確認してから反映する。実行中のharvestも終了を待つ。残っているとimportに失敗する。既存候補画像の削除は後日のユーザー判断に委ねる。

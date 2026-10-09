@@ -1,4 +1,4 @@
-"""Read historical settings without reactivating retired paid API features."""
+"""Read historical settings without reactivating retired features."""
 from typing import Any
 
 RETIRED_API_SETTING_KEYS = frozenset({
@@ -41,3 +41,9 @@ RETIRED_API_SETTING_KEYS = frozenset({
 
 def without_retired_api_settings(settings: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in settings.items() if key not in RETIRED_API_SETTING_KEYS}
+
+
+def without_retired_harvest_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Discard the retired auto-harvest switch without rewriting persisted data."""
+    return {key: value for key, value in settings.items()
+            if key not in {"autoHarvestCharacterAssets", "auto_harvest_character_assets"}}

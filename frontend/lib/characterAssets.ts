@@ -54,3 +54,16 @@ export function characterAssetImageUrl(asset: CharacterAsset): string {
 export function characterAssetSlots(assets: CharacterAsset[], count: number): (CharacterAsset | undefined)[] {
   return Array.from({ length: count }, (_, index) => assets.find(asset => asset.slot === index + 1));
 }
+
+
+export type AssetCounts = { assets: number };
+
+export function getCharacterAssetCounts(presetId: string): Promise<AssetCounts> {
+  return request(`/api/character-presets/${encodeURIComponent(presetId)}/asset-counts`);
+}
+
+export function deleteCharacterPreset(presetId: string, confirmedCounts: AssetCounts): Promise<void> {
+  return request(`/api/character-presets/${encodeURIComponent(presetId)}`, {
+    method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify(confirmedCounts)
+  });
+}

@@ -10,8 +10,7 @@ import stat
 from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from app.models import CharacterAssetHarvest, ExportItem, Job, Video
-from app.storage.character_asset_cleanup import expire_candidates
+from app.models import ExportItem, Job, Video
 from app.source_clip_history import backfill_completed_history
 from app.storage.locking import storage_mutation_lock
 from app.storage.paths import StoragePaths
@@ -84,9 +83,6 @@ def count_cleanup_eligible_videos(
             )
         ),
         ~Video.exports.any(ExportItem.job_id.not_in(expired_job_ids)),
-        Video.id.not_in(select(CharacterAssetHarvest.video_id).where(
-            CharacterAssetHarvest.state.in_(["queued", "running"]),
-        )),
     )
     return int(session.scalar(statement) or 0)
 
@@ -125,9 +121,6 @@ def _delete_orphan_videos(
             Video.created_at <= orphan_cutoff,
             ~Video.jobs.any(),
             ~Video.exports.any(),
-            Video.id.not_in(select(CharacterAssetHarvest.video_id).where(
-                CharacterAssetHarvest.state.in_(["queued", "running"]),
-            )),
         )
         .returning(Video.id, Video.stored_path)
     )
@@ -376,7 +369,6 @@ def _cleanup_expired_storage_unlocked(
     orphan_hours = _non_negative(orphan_retention_hours, "orphan_retention_hours")
     orphan_cutoff = _naive_utc(now) - timedelta(hours=orphan_hours)
     canonical_blobs_root = paths.uploads.resolve(strict=False) / ".blobs"
-    expired_candidate_files = expire_candidates(session, paths, _naive_utc(now))
 
     candidate_job_ids = list(
         session.scalars(
@@ -430,9 +422,6 @@ def _cleanup_expired_storage_unlocked(
                     (stored_path, heatmap_sidecar_path(stored_path))
                 )
         remaining_job_ids = set(session.scalars(select(Job.id)).all())
-        remaining_job_ids.update(session.scalars(select(CharacterAssetHarvest.id).where(
-            CharacterAssetHarvest.state.in_(["queued", "running"]),
-        )))
         remaining_video_ids = set(session.scalars(select(Video.id)).all())
         remaining_stored_paths = list(session.scalars(select(Video.stored_path)).all())
         session.commit()
@@ -457,7 +446,7 @@ def _cleanup_expired_storage_unlocked(
         orphan_cutoff=orphan_cutoff,
     )
     filesystem_targets.extend(orphan_targets)
-    removed_files = expired_candidate_files
+    removed_files = 0
     errors: list[str] = list(orphan_errors)
     for target in _unique_paths(filesystem_targets):
         removed, error = _delete_path(target, storage_root, blobs_root)

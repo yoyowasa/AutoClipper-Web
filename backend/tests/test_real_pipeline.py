@@ -1508,8 +1508,6 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     expected_overlay_mode: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    harvest_completions = []
-    monkeypatch.setattr(runner_module, "enqueue_completed_job_harvest", lambda db, job, paths: harvest_completions.append(job.status))
     def prepare_existing_export_rerender() -> dict[str, Any]:
         # Exercise publication replacement on a job that already has exports.
         # This persisted state can remain from a backend version with full-job reopen.
@@ -1740,7 +1738,6 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         "packaging_zip",
         "completed",
     ]
-    assert harvest_completions == ["completed"]
     assert not (storage.outputs / created["jobId"] / "subtitle_review_previews").exists()
     assert len(short_render_kwargs) == preview_short_render_count + 1
     assert Path(short_render_kwargs[-1]["top_banner_path"]).name == "short_top_banner.png"
@@ -1971,8 +1968,6 @@ def test_real_pipeline_does_not_backfill_normal_clip_from_60_second_video(
         assert db.get(Job, created["jobId"]).status == "failed"
 
 def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    harvest_completions = []
-    monkeypatch.setattr(runner_module, "enqueue_completed_job_harvest", lambda db, job, paths: harvest_completions.append(job.status))
     upload = client.post(
         "/api/videos/upload",
         files={"file": ("sample.mp4", b"fake video bytes", "video/mp4")},
@@ -2042,7 +2037,6 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
     )
 
     assert visited_statuses == SUCCESS_STATUSES[1:]
-    assert harvest_completions == ["completed"]
     status_response = client.get(f"/api/jobs/{created['jobId']}")
     assert status_response.json()["status"] == "completed"
 
