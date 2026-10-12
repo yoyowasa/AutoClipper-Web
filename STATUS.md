@@ -10949,3 +10949,15 @@ pip check: pass
 - 稼働DB保護: 全件テスト前後で`storage/autoclipper.db`のサイズ520,192バイト・更新時刻、素材/候補/収集の件数、候補画像の件数/容量が不変。Dockerは読み取りの起動状態確認だけ（backend healthy、worker/frontend running）。実動画処理・Dockerへの反映は行っていない。CIの3.11/3.12/frontendはPRで確認する。
 - 残るharvest参照: backendの旧キー除去関数・呼び出し、frontendの旧キー削除だけ。launcherは変更せず、使われなくなった`character_asset_classify`の受け付け宣言はそのまま。中継の再起動は不要。
 - 反映時の注意: 削除した関数を指すharvest仕事がRedisのキュー（予約/待機を含む）に残っていないことを確認してから反映する。実行中のharvestも終了を待つ。残っているとimportに失敗する。既存候補画像の削除は後日のユーザー判断に委ねる。
+## 2026-10-13 task-196 同一文字・単語の暴走も方式Dで読み直す
+
+- 目的: wordが区間全体を被覆する文字起こしの暴走は空白として検出できないため、既存方式Dの後に独立した暴走補修を追加する。新規ジョブの文字起こし後・後処理前に既存の呼び出し経路から適用し、既存ジョブへの再適用は作らない。
+- 変更ファイル: `audio/transcript_runaway_repair.py`（純関数の検出・置換と定数）、`audio/transcript_gap_repair.py`（モデルを使い回す追加パス）、`tests/test_transcript_runaway_repair.py`、本記録。
+- 判定: NFKC/小文字化/空白・句読点除去の後、同じ文字または同じwordが連続し時間幅3.0秒以上なら対象。wordsがない場合だけ、同一文字10連続以上かつセグメント5秒以上を補助条件にする。普通の「わーーー」1.7秒は対象外。
+- 読み直し: 暴走の前後2秒を動画内に収め、同じモデル・beam・言語でword_timestamps=True、vad_filter=False、condition_on_previous_text=False。従来の空白窓は変更/統合せず、元入力に暴走があるセグメントだけ追加で処理する。空白補修で新たに作った字幕をこの追加パスの対象にはしない。
+- 置換: 読み直し全体と抽出後の結果に暴走がなく、正規化した文字の種類が元より多い場合だけ、暴走区間内の語から作ったセグメントで元セグメント全体を置き換える。区間前の正常な部分は別途保持しない。ほかの字幕と重なる場合・読み直し失敗・語の時刻がない等は元を残し、成功済みの空白補修も巻き戻さない。置換後は既存形式の`repaired`/`repair_windows`を付ける。字幕段階の長音畳み込みは変更なし。
+- summary: `gap_repair`に`runaway_segment_count`、`runaway_replaced_count`、`runaway_skipped`（理由付きの配列）を追加。`windows`にもkind、元の時刻/テキスト冒頭80文字、暴走の時刻、文字種類数、置換/不採用理由を残す。`added_characters`は置換で得た文字数も加算する（暴走文字の削除による差し引きではない）。
+- 実音声比較: `job_cb72fb4d6f8843c5ab4819a41699161a`の2900〜2940秒を読み取り、RQ待機/実行中/中間キュー0を0.2秒間隔で監視しながら、既存キャッシュのturbo/CUDA float16/beam5で補修。元の2912.34〜2933.24秒は全112word（`ぃ`109個と`く`/`っ`/`き`）。暴走2912.64〜2933.24秒を検出し、2910.64〜2935.24秒を読み直して10セグメント・90文字へ置換、文字の種類は4→28。処理4.445秒、モデル読み込み込み6.645秒。例:「ムズイテクッキーは!!」「待ってぇ!!!」「こんな感じだった気がする」。左端は区間内の語だけを取るため「ー!!!」が残った。音声の完全な復元・新規ジョブ全体の受入は未確認。
+- 保存先/保護: 比較結果は`storage/qa/task196-runaway-repair-20261013/comparison.json`。元ジョブのraw/transcript/silence JSONのSHA256、稼働DBのサイズ/更新時刻は前後で不変。ジョブへの保存や再適用、Dockerのbuild/再起動/反映は行っていない。
+- 検証: Python 3.11.9、ruff 0.16.10で`cd backend; ruff check . ../launcher ../scripts`成功、`python -m pytest`1690 passed・2 skipped。新規19件＋既存方式D24件の計43件成功。従来D本体は関数名を除くASTが同一、`merge_repair`とlauncherは差分なし。frontendのtest（24ファイル）・lint・typecheck・build成功。CIの3.11/3.12/frontendはPRで確認する。
+- 未確認: 全動画で暴走が多数ある場合の処理時間、Docker反映後の新規ジョブと字幕画面の実受入。既存job_timeoutは変更していない。Codex中継の変更なし、再起動不要。
