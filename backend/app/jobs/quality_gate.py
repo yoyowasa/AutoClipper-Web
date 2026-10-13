@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.candidates.merge_boundaries import Candidate
-from app.duration_rules import NORMAL_LONGFORM_MAX_SECONDS, NORMAL_MAX_SECONDS
+from app.duration_rules import NORMAL_LONGFORM_MAX_SECONDS, NORMAL_MAX_SECONDS, completed_clip_duration
 from app.candidates.select_candidates import CandidateSelection
 from app.candidates.short_diversity import (
     ShortDiversitySettings,
@@ -397,7 +397,9 @@ def evaluate_selection_quality_gate(
             or candidate.end <= candidate.start
             or candidate.end > source_duration + 0.001
             or abs(candidate.duration - (candidate.end - candidate.start)) > 0.001
-            or candidate.duration < minimum - 0.001
+            or (completed_clip_duration(candidate.type, candidate.start, candidate.end,
+                                        candidate.hook_scene_start, candidate.hook_scene_end)
+                if candidate.type == "short" else candidate.duration) < minimum - 0.001
             or candidate.duration > maximum + 0.001
         ):
             invalid_ranges.append(candidate.id)

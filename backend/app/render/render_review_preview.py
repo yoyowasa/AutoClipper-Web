@@ -1,3 +1,4 @@
+from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 import subprocess
 from pathlib import Path
 
@@ -16,8 +17,8 @@ def build_review_preview_command(
     if (hook_start is None) != (hook_duration is None):
         raise ValueError("hook preview requires both start and duration")
     if hook_start is not None and hook_duration is not None:
-        if hook_duration < 0.5 or hook_duration > 3:
-            raise ValueError("hook preview duration must be between 0.5 and 3 seconds")
+        if hook_duration < HOOK_SCENE_MIN_SECONDS or hook_duration > HOOK_SCENE_MAX_SECONDS:
+            raise ValueError(HOOK_SCENE_DURATION_ERROR)
         video_filter = (
             "[0:v:0]fps=30,scale=960:540:force_original_aspect_ratio=decrease:"
             "force_divisible_by=2,"

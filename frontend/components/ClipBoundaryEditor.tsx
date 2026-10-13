@@ -10,7 +10,7 @@ import {
   type BoundaryTimeParts
 } from "../lib/clipBoundaryTime";
 import type { ClipPlanClip } from "../lib/types";
-import { effectiveShortMax, SHORT_MAX_DEFAULT_SECONDS, validateClipDuration, longformLabel } from "../lib/durationRules";
+import { clipBodyDuration, effectiveShortMax, SHORT_MAX_DEFAULT_SECONDS, validateClipDuration, longformLabel, shortDurationLimitLabel } from "../lib/durationRules";
 
 type ClipBoundaryEditorProps = {
   clip: ClipPlanClip;
@@ -127,10 +127,8 @@ export function ClipBoundaryEditor({
     if (sourceDuration !== null && end > sourceDuration + 0.001) {
       return `元動画の長さ ${formatTime(sourceDuration)} を超えています`;
     }
-    const hookDuration = clip.type === "short" && clip.hookSceneStart !== null && clip.hookSceneEnd !== null
-      ? clip.hookSceneEnd - clip.hookSceneStart : 0;
-    return validateClipDuration(clip.type, end - start + hookDuration, effectiveShortMax(shortMaxDuration));
-  }, [clip.hookSceneEnd, clip.hookSceneStart, clip.type, end, shortMaxDuration, sourceDuration, start]);
+    return validateClipDuration(clip.type, clipBodyDuration(start, end), effectiveShortMax(shortMaxDuration));
+  }, [clip.type, end, shortMaxDuration, sourceDuration, start]);
   const changed =
     start !== null &&
     end !== null &&
@@ -308,6 +306,7 @@ export function ClipBoundaryEditor({
             </button>
           </div>
         </div>
+        {clip.type === "short" ? <p className="mt-1 text-xs text-neutral-500">{shortDurationLimitLabel(shortMaxDuration)}</p> : null}
         {validation ? (
           <p className="mt-1 text-xs font-medium leading-4 text-red-700">{validation}</p>
         ) : (

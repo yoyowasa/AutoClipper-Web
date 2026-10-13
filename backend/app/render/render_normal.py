@@ -1,3 +1,4 @@
+from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 import json
 import subprocess
 from collections.abc import Callable, Sequence
@@ -46,14 +47,14 @@ def _hook_scene_range(
     hook_scene_end: float | None,
 ) -> tuple[float, float, float] | None:
     if (hook_scene_start is None) != (hook_scene_end is None):
-        raise ValueError("hook scene requires both start and end")
+        raise ValueError("フック映像の開始と終了を両方指定してください。")
     if hook_scene_start is None or hook_scene_end is None:
         return None
     hook_duration = hook_scene_end - hook_scene_start
-    if not 0.5 <= hook_duration <= 3.0:
-        raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+    if not HOOK_SCENE_MIN_SECONDS <= hook_duration <= HOOK_SCENE_MAX_SECONDS:
+        raise ValueError(HOOK_SCENE_DURATION_ERROR)
     if hook_scene_start < start - 0.001 or hook_scene_end > end + 0.001:
-        raise ValueError("hook scene must stay within the selected clip")
+        raise ValueError("フック映像は本編の範囲内で指定してください。")
     return hook_scene_start, hook_scene_end, hook_duration
 
 

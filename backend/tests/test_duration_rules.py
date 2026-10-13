@@ -58,7 +58,7 @@ def test_legacy_settings_read_without_rewrite_and_search_bounds():
     assert parse_generation_settings({'shortMinDuration': 0}).short_min_duration == 0
 
 
-def test_short_minimum_is_not_enforced_and_hook_duration_is_included():
+def test_short_minimum_is_not_enforced_and_hook_is_outside_maximum():
     assert rules.validate_clip_duration('short', 0.1, short_max=1) is None
     candidates = [Candidate(transcript_text='完結した説明です。', id='tiny', type='short', start=0, end=0.5, duration=0.5),
                   Candidate(
@@ -66,9 +66,9 @@ def test_short_minimum_is_not_enforced_and_hook_duration_is_included():
                       hook_scene_start=11, hook_scene_end=13)]
     selection = select_candidates(candidates, settings={'normalClipCount': 0, 'shortCount': 2, 'shortMinDuration': 20,
                                                       'minFinalScore': 0, 'rejectIncompleteSentence': False})
-    assert [c.id for c in selection.shorts] == ['tiny']
-    assert selection.rejected_candidates[0].reasons == ['duration_out_of_range']
-    assert selection.unfilled_requested_counts['short'] == 1
+    assert {c.id for c in selection.shorts} == {'tiny', 'hook'}
+    assert selection.rejected_candidates == []
+    assert selection.unfilled_requested_counts['short'] == 0
 
 
 @pytest.mark.parametrize('budget', [0, 5, 24, 60])

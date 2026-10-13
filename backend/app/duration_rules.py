@@ -6,6 +6,9 @@ NORMAL_MAX_SECONDS = 600.0
 NORMAL_LONGFORM_MAX_SECONDS = 1800.0
 SHORT_MAX_DEFAULT_SECONDS = 75.0
 SHORT_MAX_CEILING_SECONDS = 180.0
+HOOK_SCENE_MIN_SECONDS = 0.5
+HOOK_SCENE_MAX_SECONDS = 3.0
+HOOK_SCENE_DURATION_ERROR = f"フック映像は{HOOK_SCENE_MIN_SECONDS:g}〜{HOOK_SCENE_MAX_SECONDS:g}秒にしてください。"
 
 
 def validate_clip_duration(clip_type: str, duration: float, *, short_max: float) -> str | None:
@@ -16,7 +19,7 @@ def validate_clip_duration(clip_type: str, duration: float, *, short_max: float)
     if clip_type == "normal" and duration > NORMAL_LONGFORM_MAX_SECONDS:
         return "通常切り抜きは最長30分です。"
     if clip_type == "short" and duration > short_max:
-        return f"ショートは{short_max:g}秒以内です（設定の上限）。"
+        return f"ショートの本編は{short_max:g}秒以内です（フック映像は別に最大{HOOK_SCENE_MAX_SECONDS:g}秒）。"
     return None
 
 
@@ -60,5 +63,11 @@ def duration_search_settings(settings: dict[str, Any]) -> dict[str, Any]:
 
 
 def completed_clip_duration(clip_type: str, start: float, end: float, hook_start: float | None, hook_end: float | None) -> float:
+    """Finished duration for playback/rendering and minimum checks, including the short hook."""
     hook = hook_end - hook_start if clip_type == "short" and hook_start is not None and hook_end is not None else 0.0
     return end - start + hook
+
+
+def clip_body_duration(start: float, end: float) -> float:
+    """Maximum-duration checks use only the body; hook bounds are validated separately."""
+    return end - start

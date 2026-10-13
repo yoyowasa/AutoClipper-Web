@@ -35,7 +35,7 @@ from app.jobs.clip_plan import (
     update_clip_plan_hook_scene as update_clip_plan_hook_scene_document,
     write_clip_plan,
 )
-from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration, NORMAL_MAX_SECONDS
+from app.duration_rules import clip_body_duration, effective_short_max, validate_clip_duration, NORMAL_MAX_SECONDS
 from app.jobs.manual_workflow import (
     is_manual_workflow,
     manual_plan_settings,
@@ -178,18 +178,14 @@ def _validate_proposed_duration(
     hook_start: float | None = None, hook_end: float | None = None,
 ) -> None:
     reason = validate_clip_duration(
-        clip_type, completed_clip_duration(clip_type, start, end, hook_start, hook_end),
+        clip_type, clip_body_duration(start, end),
         short_max=effective_short_max(settings),
     )
     if reason:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, reason)
     reason = validate_clip_duration(
         clip_type,
-        completed_clip_duration(
-            clip_type, round(start, 3), round(end, 3),
-            round(hook_start, 3) if hook_start is not None else None,
-            round(hook_end, 3) if hook_end is not None else None,
-        ),
+        clip_body_duration(round(start, 3), round(end, 3)),
         short_max=effective_short_max(settings),
     )
     if reason:

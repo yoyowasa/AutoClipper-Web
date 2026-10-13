@@ -1,3 +1,4 @@
+from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 from datetime import datetime
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -740,14 +741,14 @@ class SubtitleReviewClipApplyRequest(SubtitleReviewClipContentUpdateRequest):
         hook_fields = {"hook_scene_start", "hook_scene_end"}
         supplied_hook_fields = self.model_fields_set.intersection(hook_fields)
         if supplied_hook_fields and supplied_hook_fields != hook_fields:
-            raise ValueError("hook scene requires both start and end")
+            raise ValueError("フック映像の開始と終了を両方指定してください。")
         if supplied_hook_fields:
             if (self.hook_scene_start is None) != (self.hook_scene_end is None):
-                raise ValueError("hook scene requires both start and end")
+                raise ValueError("フック映像の開始と終了を両方指定してください。")
             if self.hook_scene_start is not None and self.hook_scene_end is not None:
                 duration = self.hook_scene_end - self.hook_scene_start
-                if not 0.5 <= duration <= 3:
-                    raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+                if not HOOK_SCENE_MIN_SECONDS <= duration <= HOOK_SCENE_MAX_SECONDS:
+                    raise ValueError(HOOK_SCENE_DURATION_ERROR)
         return self
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -904,13 +905,13 @@ class ClipPlanHookSceneUpdateRequest(BaseModel):
     @model_validator(mode="after")
     def validate_range(self) -> "ClipPlanHookSceneUpdateRequest":
         if (self.start is None) != (self.end is None):
-            raise ValueError("hook scene requires both start and end")
+            raise ValueError("フック映像の開始と終了を両方指定してください。")
         if self.start is None or self.end is None:
             return self
         if self.end <= self.start:
-            raise ValueError("hook scene end must be greater than start")
-        if not 0.5 <= self.end - self.start <= 3:
-            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+            raise ValueError("フック映像の終了は開始より後にしてください。")
+        if not HOOK_SCENE_MIN_SECONDS <= self.end - self.start <= HOOK_SCENE_MAX_SECONDS:
+            raise ValueError(HOOK_SCENE_DURATION_ERROR)
         return self
 
 

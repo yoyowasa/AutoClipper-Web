@@ -1017,7 +1017,7 @@ def test_apply_subtitle_review_clip_saves_drafts_confirms_and_queues_once(
     assert persisted["segments"][0]["text"] == "OKでまとめて保存した字幕"
 
 
-def test_apply_subtitle_review_clip_rejects_edited_short_past_duration_limit(
+def test_apply_subtitle_review_clip_accepts_hook_outside_body_duration_limit(
     client: TestClient,
 ) -> None:
     job_id, candidate_id, _rendered_bytes = _seed_reeditable_export()
@@ -1046,7 +1046,7 @@ def test_apply_subtitle_review_clip_rejects_edited_short_past_duration_limit(
     applied = client.post(
         f"/api/jobs/{job_id}/subtitle-review/clips/{candidate_id}/apply",
         json={
-            "title": "上限を少し超える編集",
+            "title": "フックを別枠で追加する編集",
             "hookText": "",
             "hookDurationSeconds": 3,
             "hookSceneStart": 10,
@@ -1055,8 +1055,10 @@ def test_apply_subtitle_review_clip_rejects_edited_short_past_duration_limit(
         },
     )
 
-    assert applied.status_code == 422
-    assert "ショートは75秒以内" in applied.json()["detail"]
+    assert applied.status_code == 200, applied.text
+    clip = next(item for item in applied.json()["clips"] if item["id"] == candidate_id)
+    assert clip["duration"] == 73.55
+    assert clip["hookSceneStart"] == 10 and clip["hookSceneEnd"] == 12
 
 def test_apply_subtitle_review_clip_accepts_empty_overlay_title(
     client: TestClient,

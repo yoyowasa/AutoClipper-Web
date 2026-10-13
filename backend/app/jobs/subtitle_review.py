@@ -1,5 +1,6 @@
+from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 import json
-from app.duration_rules import completed_clip_duration, effective_short_max, validate_clip_duration
+from app.duration_rules import clip_body_duration, effective_short_max, validate_clip_duration
 import math
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -272,13 +273,13 @@ class SubtitleReviewClip(BaseModel):
         hook_start = self.hook_scene_start
         hook_end = self.hook_scene_end
         if (hook_start is None) != (hook_end is None):
-            raise ValueError("hook scene requires both start and end")
+            raise ValueError("フック映像の開始と終了を両方指定してください。")
         if hook_start is None or hook_end is None:
             return self
-        if not 0.5 <= hook_end - hook_start <= 3.0:
-            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        if not HOOK_SCENE_MIN_SECONDS <= hook_end - hook_start <= HOOK_SCENE_MAX_SECONDS:
+            raise ValueError(HOOK_SCENE_DURATION_ERROR)
         if hook_start < self.start - 0.001 or hook_end > self.end + 0.001:
-            raise ValueError("hook scene must stay within the selected clip")
+            raise ValueError("フック映像は本編の範囲内で指定してください。")
         return self
 
 
@@ -1182,15 +1183,15 @@ def update_review_hook_scene(
     if clip is None:
         raise KeyError(clip_id)
     if (start is None) != (end is None):
-        raise ValueError("hook scene requires both start and end")
+        raise ValueError("フック映像の開始と終了を両方指定してください。")
     if start is not None and end is not None:
         hook_duration = end - start
-        if not 0.5 <= hook_duration <= 3.0:
-            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+        if not HOOK_SCENE_MIN_SECONDS <= hook_duration <= HOOK_SCENE_MAX_SECONDS:
+            raise ValueError(HOOK_SCENE_DURATION_ERROR)
         if start < clip.start - 0.001 or end > clip.end + 0.001:
-            raise ValueError("hook scene must stay within the selected clip")
+            raise ValueError("フック映像は本編の範囲内で指定してください。")
     reason = validate_clip_duration(
-        clip.type, completed_clip_duration(clip.type, clip.start, clip.end, start, end),
+        clip.type, clip_body_duration(clip.start, clip.end),
         short_max=effective_short_max({"shortMaxDuration": document.short_max_duration}),
     )
     if reason:

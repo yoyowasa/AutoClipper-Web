@@ -1,3 +1,4 @@
+from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 import hashlib
 import json
 import re
@@ -229,14 +230,14 @@ class Candidate(BaseModel):
         hook_start = self.hook_scene_start
         hook_end = self.hook_scene_end
         if (hook_start is None) != (hook_end is None):
-            raise ValueError("hook scene requires both start and end")
+            raise ValueError("フック映像の開始と終了を両方指定してください。")
         if hook_start is not None and hook_end is not None:
             if hook_end <= hook_start:
-                raise ValueError("hook scene end must be greater than start")
-            if not 0.5 <= hook_end - hook_start <= 3.0:
-                raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+                raise ValueError("フック映像の終了は開始より後にしてください。")
+            if not HOOK_SCENE_MIN_SECONDS <= hook_end - hook_start <= HOOK_SCENE_MAX_SECONDS:
+                raise ValueError(HOOK_SCENE_DURATION_ERROR)
             if hook_start < self.start - 0.001 or hook_end > self.end + 0.001:
-                raise ValueError("hook scene must stay within the selected clip")
+                raise ValueError("フック映像は本編の範囲内で指定してください。")
         if (self.parent_start is None) != (self.parent_end is None):
             raise ValueError("parent range requires both start and end")
         if self.parent_start is not None and self.parent_end is not None:
