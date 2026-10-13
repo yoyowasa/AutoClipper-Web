@@ -201,23 +201,29 @@ def delete_jobs(db: Session, paths: StoragePaths, job_ids: list[str], *, execute
 
 
 def main(argv: list[str] | None = None) -> int:
+    from app.production_records import backfill_production_records
+
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("prune-completed-previews", "delete-jobs"):
+    for command in ("prune-completed-previews", "delete-jobs", "backfill-production-records"):
         child = commands.add_parser(command)
         mode = child.add_mutually_exclusive_group()
         mode.add_argument("--dry-run", action="store_true")
         mode.add_argument("--execute", action="store_true")
         if command == "delete-jobs":
             child.add_argument("--job-id", nargs="+", action="extend", required=True)
+        if command == "backfill-production-records":
+            child.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
     paths = StoragePaths(Path(get_settings().storage_root).resolve())
     try:
         with SessionLocal() as db:
             if args.command == "prune-completed-previews":
                 report = prune_completed_previews(db, paths, execute=args.execute)
-            else:
+            elif args.command == "delete-jobs":
                 report = delete_jobs(db, paths, args.job_id, execute=args.execute)
+            else:
+                report = backfill_production_records(db, paths, execute=args.execute, force=args.force)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 1 if report["errors"] else 0
     except (ValueError, OSError) as exc:

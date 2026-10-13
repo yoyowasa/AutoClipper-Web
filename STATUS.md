@@ -10971,3 +10971,15 @@ pip check: pass
 - 検証: ruff 0.16.10で`cd backend; ruff check . ../launcher ../scripts`成功、Python 3.11.9の`python -m pytest`は1723 passed・2 skipped。新規backend33件で本編72.4/75/75.1、フック0.49/0.5/3/3.1、選定・計画API・worker・字幕apply・jobs側のフック検証・品質ゲートを確認。frontendのtest（25ファイル）・lint・typecheck・build成功。SSRで本編75秒のフック追加ボタンが有効、各編集欄の同一判定、422の日本語理由を確認した。
 - データ保護: `job_cb72fb4d6f8843c5ab4819a41699161a`の暫定`shortMaxDuration=78.0`はそのまま。全件検証前後で稼働DBのサイズ/更新時刻・同ジョブの設定hash・raw transcript/subtitle review/clip planのSHA256が不変。既存ジョブの保存・再適用は実施していない。
 - 未確認/反映: 実画面・実動画での保存/書き出しの受入は未実施、Docker反映なし。既存コンテナは読み取りだけでbackend healthy/worker・frontend runningを確認。CIの3.11/3.12/frontendはPRで確認する。AI選定プロンプトとlauncherに差分なし、中継の再起動不要。
+
+## 2026-10-14 task-198 完成動画ごとの制作記録
+
+- 目的: Clip Intelligenceが手動投稿した動画と投稿タイトル一致で結び付け、成績比較に使える制作情報を長期保存する。Clip Intelligence側は変更していない。
+- 変更ファイル: 新規`backend/app/production_records.py`、`backend/app/storage/paths.py`、`backend/app/jobs/runner.py`、`backend/app/maintenance.py`、新規`backend/tests/test_production_records.py`、`test_real_pipeline.py`・`test_maintenance.py`・`test_storage_lifecycle.py`、新規`docs/PRODUCTION_RECORD_CONTRACT_v1.md`、`.gitignore`、本記録。運用の制作記録JSONはGitへ入れない。
+- 保存/寿命: `StoragePaths.production_record()`に集約した`storage/production_records/<export_id>.json`を`write_json_atomic`で保存する。初回revision=1、更新で+1。ジョブ削除・期限切れの掃除から独立して保持し、テストで固定した。動画とメタデータの公開・DBのcompleted更新成功後に記録し、記録の保存失敗は例外の種類とIDだけを警告する。動画をfailedへ戻さない。
+- 再書き出し: 現行処理はExportItemを新IDで作り直すため、同じjob/candidateの前の記録からrevisionとcreatedAtを引き継ぎ、新IDの記録へpreviousRecordIdを保存する。旧記録は残す。公開API・既存の出力ファイル・ID生成は変更していない。
+- 契約: schemaVersion=1。投稿タイトルは既存`export_download_name().stem`と同じ規則。画面文言、候補タイトル/intent/選択・推薦ID、本編/完成尺、設定にある元配信タイトル/URL、元動画内start/end、キャラ名、既存の選定情報とサムネの出どころを許可リストで出力する。フック区間は本編開始からの相対秒。絶対パス・字幕全文・連絡先/秘密設定はコピーせず、URLの認証情報・秘密クエリも除外する。親区間補正は候補IDとの対応が保存されていないため、ジョブ単位の履歴としてscope=jobを明示する。
+- backfill: `python -m app.maintenance backfill-production-records`（指定なし/`--dry-run`は読み取りのみ）。`--execute`で作成、既存は`--force`なしでは保護する。force更新もrevisionを増やす。書き込みはストレージ変更ロックで直列化する。記録は書き出し確定時の状態で、完成後のサムネ編集などの反映はforce backfillで行える。
+- 実DBのdry-run: SQLiteのmode=roで完成済みExportItemを検証し、対象16本・既存スキップ0・エラー0・書き込み0。production_recordsディレクトリも作っていない。検証前後で稼働DBの536,576バイトと更新時刻が不変。
+- 検証: Python 3.11.9の`python -m pytest`は1737 passed・2 skipped。ruff 0.16.10の`cd backend; ruff check . ../launcher ../scripts`成功。制作記録の単体/CLI10件と、既存パイプラインでの自動作成・記録失敗でもcompleted・字幕再書き出しのrevision/履歴引き継ぎを確認。自動掃除・delete-jobs後の記録保持も確認。frontend変更は無いがtest（25ファイル）・lint・typecheck・build成功。CIの3.11/3.12/frontendはPRで確認する。
+- 未確認/運用: 実動画の新規書き出しでの記録作成とClip Intelligenceでの照合は未実施。実DBでのbackfill実行とDockerのbuild/反映は行っていない。既存コンテナの読み取り確認だけでbackend healthy、worker/frontend running。launcher・Codex中継は変更なし、再起動不要。

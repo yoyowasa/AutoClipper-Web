@@ -27,6 +27,7 @@ storage/fonts/*
 storage/transcripts/*
 storage/banner_assets/*
 storage/character_assets/*
+storage/production_records/
 storage/character_asset_candidates/
 storage/backups/
 storage/qa/*

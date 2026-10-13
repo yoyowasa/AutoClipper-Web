@@ -270,10 +270,16 @@ def _candidate(candidate_id: str, candidate_type: str, start: float, end: float,
 
 @pytest.mark.parametrize("mode", ["low_cost", "high_quality"])
 @pytest.mark.parametrize("cleanup_failure", [False, True])
+@pytest.mark.parametrize("record_failure", [False, True])
 def test_real_pipeline_produces_results_metadata_and_zip(
-    client: TestClient, mode: str, cleanup_failure: bool, monkeypatch: pytest.MonkeyPatch,
+    client: TestClient, mode: str, cleanup_failure: bool, record_failure: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import app.storage.completed_previews as previews
+    if record_failure:
+        def fail_record(*_args, **_kwargs):
+            raise OSError("simulated record failure")
+
+        monkeypatch.setattr("app.production_records.write_json_atomic", fail_record)
     media = b"fake video bytes"
     sidecar = json.dumps(
         {
@@ -394,6 +400,11 @@ def test_real_pipeline_produces_results_metadata_and_zip(
     results = results_response.json()
     assert len(results["normalClips"]) == 1
     assert len(results["shorts"]) == 1
+    production_paths = list(storage.production_records.glob("*.json"))
+    assert len(production_paths) == (0 if record_failure else 2)
+    for path in production_paths:
+        record = json.loads(path.read_text(encoding="utf-8"))
+        assert record["revision"] == 1 and record["jobId"] == created["jobId"]
 
     normal_download = client.get(results["normalClips"][0]["downloadUrl"])
     short_download = client.get(results["shorts"][0]["downloadUrl"])
@@ -1764,6 +1775,9 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert first_results["canReopenForEditing"] is True
     assert len(first_results["normalClips"]) == 1
     assert len(first_results["shorts"]) == 1
+    first_records = {json.loads(p.read_text(encoding="utf-8"))["selection"]["candidateId"]:
+                     json.loads(p.read_text(encoding="utf-8")) for p in storage.production_records.glob("*.json")}
+    assert len(first_records) == 2
 
     reopened_review = prepare_existing_export_rerender()
     assert reopened_review["state"] == "awaiting_review"
@@ -1840,6 +1854,14 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         dependencies=dependencies,
     )
     assert rerender_statuses[-1] == "completed"
+    updated_records = [json.loads(p.read_text(encoding="utf-8")) for p in storage.production_records.glob("*.json")]
+    revisions = [r for r in updated_records if r["revision"] == 2]
+    assert len(revisions) == 2
+    for record in revisions:
+        previous = first_records[record["selection"]["candidateId"]]
+        assert record["previousRecordId"] == previous["recordId"]
+        assert record["createdAt"] == previous["createdAt"]
+        assert record["updatedAt"] > previous["updatedAt"]
     assert not (storage.outputs / created["jobId"] / "subtitle_review_previews").exists()
 
     rerendered_results = client.get(f"/api/jobs/{created['jobId']}/results").json()

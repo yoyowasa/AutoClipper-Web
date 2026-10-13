@@ -1,4 +1,5 @@
 from app.storage.completed_previews import prune_job_previews_after_completion
+from app.production_records import record_completed_productions
 from app.clip_allocation import is_ai_allocation, allocate_selection, allocation_summary, candidate_pool_counts
 import json
 from app.duration_rules import duration_search_settings
@@ -3183,6 +3184,7 @@ def run_autoclipper_job(
             visited_statuses.append("packaging_zip")
 
             _set_status(db, job, "completed")
+            record_completed_productions(db, job, storage_paths)
             visited_statuses.append("completed")
             prune_job_previews_after_completion(db, job, storage_paths)
         except PipelineExpectedError as exc:
@@ -3832,6 +3834,7 @@ def run_subtitle_review_render(
                     )
             else:
                 _set_status(db, job, "completed")
+            record_completed_productions(db, job, storage_paths, previous_exports=previous_exports)
             visited_statuses.append("completed")
             prune_job_previews_after_completion(db, job, storage_paths)
         except PipelineExpectedError as exc:

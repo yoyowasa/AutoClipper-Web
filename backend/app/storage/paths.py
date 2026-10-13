@@ -34,6 +34,18 @@ class StoragePaths:
         return self.root / "character_assets"
 
     @property
+    def production_records(self) -> Path:
+        return self.root / "production_records"
+
+    def production_record(self, export_id: str) -> Path:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", export_id):
+            raise ValueError("Invalid export identifier")
+        path = self.production_records / f"{export_id}.json"
+        self.production_records.resolve().relative_to(self.root.resolve())
+        path.resolve().relative_to(self.production_records.resolve())
+        return path
+
+    @property
     def models(self) -> Path:
         return self.root / "models"
 
