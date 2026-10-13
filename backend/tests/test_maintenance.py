@@ -52,6 +52,8 @@ def seed(db: Session, paths: StoragePaths, *, status: str = "completed") -> tupl
     db.add(SourceClipUsage(id="usage", source_key="source", job_id=job.id, clip_type="normal", start=0, end=90))
     db.add(ClipRejection(id="rejection", job_id=job.id, video_id=job.video_id, source_key="source",
                          clip_plan_revision=1, clip_id="clip", clip_type="normal", start=0, end=90, reason="unspecified"))
+    paths.production_records.mkdir()
+    paths.production_record("export").write_text('{"recordId":"export"}', encoding="utf-8")
     db.commit()
     return job, blob
 
@@ -137,6 +139,7 @@ def test_delete_keeps_shared_source(storage_db: tuple[Session, StoragePaths], di
     assert db.get(Job, "job_keep") is not None
     assert db.get(Video, video_id) is not None and blob.is_file()
     assert db.get(SourceClipUsage, "usage") is not None and db.get(ClipRejection, "rejection") is not None
+    assert paths.production_record("export").read_text(encoding="utf-8") == '{"recordId":"export"}'
 
 
 def test_delete_removes_only_unshared_source_and_keeps_ledgers(storage_db: tuple[Session, StoragePaths]) -> None:

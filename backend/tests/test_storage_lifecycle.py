@@ -129,6 +129,9 @@ def test_cleanup_removes_expired_completed_and_failed_jobs(storage_session: tupl
 
     assert count_cleanup_eligible_jobs(session, 7, NOW) == 2
     assert count_cleanup_eligible_videos(session, 7, 24, NOW) == 2
+    storage.production_records.mkdir()
+    record = storage.production_record("exp_job_completed")
+    record.write_text('{"recordId":"exp_job_completed"}', encoding="utf-8")
     result = cleanup_expired_storage(
         session,
         storage,
@@ -145,6 +148,7 @@ def test_cleanup_removes_expired_completed_and_failed_jobs(storage_session: tupl
     assert _count(session, ExportItem) == 0
     assert _count(session, Video) == 0
     assert all(not path.exists() for path in targets)
+    assert record.read_text(encoding="utf-8") == '{"recordId":"exp_job_completed"}'
 
 
 def test_cleanup_keeps_recent_and_nonterminal_jobs(storage_session: tuple[StoragePaths, Session]) -> None:
