@@ -1,5 +1,5 @@
 "use client";
-import { effectiveShortMax, validateClipDuration, longformLabel } from "../lib/durationRules";
+import { effectiveShortMax, validateClipDuration, longformLabel, shortDurationLimitLabel } from "../lib/durationRules";
 
 import { useEffect, useRef, useState } from "react";
 
@@ -117,6 +117,7 @@ function ManualRangeGroup({
 
   return (
     <section className="border border-neutral-300 bg-white p-4">
+      {type === "short" ? <p className="mb-2 text-xs text-neutral-500">{shortDurationLimitLabel(settings.shortMaxDuration)}</p> : null}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="text-sm font-semibold text-neutral-900">{label}</h4>
         <span

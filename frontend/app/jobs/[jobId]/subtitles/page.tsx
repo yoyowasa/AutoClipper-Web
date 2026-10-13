@@ -2318,7 +2318,7 @@ export default function SubtitleReviewPage() {
       }
 
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "clipの内容を保存できませんでした");
+      setError(`clipの内容を保存できませんでした：${caught instanceof Error ? caught.message : "通信状態を確認してください。"}`);
     } finally {
       endReviewMutation();
       setConfirmingClipId(null);

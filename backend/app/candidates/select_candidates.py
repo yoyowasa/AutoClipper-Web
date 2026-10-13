@@ -10,7 +10,7 @@ from app.audio.silence_detect import SilenceSegment
 from app.audio.volume_features import AudioFeatures
 from app.candidates.deduplicate import time_overlap_ratio
 from app.candidates.merge_boundaries import Candidate, CandidateType
-from app.duration_rules import completed_clip_duration, effective_short_max, selection_duration_rejection, SHORT_MAX_DEFAULT_SECONDS
+from app.duration_rules import clip_body_duration, effective_short_max, selection_duration_rejection, SHORT_MAX_DEFAULT_SECONDS
 from app.scoring.quality_gate import (
     QualityGateSettings,
     effective_final_score,
@@ -145,9 +145,7 @@ def partition_candidates_by_duration(
     rejected: list[CandidateRejection] = []
     short_max = effective_short_max(settings)
     for candidate in candidates:
-        duration = completed_clip_duration(
-            candidate.type, candidate.start, candidate.end, candidate.hook_scene_start, candidate.hook_scene_end,
-        )
+        duration = clip_body_duration(candidate.start, candidate.end)
         reason = selection_duration_rejection(
             candidate.type, duration, short_max=short_max, longform_reason=candidate.longform_reason,
             manual=candidate.selection_reason in {"manual_time_range", "manual_edit"} or bool(candidate.clip_plan_boundary_adjusted),

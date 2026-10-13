@@ -1,3 +1,4 @@
+from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 from app.clip_allocation import allocation_summary, allocate_selection, is_ai_allocation
 import json
 from datetime import UTC, datetime
@@ -72,15 +73,15 @@ class ClipPlanClip(BaseModel):
         hook_start = self.hook_scene_start
         hook_end = self.hook_scene_end
         if (hook_start is None) != (hook_end is None):
-            raise ValueError("hook scene requires both start and end")
+            raise ValueError("フック映像の開始と終了を両方指定してください。")
         if hook_start is None or hook_end is None:
             return self
         if hook_end <= hook_start:
-            raise ValueError("hook scene end must be greater than start")
-        if not 0.5 <= hook_end - hook_start <= 3.0:
-            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+            raise ValueError("フック映像の終了は開始より後にしてください。")
+        if not HOOK_SCENE_MIN_SECONDS <= hook_end - hook_start <= HOOK_SCENE_MAX_SECONDS:
+            raise ValueError(HOOK_SCENE_DURATION_ERROR)
         if hook_start < self.start - 0.001 or hook_end > self.end + 0.001:
-            raise ValueError("hook scene must stay within the selected clip")
+            raise ValueError("フック映像は本編の範囲内で指定してください。")
         return self
 
 
@@ -295,14 +296,14 @@ def update_clip_plan_hook_scene(
     if clip is None:
         raise KeyError(clip_id)
     if (start is None) != (end is None):
-        raise ValueError("hook scene requires both start and end")
+        raise ValueError("フック映像の開始と終了を両方指定してください。")
     if start is not None and end is not None:
         if end <= start:
-            raise ValueError("hook scene end must be greater than start")
-        if not 0.5 <= end - start <= 3.0:
-            raise ValueError("hook scene duration must be between 0.5 and 3 seconds")
+            raise ValueError("フック映像の終了は開始より後にしてください。")
+        if not HOOK_SCENE_MIN_SECONDS <= end - start <= HOOK_SCENE_MAX_SECONDS:
+            raise ValueError(HOOK_SCENE_DURATION_ERROR)
         if start < clip.start - 0.001 or end > clip.end + 0.001:
-            raise ValueError("hook scene must stay within the selected clip")
+            raise ValueError("フック映像は本編の範囲内で指定してください。")
         clip.hook_scene_start = round(float(start), 3)
         clip.hook_scene_end = round(float(end), 3)
     else:

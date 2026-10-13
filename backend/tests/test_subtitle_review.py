@@ -528,21 +528,20 @@ def test_hook_scene_update_is_applied_to_rerendered_short() -> None:
     assert cleared.shorts[0].hook_scene_end is None
 
 
-def test_hook_scene_update_rejects_manual_edit_past_review_short_duration_limit() -> None:
+def test_hook_scene_update_accepts_body_within_review_short_duration_limit() -> None:
     _transcript, review = _review_fixture()
     review.short_max_duration = 21.0
 
-    before = review.model_dump()
-    with pytest.raises(ValueError, match="ショートは"):
-        update_review_hook_scene(review, "short_1", start=12.0, end=14.0)
-    assert review.model_dump() == before
+    update_review_hook_scene(review, "short_1", start=12.0, end=14.0)
+    assert review.clips[1].hook_scene_start == 12.0
+    assert review.clips[1].hook_scene_end == 14.0
 
 def test_hook_scene_update_rejects_clip_still_over_duration_limit() -> None:
     _transcript, review = _review_fixture()
     review.short_max_duration = 19.0
 
     before = review.model_dump()
-    with pytest.raises(ValueError, match="ショートは"):
+    with pytest.raises(ValueError, match="ショートの本編は"):
         update_review_hook_scene(review, "short_1", start=12.0, end=14.0)
     assert review.model_dump() == before
 

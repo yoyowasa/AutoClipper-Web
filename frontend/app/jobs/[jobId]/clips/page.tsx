@@ -1,5 +1,5 @@
 "use client";
-import { durationSettingsError, effectiveShortMax, validateClipDuration, longformLabel } from "../../../../lib/durationRules";
+import { durationSettingsError, effectiveShortMax, validateClipDuration, longformLabel, shortDurationLimitLabel } from "../../../../lib/durationRules";
 
 import { isAIAllocation, remainingClipSlots, allocationLabel, allocationSettingsError, shortageLabels } from "../../../../lib/clipAllocation";
 import Link from "next/link";
@@ -890,7 +890,7 @@ export default function ClipPlanReviewPage() {
                       <p className="mt-1 text-xs text-neutral-600">
                         {selectedClip.type === "short"
                           ? "範囲とタイトルを維持したまま、通常切り抜きへ変更できます。"
-                          : `ショートへ変更できます。上限${plan.settings.shortMaxDuration ?? 75}秒を超える場合は範囲を調整してください。`}
+                          : `ショートへ変更できます。${shortDurationLimitLabel(plan.settings.shortMaxDuration ?? 75)}を超える場合は範囲を調整してください。`}
                       </p>
                       {!isManualWorkflow && !plan.boundaryReedit && validateClipDuration(
                         selectedClip.type === "short" ? "normal" : "short", selectedClip.end - selectedClip.start,

@@ -1,6 +1,6 @@
 "use client";
 
-import { durationSettingsError, NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_DEFAULT_SECONDS, SHORT_MAX_CEILING_SECONDS } from "../lib/durationRules";
+import { durationSettingsError, NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_DEFAULT_SECONDS, SHORT_MAX_CEILING_SECONDS, HOOK_SCENE_MAX_SECONDS } from "../lib/durationRules";
 import { isAIAllocation, allocationSettingsError } from "../lib/clipAllocation";
 import type { ClipSettings } from "../lib/types";
 import { ClipSelectionEditor } from "./ClipSelectionEditor";
@@ -555,6 +555,7 @@ export function SettingsPanel({
 
             <label className="flex flex-col gap-2">
               <span className="text-sm font-medium text-neutral-700">ショートの上限（1〜180秒）</span>
+              <span className="text-xs text-neutral-500">本編の長さ（フック映像は別に最大{HOOK_SCENE_MAX_SECONDS}秒）</span>
               <input
                 className="min-h-10 rounded-md border border-neutral-300 px-3 text-sm"
                 disabled={

@@ -1,5 +1,5 @@
 "use client";
-import { effectiveShortMax, validateClipDuration } from "../lib/durationRules";
+import { clipBodyDuration, effectiveShortMax, validateClipDuration, shortDurationLimitLabel } from "../lib/durationRules";
 
 import { useMemo, useRef, useState } from "react";
 
@@ -195,10 +195,8 @@ export function ManualClipPlanEditor({
       return `元動画の長さ ${formatTime(sourceDuration)} を超えています`;
     }
     const outputType = selectedClip?.type ?? draftType;
-    const hookDuration = outputType === "short" && selectedClip?.hookSceneStart != null && selectedClip.hookSceneEnd != null
-      ? selectedClip.hookSceneEnd - selectedClip.hookSceneStart : 0;
-    return validateClipDuration(outputType, end - start + hookDuration, effectiveShortMax(plan.settings.shortMaxDuration));
-  }, [draftType, end, plan.settings.shortMaxDuration, selectedClip?.hookSceneEnd, selectedClip?.hookSceneStart,
+    return validateClipDuration(outputType, clipBodyDuration(start, end), effectiveShortMax(plan.settings.shortMaxDuration));
+  }, [draftType, end, plan.settings.shortMaxDuration,
     selectedClip?.type, sourceDuration, start]);
 
   function beginCreate(type: ExportType) {
@@ -465,6 +463,9 @@ export function ManualClipPlanEditor({
           </p>
         </div>
 
+        {(selectedClip?.type ?? draftType) === "short" ? <p className="mt-2 text-xs text-neutral-500">
+          {shortDurationLimitLabel(plan.settings.shortMaxDuration ?? 75)}
+        </p> : null}
         {validation ? <p className="mt-3 text-xs font-semibold text-red-700">{validation}</p> : null}
 
         <div className="mt-4 grid gap-2">

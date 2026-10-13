@@ -87,8 +87,8 @@ def test_type_change_checks_target_short_duration(client, duration, valid):  # n
     assert response.status_code == (200 if valid else 422), response.text
 
 
-@pytest.mark.parametrize('hook_end,valid', [(3, True), (3.001, False)])
-def test_hook_scene_total_duration(client, hook_end, valid):  # noqa: F811
+@pytest.mark.parametrize('hook_end,valid', [(4, True), (4.001, False)])
+def test_hook_scene_duration_is_separate_from_body(client, hook_end, valid):  # noqa: F811
     job_id, output = editable_plan(client, clip_type='short', duration=73)
     queued = []
     app.dependency_overrides[get_enqueue_clip_plan_hook_scene_update] = lambda: lambda *args: queued.append(args)
@@ -97,7 +97,7 @@ def test_hook_scene_total_duration(client, hook_end, valid):  # noqa: F811
     assert response.status_code == (202 if valid else 422), response.text
     assert len(queued) == int(valid)
     if not valid:
-        assert 'ショートは75秒以内' in response.json()['detail']
+        assert 'フック映像は0.5〜3秒' in str(response.json()['detail'])
         assert (output / 'clip_plan.json').read_bytes() == before
 
 

@@ -10961,3 +10961,13 @@ pip check: pass
 - 保存先/保護: 比較結果は`storage/qa/task196-runaway-repair-20261013/comparison.json`。元ジョブのraw/transcript/silence JSONのSHA256、稼働DBのサイズ/更新時刻は前後で不変。ジョブへの保存や再適用、Dockerのbuild/再起動/反映は行っていない。
 - 検証: Python 3.11.9、ruff 0.16.10で`cd backend; ruff check . ../launcher ../scripts`成功、`python -m pytest`1690 passed・2 skipped。新規19件＋既存方式D24件の計43件成功。従来D本体は関数名を除くASTが同一、`merge_repair`とlauncherは差分なし。frontendのtest（24ファイル）・lint・typecheck・build成功。CIの3.11/3.12/frontendはPRで確認する。
 - 未確認: 全動画で暴走が多数ある場合の処理時間、Docker反映後の新規ジョブと字幕画面の実受入。既存job_timeoutは変更していない。Codex中継の変更なし、再起動不要。
+## 2026-10-13 task-197 ショートの本編上限とフック映像を分離
+
+- 目的: 本編が75秒近い候補にフックを足すと字幕applyが422になり、未保存状態でフック編集も開けなくなる行き止まりを解消する。
+- 仕様: 上限は本編のみ`shortMaxDuration`（既定75・設定範囲1〜180は維持）。フック映像は別枠0.5〜3秒、完成尺は最大で本編上限+3秒。`duration_rules.py`に`HOOK_SCENE_MIN_SECONDS`/`HOOK_SCENE_MAX_SECONDS`と`clip_body_duration`を追加し、完成尺の`completed_clip_duration`は維持した。
+- backend変更: `api/clip_plan.py`、`candidates/select_candidates.py`、`jobs/clip_plan_runner.py`、`jobs/subtitle_review.py`の上限判定を本編へ変更。`api/jobs.py`の字幕フック最終検証は共有関数を通じて同じ規則になる。candidate/clip plan/review/request schemaとrenderのフック区間検証は共有定数を参照し、0.5〜3秒の範囲と本編内の条件は維持した。
+- 最小尺の扱い: 品質ゲートの現物は本編だけを`shortMinDuration`と比較していた。今回指定された最小判定「本編+フック」にそろえるため、`jobs/quality_gate.py`のshort最小チェックだけ完成尺へ変更。上限は本編、通常clipの判定・探索用のshortMinDuration設定は変更なし。
+- frontend変更: `lib/durationRules.ts`を同期し、ClipHookSceneEditorはフック単体0.5〜3秒で制限。ClipBoundaryEditor/ManualClipPlanEditor/ManualClipRangeEditor/候補ページは本編で上限検証・表示する。SettingsPanelに「本編の長さ（フック映像は別に最大3秒）」を表示。字幕apply失敗は保存失敗の表示に理由を添え、`lib/api.ts`で422の文字列・Pydanticエラー配列を読み、日本語のフック不正理由も表示する。
+- 検証: ruff 0.16.10で`cd backend; ruff check . ../launcher ../scripts`成功、Python 3.11.9の`python -m pytest`は1723 passed・2 skipped。新規backend33件で本編72.4/75/75.1、フック0.49/0.5/3/3.1、選定・計画API・worker・字幕apply・jobs側のフック検証・品質ゲートを確認。frontendのtest（25ファイル）・lint・typecheck・build成功。SSRで本編75秒のフック追加ボタンが有効、各編集欄の同一判定、422の日本語理由を確認した。
+- データ保護: `job_cb72fb4d6f8843c5ab4819a41699161a`の暫定`shortMaxDuration=78.0`はそのまま。全件検証前後で稼働DBのサイズ/更新時刻・同ジョブの設定hash・raw transcript/subtitle review/clip planのSHA256が不変。既存ジョブの保存・再適用は実施していない。
+- 未確認/反映: 実画面・実動画での保存/書き出しの受入は未実施、Docker反映なし。既存コンテナは読み取りだけでbackend healthy/worker・frontend runningを確認。CIの3.11/3.12/frontendはPRで確認する。AI選定プロンプトとlauncherに差分なし、中継の再起動不要。

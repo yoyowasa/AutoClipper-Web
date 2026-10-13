@@ -106,14 +106,7 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
     try {
-      const payload = (await response.json()) as {
-        detail?: string | { code?: string; message?: string };
-      };
-      if (typeof payload.detail === "string") {
-        message = payload.detail;
-      } else if (payload.detail?.message) {
-        message = payload.detail.message;
-      }
+      message = apiErrorMessage(await response.json(), message);
     } catch {
       // Keep the HTTP status message when the backend returns a non-JSON error.
     }
@@ -125,10 +118,19 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
 
 function apiErrorMessage(payload: unknown, fallback: string): string {
   const parsed = payload as {
-    detail?: string | { code?: string; message?: string };
+    detail?: string | { code?: string; message?: string } | Array<{ msg?: string; loc?: (string | number)[] }>;
   } | null;
   if (typeof parsed?.detail === "string") {
     return parsed.detail;
+  }
+  if (Array.isArray(parsed?.detail)) {
+    const reasons = parsed.detail.map(error => {
+      if (error.loc?.some(field => /^(hookScene(Start|End)|hook_scene_(start|end))$/.test(String(field)))) {
+        return "フック映像の開始・終了は0秒以上の有効な時刻で指定してください。";
+      }
+      return error.msg?.replace(/^Value error, /, "") ?? "";
+    }).filter(Boolean);
+    return [...new Set(reasons)].join("\n") || fallback;
   }
   return parsed?.detail?.message ?? fallback;
 }

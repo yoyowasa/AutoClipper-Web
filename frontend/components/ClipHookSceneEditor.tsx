@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { effectiveShortMax, validateClipDuration } from "../lib/durationRules";
+import { effectiveShortMax, validateHookSceneDuration, shortDurationLimitLabel } from "../lib/durationRules";
 
 type HookSceneEditableClip = {
   start: number;
@@ -161,11 +161,8 @@ export function ClipHookSceneEditor({
   const duration = start !== null && end !== null ? end - start : null;
   const projectedDuration =
     duration !== null && duration > 0 ? clip.duration + duration : null;
-  const projectedDurationExceedsMaximum =
-    projectedDuration !== null &&
-    projectedDuration > shortMaxDuration + 0.001;
   const clipAlreadyExceedsMaximum =
-    clip.duration > shortMaxDuration + 0.001;
+    enforceMaximumDuration && clip.end - clip.start > effectiveShortMax(shortMaxDuration);
   const validation = useMemo(() => {
     if (start === null || end === null) {
       return "分と秒を正しく入力してください";
@@ -173,24 +170,11 @@ export function ClipHookSceneEditor({
     if (start < -0.001 || end > clipDuration + 0.001) {
       return `clip内 0:00.0〜${formatTime(clipDuration)}で指定してください`;
     }
-    if (duration === null || duration < 0.5 || duration > 3) {
-      return "冒頭へ複製する場面は0.5〜3秒にしてください";
-    }
-    if (
-      enforceMaximumDuration &&
-      validateClipDuration("short", clip.end - clip.start + duration, effectiveShortMax(shortMaxDuration))
-    ) {
-      return validateClipDuration("short", clip.end - clip.start + duration, effectiveShortMax(shortMaxDuration));
-    }
-    return null;
+    return validateHookSceneDuration(duration ?? Number.NaN);
   }, [
-    clip.end,
-    clip.start,
     clipDuration,
     duration,
     end,
-    enforceMaximumDuration,
-    shortMaxDuration,
     start
   ]);
   const changed =
@@ -314,8 +298,7 @@ export function ClipHookSceneEditor({
           {hasSavedHook ? (
             <button
               className={`${compact ? "min-h-9" : "min-h-10"} border border-neutral-300 bg-white px-3 text-xs font-semibold text-neutral-800 disabled:opacity-50`}
-              disabled={disabled || (enforceMaximumDuration &&
-                validateClipDuration("short", clip.end - clip.start, effectiveShortMax(shortMaxDuration)) !== null)}
+              disabled={disabled}
               type="button"
               onClick={() => onSave(null, null)}
             >
@@ -344,19 +327,17 @@ export function ClipHookSceneEditor({
         </p>
       ) : (
         <>
-          {projectedDurationExceedsMaximum ? (
+          {clipAlreadyExceedsMaximum ? (
             <p
               className={`${compact ? "mt-1 leading-4" : "mt-2"} text-xs font-medium text-amber-800`}
             >
-              {clipAlreadyExceedsMaximum
-                ? `元のclipが上限 ${formatTime(shortMaxDuration)} を超えています。`
-                : `編集後の完成尺が上限 ${formatTime(shortMaxDuration)} を超えます。`}
-              追加後 {formatTime(projectedDuration ?? 0)} で保存します。
+              本編が上限 {formatTime(effectiveShortMax(shortMaxDuration))} を超えています。切り抜きの範囲を調整してください。
             </p>
           ) : null}
           <p
             className={`${compact ? "mt-1 leading-4" : "mt-2"} text-xs text-neutral-500`}
           >
+            {enforceMaximumDuration ? `${shortDurationLimitLabel(shortMaxDuration)}。` : ""}
             対象clipの軽量プレビューだけを作り直します。
           </p>
         </>
