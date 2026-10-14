@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -146,6 +147,41 @@ def test_backfill_cli_defaults_to_dry_run(example, monkeypatch, capsys):
     assert maintenance.main(["backfill-production-records"]) == 0
     assert json.loads(capsys.readouterr().out)["eligible"] == 1
     assert not paths.production_records.exists()
+
+
+@pytest.mark.parametrize("export_time", [
+    datetime(2026, 10, 1, 12, 34, 56, 123456),
+    datetime(2026, 10, 1, 12, 34, 56, 123456, tzinfo=timezone(timedelta(hours=9))),
+    datetime(2099, 1, 1, tzinfo=UTC),
+])
+@pytest.mark.parametrize("force", [False, True])
+def test_backfill_uses_export_time_including_force(example, export_time, force):
+    db, job, export, paths = example
+    if force:
+        # Reproduce task-198's execution-time createdAt on an existing record.
+        records.write_production_record(job, export, paths)
+        previous = json.loads(paths.production_record(export.id).read_text(encoding="utf-8"))
+    export.created_at = export_time
+    # Keep the aware timestamp in memory; SQLite intentionally stores timestamps without a timezone.
+    db.flush()
+    expected = export_time.replace(tzinfo=UTC) if export_time.tzinfo is None else export_time.astimezone(UTC)
+    before = {p: p.read_bytes() for p in paths.root.rglob("*") if p.is_file()}
+    assert records.backfill_production_records(db, paths, force=force)["eligible"] == 1
+    assert before == {p: p.read_bytes() for p in paths.root.rglob("*") if p.is_file()}
+    report = records.backfill_production_records(db, paths, execute=True, force=force)
+    assert report["errors"] == [] and report["written"] == 1
+    payload = json.loads(paths.production_record(export.id).read_text(encoding="utf-8"))
+    assert payload["createdAt"] == expected.isoformat().replace("+00:00", "Z")
+    assert datetime.fromisoformat(payload["updatedAt"]) >= expected
+    assert payload["revision"] == (previous["revision"] + 1 if force else 1)
+
+
+def test_normal_record_creation_still_uses_current_time(example):
+    _db, job, export, paths = example
+    export.created_at = datetime(2020, 1, 1)
+    before = datetime.now(UTC)
+    payload = json.loads(records.write_production_record(job, export, paths).read_text(encoding="utf-8"))
+    assert before <= datetime.fromisoformat(payload["createdAt"]) <= datetime.now(UTC)
 
 
 @pytest.mark.parametrize("identifier", ["../export", "C:/private", "a/b", "a\\b"])

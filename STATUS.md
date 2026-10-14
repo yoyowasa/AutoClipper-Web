@@ -10983,3 +10983,12 @@ pip check: pass
 - 実DBのdry-run: SQLiteのmode=roで完成済みExportItemを検証し、対象16本・既存スキップ0・エラー0・書き込み0。production_recordsディレクトリも作っていない。検証前後で稼働DBの536,576バイトと更新時刻が不変。
 - 検証: Python 3.11.9の`python -m pytest`は1737 passed・2 skipped。ruff 0.16.10の`cd backend; ruff check . ../launcher ../scripts`成功。制作記録の単体/CLI10件と、既存パイプラインでの自動作成・記録失敗でもcompleted・字幕再書き出しのrevision/履歴引き継ぎを確認。自動掃除・delete-jobs後の記録保持も確認。frontend変更は無いがtest（25ファイル）・lint・typecheck・build成功。CIの3.11/3.12/frontendはPRで確認する。
 - 未確認/運用: 実動画の新規書き出しでの記録作成とClip Intelligenceでの照合は未実施。実DBでのbackfill実行とDockerのbuild/反映は行っていない。既存コンテナの読み取り確認だけでbackend healthy、worker/frontend running。launcher・Codex中継は変更なし、再起動不要。
+
+## 2026-10-14 task-199 backfillのcreatedAtを書き出し時刻へ修正
+
+- 目的/原因: backfillが通常保存用の生成関数へ日時を指定せず、現在時刻または既存記録のcreatedAtを使っていたため、過去の投稿と「投稿日時 >= createdAt」で結び付けられなかった。
+- 変更ファイル: `backend/app/production_records.py`、`backend/tests/test_production_records.py`、`docs/PRODUCTION_RECORD_CONTRACT_v1.md`、本記録。
+- 修正: backfillのdry-run・実行・force更新では、対象の`ExportItem.created_at`をUTCへ正規化してcreatedAtに指定する。SQLiteのタイムゾーン無し日時はUTCとして扱い、タイムゾーン付き日時は同じ瞬間のUTCへ変換する。JSONはISO 8601・末尾Z。updatedAtは実行時刻とcreatedAtの遅い方にし、未来の日時でもupdatedAt >= createdAtを保証する。
+- 維持: 通常の書き出し完了時の日時処理、再書き出し時の日時引き継ぎ、revisionの増やし方、既存ファイル保護は変更しない。forceでは旧createdAtを引き継がず、ExportItem.created_atへ修正する。契約に「createdAt＝書き出し完了時刻。backfillも同じ」を追記した。
+- 検証: ruff 0.16.10の`cd backend; ruff check . ../launcher ../scripts`成功。Python 3.11.9の`python -m pytest`は1744 passed・2 skipped。制作記録17件のうち追加7件で、新規/forceの書き出し時刻一致、末尾Z、UTC変換、updatedAtの順序、dry-run無変更、revision、通常経路の現状維持を確認。frontendは変更なしだがtest（25ファイル）・lint・typecheck・buildも成功。CIの3.11/3.12/frontendはPRで確認する。
+- データ保護/未確認: 検証前後で稼働DBの536,576バイト・更新時刻、既存の制作記録16件のSHA256が不変。稼働環境でのforce backfill・Docker反映・Clip Intelligenceでの実照合は未実施。Dockerは既存コンテナの起動状態を読み取っただけでbackend healthy、worker/frontend running。launcher・Clip Intelligenceに変更なし。

@@ -134,6 +134,7 @@ def _source_url(value: str | None) -> str | None:
 
 def build_production_record(
     job: Job, export: ExportItem, paths: StoragePaths, *, previous: ProductionRecord | None = None,
+    created_at: datetime | None = None,
 ) -> ProductionRecord:
     selected = _selected_candidate(paths, export)
     metadata = _read_object(_resolve_stored_path(export.metadata_path, paths.root)) if export.metadata_path else {}
@@ -157,7 +158,8 @@ def build_production_record(
     now = datetime.now(UTC)
     return ProductionRecord(
         recordId=export.id, revision=previous.revision + 1 if previous else 1,
-        createdAt=previous.createdAt if previous else now, updatedAt=now,
+        createdAt=created_at if created_at is not None else previous.createdAt if previous else now,
+        updatedAt=max(now, created_at) if created_at is not None else now,
         previousRecordId=previous.recordId if previous and previous.recordId != export.id else (
             previous.previousRecordId if previous else None),
         jobId=job.id, type=export.type, publicationTitle=export_download_name(export).stem,
@@ -232,8 +234,11 @@ def backfill_production_records(db: Session, paths: StoragePaths, *, execute: bo
                 report["skipped"] += 1
                 continue
             # Build even in dry-run to catch unreadable/malformed source JSON, without creating any files.
+            # SQLite stores naive UTC; aware timestamps must retain their instant when normalized.
+            created_at = (export.created_at.replace(tzinfo=UTC) if export.created_at.tzinfo is None
+                          else export.created_at.astimezone(UTC))
             previous = ProductionRecord.model_validate(_read_object(target)) if target.exists() else None
-            build_production_record(job, export, paths, previous=previous)
+            build_production_record(job, export, paths, previous=previous, created_at=created_at)
             report["eligible"] += 1
             report["targets"].append(export.id)
             if execute:
@@ -243,7 +248,7 @@ def backfill_production_records(db: Session, paths: StoragePaths, *, execute: bo
                         report["skipped"] += 1
                         continue
                     previous = ProductionRecord.model_validate(_read_object(target)) if target.exists() else None
-                    record = build_production_record(job, export, paths, previous=previous)
+                    record = build_production_record(job, export, paths, previous=previous, created_at=created_at)
                     write_json_atomic(target, record.model_dump(mode="json", by_alias=True), allow_nan=False)
                     report["written"] += 1
         except Exception as exc:
