@@ -10,7 +10,11 @@
 記録の保存に失敗した場合はIDと例外の種類だけを警告ログに出し、動画は完成済みのままとする。
 ジョブ削除、保存期間切れ、プレビューの掃除では消さない。
 
-- 初回の`revision`は1。同じExportItemの更新は+1。`createdAt`を保持し、`updatedAt`を更新する。
+- `createdAt`＝書き出し完了時刻。backfillも同じで、対象の`ExportItem.created_at`を使う。
+  SQLiteのタイムゾーン無し日時はUTCとして扱い、ISO 8601の末尾`Z`で保存する。
+  `--force`で既存記録を作り直す場合も、createdAtを同じ書き出し時刻へ修正する。
+  `updatedAt`は更新時刻とcreatedAtの遅い方にし、常に`updatedAt >= createdAt`を満たす。
+- 初回の`revision`は1。同じExportItemの通常の更新は+1。`createdAt`を保持し、`updatedAt`を更新する。
 - 現在の字幕再書き出しはExportItemを新しいIDで作り直す。公開APIやIDは変更せず、
   同じjob・candidateの前の記録からrevisionとcreatedAtを引き継ぐ。
   新しいIDのファイルを作り、`previousRecordId`に前のIDを記録する。旧記録は保持する。
@@ -35,7 +39,7 @@ Windows禁止文字の全角化、制御文字の除去、末尾の空白・ピ�
 | schemaVersion | 整数、常に1 |
 | recordId | 文字列、ExportItemのID |
 | revision | 1以上の整数、記録の更新回数 |
-| createdAt / updatedAt | UTC日時 |
+| createdAt / updatedAt | 書き出し完了時刻 / 記録の更新時刻。backfillもcreatedAtはExportItem.created_at。updatedAtはcreatedAt以上 |
 | previousRecordId | 文字列またはnull、新IDでの再書き出し元の記録ID |
 | jobId | 文字列 |
 | type | `normal` / `short` |
@@ -102,7 +106,7 @@ python -m app.maintenance backfill-production-records --execute --force
 
 指定なしもdry-run。対象はDBでcompletedのジョブのExportItem。
 dry-runは読み取り・形式検証だけを行い、ディレクトリも記録も作らない。
-既存ファイルは`--force`なしではスキップする。
+既存ファイルは`--force`なしではスキップする。force更新もcreatedAtは対象のExportItem.created_atとし、revisionは+1。
 結果は`eligible`（作成・更新の対象数）、`written`、`skipped`、`targets`（ExportItemのID）、`errors`をJSONで返す。
 一部が失敗しても残りを処理し、errorsがあれば終了コード1。エラーにはIDと例外の種類だけを含める。
 実際の書き込みはストレージの変更ロック内で行い、既存ファイルの有無を取り直してから原子的に保存する。
