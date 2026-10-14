@@ -1,7 +1,6 @@
 "use client";
 
 import { SubtitleSegmentActions } from "../SubtitleSegmentActions";
-import { SubtitleGapRow } from "../SubtitleGapMarkers";
 import { SubtitleBulkCorrection } from "../SubtitleBulkCorrection";
 import { formatTime, clipLabel, clamp } from "../../lib/subtitleReview/display";
 import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/context";
@@ -11,7 +10,6 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
   const {
     selectedClip,
     review,
-    selectedGaps,
     selectedSegments,
     pausedSubtitleDraft,
     setPausedSubtitleDraft,
@@ -27,12 +25,6 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
     drafts,
     saveBulkCorrection,
     subtitleListRef,
-    selectedSubtitleTimeline,
-    acknowledgingGapId,
-    selectedPlayerReady,
-    isPlayerReady,
-    seekToSubtitleGap,
-    acknowledgeGap,
     dirtySegmentIds,
     activeSegmentId,
     segmentRowRefs,
@@ -58,9 +50,6 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
                       <h3 className="text-base font-semibold">
                         {clipLabel(selectedClip, review.clips)} の字幕
                       </h3>
-                      {selectedGaps.length > 0 ? (
-                        <p className="mt-1 text-xs font-medium text-amber-800">字幕なし {selectedGaps.length}か所</p>
-                      ) : null}
                       <p className="mt-1 text-xs text-neutral-500">
                         再生中の字幕へ自動で追従します
                       </p>
@@ -135,15 +124,11 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
                   className="relative min-h-0 flex-1 overflow-y-auto overscroll-y-contain"
                   ref={subtitleListRef}
                 >
-                  {selectedSubtitleTimeline.length > 0 ? (
-                    selectedSubtitleTimeline.map((item) => {
-                      if (item.kind === "gap") {
-                        return <SubtitleGapRow key={`gap:${item.gap.id}`} gap={item.gap}
-                          editable={isEditable} saving={acknowledgingGapId === item.gap.id}
-                          canSeek={selectedPlayerReady && isPlayerReady}
-                          onSelect={seekToSubtitleGap} onAcknowledge={(gap) => void acknowledgeGap(gap)} />;
-                      }
-                      const { segment, segmentIndex } = item;
+                  {selectedSegments.length > 0 ? (
+                    selectedSegments
+                      .map((segment, segmentIndex) => ({ segment, segmentIndex }))
+                      .sort((left, right) => left.segment.start - right.segment.start)
+                      .map(({ segment, segmentIndex }) => {
                       const isDirty = dirtySegmentIds.has(segment.id);
                       const isActive = activeSegmentId === segment.id;
                       const relativeStart = clamp(

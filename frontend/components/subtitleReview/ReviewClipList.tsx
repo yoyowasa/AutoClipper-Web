@@ -1,6 +1,5 @@
 "use client";
 
-import { unacknowledgedSubtitleGaps } from "../../lib/subtitleGaps";
 import { formatTime, clipLabel } from "../../lib/subtitleReview/display";
 import { isPreviewReady } from "../../lib/subtitleReview/preview";
 import { isClipContentDirty } from "../../lib/subtitleReview/drafts";
@@ -130,11 +129,6 @@ export function ReviewClipList({ context }: { context: SubtitleReviewViewContext
                     <span className="mt-2 block line-clamp-2 text-sm font-medium">
                       {clipDraft ? clipDraft.title : clip.title}
                     </span>
-                    {unacknowledgedSubtitleGaps(clip.gaps).length > 0 ? (
-                      <span className={`mt-1 block text-[11px] font-medium ${clip.id === selectedClipId ? "text-amber-200" : "text-amber-800"}`}>
-                        字幕なし {unacknowledgedSubtitleGaps(clip.gaps).length}か所
-                      </span>
-                    ) : null}
                     {!isPreviewReady(clip, review.state) ? (
                       <span
                         className={`mt-2 block text-[11px] font-semibold ${

@@ -1,15 +1,12 @@
 import assert from "node:assert/strict";
 import { createElement, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { SubtitleGapMarkers, SubtitleGapRow } from "../components/SubtitleGapMarkers";
-import { acknowledgeSubtitleReviewGap } from "../lib/api";
-import {
-  mergeSubtitleGapAcknowledgement,
-  seekAndPauseAtSubtitleGap,
-  subtitleGapLabel,
-  subtitleTimeline,
-  unacknowledgedSubtitleGaps
-} from "../lib/subtitleGaps";
+import { SubtitleGapMarkers } from "../components/SubtitleGapMarkers";
+import { seekAndPauseAtSubtitleGap, subtitleGapLabel } from "../lib/subtitleGaps";
+import { ReviewClipList } from "../components/subtitleReview/ReviewClipList";
+import { ReviewSubtitleSegments } from "../components/subtitleReview/ReviewSubtitleSegments";
+import { contentDraftForClip } from "../lib/subtitleReview/drafts";
+import type { SubtitleReviewViewContext } from "../lib/subtitleReview/hooks/context";
 import type { SubtitleReviewClip, SubtitleReviewDocument, SubtitleReviewGap, SubtitleReviewSegment } from "../lib/types";
 
 const gap: SubtitleReviewGap = {
@@ -21,13 +18,6 @@ function segment(id: string, start: number, end: number): SubtitleReviewSegment 
     confidence: null, edited: false, affectedClipIds: ["clip"] };
 }
 const segments = [segment("first", 100, 109), segment("second", 115, 120)];
-assert.deepEqual(subtitleTimeline(segments, [gap, acknowledgedGap], 100, 3).map((item) =>
-  item.kind === "segment" ? [item.kind, item.segment.id, item.segmentIndex, item.start] : [item.kind, item.gap.id, item.start]
-), [["segment", "first", 0, 3], ["gap", "gap_middle", 12], ["segment", "second", 1, 18]],
-"gap times already include the hook; segment times include it exactly once");
-assert.equal(subtitleTimeline([], [gap], 100, 3)[0].kind, "gap", "clips with no captions still show their gap");
-assert.equal(subtitleTimeline(segments, undefined, 100, 0).length, 2, "old responses without gaps remain usable");
-assert.deepEqual(unacknowledgedSubtitleGaps([gap, acknowledgedGap]), [gap]);
 assert.equal(subtitleGapLabel(gap), "字幕なし（音あり）0:12〜0:18");
 
 const events: string[] = [];
@@ -38,59 +28,65 @@ const player = {
   set currentTime(value: number) { playbackTime = value; events.push(`seek:${value}`); }
 };
 const onSelect = (selected: SubtitleReviewGap) => { seekAndPauseAtSubtitleGap(player, selected, 30); };
-let savedGap: SubtitleReviewGap | null = null;
-const row = SubtitleGapRow({ gap, editable: true, saving: false, canSeek: true,
-  onSelect, onAcknowledge: (selected) => { savedGap = selected; } });
 function buttons(node: ReactNode): Array<{ onClick?: () => void }> {
   if (Array.isArray(node)) return node.flatMap(buttons);
   if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node)) return [];
   return [...(node.type === "button" ? [node.props] : []), ...buttons(node.props.children)];
 }
-buttons(row)[0].onClick?.();
-assert.deepEqual(events, ["pause", "seek:12"], "clicking the gap pauses and seeks to its clip-relative start");
-assert.equal(playbackTime, 12, "the existing paused-caption insertion uses this playback position");
-buttons(row)[1].onClick?.();
-assert.equal(savedGap, gap);
-assert.equal(SubtitleGapRow({ gap: acknowledgedGap, editable: true, saving: false, canSeek: true,
-  onSelect, onAcknowledge: () => {} }), null, "confirmed rows disappear");
-const rowMarkup = renderToStaticMarkup(row);
-assert.match(rowMarkup, /停止位置から字幕を追加/);
-assert.match(rowMarkup, /確認済みにする/);
 const markerProps = { gaps: [gap, acknowledgedGap], duration: 30, onSelect };
 const markerMarkup = renderToStaticMarkup(createElement(SubtitleGapMarkers, markerProps));
-assert.equal((markerMarkup.match(/<button/g) ?? []).length, 1, "confirmed marks disappear from the playback bar too");
+assert.equal((markerMarkup.match(/<button/g) ?? []).length, 2, "all gaps remain visible regardless of acknowledgement");
 assert.match(markerMarkup, /left:40%;width:20%/);
-buttons(SubtitleGapMarkers(markerProps))[0].onClick?.();
-assert.deepEqual(events.slice(-2), ["pause", "seek:12"]);
-
-const current = {
-  jobId: "job", updatedAt: "before", segments,
-  clips: [{ id: "clip", gaps: [gap], title: "current title", previewState: "ready" } as SubtitleReviewClip]
-} as SubtitleReviewDocument;
-const updated = {
-  ...current, updatedAt: "after", segments: [segment("server", 0, 1)],
-  clips: [{ ...current.clips[0], title: "old server title", previewState: "queued", gaps: [{ ...gap, acknowledged: true }] }]
-} as SubtitleReviewDocument;
-const merged = mergeSubtitleGapAcknowledgement(current, updated, "clip");
-assert.equal(merged.segments, current.segments, "confirmation cannot reset subtitle edits");
-assert.equal(merged.clips[0].title, "current title");
-assert.equal(merged.clips[0].previewState, "ready");
-assert.deepEqual(unacknowledgedSubtitleGaps(merged.clips[0].gaps), []);
-assert.equal(merged.updatedAt, "after");
-
-async function main() {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
-    assert.match(String(input), /\/api\/jobs\/job\/subtitle-review\/clips\/clip\/gaps\/gap_middle$/);
-    assert.equal(init?.method, "PATCH");
-    assert.deepEqual(JSON.parse(String(init?.body)), { acknowledged: true });
-    return new Response(JSON.stringify(updated), { headers: { "Content-Type": "application/json" } });
-  };
-  try {
-    assert.deepEqual((await acknowledgeSubtitleReviewGap("job", "clip", gap.id)).clips[0].gaps, updated.clips[0].gaps);
-    globalThis.fetch = async () => new Response(JSON.stringify({ detail: "空白区間が変わりました。再読み込みしてください。" }), { status: 404 });
-    await assert.rejects(acknowledgeSubtitleReviewGap("job", "clip", gap.id), /空白区間が変わりました/);
-  } finally { globalThis.fetch = originalFetch; }
-  console.log("Subtitle gaps: timeline, playback marks, seek/pause and persisted confirmation passed.");
+assert.match(markerMarkup, /left:83\.33333333333334%;width:13\.333333333333334%/);
+assert.doesNotMatch(markerMarkup, /確認済みにする|確認を保存中|[0-9]+か所/);
+const unconfirmedMarkup = renderToStaticMarkup(createElement(SubtitleGapMarkers, {
+  ...markerProps, gaps: markerProps.gaps.map(item => ({ ...item, acknowledged: false }))
+}));
+assert.equal(markerMarkup, unconfirmedMarkup, "confirmation flags do not change marker appearance");
+for (const [index, second] of [12, 25].entries()) {
+  buttons(SubtitleGapMarkers(markerProps))[index].onClick?.();
+  assert.deepEqual(events.slice(-2), ["pause", `seek:${second}`]);
+  assert.equal(playbackTime, second, "paused subtitle insertion continues to use the selected gap's position");
 }
-void main().catch((error) => { console.error(error); process.exitCode = 1; });
+assert.equal(SubtitleGapMarkers({ ...markerProps, gaps: undefined }), null, "old responses without gaps remain usable");
+assert.equal(SubtitleGapMarkers({ ...markerProps, gaps: [] }), null);
+assert.equal(SubtitleGapMarkers({ ...markerProps, duration: 0 }), null);
+assert.equal(seekAndPauseAtSubtitleGap(player, { ...gap, start: -5 }, 30), 0);
+assert.equal(seekAndPauseAtSubtitleGap(player, { ...gap, start: 40 }, 30), 30);
+assert.deepEqual(markerProps.gaps, [gap, acknowledgedGap], "display and seeking do not change saved confirmation flags");
+
+const clip = {
+  id: "clip", type: "normal", title: "タイトル", publicationTitle: "投稿タイトル",
+  start: 100, end: 200, duration: 100, hookText: "", hookDurationSeconds: 3,
+  hookSceneStart: null, hookSceneEnd: null, titleStyle: null, hookStyle: null, subtitleStyle: null,
+  previewState: "ready", previewVideoUrl: "/preview.mp4", previewSpecHash: "spec",
+  segmentIds: segments.map(item => item.id), confirmed: false, editedSegmentCount: 0, gaps: markerProps.gaps
+} as SubtitleReviewClip;
+const context = {
+  selectedClip: clip, selectedClipId: clip.id, activeClipType: "normal", normalClips: [clip], shortClips: [], visibleClips: [clip],
+  review: { clips: [clip], state: "awaiting_review", renderRevision: 1, totalClipCount: 1, confirmedClipCount: 0, editedSegmentCount: 0 } as SubtitleReviewDocument,
+  clipContentDrafts: {}, selectedClipContentDraft: contentDraftForClip(clip), selectedSegments: [...segments].reverse(),
+  drafts: {}, dirtySegmentIds: new Set(), subtitleListRef: { current: null }, segmentRowRefs: { current: {} },
+  isEditable: true, allConfirmed: false, allPreviewsReady: true, bodyDuration: 100, clipDuration: 103,
+  hookSceneDuration: 3, hookSuppressionEnd: 3, selectedHookDurationIsValid: true,
+  // Supply the pre-change gap inputs so this fixture also detects the old rows/counts.
+  selectedGaps: markerProps.gaps, selectedSubtitleTimeline: [
+    { kind: "segment", segment: segments[0], segmentIndex: 1, start: 3 },
+    { kind: "gap", gap, start: gap.start },
+    { kind: "segment", segment: segments[1], segmentIndex: 0, start: 18 }
+  ]
+} as unknown as SubtitleReviewViewContext;
+const clipMarkup = renderToStaticMarkup(createElement(ReviewClipList, { context }));
+const segmentMarkup = renderToStaticMarkup(createElement(ReviewSubtitleSegments, { context }));
+assert.doesNotMatch(clipMarkup, /字幕なし/);
+assert.doesNotMatch(segmentMarkup, /字幕なし|確認済みにする|確認を保存中/);
+assert.match(clipMarkup, /未確認/, "clip confirmation status remains visible");
+assert.match(segmentMarkup, /この内容を保存してOK/, "saving and clip confirmation remain available");
+assert.equal((segmentMarkup.match(/<textarea/g) ?? []).length, 2);
+assert(segmentMarkup.indexOf('>first</textarea>') < segmentMarkup.indexOf('>second</textarea>'),
+  "subtitle rows keep their chronological display order");
+assert.deepEqual(context.selectedSegments.map(item => item.id), ["second", "first"], "rendering does not reorder saved segments");
+const emptyMarkup = renderToStaticMarkup(createElement(ReviewSubtitleSegments, { context: { ...context, selectedSegments: [] } }));
+assert.match(emptyMarkup, /このclipに表示対象の字幕はありません/);
+assert.doesNotMatch(emptyMarkup, /字幕なし|確認済みにする/);
+console.log("Subtitle gaps: marker-only display, confirmation-independent rendering, seek/pause and subtitle editing preserved");
