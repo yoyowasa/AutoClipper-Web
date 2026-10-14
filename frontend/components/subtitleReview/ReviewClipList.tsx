@@ -17,6 +17,8 @@ export function ReviewClipList({ context }: { context: SubtitleReviewViewContext
     openedFromReupload,
     visibleClips,
     clipContentDrafts,
+    dirtySegmentIds,
+    shortFramingDrafts,
     selectedClipId,
     isUpdatingHookScene,
     selectClip,
@@ -93,7 +95,8 @@ export function ReviewClipList({ context }: { context: SubtitleReviewViewContext
             <div className="max-h-64 min-h-0 overflow-y-auto lg:max-h-none lg:flex-1">
               {visibleClips.map((clip) => {
                 const clipDraft = clipContentDrafts[clip.id];
-                const contentDirty = isClipContentDirty(clip, clipContentDrafts);
+                const contentDirty = isClipContentDirty(clip, clipContentDrafts)
+                  || clip.segmentIds.some(id => dirtySegmentIds.has(id)) || Boolean(shortFramingDrafts?.[clip.id]);
                 return (
                   <button
                     className={`block w-full border-b border-neutral-200 px-4 py-4 text-left disabled:cursor-wait disabled:opacity-60 ${
@@ -143,7 +146,9 @@ export function ReviewClipList({ context }: { context: SubtitleReviewViewContext
                       >
                         {clip.previewState === "failed"
                           ? "プレビュー生成失敗"
-                          : "完成表示プレビューを更新中"}
+                          : clip.previewDeferred || clip.previewState === "stale"
+                            ? "確定すると正式プレビューを作成"
+                            : "完成表示プレビューを更新中"}
                       </span>
                     ) : null}
                     <span

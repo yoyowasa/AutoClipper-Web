@@ -92,8 +92,8 @@ for (const changed of [
 }
 assert.equal(isClipContentDirty(clip, { [clip.id]: { ...draft, youtubeHashtagsText: "題材, #題材、切り抜き" } }), false);
 assert.equal(isClipContentDirty(clip, { [clip.id]: { ...draft, youtubeHashtagsText: "#切り抜き #題材" } }), true);
-// Characterize the existing comparison scope; this refactor does not add tag-only detection.
-assert.equal(isClipContentDirty(clip, { [clip.id]: { ...draft, youtubeTagsText: "違うタグ" } }), false);
+// Posting tags are part of the single-confirm draft (task-204).
+assert.equal(isClipContentDirty(clip, { [clip.id]: { ...draft, youtubeTagsText: "違うタグ" } }), true);
 
 const hashtags = [" 題材, #題材、切り抜き ", "#Tag tag", "", " \n "];
 assert.deepEqual(normalizeYoutubeHashtags(hashtags), ["#題材", "#切り抜き", "#Tag", "#tag"]);

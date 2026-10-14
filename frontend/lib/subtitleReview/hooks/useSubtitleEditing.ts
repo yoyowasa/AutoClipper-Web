@@ -3,7 +3,6 @@
 import { editSubtitleStructure } from "../../api";
 import type { SubtitleStructureRequest } from "../../types";
 import type { SubtitleBatchUpdate } from "../../subtitleBulkCorrection";
-import { updateSubtitleReviewSegments } from "../../api";
 import { nextNonemptySubtitleStart, subtitleInsertionConflict } from "../../subtitlePauseInsert";
 import { remapInsertedSubtitleDraft, subtitleStructureSources } from "../../subtitleStructureDrafts";
 import type { SubtitleReviewContext } from "./context";
@@ -70,36 +69,17 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
   }
 
   async function saveBulkCorrection(updates: SubtitleBatchUpdate[]) {
-    const {
-      beginReviewMutation,
-      setIsSavingBulkCorrection,
-      setShowSavedPreview,
-      jobId,
-      isCurrentReviewMutation,
-      setReview,
-      setDrafts,
-      setDirtySegmentIds,
-      endReviewMutation
-    } = context;
-    const generation = beginReviewMutation();
-    setIsSavingBulkCorrection(true);
+    const { setDrafts, setDirtySegmentIds, setShowSavedPreview, review } = context;
     setShowSavedPreview(false);
-    try {
-      const updated = await updateSubtitleReviewSegments(jobId, updates);
-      if (isCurrentReviewMutation(generation)) {
-        const ids = new Set(updates.map((item) => item.segmentId));
-        setReview(updated);
-        setDrafts((current) => {
-          const next = { ...current };
-          for (const segment of updated.segments) if (ids.has(segment.id)) next[segment.id] = segment.text;
-          return next;
-        });
-        setDirtySegmentIds((current) => new Set([...current].filter((id) => !ids.has(id))));
+    setDrafts(current => ({ ...current, ...Object.fromEntries(updates.map(item => [item.segmentId, item.text])) }));
+    setDirtySegmentIds(current => {
+      const next = new Set(current);
+      for (const update of updates) {
+        const saved = review?.segments.find(item => item.id === update.segmentId);
+        if (saved?.text === update.text) next.delete(update.segmentId); else next.add(update.segmentId);
       }
-    } finally {
-      endReviewMutation();
-      setIsSavingBulkCorrection(false);
-    }
+      return next;
+    });
   }
 
   async function saveSubtitleStructure(request: SubtitleStructureRequest): Promise<boolean> {
@@ -121,6 +101,7 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
       setSegmentCursor,
       setBulkCorrectionSelection,
       segmentRowRefs,
+      locallyUpdatedReviewRef,
       endReviewMutation
     } = context;
     if (!review || !isEditable) return false;
@@ -138,6 +119,7 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
     try {
       const updated = await editSubtitleStructure(jobId, request);
       if (!isCurrentReviewMutation(generation)) return false;
+      locallyUpdatedReviewRef.current = updated;
       setReview(updated);
       setDrafts(current => Object.fromEntries(updated.segments.map(segment => [segment.id,
         targets.has(segment.id) || !oldIds.has(segment.id) ? segment.text : current[segment.id] ?? segment.text])));

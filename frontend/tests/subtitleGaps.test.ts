@@ -5,6 +5,7 @@ import { SubtitleGapMarkers } from "../components/SubtitleGapMarkers";
 import { seekAndPauseAtSubtitleGap, subtitleGapLabel } from "../lib/subtitleGaps";
 import { ReviewClipList } from "../components/subtitleReview/ReviewClipList";
 import { ReviewSubtitleSegments } from "../components/subtitleReview/ReviewSubtitleSegments";
+import { ReviewContentEditor } from "../components/subtitleReview/ReviewContentEditor";
 import { contentDraftForClip } from "../lib/subtitleReview/drafts";
 import type { SubtitleReviewViewContext } from "../lib/subtitleReview/hooks/context";
 import type { SubtitleReviewClip, SubtitleReviewDocument, SubtitleReviewGap, SubtitleReviewSegment } from "../lib/types";
@@ -81,7 +82,7 @@ const segmentMarkup = renderToStaticMarkup(createElement(ReviewSubtitleSegments,
 assert.doesNotMatch(clipMarkup, /字幕なし/);
 assert.doesNotMatch(segmentMarkup, /字幕なし|確認済みにする|確認を保存中/);
 assert.match(clipMarkup, /未確認/, "clip confirmation status remains visible");
-assert.match(segmentMarkup, /この内容を保存してOK/, "saving and clip confirmation remain available");
+assert.match(segmentMarkup, /この動画を確定/, "saving and clip confirmation remain available");
 assert.equal((segmentMarkup.match(/<textarea/g) ?? []).length, 2);
 assert(segmentMarkup.indexOf('>first</textarea>') < segmentMarkup.indexOf('>second</textarea>'),
   "subtitle rows keep their chronological display order");
@@ -89,4 +90,16 @@ assert.deepEqual(context.selectedSegments.map(item => item.id), ["second", "firs
 const emptyMarkup = renderToStaticMarkup(createElement(ReviewSubtitleSegments, { context: { ...context, selectedSegments: [] } }));
 assert.match(emptyMarkup, /このclipに表示対象の字幕はありません/);
 assert.doesNotMatch(emptyMarkup, /字幕なし|確認済みにする/);
+const dirtyEditorMarkup = renderToStaticMarkup(createElement(ReviewContentEditor, { context: {
+  ...context, autoGeneratingSuggestionClipIds: new Set<string>(), hasDirtyClipContent: true,
+  dirtySegmentIds: new Set(["first"])
+} }));
+assert.doesNotMatch(dirtyEditorMarkup, /フック映像の変更前に|右下のOK/);
+assert.match(dirtyEditorMarkup, /フック映像設定/, "dirty text must keep the hook editor available");
+const staleClip = { ...clip, previewState: "stale" as const, previewDeferred: true };
+const staleMarkup = renderToStaticMarkup(createElement(ReviewClipList, { context: {
+  ...context, visibleClips: [staleClip]
+} }));
+assert.match(staleMarkup, /確定すると正式プレビューを作成/);
+assert.doesNotMatch(staleMarkup, /完成表示プレビューを更新中/);
 console.log("Subtitle gaps: marker-only display, confirmation-independent rendering, seek/pause and subtitle editing preserved");

@@ -397,6 +397,7 @@ def refresh_subtitle_review_preview_states(
     document: SubtitleReviewDocument,
     paths: StoragePaths,
     clip_ids: set[str] | None = None,
+    generate_exact: bool = False,
 ) -> tuple[SubtitleReviewDocument, list[tuple[str, str]], bool]:
     queued: list[tuple[str, str]] = []
     changed = False
@@ -409,6 +410,9 @@ def refresh_subtitle_review_preview_states(
     for clip in document.clips:
         if clip.id not in selected_ids:
             continue
+        if generate_exact and clip.preview_deferred:
+            clip.preview_deferred = False
+            changed = True
         try:
             spec, spec_hash, _inputs = current_subtitle_review_preview_spec(
                 job=job,
@@ -464,7 +468,22 @@ def refresh_subtitle_review_preview_states(
             if live_ready
             else None
         )
-        if exact_subtitle_review_preview_is_ready(artifacts, spec_hash):
+        if clip.preview_deferred:
+            next_state = "stale"
+            next_url = None
+            next_error = None
+            if not live_ready:
+                next_error = read_subtitle_review_preview_error(
+                    exact_subtitle_review_preview_error_path(output_dir, clip.id, spec_hash)
+                )
+                if next_error:
+                    next_state = "failed"
+                elif clip.preview_spec_hash == spec_hash and clip.preview_state == "failed":
+                    next_state = "failed"
+                    next_error = clip.preview_error
+                else:
+                    queued.append((clip.id, spec_hash))
+        elif exact_subtitle_review_preview_is_ready(artifacts, spec_hash):
             try:
                 exact_subtitle_review_preview_error_path(
                     output_dir,

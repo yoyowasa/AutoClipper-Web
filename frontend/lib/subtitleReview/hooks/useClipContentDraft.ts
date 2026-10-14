@@ -1,11 +1,10 @@
 "use client";
 
-import { updateSubtitleReviewClipFraming, updateSubtitleReviewHookScene, updateSubtitleReviewShortBannerSettings } from "../../api";
+import { updateSubtitleReviewShortBannerSettings } from "../../api";
 import { type ClipTextTarget } from "../../clipTextStyle";
 import type { ClipTextStyle, SubtitleReviewClipFramingUpdateRequest, SubtitleReviewDocument } from "../../types";
-import { clamp } from "../display";
+import { shortFramingEquals } from "../framing";
 import { type ClipContentDraft, contentDraftForClip } from "../drafts";
-import { shortFramingSignature, shortFramingEquals } from "../framing";
 import type { SubtitleReviewContext } from "./context";
 
 export function useClipContentDraft(context: SubtitleReviewContext) {
@@ -83,105 +82,18 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
     return next;
   }
 
-  async function saveSelectedShortFraming(
-    clipId: string,
-    framing: SubtitleReviewClipFramingUpdateRequest
-  ) {
-    const {
-      review,
-      isEditable,
-      shortFramingSaveInFlightRef,
-      setShortFramingDrafts,
-      lastSavedShortFramingSignatureRef,
-      beginReviewMutation,
-      setSavingShortFramingClipId,
-      setShowSavedPreview,
-      setError,
-      jobId,
-      isCurrentReviewMutation,
-      setReview,
-      endReviewMutation
-    } = context;
-    const clip = review?.clips.find((item) => item.id === clipId);
-    if (
-      !clip ||
-      clip.type !== "short" ||
-      !isEditable ||
-      shortFramingSaveInFlightRef.current.has(clipId)
-    ) {
-      return false;
-    }
-    const nextFraming = {
-      framingOffsetX: clamp(framing.framingOffsetX, -100, 100),
-      framingOffsetY: clamp(framing.framingOffsetY, -100, 100),
-      framingZoom: clamp(framing.framingZoom, 1, 3)
-    };
-    const savedFraming = {
-      framingOffsetX: clip.framingOffsetX,
-      framingOffsetY: clip.framingOffsetY,
-      framingZoom: clip.framingZoom
-    };
-    const signature = shortFramingSignature(nextFraming);
-    const layoutChanged = framing.shortLayout !== undefined && framing.shortLayout !== (clip.shortLayout ?? review?.shortLayout);
-    if (!layoutChanged && shortFramingEquals(nextFraming, savedFraming)) {
-      setShortFramingDrafts((drafts) => {
-        const next = { ...drafts };
-        delete next[clipId];
-        return next;
-      });
-      return true;
-    }
-    if (!layoutChanged && lastSavedShortFramingSignatureRef.current[clipId] === signature) {
-      setShortFramingDrafts((drafts) => {
-        const next = { ...drafts };
-        delete next[clipId];
-        return next;
-      });
-      return true;
-    }
-
-    shortFramingSaveInFlightRef.current.add(clipId);
-    const mutationGeneration = beginReviewMutation();
-    setSavingShortFramingClipId(clipId);
+  async function saveSelectedShortFraming(clipId: string, framing: SubtitleReviewClipFramingUpdateRequest) {
+    const { setShortFramingDrafts, setShowSavedPreview, review } = context;
+    const clip = review?.clips.find(item => item.id === clipId);
+    const unchanged = clip && shortFramingEquals(framing, { framingOffsetX: clip.framingOffsetX,
+      framingOffsetY: clip.framingOffsetY, framingZoom: clip.framingZoom, shortLayout: clip.shortLayout ?? review?.shortLayout });
+    setShortFramingDrafts(current => {
+      const next = { ...current };
+      if (unchanged) delete next[clipId]; else next[clipId] = framing;
+      return next;
+    });
     setShowSavedPreview(false);
-    setError(null);
-    try {
-      const updated = await updateSubtitleReviewClipFraming(
-        jobId,
-        clipId,
-        { ...nextFraming, shortLayout: framing.shortLayout }
-      );
-      lastSavedShortFramingSignatureRef.current[clipId] = signature;
-      if (isCurrentReviewMutation(mutationGeneration)) {
-        setReview(updated);
-      }
-      setShortFramingDrafts((drafts) => {
-        if (
-          !drafts[clipId] ||
-          shortFramingSignature(drafts[clipId]) !== signature
-        ) {
-          return drafts;
-        }
-        const next = { ...drafts };
-        delete next[clipId];
-        return next;
-      });
-      return true;
-    } catch (caught) {
-      delete lastSavedShortFramingSignatureRef.current[clipId];
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "ショート画角を保存できませんでした"
-      );
-      return false;
-    } finally {
-      endReviewMutation();
-      shortFramingSaveInFlightRef.current.delete(clipId);
-      setSavingShortFramingClipId((current) =>
-        current === clipId ? null : current
-      );
-    }
+    return true;
   }
 
   async function saveShortBannerSettings(
@@ -201,6 +113,7 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
       jobId,
       isCurrentReviewMutation,
       setClipContentDrafts,
+      locallyUpdatedReviewRef,
       endReviewMutation
     } = context;
     if (!review || !isEditable || hasReviewMutationInFlight) {
@@ -256,6 +169,7 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
         requestBody
       );
       if (isCurrentReviewMutation(mutationGeneration)) {
+        locallyUpdatedReviewRef.current = updated;
         setReview(updated);
         if (assets.characterPresetName) {
           setClipContentDrafts(current => {
@@ -301,49 +215,11 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
     }
   }
 
-  async function saveHookScene(
-    start: number | null,
-    end: number | null
-  ) {
-    const {
-      selectedClip,
-      dirtySegmentIds,
-      hasDirtyClipContent,
-      setError,
-      beginReviewMutation,
-      videoRef,
-      setIsUpdatingHookScene,
-      jobId,
-      endReviewMutation
-    } = context;
-    if (!selectedClip) {
-      return;
-    }
-    if (dirtySegmentIds.size > 0 || hasDirtyClipContent) {
-      setError(
-        "未保存のタイトル、投稿情報、フック文字、文字スタイル、または字幕を先に保存してください。"
-      );
-      return;
-    }
-    beginReviewMutation();
+  async function saveHookScene(start: number | null, end: number | null) {
+    const { selectedClip, updateClipContentDraft, videoRef } = context;
+    if (!selectedClip) return;
     videoRef.current?.pause();
-    setError(null);
-    setIsUpdatingHookScene(true);
-    try {
-      await updateSubtitleReviewHookScene(jobId, selectedClip.id, {
-        start,
-        end
-      });
-    } catch (caught) {
-      setIsUpdatingHookScene(false);
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "冒頭フック映像を更新できませんでした"
-      );
-    } finally {
-      endReviewMutation();
-    }
+    updateClipContentDraft(selectedClip.id, { hookSceneStart: start, hookSceneEnd: end });
   }
   return { updateClipContentDraft, updateClipTextStyle, changeSelectedShortFraming, saveSelectedShortFraming, saveShortBannerSettings, saveHookScene };
 }

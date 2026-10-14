@@ -164,7 +164,7 @@ def test_insert_at_paused_time_in_gap_reaches_preview_and_render(client):  # noq
                for segment in preview.transcript_segments)
 
 
-def test_split_keeps_playable_live_video_while_exact_preview_updates(client):  # noqa: F811
+def test_split_keeps_playable_live_video_while_exact_preview_is_deferred(client):  # noqa: F811
     job_id, path, doc, _, _ = seed_structure(client)
     paths = app.dependency_overrides[get_storage_paths]()
     with next(app.dependency_overrides[get_db]()) as db:
@@ -188,7 +188,9 @@ def test_split_keeps_playable_live_video_while_exact_preview_updates(client):  #
     )
     assert response.status_code == 200, response.text
     after_clip = next(clip for clip in response.json()["clips"] if clip["id"] == "normal")
-    assert after_clip["previewSpecHash"] != before_clip["previewSpecHash"]
+    assert after_clip["previewState"] == "stale"
+    polled = client.get(f"/api/jobs/{job_id}/subtitle-review").json()
+    assert next(clip for clip in polled["clips"] if clip["id"] == "normal")["previewSpecHash"] != before_clip["previewSpecHash"]
     assert after_clip["livePreviewVideoUrl"] == before_clip["livePreviewVideoUrl"]
     assert client.get(after_clip["livePreviewVideoUrl"]).content == b"playable live video"
 

@@ -663,6 +663,7 @@ export async function applySubtitleReviewClip(
     titleStyle: ClipTextStyle | null;
     hookStyle: ClipTextStyle | null;
     subtitleStyle: ClipTextStyle | null;
+    framing?: SubtitleReviewClipFramingUpdateRequest;
     segments: Array<{ segmentId: string; text: string }>;
     subtitleStyles?: import("./types").SubtitleStyleOverride[];
   }

@@ -1658,7 +1658,8 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     )
     review = client.get(f"/api/jobs/{created['jobId']}/subtitle-review").json()
     assert review["shortOverlayTitleMode"] == expected_overlay_mode
-    assert all(clip["previewVideoUrl"] for clip in review["clips"])
+    assert all(clip["previewVideoUrl"] is None and clip["previewState"] == "stale" for clip in review["clips"])
+    assert all(clip["previewDeferred"] for clip in review["clips"])
     assert all(clip["livePreviewVideoUrl"] for clip in review["clips"])
     assert all(clip["livePreviewSpecHash"] for clip in review["clips"])
     settings_updated = client.patch(
@@ -1671,10 +1672,6 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert settings_updated.status_code == 200
     assert settings_updated.json()["shortTopBannerEnabled"] is True
     assert settings_updated.json()["shortBottomBannerEnabled"] is True
-    preview_response = client.get(review["clips"][0]["previewVideoUrl"])
-    assert preview_response.status_code == 200
-    assert preview_response.headers["content-type"].startswith("video/mp4")
-    assert preview_response.content.startswith(b"rendered")
     live_preview_response = client.get(review["clips"][0]["livePreviewVideoUrl"])
     assert live_preview_response.status_code == 200
     assert live_preview_response.headers["content-type"].startswith("video/mp4")
@@ -1716,12 +1713,13 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     accepted_while_queued = apply_clip(queued_clip)
     assert accepted_while_queued.status_code == 200
     assert next(clip for clip in accepted_while_queued.json()["clips"] if clip["id"] == queued_clip["id"])["confirmed"]
-    review = render_queued_previews(accepted_while_queued.json())
+    review = accepted_while_queued.json()
     for clip in review["clips"]:
         response = apply_clip(clip)
         assert response.status_code == 200
         review = response.json()
     assert review["confirmedClipCount"] == review["totalClipCount"] == 2
+    review = render_queued_previews(review)
 
     queued_jobs: list[tuple[str, int]] = []
     app.dependency_overrides[get_enqueue_render_job] = lambda: (
@@ -1835,13 +1833,15 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         hook_end,
     )
     assert updated_short["confirmed"] is False
-    assert updated_short["previewState"] == "ready"
+    assert updated_short["previewState"] == "stale"
+    assert updated_short["previewDeferred"] is True
 
     for clip in reopened_review["clips"]:
         response = apply_clip(clip)
         assert response.status_code == 200
         reopened_review = response.json()
 
+    reopened_review = render_queued_previews(reopened_review)
     queued_jobs.clear()
     rerender_queued = client.post(f"/api/jobs/{created['jobId']}/subtitle-review/finalize")
     assert rerender_queued.status_code == 202

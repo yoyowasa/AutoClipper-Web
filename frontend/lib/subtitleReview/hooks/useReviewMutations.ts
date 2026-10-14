@@ -80,10 +80,15 @@ export function useReviewMutations(context: SubtitleReviewContext) {
   }
 
   function updateDraft(segmentId: string, text: string) {
-    const { setShowSavedPreview, setDrafts, setDirtySegmentIds } = context;
+    const { setShowSavedPreview, setDrafts, setDirtySegmentIds, review } = context;
     setShowSavedPreview(false);
     setDrafts((current) => ({ ...current, [segmentId]: text }));
-    setDirtySegmentIds((current) => new Set(current).add(segmentId));
+    setDirtySegmentIds((current) => {
+      const next = new Set(current);
+      if (review?.segments.find(segment => segment.id === segmentId)?.text === text) next.delete(segmentId);
+      else next.add(segmentId);
+      return next;
+    });
   }
   return { beginReviewMutation, endReviewMutation, isCurrentReviewMutation, selectClip, selectClipType, updateDraft };
 }

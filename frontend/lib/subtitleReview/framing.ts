@@ -8,7 +8,7 @@ export type ShortFramingDrafts = Record<
 export function shortFramingSignature(
   framing: SubtitleReviewClipFramingUpdateRequest
 ): string {
-  return `${framing.framingOffsetX}:${framing.framingOffsetY}:${framing.framingZoom}`;
+  return `${framing.framingOffsetX}:${framing.framingOffsetY}:${framing.framingZoom}:${framing.shortLayout ?? ""}`;
 }
 
 export function shortFramingEquals(

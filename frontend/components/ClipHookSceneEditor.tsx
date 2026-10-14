@@ -12,6 +12,7 @@ type HookSceneEditableClip = {
 };
 
 type ClipHookSceneEditorProps = {
+  draftOnly?: boolean;
   clip: HookSceneEditableClip;
   compact?: boolean;
   disabled?: boolean;
@@ -127,6 +128,7 @@ export function ClipHookSceneEditor({
   compact = false,
   disabled = false,
   saving = false,
+  draftOnly = false,
   playheadSourceTime,
   shortMaxDuration,
   enforceMaximumDuration = true,
@@ -338,7 +340,7 @@ export function ClipHookSceneEditor({
             className={`${compact ? "mt-1 leading-4" : "mt-2"} text-xs text-neutral-500`}
           >
             {enforceMaximumDuration ? `${shortDurationLimitLabel(shortMaxDuration)}。` : ""}
-            対象clipの軽量プレビューだけを作り直します。
+            {draftOnly ? "下書きの映像・音声で確認し、clipの確定時にまとめて保存します。" : "対象clipの軽量プレビューだけを作り直します。"}
           </p>
         </>
       )}

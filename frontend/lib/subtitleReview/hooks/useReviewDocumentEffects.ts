@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { getJobStatus, getSubtitleReview } from "../../api";
+import { livePreviewReference } from "../livePlaybackSource";
 import { contentDraftForClip } from "../drafts";
 import type { SubtitleReviewContext } from "./context";
 
@@ -124,10 +125,7 @@ export function useRetainedLivePreviews(context: Pick<SubtitleReviewContext, "re
         if (next === current) {
           next = { ...current };
         }
-        next[clip.id] = {
-          url: clip.livePreviewVideoUrl,
-          version: clip.livePreviewSpecHash
-        };
+        next[clip.id] = livePreviewReference(clip, review);
       }
       return next;
     });

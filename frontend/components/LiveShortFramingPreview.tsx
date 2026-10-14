@@ -4,12 +4,14 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { toBrowserApiUrl } from "../lib/api";
 import { framingGeometry, type Framing, type FramingGuide } from "../lib/shortFraming";
 import { prepareShortFramingGuide } from "../lib/shortFramingApi";
+import { sourceVideoForClock } from "../lib/subtitleReview/draftPlayback";
 import { shortPreviewSourceTime } from "../lib/shortPreviewTime";
 
 // The existing clip remains the playback/audio clock. Only its picture is replaced
 // from the original video; no server-side encoding is needed for framing changes.
-export function LiveShortFramingPreview({ jobId, clipId, sourceUrl, clockRef, framing, layout, start, end, hookStart, hookEnd }: {
+export function LiveShortFramingPreview({ jobId, clipId, sourceUrl, clockRef, framing, layout, start, end, hookStart, hookEnd, topBannerUrl, bottomBannerUrl }: {
   jobId: string; clipId: string; sourceUrl: string; clockRef: RefObject<HTMLVideoElement | null>;
+  topBannerUrl?: string; bottomBannerUrl?: string;
   framing: Framing; layout: string; start: number; end: number; hookStart: number | null; hookEnd: number | null;
 }) {
   const sourceRef = useRef<HTMLVideoElement>(null);
@@ -19,6 +21,14 @@ export function LiveShortFramingPreview({ jobId, clipId, sourceUrl, clockRef, fr
   const [ready, setReady] = useState(false);
   const [retry, setRetry] = useState(0);
   const { framingOffsetX, framingOffsetY, framingZoom } = framing;
+  const banners = useRef<{ top?: HTMLImageElement; bottom?: HTMLImageElement }>({});
+  useEffect(() => {
+    const images: typeof banners.current = {};
+    for (const [key, url] of [["top", topBannerUrl], ["bottom", bottomBannerUrl]] as const) {
+      if (url) { const image = new Image(); image.src = toBrowserApiUrl(url); images[key] = image; }
+    }
+    banners.current = images;
+  }, [topBannerUrl, bottomBannerUrl]);
 
   useEffect(() => {
     const abort = new AbortController();
@@ -63,10 +73,14 @@ export function LiveShortFramingPreview({ jobId, clipId, sourceUrl, clockRef, fr
       context.setTransform(.5, 0, 0, .5, 0, 0);
       context.fillStyle = "black"; context.fillRect(0, 0, 1080, 1920);
       // Reuse the exact banner images already present in the text-free clip.
-      if (guide!.contentY > 0) context.drawImage(clock, 0, 0, clock.videoWidth, clock.videoHeight * guide!.contentY / 1920,
+      const picture = sourceVideoForClock(clock);
+      const top = banners.current.top, bottomImage = banners.current.bottom;
+      if (top?.complete && top.naturalWidth) context.drawImage(top, 0, 0, 1080, guide!.contentY);
+      else if (!topBannerUrl && guide!.contentY > 0) context.drawImage(picture, 0, 0, clock.videoWidth, clock.videoHeight * guide!.contentY / 1920,
         0, 0, 1080, guide!.contentY);
       const bottom = guide!.contentY + guide!.contentHeight;
-      if (bottom < 1920) context.drawImage(clock, 0, clock.videoHeight * bottom / 1920,
+      if (bottomImage?.complete && bottomImage.naturalWidth) context.drawImage(bottomImage, 0, bottom, 1080, 1920 - bottom);
+      else if (!bottomBannerUrl && bottom < 1920) context.drawImage(picture, 0, clock.videoHeight * bottom / 1920,
         clock.videoWidth, clock.videoHeight * (1920 - bottom) / 1920, 0, bottom, 1080, 1920 - bottom);
       context.save(); context.beginPath(); context.rect(0, guide!.contentY, 1080, guide!.contentHeight); context.clip();
       context.translate(0, guide!.contentY);
@@ -83,7 +97,7 @@ export function LiveShortFramingPreview({ jobId, clipId, sourceUrl, clockRef, fr
     }
     animation = requestAnimationFrame(frame);
     return () => { cancelled = true; cancelAnimationFrame(animation); source.pause(); };
-  }, [guide, framingOffsetX, framingOffsetY, framingZoom, clockRef, start, end, hookStart, hookEnd]);
+  }, [guide, framingOffsetX, framingOffsetY, framingZoom, clockRef, start, end, hookStart, hookEnd, topBannerUrl, bottomBannerUrl]);
 
   return <div className="pointer-events-none absolute inset-0 bg-black" aria-label="変更した画角の動画プレビュー">
     <video key={`${sourceUrl}:${retry}`} ref={sourceRef} src={toBrowserApiUrl(sourceUrl)} muted playsInline preload="auto" className="hidden"

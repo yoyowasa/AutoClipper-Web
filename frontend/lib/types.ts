@@ -529,7 +529,8 @@ export type SubtitleReviewClip = {
   start: number;
   end: number;
   duration: number;
-  previewState: "queued" | "rendering" | "ready" | "failed";
+  previewState: "stale" | "queued" | "rendering" | "ready" | "failed";
+  previewDeferred?: boolean;
   previewSpecHash: string | null;
   previewError: string | null;
   previewVideoUrl: string | null;

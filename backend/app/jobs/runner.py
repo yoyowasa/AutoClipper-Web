@@ -1485,6 +1485,7 @@ def _render_exact_subtitle_review_preview_for_clip(
     document: SubtitleReviewDocument,
     paths: StoragePaths,
     clip_id: str,
+    live_only: bool = False,
 ) -> ExactPreviewResult:
     spec, expected_hash, inputs = current_subtitle_review_preview_spec(
         job=job,
@@ -1506,6 +1507,7 @@ def _render_exact_subtitle_review_preview_for_clip(
         overlay_title_expected=inputs.overlay_title_expected,
         normal_renderer=dependencies.normal_renderer,
         short_renderer=dependencies.short_renderer,
+        **({"live_only": True} if live_only else {}),
     )
     if result.spec_hash != expected_hash:
         raise RuntimeError("subtitle review preview renderer returned a stale spec")
@@ -1520,7 +1522,7 @@ def _render_exact_subtitle_review_preview_for_clip(
         or result.spec_path != expected_paths.spec_path
     ):
         raise RuntimeError("subtitle review preview renderer returned unexpected paths")
-    if not exact_subtitle_review_preview_is_ready(expected_paths, expected_hash):
+    if not live_only and not exact_subtitle_review_preview_is_ready(expected_paths, expected_hash):
         raise RuntimeError("subtitle review preview renderer returned invalid artifacts")
     expected_live_spec = build_live_subtitle_review_preview_spec(spec)
     expected_live_hash = subtitle_review_preview_spec_hash(expected_live_spec)
@@ -1696,11 +1698,13 @@ def _mark_subtitle_review_preview_ready(
     clip_id: str,
     spec_hash: str,
     live_spec_hash: str,
+    live_only: bool = False,
 ) -> None:
     clip = next((item for item in document.clips if item.id == clip_id), None)
     if clip is None:
         raise KeyError(clip_id)
-    clip.preview_state = "ready"
+    clip.preview_deferred = live_only
+    clip.preview_state = "stale" if live_only else "ready"
     clip.preview_spec_hash = spec_hash
     clip.preview_video_url = exact_subtitle_review_preview_url(
         document.job_id,
@@ -1713,6 +1717,8 @@ def _mark_subtitle_review_preview_ready(
         clip_id,
         live_spec_hash,
     )
+    if live_only:
+        clip.preview_video_url = None
     clip.preview_error = None
 
 
@@ -2931,6 +2937,7 @@ def run_autoclipper_job(
                             document=review_document,
                             paths=storage_paths,
                             clip_id=clip.id,
+                            live_only=automation_mode == "manual",
                         )
                     except Exception as exc:
                         raise PipelineExpectedError(
@@ -2942,6 +2949,7 @@ def run_autoclipper_job(
                         clip_id=clip.id,
                         spec_hash=result.spec_hash,
                         live_spec_hash=result.live_spec_hash,
+                        live_only=automation_mode == "manual",
                     )
                     _set_subtitle_review_preview_progress(
                         db,
@@ -3255,10 +3263,11 @@ def run_subtitle_review_preview(
             clip_id,
             live_hash,
         )
-        preview_ready = exact_subtitle_review_preview_is_ready(
+        live_only = clip.preview_deferred
+        preview_ready = (live_only or exact_subtitle_review_preview_is_ready(
             artifacts,
             spec_hash,
-        ) and live_subtitle_review_preview_is_ready(live_artifacts, live_hash)
+        )) and live_subtitle_review_preview_is_ready(live_artifacts, live_hash)
 
         if not preview_ready:
             try:
@@ -3271,6 +3280,7 @@ def run_subtitle_review_preview(
                     document=document,
                     paths=storage_paths,
                     clip_id=clip_id,
+                    live_only=live_only,
                 )
             except Exception as exc:
                 write_subtitle_review_preview_error(
@@ -3391,12 +3401,14 @@ def run_subtitle_review_hook_scene_update(
                 document=next_document,
                 paths=storage_paths,
                 clip_id=clip_id,
+                live_only=True,
             )
             _mark_subtitle_review_preview_ready(
                 next_document,
                 clip_id=clip_id,
                 spec_hash=result.spec_hash,
                 live_spec_hash=result.live_spec_hash,
+                live_only=True,
             )
             target_index = next(index for index, item in enumerate(target_candidates) if item.id == clip_id)
             target_candidates[target_index] = updated_candidate
