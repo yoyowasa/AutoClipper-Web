@@ -889,3 +889,13 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 統合は見送り: `youtubePosting.ts`のhashtagsFromText/PostingMetadataDraftと投稿文の役割、`subtitlePreview.ts`の文言正規化、`clipBoundaryTime.ts`の時刻処理を将来の整理候補としてPRに列挙する。特にハッシュタグの大小文字の比較・12件制限が異なるため、このPRでは共有化していない。
 - 検証: frontendのlint・typecheck・test（追加1件を含む26ファイル）・build成功。下書きの既定値/公開タイトル/投稿情報/字幕書式、未保存変更、書式の等価性、ハッシュタグの区切り/重複/大小文字/件数、各種改行と2行制限を確認。タグ欄だけの値差をisClipContentDirtyが判定に含めない現状も維持し、テストに記録した。git diff --check成功。CIのbackend（3.11/3.12）とfrontendはPRで確認する。
 - 停止条件/未確認: ユーザー指示によりPRとCI成功で停止し、マージしない。レビューとユーザーの画面確認は未実施。Dockerのbuild/反映、実ジョブでの画面操作・保存は行っていない。
+
+## 2026-10-15 task-202 字幕確認画面の本体をコンポーネントとフックへ分割
+
+- 目的: 字幕確認ページを役割別に分け、見た目・操作・API呼び出しの条件/引数/順序/タイミングを維持する。task-203/204の変更は含めない。
+- 変更ファイル: `frontend/app/jobs/[jobId]/subtitles/page.tsx`、新規`frontend/components/subtitleReview/`の8ファイル、新規`frontend/lib/subtitleReview/hooks/`の12ファイル、`frontend/tests/subtitleReviewActions.test.ts`、本記録。backend・launcher・CSS・API実装・依存パッケージは変更していない。
+- 構成: clip一覧、プレビュー、字幕一覧/編集、タイトル/フック/投稿文、フック映像、文字書式/画角、下部操作をpropsで接続する。state/refは専用フックへ、41内部関数は更新ガード・プレイヤー・字幕編集・内容下書き・タイトル案・確定操作の6フックへ移した。page.tsxは3428行→9行、画面組み立てのSubtitleReviewScreenは101行。状態管理ライブラリは追加していない。
+- 動作の照合: 分割前のmain `9da16f9`から保存したASTと比較し、41関数の処理本文と捕捉する値、14effectの本文/依存配列、59初期化文、65派生値、state/memo/effectの登録順が一致した。新コンポーネントを展開したJSXも、元のDOM構造・表示条件・文言・イベント・ref・key・既存子コンポーネントのpropsと一致。比較用のsnapshot/スクリプトはGit管理外の`.codex_tmp`で実行した。
+- effect: useEffect 13件・useLayoutEffect 1件の依存配列変更は0件。安定したsetter/refを引数から受け取ることによるESLintの推論上の警告には、元の依存配列の直前だけに注釈を付けた。React Compilerの規則・eslint設定は変更していない。API対応表と14依存配列をPR本文に記載する。
+- 検証: frontendのlint・typecheck・test（追加1件を含む27ファイル）・build成功。追加テストはmocked HTTPで、queued previewでもapplyできること、タイトルとdirty字幕の送信/他clipの未保存字幕保全、未保存変更/未完成previewの操作制限、成功後の遷移、フック更新・一括保存・422の理由表示と更新ガード解除を確認した。backendのローカル検証は実行していない（変更なし）。CIのbackend 3.11/3.12・frontendはPRで確認する。
+- 停止条件/未確認: PRとCI成功で停止し、マージしない。実ブラウザでの操作・保存/書き出しの受入は未確認。Dockerのbuild/反映、実jobのAPI取得・編集は行っていない。レビューとユーザーの画面確認の後にマージを判断する。
