@@ -29,7 +29,6 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   isEditable: boolean;
   segmentsById: Map<string, SubtitleReviewSegment>;
   selectedSegments: SubtitleReviewSegment[];
-  selectedGaps: SubtitleReviewGap[];
   selectedSuggestionSegments: { segmentId: string; text: string; }[];
   selectedSuggestionInputSnapshot: string;
   selectedSuggestionRecord: { response: TitleHookSuggestionResponse; draftHashVerified: boolean; inputSnapshot: string; requestGeneration: number; } | null;
@@ -66,7 +65,6 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   hasDirtyClipContent: boolean;
   selectedHookDurationIsValid: boolean;
   hookSuppressionEnd: number;
-  selectedSubtitleTimeline: ({ kind: "segment"; segment: SubtitleReviewSegment; segmentIndex: number; start: number; } | { kind: "gap"; gap: SubtitleReviewGap; start: number; })[];
   isInHookSuppression: boolean;
   absolutePlaybackTime: number;
   activeSegment: SubtitleReviewSegment | null | undefined;
@@ -94,7 +92,6 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   playFromClipStart: () => void;
   seekToSubtitle: (start: number) => void;
   seekToSubtitleGap: (gap: SubtitleReviewGap) => void;
-  acknowledgeGap: (gap: SubtitleReviewGap) => Promise<void>;
   togglePlayback: () => void;
   skipBy: (seconds: number) => void;
   currentSourceTime: () => number | null;

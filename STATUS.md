@@ -899,3 +899,13 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - effect: useEffect 13件・useLayoutEffect 1件の依存配列変更は0件。安定したsetter/refを引数から受け取ることによるESLintの推論上の警告には、元の依存配列の直前だけに注釈を付けた。React Compilerの規則・eslint設定は変更していない。API対応表と14依存配列をPR本文に記載する。
 - 検証: frontendのlint・typecheck・test（追加1件を含む27ファイル）・build成功。追加テストはmocked HTTPで、queued previewでもapplyできること、タイトルとdirty字幕の送信/他clipの未保存字幕保全、未保存変更/未完成previewの操作制限、成功後の遷移、フック更新・一括保存・422の理由表示と更新ガード解除を確認した。backendのローカル検証は実行していない（変更なし）。CIのbackend 3.11/3.12・frontendはPRで確認する。
 - 停止条件/未確認: PRとCI成功で停止し、マージしない。実ブラウザでの操作・保存/書き出しの受入は未確認。Dockerのbuild/反映、実jobのAPI取得・編集は行っていない。レビューとユーザーの画面確認の後にマージを判断する。
+
+## 2026-10-15 task-203 字幕空白の確認操作と一覧表示を廃止
+
+- 目的: 字幕空白についてはプレビューの注意マーカーだけを残し、一覧内の空白行・確認操作・件数表示を廃止する。
+- 変更ファイル: `frontend/components/SubtitleGapMarkers.tsx`、`frontend/components/subtitleReview/{ReviewClipList,ReviewSubtitleSegments}.tsx`、`frontend/lib/{api,subtitleGaps}.ts`、`frontend/lib/subtitleReview/hooks/{context,useSubtitleEditing,useSubtitleReviewDocument,useSubtitleReviewState}.ts`、`frontend/tests/subtitleGaps.test.ts`、本記録。backend・launcherには変更なし。
+- 表示/操作: SubtitleGapRowと確認ボタン、clip一覧/字幕編集欄の「字幕なし○か所」を削除。プレビューの橙色マーカー・区間のtooltip/読み上げラベルとクリックでのシーク/一時停止は維持する。マーカーの凡例からも件数だけを外し、acknowledgedのtrue/falseによる表示差はなくした。字幕行の時刻順と元のsegmentIndex、構成変更/一括修正、停止位置からの追加、clipのOK/確定操作は維持する。
+- 削除したfrontend専用処理: acknowledgeSubtitleReviewGap、acknowledgeGap、確認中のstateと編集ガードへの条件、mergeSubtitleGapAcknowledgement、unacknowledgedSubtitleGaps、字幕と空白を混在させるsubtitleTimeline/SubtitleTimelineItemと対応するview-model項目。アプリ側の参照が残っていないことを検索で確認した。
+- 互換性: backendの空白検出とPATCHの確認APIは残した。SubtitleReviewGapはマーカーとAPI応答で使うため残し、既存のacknowledged値は応答型として受け取るが表示条件には使わない。保存データを読み替えて書き戻す処理は追加していない。
+- 検証: frontendのlint・typecheck・test（27ファイル）・build成功。SSRとクリックの回帰テストで確認済み/未確認のマーカー表示が一致すること、2区間の位置/幅、pause→seek、保存済みフラグの不変、gapsなし/空/尺0の互換、空白行/件数/確認ボタンの非表示、字幕行の時刻順/元配列の不変、字幕なし時の表示、clipの確認状態とOK操作の維持を確認。git diff --check成功。CIはPRで確認する。
+- 未確認/反映: 実ブラウザでの受入確認、稼働環境への反映、既存jobの取得/編集は未実施。backendのローカル検証は実行していない（変更なし）。

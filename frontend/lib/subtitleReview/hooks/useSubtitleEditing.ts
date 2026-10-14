@@ -3,46 +3,12 @@
 import { editSubtitleStructure } from "../../api";
 import type { SubtitleStructureRequest } from "../../types";
 import type { SubtitleBatchUpdate } from "../../subtitleBulkCorrection";
-import { acknowledgeSubtitleReviewGap, updateSubtitleReviewSegments } from "../../api";
+import { updateSubtitleReviewSegments } from "../../api";
 import { nextNonemptySubtitleStart, subtitleInsertionConflict } from "../../subtitlePauseInsert";
 import { remapInsertedSubtitleDraft, subtitleStructureSources } from "../../subtitleStructureDrafts";
-import { mergeSubtitleGapAcknowledgement } from "../../subtitleGaps";
-import type { SubtitleReviewGap } from "../../types";
 import type { SubtitleReviewContext } from "./context";
 
 export function useSubtitleEditing(context: SubtitleReviewContext) {
-  async function acknowledgeGap(gap: SubtitleReviewGap) {
-    const {
-      selectedClip,
-      isEditable,
-      beginReviewMutation,
-      setAcknowledgingGapId,
-      setError,
-      jobId,
-      isCurrentReviewMutation,
-      setReview,
-      endReviewMutation
-    } = context;
-    if (!selectedClip || !isEditable) return;
-    const clipId = selectedClip.id;
-    const generation = beginReviewMutation();
-    setAcknowledgingGapId(gap.id);
-    setError(null);
-    try {
-      const updated = await acknowledgeSubtitleReviewGap(jobId, clipId, gap.id);
-      if (isCurrentReviewMutation(generation)) {
-        setReview((current) => current ? mergeSubtitleGapAcknowledgement(current, updated, clipId) : current);
-      }
-    } catch (caught) {
-      if (isCurrentReviewMutation(generation)) {
-        setError(caught instanceof Error ? caught.message : "空白区間の確認を保存できませんでした");
-      }
-    } finally {
-      endReviewMutation();
-      setAcknowledgingGapId(null);
-    }
-  }
-
   function openPausedSubtitleDraft() {
     const { videoRef, selectedClip, currentSourceTime, setError, selectedSegments, setPausedSubtitleDraft } = context;
     const video = videoRef.current;
@@ -218,5 +184,5 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
       endReviewMutation();
     }
   }
-  return { acknowledgeGap, openPausedSubtitleDraft, savePausedSubtitleDraft, saveBulkCorrection, saveSubtitleStructure };
+  return { openPausedSubtitleDraft, savePausedSubtitleDraft, saveBulkCorrection, saveSubtitleStructure };
 }

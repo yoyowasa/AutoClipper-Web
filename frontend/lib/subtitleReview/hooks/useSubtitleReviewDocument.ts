@@ -3,7 +3,6 @@
 import { useMemo } from "react";
 import { subtitlePreviewEvents } from "../../subtitlePreview";
 import { subtitleInsertionConflict } from "../../subtitlePauseInsert";
-import { subtitleTimeline, unacknowledgedSubtitleGaps } from "../../subtitleGaps";
 import type { SubtitleReviewSegment } from "../../types";
 import { isPreviewReady, shortTitleOutputExpected } from "../preview";
 import { normalizeReviewTitle } from "../text";
@@ -77,7 +76,6 @@ export function useSubtitleReviewDocument() {
     setAutoGeneratingSuggestionClipIds,
     isSavingBulkCorrection,
     isSavingStructure,
-    acknowledgingGapId,
     retainedLivePreviews,
     setRetainedLivePreviews,
     suggestionHydrationRetryVersion,
@@ -118,7 +116,6 @@ export function useSubtitleReviewDocument() {
   usePendingPreviewPoll({ jobId, hasPendingPreviews, isUpdatingHookScene, reviewMutationCountRef, reviewRequestGenerationRef, setReview });
 
   const hasReviewMutationInFlight =
-    acknowledgingGapId !== null ||
     isSavingBulkCorrection ||
     isSavingStructure ||
     retryingPreviewClipId !== null ||
@@ -142,7 +139,6 @@ export function useSubtitleReviewDocument() {
         .filter((segment): segment is SubtitleReviewSegment => Boolean(segment)) ?? [],
     [segmentsById, selectedClip]
   );
-  const selectedGaps = unacknowledgedSubtitleGaps(selectedClip?.gaps);
   const selectedSuggestionSegments = useMemo(
     () =>
       [...selectedSegments]
@@ -294,9 +290,6 @@ export function useSubtitleReviewDocument() {
         )
       )
     : 0;
-  const selectedSubtitleTimeline = subtitleTimeline(
-    selectedSegments, selectedClip?.gaps, selectedClip?.start ?? 0, hookSceneDuration
-  );
   const isInHookSuppression = clipTime < hookSuppressionEnd;
   const absolutePlaybackTime = selectedClip
     ? hookSceneDuration > 0 &&
@@ -454,7 +447,6 @@ export function useSubtitleReviewDocument() {
     isEditable,
     segmentsById,
     selectedSegments,
-    selectedGaps,
     selectedSuggestionSegments,
     selectedSuggestionInputSnapshot,
     selectedSuggestionRecord,
@@ -491,7 +483,6 @@ export function useSubtitleReviewDocument() {
     hasDirtyClipContent,
     selectedHookDurationIsValid,
     hookSuppressionEnd,
-    selectedSubtitleTimeline,
     isInHookSuppression,
     absolutePlaybackTime,
     activeSegment,
@@ -519,7 +510,6 @@ export function useSubtitleReviewDocument() {
     get playFromClipStart() { return playFromClipStart; },
     get seekToSubtitle() { return seekToSubtitle; },
     get seekToSubtitleGap() { return seekToSubtitleGap; },
-    get acknowledgeGap() { return acknowledgeGap; },
     get togglePlayback() { return togglePlayback; },
     get skipBy() { return skipBy; },
     get currentSourceTime() { return currentSourceTime; },
@@ -571,7 +561,7 @@ export function useSubtitleReviewDocument() {
     toggleFullscreen,
     retrySelectedPreview
   } = useReviewPreviews(context);
-  const { acknowledgeGap, openPausedSubtitleDraft, savePausedSubtitleDraft, saveBulkCorrection, saveSubtitleStructure } = useSubtitleEditing(context);
+  const { openPausedSubtitleDraft, savePausedSubtitleDraft, saveBulkCorrection, saveSubtitleStructure } = useSubtitleEditing(context);
   const {
     updateClipContentDraft,
     updateClipTextStyle,
