@@ -46,7 +46,20 @@ def ingest_video(db: Session, channel_id: int, item: dict[str, Any], observed: d
     return video
 
 
-def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, rows, observed, video_id=None) -> None:
+def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, rows, observed, video_id=None,
+                *, error: YouTubeError | None = None) -> None:
+    if error:
+        run.missing_reports = [*run.missing_reports, {"kind": kind, "videoId": video_id, "start": str(start), "end": str(end),
+                                                    **error.details()}]
+    elif rows and video_id:
+        # A successful retry supersedes the null placeholder for that range.
+        placeholder = db.scalar(select(VideoDailyStat).where(
+            VideoDailyStat.channel_id == run.channel_id, VideoDailyStat.kind == kind,
+            VideoDailyStat.dimension_key == f":{video_id}:",
+            VideoDailyStat.period_start == start, VideoDailyStat.period_end == end))
+        if placeholder and set(placeholder.missing_reasons.values()) == {"API_5XX"}:
+            db.delete(placeholder)
+            db.flush()
     if kind in {"first7", "video_format"} and video_id:
         video = db.get(YouTubeVideo, video_id)
         content_types = {row.get("creatorContentType") for row in rows}
@@ -65,6 +78,9 @@ def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, r
         saved = db.scalar(select(VideoDailyStat).where(
             VideoDailyStat.channel_id == run.channel_id, VideoDailyStat.kind == kind,
             VideoDailyStat.dimension_key == key, VideoDailyStat.period_start == period_start, VideoDailyStat.period_end == period_end))
+        if saved is not None and error:
+            # A transient failure must not erase previously returned statistics.
+            continue
         if saved is None:
             saved = VideoDailyStat(channel_id=run.channel_id, kind=kind, dimension_key=key,
                                    period_start=period_start, period_end=period_end)
@@ -72,7 +88,8 @@ def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, r
         saved.video_id, saved.sync_run_id = selected_id, run.id
         saved.dimensions = dimensions
         saved.values = {metric: row.get(metric) for metric in METRICS}
-        saved.missing_reasons = {metric: "UNAVAILABLE" if rows else "NO_ROWS" for metric in METRICS if row.get(metric) is None}
+        missing = error.code if error else "NO_ROWS"
+        saved.missing_reasons = {metric: "UNAVAILABLE" if rows else missing for metric in METRICS if row.get(metric) is None}
         saved.observed_at, saved.expires_at = observed, statistical_expiry(observed, config)
-        if not rows:
+        if not rows and not error:
             run.missing_reports = [*run.missing_reports, {"kind": kind, "videoId": video_id, "reason": "NO_ROWS"}]

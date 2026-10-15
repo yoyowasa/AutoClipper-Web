@@ -33,7 +33,7 @@ def read_run(run: SyncRun) -> SyncRunRead:
     return SyncRunRead(id=run.id, status=run.status, queuedAt=run.queued_at, finishedAt=run.finished_at,
         errorCode=run.error_code, errorMessage=ERROR_MESSAGES.get(run.error_code), requestedStart=run.requested_start,
         requestedEnd=run.requested_end, lastReportDate=run.last_report_date, fetchedCount=run.fetched_count,
-        truncated=run.truncated, missingReportCount=len(run.missing_reports))
+        truncated=run.truncated, missingReportCount=sum(item.get("reason") == "NO_ROWS" for item in run.missing_reports))
 
 
 @router.get("/channels", response_model=YouTubeConnectionsRead)
