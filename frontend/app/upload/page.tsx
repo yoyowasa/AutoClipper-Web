@@ -2,6 +2,7 @@
 
 import { FormEvent, Suspense, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 import {
   SettingsPanel,
@@ -344,6 +345,7 @@ function UploadForm() {
             </span>
           </div>
           <div className="flex items-center gap-2">
+            <Link href="/settings" className="text-xs font-semibold underline">YouTube連携・設定</Link>
             <span className="hidden text-[11px] font-semibold text-[#6d6d68] sm:inline">
               {runtimeProfile === "gpu"
                 ? "GPU recommended"

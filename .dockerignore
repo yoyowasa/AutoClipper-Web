@@ -9,6 +9,7 @@ storage/temp/*
 storage/outputs/*
 storage/heatmaps/*
 storage/codex_bridge/*
+storage/secrets/
 storage/*.db
 storage/*.db-*
 storage/.storage-lifecycle.lock

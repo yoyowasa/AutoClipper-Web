@@ -923,3 +923,20 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: ruff 0.16.10の`cd backend; python -m ruff check . ../launcher ../scripts`成功。Python 3.11.9の`python -m pytest -q`は1751 passed・2 skipped。frontendのlint/typecheck/test（28ファイル）/build成功。正式生成の保留・単一apply・finalizeの409ゲート、normal/shortのlive-onlyで正式MP4/ASSを作らないこと、旧hook worker、RQ ID、live失敗/再試行を確認。下書きの単一送信、保存/復元/破棄/保存不能、hook/bodyの時計対応、旧liveのフック長もテストした。
 - ブラウザ検証: 別ポートの架空APIと合成MP4だけを使用。タイトル・字幕・3秒フックを下書きで編集→別clipへ移動→再読み込みで復元→apply1件に全項目が含まれる→未保存0・正式作成中→他clip編集可能を確認。稼働API/DB・Codexへは接続していない。テスト前後で稼働DBの536,576 bytes・更新時刻2026-10-14T14:12:33.1189291Zが不変。
 - 未確認/反映: 実動画と稼働環境でのユーザー受入は未実施。Docker Desktop Linuxエンジン停止のため既存コンテナの起動確認はできていない。Dockerのbuild/反映、稼働jobの取得/編集は行っていない。Codex中継の変更・再起動は不要。PRとCI確認後、レビュー/ユーザー確認のため未マージで止める。
+
+
+## 2026-10-15 task-205 Clip Intelligence統合① YouTube接続と自チャンネル同期
+
+- 目的/範囲: Clip Intelligenceの本人OAuthと公式統計の取得をAutoClipperへ移す。参照元は読み取りのみ。制作記録のDB結合・Codex分析・派生集計/制作反映・分析画面・既存データ移行・旧アプリ停止は含めない。既存の切り抜きrunner/選定/字幕処理とlauncherは変更しない。
+- 変更ファイル: 新規`backend/app/intelligence/`（models/credentials/oauth/secret_files/youtube_client/collection/ingest/sync/queue/policy/maintenance/schemas/common）、新規`api/intelligence.py`、既存のconfig/db/main/storage paths/worker、pyprojectと2つのrequirements lock、composeとGit/Docker除外。frontendの新規settingsページ・YouTubeConnectionSettings・lib/intelligenceとuploadの設定リンク。新規backend/frontendテスト、API一覧契約、`docs/INTELLIGENCE_YOUTUBE_SYNC.md`、本記録。
+- DB: channels/channel_connections/youtube_videos/video_daily_stats/sync_runsの5テーブルをcreate_allで追加。既存テーブルの列は変更しない。トークンはDBに保存しない。日次/期間集計、チャンネル/動画、公開/内部の出所を混同しない。
+- 認可: Desktopループバックの既定URLはhttp://localhost:8000/api/intelligence/oauth/callback（設定でループバックhost/portのみ変更可）。youtube.readonly/yt-analytics.readonlyの2スコープ、10分・1回限りのstate、HttpOnly/SameSite cookie、PKCEを使用。指定したチャンネルIDとmine=trueの取得結果が一致した場合だけ保存する。認可開始と同期POSTは外部Originを拒否する。
+- 秘密情報: Googleクライアント設定はユーザーがstorage/secrets/google-client.jsonへコピーする。トークンはStoragePathsに集約したstorage/secrets/youtube_tokens/<channel_external_id>.jsonへ、一時ファイルを600で作り置換（親700、Linux）。state一時情報も同様。GitとDocker build contextからsecretsを除外。OAuthライブラリの資格情報debugログ、callbackアクセスログのqueryを抑止し、API/例外には許可リストの理由だけを返す。実際の資格情報の値は開いていない。
+- 同期: HTTPではRQ登録だけ。同じチャンネルの実行中claimはuniqueで二重登録を409にする。最新200本＋追跡済みの旧動画を更新し、公開動画だけ登録する。公開のviews/likes/comments、内部の10指標を取得。チャンネル日次60日、最終返却日から28日/前28日、動画別日次60日/28日、公式creatorContentType、公開翌日から7暦日（新しい順50本）を保存する。集計日はAmerica/Los_Angeles。件数上限による打切りはpartialとして表示する。
+- 欠損/失敗: NULLはUNAVAILABLE、空レポートはNO_ROWS。0にせず、負数likes・100%超の平均視聴割合も公式値のまま保存。invalid_grant/401は再接続が必要へ。利用枠/権限エラーはRQとsync_runsをfailedにする。通信中にDB書き込みロックを保持せず、取得後一括commit、失敗時は前回の成功分を保つ。実行のAPI期限は既定120秒・最大90要求、各I/O timeout最大10秒、RQ hard timeoutは150秒（設定上限+30秒）。強制終了/孤立した同期はworker失敗処理/保守で記録する。
+- 保持条件: 2026-10-15のユーザー決定に基づきderived_allowed/extended_storageは既定true、確認日と追加ポリシーURLをconfigに保存。統計は取得から最大36暦月。タイトル・名前等は30日更新できなければ消す。extended_storage=falseなら統計も30日。workerのrun_maintenance_tasksで期限処理し、切り抜き出力の掃除からは独立させる。この段階で独自の派生指標は作らない。
+- 画面: /settingsにYouTube連携を追加。接続/再接続/同期、接続状態、最終成功日時、今回の結果、最新返却日、NO_ROWSを表示する。接続成功と統計取得成功は別に扱う。
+- 依存: uv 0.12.22で実行用/dev用universal lockを再生成し、同じコマンドで再生成してSHA256不変を確認。既存pin変更なし、新規13パッケージ（google-auth-oauthlib 1.5.0/google-auth 2.62.0と推移依存、tzdata等）。Python 3.11/3.12の既存NumPy分岐、av 18.1.0/faster-whisper 1.2.1は維持する。
+- ローカル検証: Python 3.11.9の`python -m pytest -q`は1777 passed・2 skipped。ruff 0.16.10の`cd backend; python -m ruff check . ../launcher ../scripts`成功。frontendのlint/typecheck/test（29ファイル）/build成功。OAuth/state/本人不一致/権限不足/トークン非表示/atomic保存失敗/invalid_grant/欠損/期間/再同期/二重登録/キュー失敗/時間制限/強制終了/DBロック回避/保持期限/既存schema不変をモックと隔離DBで確認した。
+- compose/ブラウザ: task205-validationの専用CPU構成、専用DBボリューム、18050/13050ポートでbuild/起動。最終APIは読み取り専用source bindでも起動確認した。backend healthy、worker/frontend/redis running、/healthと/settingsが200、5テーブル作成、Linuxの合成トークンファイル600、av 18.1.0/faster-whisper 1.2.1を確認。ブラウザでも連携設定画面を確認。外部Originの同期POSTは403。検証専用コンテナ・ボリューム・イメージは終了後に削除した。稼働コンテナの作り直しは行わず、稼働DBの536,576 bytes・更新時刻2026-10-14T23:52:24.2735236Zが検証前後で不変。
+- 未確認: 実際のGoogle認可・実チャンネル同期は未実施（ユーザーが反映後に行う）。既存チャンネル/過去統計/手入力データは移行していない。CIの3.11/3.12/frontendはPRで確認し、成功後もレビュー待ちで未マージとする。稼働環境へは未反映、Codex中継の変更/再起動なし。
