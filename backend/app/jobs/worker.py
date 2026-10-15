@@ -12,6 +12,7 @@ from app.jobs.queue import get_redis_connection
 from app.db import SessionLocal
 from app.intelligence.sync import record_rq_sync_failure
 from app.intelligence.maintenance import maintain_youtube
+from app.intelligence.analysis_runner import record_rq_analysis_failure
 from app.storage.paths import get_storage_paths
 
 
@@ -27,6 +28,7 @@ class CharacterAssetWorker(Worker):
                 with SessionLocal() as db:
                     mark_rq_failure(db, job, exc_string)
                     record_rq_sync_failure(db, job)
+                    record_rq_analysis_failure(db, job)
         except Exception:
             logging.getLogger(__name__).warning("Application job failure could not be recorded; maintenance will reconcile it")
 

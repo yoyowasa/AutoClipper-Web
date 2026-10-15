@@ -34,9 +34,12 @@ THUMBNAIL_COPY_TASK = "thumbnail_copy_suggestions"
 THUMBNAIL_FRAME_RANK_TASK = "thumbnail_frame_rank"
 CHARACTER_ASSET_CLASSIFY_TASK = "character_asset_classify"
 THUMBNAIL_EMOTION_SELECT_TASK = "thumbnail_emotion_select"
+CHANNEL_SELF_ANALYSIS_TASK = "channel_self_analysis"
+CHANNEL_SELF_ANALYSIS_MODEL = "gpt-6-astra"
+CHANNEL_SELF_ANALYSIS_TIMEOUT_SECONDS = 900.0
 ALLOWED_REQUEST_TASKS = frozenset({
     REQUEST_TASK, THUMBNAIL_COPY_TASK, THUMBNAIL_FRAME_RANK_TASK, CHARACTER_ASSET_CLASSIFY_TASK, *INITIAL_SELECTION_TASKS,
-    THUMBNAIL_EMOTION_SELECT_TASK,
+    THUMBNAIL_EMOTION_SELECT_TASK, CHANNEL_SELF_ANALYSIS_TASK,
 })
 MAX_REQUEST_BYTES = 4 * 1024 * 1024
 MAX_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -241,6 +244,7 @@ TITLE_HOOK_OUTPUT_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 EXPECTED_RESPONSE_SCHEMA_SHA256 = {
+    CHANNEL_SELF_ANALYSIS_TASK: "9ec4cea58707f4164b205f6b02194b524d4858db041b0f57d1acd23c036f37e1",
     THUMBNAIL_EMOTION_SELECT_TASK: "f0c2e24958ee144da98757ff6382790ddc4b6b8553e7a52a08fa9904617ddbcb",
     CHARACTER_ASSET_CLASSIFY_TASK: "0d4baaf7e17e83d4f42f8fac2685d6cfc8e0acd16fc93b186e29e4ba5efee7c6",
     THUMBNAIL_FRAME_RANK_TASK: "eb98de5fc047f2d5a8a8a9350108e9cb949ae6d4607c405966ec46cc46110097",
@@ -698,6 +702,16 @@ def _resolve_storage_image(storage_root: Path, value: Any) -> Path:
     return candidate
 
 
+def _analysis_expiry(payload: dict[str, Any]) -> float:
+    try:
+        stamp = datetime.fromisoformat(payload["expiresAt"])
+        if stamp.tzinfo is None or stamp.timestamp() <= time.time():
+            raise ValueError("expired or missing timezone")
+        return stamp.timestamp()
+    except (KeyError, ValueError, TypeError, OverflowError):
+        raise ValueError("analysis_request_invalid") from None
+
+
 def validate_request(payload: dict[str, Any], storage_root: Path) -> BridgeRequest:
     allowed_keys = {
         "schemaVersion",
@@ -712,6 +726,8 @@ def validate_request(payload: dict[str, Any], storage_root: Path) -> BridgeReque
         "promptVersion",
         "attempt",
     }
+    if payload.get("task") == CHANNEL_SELF_ANALYSIS_TASK:
+        allowed_keys.add("expiresAt")
     if set(payload) - allowed_keys:
         raise ValueError("request_fields_unsupported")
     if int(payload.get("schemaVersion") or 0) != BRIDGE_PROTOCOL_VERSION:
@@ -730,6 +746,13 @@ def validate_request(payload: dict[str, Any], storage_root: Path) -> BridgeReque
         raise ValueError("images_invalid")
     if task == THUMBNAIL_EMOTION_SELECT_TASK and raw_images:
         raise ValueError("thumbnail_emotion_images_not_allowed")
+    if task == CHANNEL_SELF_ANALYSIS_TASK and (
+        raw_images or payload.get("threadId") or payload.get("model") not in (None, CHANNEL_SELF_ANALYSIS_MODEL)
+        or not re.fullmatch(r"[0-9a-f]{32}", request_id)
+    ):
+        raise ValueError("analysis_request_invalid")
+    if task == CHANNEL_SELF_ANALYSIS_TASK:
+        _analysis_expiry(payload)
     images = tuple(_resolve_storage_image(storage_root, value) for value in raw_images)
     raw_response_schema = payload.get("responseSchema")
     if raw_response_schema is None:
@@ -785,9 +808,12 @@ def build_codex_command(
         ]
     for feature in DISABLED_CODEX_FEATURES:
         command.extend(["--disable", feature])
+    if request.task == CHANNEL_SELF_ANALYSIS_TASK:
+        command.extend(["--ephemeral", "-c", 'history.persistence="none"'])
     # Apply the same policy to new requests and resumed threads, including legacy inputs.
     command.extend(
-        ["--model", CODEX_MODEL, "-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"']
+        ["--model", CHANNEL_SELF_ANALYSIS_MODEL if request.task == CHANNEL_SELF_ANALYSIS_TASK else CODEX_MODEL,
+         "-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"']
     )
     command.extend(
         [
@@ -995,7 +1021,7 @@ REQUEST_VALIDATION_MESSAGES = {
 }
 
 
-def process_request_file(
+def _process_request_file(
     request_path: Path,
     *,
     project_root: Path,
@@ -1060,6 +1086,10 @@ def process_request_file(
     session_dir.mkdir(parents=True, exist_ok=True)
     work_dir = private_paths.work / request.request_id
     work_dir.mkdir(parents=True, exist_ok=True)
+    if request.task == CHANNEL_SELF_ANALYSIS_TASK:
+        atomic_write_json(work_dir / ".channel-self-analysis", {
+            "expiresAt": min(time.time() + 30 * 24 * 60 * 60, _analysis_expiry(payload)),
+        })
     schema_path = work_dir / "output-schema.json"
     output_path = work_dir / "final-output.json"
     schema_path.write_text(
@@ -1076,6 +1106,7 @@ def process_request_file(
     )
     effective_timeout = max(
         timeout,
+        CHANNEL_SELF_ANALYSIS_TIMEOUT_SECONDS if request.task == CHANNEL_SELF_ANALYSIS_TASK else
         INITIAL_CLIP_SELECTION_TIMEOUT_SECONDS
         if request.task in INITIAL_SELECTION_TASKS
         else DEFAULT_CODEX_TIMEOUT_SECONDS,
@@ -1105,7 +1136,7 @@ def process_request_file(
                 paths.stop_request,
             )
     thread_id = thread_id_from_jsonl(result.stdout) or request.thread_id
-    if thread_id:
+    if thread_id and request.task != CHANNEL_SELF_ANALYSIS_TASK:
         try:
             register_bridge_thread(
                 private_paths,
@@ -1160,6 +1191,54 @@ def process_request_file(
             request=request,
         )
     return _ready_response(request, thread_id=thread_id, output=output)
+
+
+def process_request_file(
+    request_path: Path, *, project_root: Path, codex_executable: str | None = None,
+    runner: CodexRunner = run_codex_command, timeout: float = DEFAULT_CODEX_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    # Analysis contains expiring YouTube metadata. Its private scratch must not
+    # survive success, malformed output, timeout, or an exception. Old tasks keep
+    # their existing session/resume behavior.
+    analysis = False
+    try:
+        analysis = (re.fullmatch(r"[0-9a-f]{32}", request_path.stem) is not None
+                    and read_json_object(request_path).get("task") == CHANNEL_SELF_ANALYSIS_TASK)
+    except (OSError, ValueError):
+        pass
+    try:
+        return _process_request_file(request_path, project_root=project_root, codex_executable=codex_executable,
+                                     runner=runner, timeout=timeout)
+    finally:
+        if analysis:
+            private = private_bridge_paths(project_root)
+            for base in (private.sessions, private.work):
+                target = base / request_path.stem
+                try:
+                    target.resolve().relative_to(base.resolve())
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                except (OSError, ValueError):
+                    pass
+
+
+def expire_analysis_scratch(project_root: Path, *, clock: float | None = None) -> None:
+    # Only marked analysis directories are eligible; legacy resumable tasks stay intact.
+    private = private_bridge_paths(project_root)
+    stamp = time.time() if clock is None else clock
+    for marker in private.work.glob("*/.channel-self-analysis"):
+        try:
+            request_id = marker.parent.name
+            expiry = read_json_object(marker).get("expiresAt")
+            if not re.fullmatch(r"[0-9a-f]{32}", request_id) or not isinstance(expiry, (int, float)) or expiry > stamp:
+                continue
+            for base in (private.sessions, private.work):
+                target = base / request_id
+                target.resolve().relative_to(base.resolve())
+                if target.is_dir():
+                    shutil.rmtree(target)
+        except (OSError, ValueError):
+            continue
 
 
 def recover_processing_requests(paths: BridgePaths) -> None:
@@ -1377,8 +1456,12 @@ def serve(
             return 5
         recover_processing_requests(paths)
         _write_request_status(paths, request_id=None, request_state="idle")
+        last_analysis_cleanup = 0.0
         while True:
             try:
+                if time.monotonic() - last_analysis_cleanup >= 3600 or last_analysis_cleanup == 0:
+                    expire_analysis_scratch(root)
+                    last_analysis_cleanup = time.monotonic()
                 process_pending_requests(
                     paths,
                     project_root=root,

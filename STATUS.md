@@ -965,3 +965,19 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: 最終差分のPython 3.11.9・backend全件pytestは1845 passed・2 skipped（既存1821件＋追加24件）。関連24件とruff 0.16.10の`check . ../launcher ../scripts`成功。frontendのlint/typecheck/test（30ファイル）/build成功。CIのPython 3.11/3.12とfrontendはPRで確認する。
 - 隔離起動/画面: task207-validationの専用DBボリューム・18070/13070ポートでbuild/起動し、backend healthy、worker起動、/healthと/settingsが200。合成データで自動1件→画面から手動結合で2件→解除で1件、再照合でもmanual_unlinked維持を確認。検証コンテナ/ボリューム/イメージは削除。稼働autoclipperwebは作り直していない。
 - 未確認/範囲: 実データの結合操作・稼働環境への反映は未実施。制作記録にYouTubeの数値は書き込まない。launcherとCodex中継の変更なし。PRはCI（Python 3.11/3.12・frontend）を確認後も未マージでレビュー待ちにする。
+
+## 2026-10-16 task-208 Clip Intelligence統合③ Codexによる自己分析
+
+- 目的: 自チャンネルの統計と結び付いた制作記録を、既存のホスト側Codex中継経由で分析し、検証済みの所見・仮説・提案を保存・表示する。Clip Intelligenceは参照のみで編集せず、採用/改善試験や制作への自動反映は統合⑤以降とする。
+- 変更ファイル: backend/app/intelligence/analysis_*・recommendation_rules.py、api/channel_analysis.py、既存intelligenceのmodels/queue/policy/maintenance、worker/main、共用中継envelope、storage/paths.py、launcher/codex_bridge.py、frontendのChannelAnalysisSettings/channelAnalysisとYouTube連携欄、backend/frontendの関連テスト・API一覧契約・旧中継指紋fixture、docs/INTELLIGENCE_SELF_ANALYSIS.md、本記録。
+- 根拠: 最新のsuccess/partial同期の最終返却日を基準に直近28日・前28日、チャンネル日次推移、動画別期間・初期7日のネイティブ値、公式形式別の動画一覧、欠損理由を組み立てる。形式別全体集計・流入元・維持率等の未取得値は作らない。動画別×日別の全行は重ねて渡さず、動画比較は期間/初期7日の原値を使う。欠損を0にしない。
+- 制作情報: production_linksの最新記録と一致するファミリーだけ、尺、フック映像の有無/長さ/文言、タイトル候補/選択/推薦/intent、選定理由・topicKey・openingScore・score・キャラを付ける。未結合には補わない。統計/公開累計/制作情報に別の根拠IDを振り、出所・期間・観測日時・定義を渡す。公式統計と制作情報を区別する。
+- 返答/保存: Clip IntelligenceのFinding/Proposal/Reviewと公式推薦面の説明を移植。baseline_video_idのみAutoClipperの動画キーに合わせ11文字のYouTube ID文字列にする。channel/batch/根拠ID/基準動画と形式/主要指標views/推薦面の対応を検証し、不正出力は保存しない。生成中に根拠が変わった場合も不採用。新テーブルchannel_analysis_runsはcreate_allで作り、既存テーブルを変更しない。実行状態・入力スナップショット・検証済みReview・モデル/推論/中継依頼IDを記録する。
+- 実行: POST/GET /api/intelligence/channels/{id}/analysis。POSTは既存連携と同じOrigin確認、202でRQに受付。同一チャンネルのactive claimをDB一意制約で1件に制限。事前同期はauto（最終同期から24時間以上、既定）/always/never。同じRQ仕事の中で同期し、単一workerで子仕事を待たない。同期失敗時のclaimも閉じる。worker失敗フックと孤立仕事の保守点検を追加。
+- 中継: 新しいchannel_self_analysisだけgpt-6-astra/high、文字入力のみ・再開なし・履歴なしの一時セッション。ホスト上限900秒、backend待ち960秒、RQは同期予算+1020秒（既定1140秒）。既存種別のモデル/推論・全スキーマ指紋はmainから保存したfixtureとの照合で維持する。共用envelopeの期限は分析だけに付け、既存種別の送信内容に追加しない。ホスト側Codex中継の再起動が反映時に必要。
+- 保持: 入力/ReviewはYouTubeメタデータとして最長30日か、参照元の最短期限まで。36か月の統計保持で延長しない。期限処理で本文を消し、本文を含まない監査ID/モデル/時刻等だけ残す。GETは期限切れ本文を返さない。中継ファイルは終了時/保守で片付け、ホストの分析専用一時領域も終了時に削除する。強制終了時の残骸には根拠と同じ期限を持たせ、起動時・1時間ごとの点検で削除する。既存種別の再開用領域は消さない。
+- 画面: 設定のYouTube連携内に分析開始、事前同期の選択、状態、保持期限内の最新成功結果、所見/代替説明/反対証拠/次の確認、提案/推薦面/根拠ID、直近20件の履歴を文章で表示。新しい分析が失敗しても前回成功を残す。
+- 実データの入力確認: 稼働DBを読み取り専用接続のbackup()でGit対象外のコピーへ複製し、integrity_check=ok。チャンネル1は66本/根拠2568件/prompt230213文字、チャンネル2は20本/根拠680件/prompt67896文字で上限280000内。上限を超えた場合は理由付き失敗とし黙って切り落とさない。元DBの1,421,312 bytes・更新時刻2026-10-15T14:19:34 UTCは検証前後で不変。
+- 検証: ruff 0.16.10のcheck . ../launcher ../scripts成功。最終差分のPython 3.11.9・backend全件pytestは1877 passed・2 skipped（既存1845件＋追加32件）。分析/共用中継/ホスト関連106件成功。frontend lint/typecheck/test（31ファイル）/build成功。
+- 分離起動/画面: task208-validation専用DB/Redis/ポート18177・13177でbackend healthy、worker起動、/health・/settingsが200。架空の検証済みReviewで所見/仮説/提案/推薦面を表示し、実RQ受付→統計不足で理由付き失敗→前回成功結果を維持することをブラウザで確認。中継依頼は0件。検証コンテナ/ボリューム/イメージを削除済み。最初の検証ポート18080はWindowsに拒否され、使用可能な分離ポートへ変更して確認した。
+- 未確認/範囲: 実Codex実行・実Google同期・分析品質/改善効果は未確認で、反映後にユーザーが確認する。稼働環境のbuild/再作成、中継の再起動は行っていない。有料APIは使わず、既存切り抜き処理と制作記録の契約は変更しない。PRのCI（Python 3.11/3.12・frontend）確認後も未マージでレビュー待ちにする。

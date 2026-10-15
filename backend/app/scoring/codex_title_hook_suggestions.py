@@ -45,6 +45,7 @@ class _BridgeEnvelope(BaseModel):
     task: Literal[
         "title_hook_suggestions", "thumbnail_copy_suggestions", "thumbnail_frame_rank",
         "thumbnail_emotion_select",
+        "channel_self_analysis",
     ] = "title_hook_suggestions"
     request_id: str = Field(pattern=r"^[0-9a-f]{32}$", alias="requestId")
     prompt: str = Field(min_length=1)
@@ -53,6 +54,7 @@ class _BridgeEnvelope(BaseModel):
     model: str | None = Field(default=None, min_length=1, max_length=64)
     thread_id: str | None = Field(default=None, alias="threadId")
     thread_scope: str = Field(min_length=1, max_length=128, alias="threadScope")
+    expires_at: datetime | None = Field(default=None, alias="expiresAt")
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -295,6 +297,7 @@ class CodexTitleHookSuggestionGenerator:
             model=self.model,
             threadId=self.thread_id,
             threadScope=f"{self.job_id}:{self.clip_id}",
+            expiresAt=getattr(self, "expires_at", None),
         )
         write_json_atomic(
             self.request_path(request_id),

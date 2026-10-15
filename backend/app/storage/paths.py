@@ -37,6 +37,12 @@ class StoragePaths:
     def production_records(self) -> Path:
         return self.root / "production_records"
 
+    def analysis_bridge_files(self, request_id: str) -> tuple[Path, ...]:
+        if not re.fullmatch(r"[0-9a-f]{32}", request_id):
+            raise ValueError("Invalid analysis request identifier")
+        return tuple(self.root / "codex_bridge" / folder / f"{request_id}.json"
+                     for folder in ("requests", "processing", "responses"))
+
     @property
     def google_client(self) -> Path:
         return self.root / "secrets" / "google-client.json"

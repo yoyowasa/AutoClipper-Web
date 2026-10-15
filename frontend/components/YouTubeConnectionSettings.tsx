@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { ChannelAnalysisSettings } from "./ChannelAnalysisSettings";
 import { getYouTubeConnections, startYouTubeConnection, syncYouTubeChannel, youtubeSyncLabel, youtubeSyncTime,
   type YouTubeConnections } from "../lib/intelligence";
 
@@ -30,6 +31,7 @@ export function YouTubeConnectionList({ data, busy, onConnect, onSync }: {
         <button type="button" disabled={busy || active || channel.connectionStatus !== "connected"}
           className="bg-sky-700 px-3 py-2 text-white disabled:opacity-40" onClick={() => onSync(channel.id)}>同期する</button>
       </div>
+      <ChannelAnalysisSettings channelId={channel.id} connected={channel.connectionStatus === "connected"} syncActive={active} />
     </li>;
   })}</ul>;
 }
