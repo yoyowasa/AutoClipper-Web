@@ -679,6 +679,7 @@ class SubtitleReviewClipSegmentUpdate(BaseModel):
 
 
 class SubtitleReviewClipApplyRequest(SubtitleReviewClipContentUpdateRequest):
+    framing: SubtitleReviewClipFramingUpdateRequest | None = None
     publication_title: str | None = Field(
         default=None,
         min_length=1,

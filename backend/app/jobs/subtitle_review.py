@@ -41,7 +41,7 @@ SUBTITLE_REVIEW_PREVIEW_DIRNAME = "subtitle_review_previews"
 _STYLE_UNSET = object()
 
 SubtitleReviewState = Literal["awaiting_review", "render_queued", "rendering", "completed"]
-SubtitleReviewPreviewState = Literal["queued", "rendering", "ready", "failed"]
+SubtitleReviewPreviewState = Literal["stale", "queued", "rendering", "ready", "failed"]
 
 
 def _utc_iso() -> str:
@@ -213,6 +213,7 @@ class SubtitleReviewClip(BaseModel):
     duration: float = Field(ge=0)
     preview_video_url: str | None = Field(default=None, alias="previewVideoUrl")
     preview_state: SubtitleReviewPreviewState = Field(default="queued", alias="previewState")
+    preview_deferred: bool = Field(default=False, alias="previewDeferred")
     preview_spec_hash: str | None = Field(default=None, alias="previewSpecHash")
     preview_error: str | None = Field(default=None, alias="previewError")
     live_preview_video_url: str | None = Field(

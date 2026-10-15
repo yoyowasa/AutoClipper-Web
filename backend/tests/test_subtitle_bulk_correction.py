@@ -52,7 +52,8 @@ def test_bulk_correction_saves_shared_segments_and_can_undo(client: TestClient) 
     ]
     assert {c.id: c.confirmed for c in saved.clips} == {"normal": False, "short": False, "other": True}
     assert [c.title for c in saved.clips] == [c.title for c in document.clips]
-    assert len({c.id for c in saved.clips if c.preview_state == "queued"}) == 2
+    assert len({c.id for c in saved.clips if c.preview_state == "stale"}) == 2
+    assert all(c.preview_deferred for c in saved.clips if c.id in {"normal", "short"})
     undo = [{"segmentId": item["segmentId"], "before": item["text"], "text": item["before"]} for item in updates]
     assert client.patch(f"/api/jobs/{job_id}/subtitle-review/segments", json={"segments": undo}).status_code == 200
     assert [s.text for s in load_subtitle_review(path).segments] == [s.text for s in document.segments]

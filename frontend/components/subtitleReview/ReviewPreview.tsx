@@ -1,5 +1,7 @@
 "use client";
 
+import { livePlaybackSource } from "../../lib/subtitleReview/livePlaybackSource";
+import { DraftReviewPlayer } from "./DraftReviewPlayer";
 import { LiveShortFramingPreview } from "../LiveShortFramingPreview";
 import { SubtitleGapMarkers } from "../SubtitleGapMarkers";
 import { ClipTextOverlay } from "../ClipTextStyleEditor";
@@ -10,8 +12,9 @@ import { ReviewShortFraming } from "./ReviewStyleFraming";
 
 export function ReviewPreview({ context }: { context: SubtitleReviewViewContext }) {
   const {
-    selectedClip,
+    selectedClip: savedClip,
     selectedShortFramingDraft,
+    retainedLivePreviews,
     review,
     jobId,
     isEditable,
@@ -69,6 +72,19 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
     changePlaybackRate,
     toggleFullscreen
   } = context;
+  const savedHookDuration = savedClip?.hookSceneStart != null && savedClip.hookSceneEnd != null ? savedClip.hookSceneEnd - savedClip.hookSceneStart : 0;
+  const draftHookDuration = selectedClipContentDraft?.hookSceneStart != null && selectedClipContentDraft.hookSceneEnd != null
+    ? selectedClipContentDraft.hookSceneEnd - selectedClipContentDraft.hookSceneStart : 0;
+  const selectedClip = savedClip ? { ...savedClip,
+    hookSceneStart: selectedClipContentDraft?.hookSceneStart ?? null, hookSceneEnd: selectedClipContentDraft?.hookSceneEnd ?? null,
+    gaps: savedClip.gaps?.map(gap => ({ ...gap, start: gap.start + draftHookDuration - savedHookDuration, end: gap.end + draftHookDuration - savedHookDuration }))
+  } : null;
+  const media = savedClip ? livePlaybackSource(savedClip, review, retainedLivePreviews[savedClip.id]) : null;
+  const draftFramingKey = selectedShortFramingDraft ? JSON.stringify([selectedShortFramingDraft.framingOffsetX,
+    selectedShortFramingDraft.framingOffsetY, selectedShortFramingDraft.framingZoom,
+    selectedShortFramingDraft.shortLayout ?? selectedClip?.shortLayout ?? review.shortLayout]) : null;
+  const replacePicture = selectedShortFramingDirty || Boolean(selectedClip?.previewFraming)
+    || (media?.framingKey !== null && media?.framingKey !== draftFramingKey);
   return (
     <section className="subtitle-review-player flex min-w-0 flex-col border-b border-neutral-300 lg:border-r 2xl:min-h-0 2xl:overflow-hidden">
             {selectedClip ? (
@@ -86,7 +102,7 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                       <div>
                         <p className="text-sm font-semibold text-neutral-900">ショート画角</p>
                         <p className="text-xs text-neutral-500">
-                          配置を試してから保存。試し表示では動画を再生成しません
+                          画角は下書きに反映し、clipの確定時にまとめて保存します。
                         </p>
                       </div>
 
@@ -123,7 +139,7 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                         }`}
                         style={{ containerType: "inline-size" }}
                       >
-                      {selectedPlayerReady && selectedPlayerVideoUrl ? (
+                      {isShowingLivePreview ? <DraftReviewPlayer context={context} /> : selectedPlayerReady && selectedPlayerVideoUrl ? (
                         <video
                         className="h-full w-full cursor-pointer bg-black object-contain"
                         key={playerMediaKey}
@@ -169,13 +185,15 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                         onWaiting={() => setIsBuffering(true)}
                         />
                       ) : null}
-                      {isShowingLivePreview && selectedClip.type === "short" && selectedClip.previewFraming && selectedShortFramingDraft ? (
+                      {isShowingLivePreview && selectedClip.type === "short" && replacePicture && selectedShortFramingDraft ? (
                         <LiveShortFramingPreview
                           key={`${selectedClip.id}:${selectedClip.shortLayout ?? review.shortLayout}`} jobId={jobId} clipId={selectedClip.id}
                           sourceUrl={review.sourceVideoUrl} clockRef={videoRef}
-                          framing={selectedShortFramingDraft} layout={selectedClip.shortLayout ?? review.shortLayout}
+                          framing={selectedShortFramingDraft} layout={selectedShortFramingDraft.shortLayout ?? selectedClip.shortLayout ?? review.shortLayout}
                           start={selectedClip.start} end={selectedClip.end}
                           hookStart={selectedClip.hookSceneStart} hookEnd={selectedClip.hookSceneEnd}
+                          topBannerUrl={review.shortTopBannerEnabled ? `/api/jobs/${jobId}/subtitle-review/banner-assets/top?v=${review.updatedAt}` : undefined}
+                          bottomBannerUrl={review.shortBottomBannerEnabled ? `/api/jobs/${jobId}/subtitle-review/banner-assets/bottom?v=${review.updatedAt}` : undefined}
                         />
                       ) : null}
                       {isShowingLivePreview && selectedClip ? (

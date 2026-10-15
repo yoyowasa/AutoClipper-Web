@@ -2,6 +2,8 @@
 
 import { applySubtitleReviewClip, finalizeSubtitleReview, reopenClipPlanForBoundaryReedit } from "../../api";
 import { postMetadataApplyPayload } from "../../youtubePosting";
+import { writeReviewDraft } from "../draftStorage";
+import { validateClipDuration, validateHookSceneDuration } from "../../durationRules";
 import { contentDraftForClip } from "../drafts";
 import type { SubtitleReviewContext } from "./context";
 
@@ -12,7 +14,11 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
       setError,
       selectedClip,
       selectedClipContentDraft,
+      selectedShortFramingDraft,
       selectedShortFramingDirty,
+      setShortFramingDrafts,
+      locallyUpdatedReviewRef,
+      review,
       selectedHookDurationIsValid,
       selectedSegments,
       dirtySegmentIds,
@@ -34,10 +40,6 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
     if (!selectedClip || !selectedClipContentDraft) {
       return;
     }
-    if (selectedShortFramingDirty) {
-      setError("このclipの画角調整を保存してからOKにしてください。");
-      return;
-    }
     const title = selectedClipContentDraft.title.trim();
     const publicationTitle = selectedClipContentDraft.publicationTitle.trim();
     if (!publicationTitle) {
@@ -48,6 +50,12 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
       setError("冒頭フックの表示秒数は1〜8秒で入力してください。");
       return;
     }
+    const bodyError = validateClipDuration(selectedClip.type, selectedClip.end - selectedClip.start, review?.shortMaxDuration ?? 75);
+    const { hookSceneStart, hookSceneEnd } = selectedClipContentDraft;
+    const hookError = hookSceneStart === null && hookSceneEnd === null ? null
+      : hookSceneStart === null || hookSceneEnd === null || hookSceneStart < selectedClip.start || hookSceneEnd > selectedClip.end
+        ? "フック映像は本編内の開始・終了を指定してください。" : validateHookSceneDuration(hookSceneEnd - hookSceneStart);
+    if (bodyError || hookError) { setError(bodyError ?? hookError); return; }
     const segmentUpdates = selectedSegments
       .filter((segment) => dirtySegmentIds.has(segment.id))
       .map((segment) => ({
@@ -76,9 +84,13 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
         hookStyle: selectedClipContentDraft.hookStyle,
         subtitleStyle: selectedClipContentDraft.subtitleStyle,
         subtitleStyles: selectedClipContentDraft.subtitleStyles,
+        ...(selectedShortFramingDirty && selectedShortFramingDraft ? { framing: selectedShortFramingDraft } : {}),
         segments: segmentUpdates
       });
       if (isCurrentReviewMutation(mutationGeneration)) {
+        locallyUpdatedReviewRef.current = updated;
+        writeReviewDraft(jobId, selectedClip.id, null);
+        setShortFramingDrafts(current => { const next = { ...current }; delete next[selectedClip.id]; return next; });
         setReview(updated);
         const updatedClip = updated.clips.find((clip) => clip.id === selectedClip.id);
         if (updatedClip) {

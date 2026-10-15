@@ -150,6 +150,7 @@ from app.video.heatmap import HeatmapSidecarError, parse_heatmap_sidecar
 
 from app.api._job_common import (
     _completed_clip_video,
+    _defer_subtitle_review_previews_unlocked,
     _enqueue_subtitle_review_previews,
     _evaluate_and_write_content_quality_gate,
     _get_job_or_404,
@@ -2162,22 +2163,10 @@ def update_subtitle_review_settings(
         job.updated_at = utc_now()
         db.commit()
         db.refresh(job)
-        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
-            job=job,
-            video=video,
-            document=document,
-            paths=paths,
-            clip_ids={clip.id for clip in document.clips
-                      if request.character_preset_name is not None or clip.type == "short"},
-        )
+        document = _defer_subtitle_review_previews_unlocked(document, {clip.id for clip in document.clips
+                if request.character_preset_name is not None or clip.type == "short"})
         _write_subtitle_review_unlocked(document, paths)
-    return _enqueue_subtitle_review_previews(
-        job_id=job.id,
-        document=document,
-        queued=queued_previews,
-        paths=paths,
-        enqueue_preview=enqueue_preview,
-    )
+    return document
 
 
 @router.get("/{job_id}/subtitle-review/clips/{clip_id}/preview-video")
@@ -2638,6 +2627,7 @@ def update_subtitle_review_clip_framing(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=str(exc),
             ) from exc
+        document = _defer_subtitle_review_previews_unlocked(document, {clip_id})
         _write_subtitle_review_unlocked(document, paths)
     return document
 
@@ -2688,6 +2678,8 @@ def apply_subtitle_review_clip(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="subtitle review clip not found",
             )
+        if request.hook_scene_start is not None and request.hook_scene_end is not None and video.has_audio is False:
+            raise HTTPException(422, "音声のない元動画ではフック映像を追加できません。")
         allowed_segment_ids = set(clip.segment_ids)
         requested_segment_ids = {segment_update.segment_id for segment_update in request.segments}
         if not requested_segment_ids.issubset(allowed_segment_ids):
@@ -2948,6 +2940,17 @@ def apply_subtitle_review_clip(
                     segment_update.segment_id,
                     segment_update.text,
                 )
+            clip.preview_framing = None
+            if request.framing is not None:
+                document = update_review_clip_framing(
+                    document, clip_id,
+                    framing_offset_x=request.framing.framing_offset_x,
+                    framing_offset_y=request.framing.framing_offset_y,
+                    framing_zoom=request.framing.framing_zoom,
+                )
+                clip.preview_framing = None
+                if request.framing.short_layout is not None:
+                    clip.short_layout = request.framing.short_layout
             document, _contract_changed = refresh_review_render_contract(
                 document,
                 render_mode=str((job.settings_json or {}).get("mode", "high_quality")),
@@ -2966,12 +2969,14 @@ def apply_subtitle_review_clip(
                 detail=str(exc),
             ) from exc
 
+        document = _defer_subtitle_review_previews_unlocked(document, affected_clip_ids - {clip_id})
         document, queued_previews = _refresh_subtitle_review_previews_unlocked(
             job=job,
             video=video,
             document=document,
             paths=paths,
-            clip_ids=affected_clip_ids,
+            clip_ids={clip_id},
+            generate_exact=True,
         )
         document = confirm_review_clip(document, clip_id)
         _write_subtitle_review_unlocked(document, paths)
@@ -3028,13 +3033,9 @@ def change_subtitle_structure(
         source_snapshot = subtitle_review_source_path(paths.job_outputs(job_id), document)
         if not source_snapshot.exists():
             shutil.copyfile(transcript_output_path(paths.job_outputs(job_id)), source_snapshot)
-        document, queued = _refresh_subtitle_review_previews_unlocked(
-            job=job, video=video, document=document, paths=paths, clip_ids=affected,
-        )
+        document = _defer_subtitle_review_previews_unlocked(document, affected)
         _write_subtitle_review_unlocked(document, paths)
-    return _enqueue_subtitle_review_previews(
-        job_id=job.id, document=document, queued=queued, paths=paths, enqueue_preview=enqueue_preview,
-    )
+    return document
 
 
 @router.patch("/{job_id}/subtitle-review/segments", response_model=SubtitleReviewDocument)
@@ -3071,13 +3072,9 @@ def update_subtitle_review_segments(
                 document = update_review_segment(document, item.segment_id, item.text)
         if not affected_clip_ids:
             return document
-        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
-            job=job, video=video, document=document, paths=paths, clip_ids=affected_clip_ids,
-        )
+        document = _defer_subtitle_review_previews_unlocked(document, affected_clip_ids)
         _write_subtitle_review_unlocked(document, paths)
-    return _enqueue_subtitle_review_previews(
-        job_id=job.id, document=document, queued=queued_previews, paths=paths, enqueue_preview=enqueue_preview,
-    )
+    return document
 
 
 @router.post(
@@ -3123,6 +3120,7 @@ def finalize_subtitle_review(
             video=video,
             document=document,
             paths=paths,
+            generate_exact=True,
         )
         previews_ready = all(clip.preview_state == "ready" for clip in document.clips)
         if previews_ready:

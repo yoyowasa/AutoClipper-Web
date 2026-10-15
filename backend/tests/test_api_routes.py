@@ -1214,7 +1214,9 @@ def test_patch_subtitle_review_clip_framing_persists_without_reencoding(
     assert clip["framingOffsetY"] == -30.87
     assert clip["framingZoom"] == 1.235
     assert clip["confirmed"] is False
-    assert clip["previewState"] == "ready"
+    assert clip["previewState"] == "stale"
+    assert clip["previewDeferred"] is True
+    assert clip["previewVideoUrl"] is None
     assert clip["previewSpecHash"] == baseline_hash
     assert queued == []
     refreshed = client.get(f"/api/jobs/{job_id}/subtitle-review").json()

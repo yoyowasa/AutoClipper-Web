@@ -105,6 +105,7 @@ export function isClipContentDirty(
         draft.hookDurationSeconds !== clip.hookDurationSeconds ||
         draft.hookSceneStart !== clip.hookSceneStart ||
         draft.hookSceneEnd !== clip.hookSceneEnd ||
+        draft.youtubeTagsText !== youtubeTagsText(clip.youtubeTags ?? []) ||
         draft.thumbnailKicker !== (clip.thumbnailKicker ?? "") ||
         draft.thumbnailLine1 !== (clip.thumbnailLine1 ?? "") ||
         draft.thumbnailLine2 !== (clip.thumbnailLine2 ?? "") ||

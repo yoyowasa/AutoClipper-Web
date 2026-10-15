@@ -114,7 +114,7 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
                   </div>
                 ) : null}
 
-                <SubtitleBulkCorrection
+                <SubtitleBulkCorrection draftOnly
                   selection={bulkCorrectionSelection} onSelection={setBulkCorrectionSelection}
                   segments={review.segments} drafts={drafts} disabled={!isEditable}
                   onSave={saveBulkCorrection}

@@ -456,6 +456,7 @@ def render_exact_subtitle_review_preview(
     ffmpeg_bin: str = "ffmpeg",
     normal_renderer: NormalPreviewRenderer = render_normal_clip,
     short_renderer: ShortPreviewRenderer = render_short_clip,
+    live_only: bool = False,
 ) -> ExactPreviewResult:
     spec = build_subtitle_review_preview_spec(
         candidate=candidate,
@@ -481,7 +482,8 @@ def render_exact_subtitle_review_preview(
         candidate.id,
         live_spec_hash,
     )
-    exact_cached = _cached_artifacts_match(paths, spec)
+    # A draft prepares only the text-free video; no ASS or burned-in MP4 is made.
+    exact_cached = live_only or _cached_artifacts_match(paths, spec)
     live_cached = _cached_live_artifacts_match(live_paths, live_spec)
     if exact_cached and live_cached:
         return ExactPreviewResult(

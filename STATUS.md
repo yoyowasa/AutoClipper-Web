@@ -909,3 +909,17 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 互換性: backendの空白検出とPATCHの確認APIは残した。SubtitleReviewGapはマーカーとAPI応答で使うため残し、既存のacknowledged値は応答型として受け取るが表示条件には使わない。保存データを読み替えて書き戻す処理は追加していない。
 - 検証: frontendのlint・typecheck・test（27ファイル）・build成功。SSRとクリックの回帰テストで確認済み/未確認のマーカー表示が一致すること、2区間の位置/幅、pause→seek、保存済みフラグの不変、gapsなし/空/尺0の互換、空白行/件数/確認ボタンの非表示、字幕行の時刻順/元配列の不変、字幕なし時の表示、clipの確認状態とOK操作の維持を確認。git diff --check成功。CIはPRで確認する。
 - 未確認/反映: 実ブラウザでの受入確認、稼働環境への反映、既存jobの取得/編集は未実施。backendのローカル検証は実行していない（変更なし）。
+
+
+## 2026-10-15 task-204 字幕確認を下書き編集と1回の確定へ変更
+
+- 目的: 字幕・画角・タイトル・フック文言/映像・書式・投稿文を待たずに編集し、clipの確定1回でまとめて保存、正式プレビューを1回だけ依頼する。
+- 変更ファイル: backendの`api/{jobs,_job_common}.py`、`jobs/{subtitle_review,subtitle_review_preview,queue,runner}.py`、`render/render_exact_review_preview.py`、`schemas.py`と関連テスト。frontendの`components/subtitleReview/`、既存の画角/フック/一括修正部品、`lib/subtitleReview/`の下書き・再生・各hook、`lib/{api,types}.ts`と関連テスト。本記録。launcher変更なし。
+- 保存/生成: segments・structure・hook-scene・settings・旧framing保存は正式表示をstale/未確定へ戻すだけ。previewDeferredを保存し、後続GETからも正式生成を再開させない。apply/finalizeで正式生成を許可し、applyの任意framingで画角も同時保存する。手動確認の初回準備と旧hook workerは文字なしlive動画のみ。自動/shadow/guardedの初回品質ゲートに必要な正式プレビューと、最終書き出しの尺/品質/全clip確定/準備完了検証は従来どおり維持する。
+- 簡易プレビュー: 既存live specは字幕文字・文字スタイル・タイトル・フック文言を含まないため、文字だけの変更では再生成しない。映像区間・フック映像区間・画角/配置/帯が変わるとliveを更新する。人物追従では字幕の時刻区切りも追従窓に関係する。未保存のフックはブラウザで既存live動画の再生順序を組み替え、映像と音声を確認できる。保存済みliveの古いフック長も別に保持して時刻を正しく対応させる。画角は既存canvas方式を使用する。
+- 下書き/表示: 字幕文字・一括修正・フック映像・画角はローカルで保持し、applyにまとめる。構成変更はIDが変わるため即時保存を維持する。localStorageへclip別に保管し、移動/再読み込みで復元、確定または外部の文書変更で破棄する。プレビュー完了やポーリング時刻だけでは破棄しない。保存禁止/容量不足はtry/catchで保護する。「このショートを確定」/「この動画を確定」、未保存件数、正式作成中を表示し、他clipの編集を妨げない。
+- キュー/失敗: liveのみの仕事と正式生成を別のRQ IDにし、同じspecのlive処理中に確定依頼が吸収されるのを防ぐ。liveの失敗も理由を表示し、明示的な再試行まで再登録しない。
+- 生成回数の比較: 同一clipの「字幕文字保存→分割→帯設定→apply」で旧main b77125dは正式enqueue 4件（hashも4種）、変更後は1件。隔離DBのTestClientで旧ルーターと新規回帰テストを比較した。初回画面準備を除く要求件数で、実動画のFFmpeg処理回数/所要時間の測定ではない。
+- 検証: ruff 0.16.10の`cd backend; python -m ruff check . ../launcher ../scripts`成功。Python 3.11.9の`python -m pytest -q`は1751 passed・2 skipped。frontendのlint/typecheck/test（28ファイル）/build成功。正式生成の保留・単一apply・finalizeの409ゲート、normal/shortのlive-onlyで正式MP4/ASSを作らないこと、旧hook worker、RQ ID、live失敗/再試行を確認。下書きの単一送信、保存/復元/破棄/保存不能、hook/bodyの時計対応、旧liveのフック長もテストした。
+- ブラウザ検証: 別ポートの架空APIと合成MP4だけを使用。タイトル・字幕・3秒フックを下書きで編集→別clipへ移動→再読み込みで復元→apply1件に全項目が含まれる→未保存0・正式作成中→他clip編集可能を確認。稼働API/DB・Codexへは接続していない。テスト前後で稼働DBの536,576 bytes・更新時刻2026-10-14T14:12:33.1189291Zが不変。
+- 未確認/反映: 実動画と稼働環境でのユーザー受入は未実施。Docker Desktop Linuxエンジン停止のため既存コンテナの起動確認はできていない。Dockerのbuild/反映、稼働jobの取得/編集は行っていない。Codex中継の変更・再起動は不要。PRとCI確認後、レビュー/ユーザー確認のため未マージで止める。

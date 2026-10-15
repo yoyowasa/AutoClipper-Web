@@ -18,19 +18,21 @@ function state<T>(initial: T): { value: T; set: Dispatch<SetStateAction<T>> } {
 
 async function main() {
   const clip = {
-    id: "short-01", type: "short", title: "画面タイトル", publicationTitle: "投稿タイトル",
+    id: "short-01", type: "short", start: 100, end: 175, segmentIds: ["seg-01"], title: "画面タイトル", publicationTitle: "投稿タイトル",
     hookText: "題材のフック", hookDurationSeconds: 3, hookSceneStart: null, hookSceneEnd: null,
     titleStyle: null, hookStyle: null, subtitleStyle: null, previewState: "queued"
   } as SubtitleReviewClip;
   const segment = { id: "seg-01", text: "保存された字幕" } as SubtitleReviewSegment;
-  const review = { clips: [clip], segments: [segment] } as SubtitleReviewDocument;
+  const review = { jobId: "job-test", shortMaxDuration: 75, clips: [clip], segments: [segment] } as SubtitleReviewDocument;
   const error = state<string | null>(null);
   const drafts = state<Record<string, string>>({ "seg-01": "編集中の字幕", "other-clip": "残す字幕" });
   const dirty = state(new Set(["seg-01", "other-clip"]));
   const savedReview = state<SubtitleReviewDocument | null>(review);
   const contentDrafts = state({ [clip.id]: contentDraftForClip(clip) });
+  const framingDrafts = state({});
   const destinations: string[] = [];
   const context = {
+    locallyUpdatedReviewRef: { current: null }, setShortFramingDrafts: framingDrafts.set,
     jobId: "job-test", review, selectedClip: clip, selectedClipContentDraft: { ...contentDraftForClip(clip), publicationTitle: "  投稿タイトル  " },
     selectedSegments: [segment], selectedShortFramingDirty: false, selectedHookDurationIsValid: true,
     hasDirtyShortFraming: false, hasDirtyClipContent: false, isSavingShortBannerSettings: false,
@@ -80,22 +82,37 @@ async function main() {
     ]);
     assert.deepEqual(destinations, ["/jobs/job-test", "/jobs/job-test/clips"]);
 
-    // Hook scene updates remain blocked while subtitle edits are unsaved.
+    // Hook/frames and bulk text edits remain local, even with existing dirty rows.
     const content = createContentActions(context);
+    Object.assign(context, content);
     context.dirtySegmentIds = new Set(["seg-01"]);
     await content.saveHookScene(100, 103);
-    assert.equal(calls.length, 3);
-    context.dirtySegmentIds = new Set();
-    await content.saveHookScene(100, 103);
-    assert.deepEqual(calls[3].body, { start: 100, end: 103 });
-    assert.equal(calls[3].path, "/api/jobs/job-test/subtitle-review/clips/short-01/hook-scene");
-
-    // Bulk correction uses one batch request and only clears the submitted row's dirty flag.
+    await content.saveSelectedShortFraming(clip.id, { framingOffsetX: 20, framingOffsetY: 0, framingZoom: 1.2, shortLayout: "center_crop" });
+    assert.equal(calls.length, 3, "drafting never sends hook-scene/framing requests");
+    assert.equal(contentDrafts.value[clip.id].hookSceneEnd, 103);
     dirty.set(new Set(["seg-01", "other-clip"]));
     await createSubtitleActions(context).saveBulkCorrection([{ segmentId: "seg-01", before: "保存された字幕", text: "修正済み" }]);
-    assert.equal(calls[4].path, "/api/jobs/job-test/subtitle-review/segments");
-    assert.deepEqual(calls[4].body, { segments: [{ segmentId: "seg-01", before: "保存された字幕", text: "修正済み" }] });
+    assert.equal(calls.length, 3, "batch text changes are also drafts");
+    context.selectedClipContentDraft = { ...contentDrafts.value[clip.id], title: "新しい画面タイトル" };
+    context.selectedShortFramingDirty = true;
+    context.selectedShortFramingDraft = { framingOffsetX: 20, framingOffsetY: 0, framingZoom: 1.2, shortLayout: "center_crop" };
+    context.drafts = drafts.value;
+    context.dirtySegmentIds = dirty.value;
+    await confirmation.confirmSelectedClip();
+    assert.equal(calls.length, 4, "one apply saves all of the selected clip's edits");
+    assert.equal(calls[3].path, "/api/jobs/job-test/subtitle-review/clips/short-01/apply");
+    assert.equal(calls[3].body?.title, "新しい画面タイトル");
+    assert.deepEqual(calls[3].body?.segments, [{ segmentId: "seg-01", text: "修正済み" }]);
+    assert.equal(calls[3].body?.hookSceneStart, 100);
+    assert.equal(calls[3].body?.hookSceneEnd, 103);
+    assert.deepEqual(calls[3].body?.framing, context.selectedShortFramingDraft);
     assert.deepEqual([...dirty.value], ["other-clip"]);
+    assert.deepEqual(framingDrafts.value, {}, "accepted framing drafts are discarded");
+    context.selectedClipContentDraft.hookSceneEnd = 103.1;
+    await confirmation.confirmSelectedClip();
+    assert.equal(calls.length, 4, "invalid hook duration never reaches apply");
+    assert.match(error.value ?? "", /0.5〜3秒/);
+    context.selectedClipContentDraft.hookSceneEnd = 103;
 
     failRequest = true;
     await confirmation.confirmSelectedClip();

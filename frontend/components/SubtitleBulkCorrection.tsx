@@ -4,12 +4,13 @@ import { useState } from "react";
 import { matchingSubtitleCorrections, type CorrectionSelection, type SubtitleBatchUpdate } from "../lib/subtitleBulkCorrection";
 import type { SubtitleReviewSegment } from "../lib/types";
 
-export function SubtitleBulkCorrection({ selection, onSelection, segments, drafts, disabled, onSave }: {
+export function SubtitleBulkCorrection({ selection, onSelection, segments, drafts, disabled, onSave, draftOnly = false }: {
   selection: CorrectionSelection | null;
   onSelection: (value: CorrectionSelection | null) => void;
   segments: SubtitleReviewSegment[];
   drafts: Record<string, string>;
   disabled: boolean;
+  draftOnly?: boolean;
   onSave: (updates: SubtitleBatchUpdate[]) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -32,7 +33,7 @@ export function SubtitleBulkCorrection({ selection, onSelection, segments, draft
     try {
       await onSave(changes);
       setUndo(revert ? [] : matches.map(({ segmentId, current, text }) => ({ segmentId, before: text, text: current })));
-      setNotice(revert ? "直前の一括修正を取り消しました。" : `${count}か所を修正して保存しました。対象の${clipCount}本は字幕を再確認してください。`);
+      setNotice(revert ? "直前の一括修正を取り消しました。" : draftOnly ? `${count}か所を下書きに反映しました。clipの確定時に保存します。` : `${count}か所を修正して保存しました。対象の${clipCount}本は字幕を再確認してください。`);
       onSelection(null);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "一括修正を保存できませんでした。"); }
     finally { setBusy(false); }
@@ -60,11 +61,11 @@ export function SubtitleBulkCorrection({ selection, onSelection, segments, draft
           </div>)}
         </div>
       </details>}
-      <p className="text-neutral-500">一致する表記だけを修正します。対象の字幕に入力中の変更も一緒に保存します。</p>
+      <p className="text-neutral-500">一致する表記だけを修正します。{draftOnly ? "変更は下書きに反映し、clipの確定時にまとめて保存します。" : "対象の字幕に入力中の変更も一緒に保存します。"}</p>
       <div className="flex flex-wrap gap-2">
         <button type="button" disabled={disabled || busy || !count || matches.some((match) => match.text.length > 4000)}
           className="min-h-9 bg-sky-700 px-3 font-semibold text-white disabled:opacity-40" onClick={() => void save(false)}>
-          {busy ? "保存中…" : `${count}か所をまとめて修正・保存`}
+          {busy ? "反映中…" : draftOnly ? `${count}か所をまとめて下書きへ反映` : `${count}か所をまとめて修正・保存`}
         </button>
         <button type="button" disabled={busy} className="min-h-9 border border-neutral-300 px-3" onClick={() => onSelection(null)}>閉じる</button>
       </div>

@@ -17,6 +17,7 @@ const layouts: { value: Layout; label: string }[] = [
 type FrameSnapshot = { image: HTMLCanvasElement; position: number };
 
 type Props = {
+  draftOnly?: boolean;
   jobId: string; clipId: string; sourceUrl: string; start: number; end: number;
   layout: Layout;
   value: Framing; editable: boolean; onSave: (value: Framing) => Promise<boolean>;
@@ -42,7 +43,7 @@ export function ShortFramingWorkspace(props: Props) {
   </>;
 }
 
-function FramingDialog({ jobId, clipId, sourceUrl, start, end, value, layout, editable, onSave, onClose, initialLayout, initialFrame, onFrame }: Props & {
+function FramingDialog({ jobId, clipId, sourceUrl, start, end, value, layout, editable, onSave, onClose, initialLayout, initialFrame, onFrame, draftOnly = false }: Props & {
   onClose: () => void; initialLayout: Layout; initialFrame: FrameSnapshot | null; onFrame: (frame: FrameSnapshot) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -172,7 +173,7 @@ function FramingDialog({ jobId, clipId, sourceUrl, start, end, value, layout, ed
           onChange={event => { setRetry(0); setDraftLayout(event.target.value as Layout); }}>
           {layouts.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
-        <span className="text-xs font-normal text-neutral-600">保存するまで試し表示。基本配置は全ショート共通、位置・倍率はこのショートのみ。</span>
+        <span className="text-xs font-normal text-neutral-600">{draftOnly ? "このショートの配置を下書きに反映します。保存はclipの確定時です。" : "保存するまで試し表示。基本配置は全ショート共通、位置・倍率はこのショートのみ。"}</span>
       </label>
       <div role="status" className="shrink-0 text-sm">
         {sourceError || error ? <span className="text-red-700">{sourceError || error} <button type="button" className="underline"
@@ -220,10 +221,10 @@ function FramingDialog({ jobId, clipId, sourceUrl, start, end, value, layout, ed
       </div>
       <footer className="flex shrink-0 flex-wrap items-center gap-3 border-t pt-2">
         <button type="button" disabled={!ready || saving} className="min-h-10 border bg-white px-3" onClick={() => setDraft({ framingOffsetX: 0, framingOffsetY: 0, framingZoom: 1 })}>自動値へ戻す</button>
-        <p className="min-w-0 flex-1 text-xs text-neutral-600">{editable ? "保存した画角で編集プレビューを再生できます。動画の再生成を待つ必要はありません。" : "完了済みのため試し表示のみ。保存は再編集時に使えます。"}</p>
+        <p className="min-w-0 flex-1 text-xs text-neutral-600">{editable ? (draftOnly ? "この画角を下書きに反映し、簡易プレビューで確認できます。" : "保存した画角で編集プレビューを再生できます。動画の再生成を待つ必要はありません。") : "完了済みのため試し表示のみ。保存は再編集時に使えます。"}</p>
         <button type="button" disabled={!editable || !ready || !changed || saving} className="min-h-11 bg-sky-700 px-5 font-semibold text-white disabled:bg-neutral-300"
           onClick={async () => { setSaving(true); try { if (await onSave({ ...draft, shortLayout: draftLayout })) onClose(); else setError("画角を保存できませんでした。再度保存してください。"); } finally { setSaving(false); } }}>
-          {saving ? "保存中…" : "この画角を保存"}
+          {saving ? (draftOnly ? "反映中…" : "保存中…") : draftOnly ? "この画角を下書きに反映" : "この画角を保存"}
         </button>
       </footer>
     </div>

@@ -162,7 +162,7 @@ def _remove_superseded_queued_subtitle_review_previews(
     the older queued IDs, rapid split/merge operations render every obsolete
     intermediate document before the latest one.
     """
-    rq_job_base = f"subtitle_review_preview-{job_id}-{clip_id}"
+    rq_job_base = keep_rq_job_id.rsplit("-", 1)[0]
     for queued_job_id in queue.get_job_ids():
         if (
             queued_job_id == keep_rq_job_id
@@ -187,6 +187,18 @@ def enqueue_subtitle_review_preview(
 ) -> None:
     queue = get_queue()
     rq_job_id = subtitle_review_preview_rq_job_id(job_id, clip_id, spec_hash)
+    from app.jobs.subtitle_review import load_subtitle_review, subtitle_review_output_path
+    from app.storage.paths import get_storage_paths
+
+    # Live-only work must not absorb an apply for the same immutable spec while
+    # it is running. Keep separate IDs; both retain the old RQ entry point.
+    try:
+        document = load_subtitle_review(subtitle_review_output_path(get_storage_paths().job_outputs(job_id)))
+        clip = next((item for item in document.clips if item.id == clip_id), None)
+        if clip is not None and clip.preview_deferred:
+            rq_job_id = "live_" + rq_job_id
+    except (OSError, ValueError):
+        pass
     _remove_superseded_queued_subtitle_review_previews(
         queue,
         job_id=job_id,

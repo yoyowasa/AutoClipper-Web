@@ -1,5 +1,6 @@
 "use client";
 
+import { contentDraftForClip } from "../../lib/subtitleReview/drafts";
 import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/context";
 
 export function ReviewRenderControls({ context }: { context: SubtitleReviewViewContext }) {
@@ -65,30 +66,34 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
     confirmSelectedClip,
     hasReviewMutationInFlight,
     review,
-    selectClip
+    selectClip,
+    dirtySegmentIds
   } = context;
   if (!selectedClip) return null;
+  const savedContent = contentDraftForClip(selectedClip);
+  const pendingChanges = selectedClip.segmentIds.filter(id => dirtySegmentIds.has(id)).length
+    + (selectedShortFramingDirty ? 1 : 0)
+    + (selectedClipContentDraft ? (Object.keys(savedContent) as (keyof typeof savedContent)[])
+      .filter(key => JSON.stringify(savedContent[key]) !== JSON.stringify(selectedClipContentDraft[key])).length : 0);
   return (
     <div className="border-t border-neutral-300 bg-neutral-50 p-4">
+                  <p className="mb-2 text-xs font-semibold text-amber-800">未保存の変更 {pendingChanges}件</p>
                   <p className="mb-3 text-xs text-neutral-600">
-                    {selectedShortFramingDirty
-                      ? "画角調整を保存してから、このclipをOKにしてください。"
-                      : selectedClipHasDirtySegments || selectedClipHasDirtyContent
-                      ? "メインの即時表示を確認し、OKでタイトル・文字設定・字幕をまとめて保存します。"
+                    {selectedClipHasDirtySegments || selectedClipHasDirtyContent || selectedShortFramingDirty
+                      ? "簡易プレビューで下書きを確認し、確定で字幕・画角・フック・投稿情報をまとめて保存します。"
                       : selectedClip.confirmed && !selectedPreviewReady
-                        ? "OK済みです。完成表示はバックグラウンドで更新しています。"
+                        ? "確定済みです。正式プレビューをバックグラウンドで作成中です。他のclipも編集できます。"
                         : selectedClip.confirmed
-                          ? "このclipはOK済みです。"
-                          : "メインの動画と字幕を確認し、OKで保存します。"}
+                          ? "このclipは確定済みです。"
+                          : "簡易プレビューで確認し、このclipを確定してください。"}
                   </p>
                   <button
                     className="min-h-11 w-full bg-sky-700 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
                     disabled={
                       !isEditable ||
-                      selectedShortFramingDirty ||
                       (selectedClip.confirmed &&
                         !selectedClipHasDirtySegments &&
-                        !selectedClipHasDirtyContent) ||
+                        !selectedClipHasDirtyContent && !selectedShortFramingDirty) ||
                       !selectedClipContentDraft?.publicationTitle.trim() ||
                       !selectedHookDurationIsValid ||
                       isSavingShortBannerSettings ||
@@ -98,14 +103,12 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
                     onClick={() => void confirmSelectedClip()}
                   >
                     {confirmingClipId === selectedClip.id
-                      ? "OKを反映中"
-                      : selectedShortFramingDirty
-                        ? "画角調整の保存が必要です"
+                      ? "確定中"
                       : selectedClip.confirmed &&
                           !selectedClipHasDirtySegments &&
-                          !selectedClipHasDirtyContent
-                        ? "このclipはOK済み"
-                        : "この内容を保存してOK"}
+                          !selectedClipHasDirtyContent && !selectedShortFramingDirty
+                        ? "このclipは確定済み"
+                        : selectedClip.type === "short" ? "このショートを確定" : "この動画を確定"}
                   </button>
                   <button type="button" className="mt-2 min-h-9 w-full border border-neutral-400 bg-white text-sm disabled:opacity-40"
                     disabled={hasReviewMutationInFlight || review.clips.length < 2}

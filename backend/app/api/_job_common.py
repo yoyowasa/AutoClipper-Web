@@ -128,6 +128,7 @@ def _refresh_subtitle_review_previews_unlocked(
     document: SubtitleReviewDocument,
     paths: StoragePaths,
     clip_ids: set[str] | None = None,
+    generate_exact: bool = False,
 ) -> tuple[SubtitleReviewDocument, list[tuple[str, str]]]:
     document, queued, changed = refresh_subtitle_review_preview_states(
         job=job,
@@ -135,10 +136,26 @@ def _refresh_subtitle_review_previews_unlocked(
         document=document,
         paths=paths,
         clip_ids=clip_ids,
+        generate_exact=generate_exact,
     )
     if changed:
         _write_subtitle_review_unlocked(document, paths)
     return document, queued
+
+
+def _defer_subtitle_review_previews_unlocked(
+    document: SubtitleReviewDocument, clip_ids: set[str],
+) -> SubtitleReviewDocument:
+    """Invalidate exact previews without encoding anything during draft saves."""
+    for clip in document.clips:
+        if clip.id in clip_ids:
+            clip.confirmed = False
+            clip.preview_deferred = True
+            clip.preview_state = "stale"
+            clip.preview_video_url = None
+            clip.preview_error = None
+    document.confirmed_clip_count = sum(clip.confirmed for clip in document.clips)
+    return document
 
 def _enqueue_subtitle_review_previews(
     *,

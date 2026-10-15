@@ -31,9 +31,7 @@ export function ReviewContentEditor({ context }: { context: SubtitleReviewViewCo
     applyTitleHookSuggestion,
     clearSelectedHook,
     generateTitleHookSuggestions,
-    previewTitleHookSuggestion,
-    dirtySegmentIds,
-    hasDirtyClipContent
+    previewTitleHookSuggestion
   } = context;
   if (!selectedClip) return null;
   return (
@@ -378,22 +376,15 @@ export function ReviewContentEditor({ context }: { context: SubtitleReviewViewCo
                     (selectedClipContentDraft.hookSceneStart !== selectedClip.hookSceneStart ||
                       selectedClipContentDraft.hookSceneEnd !== selectedClip.hookSceneEnd) ? (
                       <p className="mt-2 border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-medium text-violet-900">
-                        投稿案のフック映像区間は、右下のOKでタイトル・字幕とまとめて保存します。
+                        フック映像の区間は、clipの確定でタイトル・字幕とまとめて保存します。
                       </p>
                     ) : null}
 
                     <p className="mt-3 border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-900">
-                      変更はメインへ即時反映します。右下のOKで字幕修正もまとめて保存します。
+                      変更は簡易プレビューへ即時反映します。clipの確定で字幕修正もまとめて保存します。
                     </p>
 
-                    <>
-                        {dirtySegmentIds.size > 0 || hasDirtyClipContent ? (
-                          <p className="mt-2 border border-amber-300 bg-amber-50 px-2 py-2 text-[11px] font-medium text-amber-900">
-                            フック映像の変更前に、文字設定と字幕を保存してください。
-                          </p>
-                        ) : null}
-                        <ReviewHookSceneSettings context={context} />
-                    </>
+                    <ReviewHookSceneSettings context={context} />
                     </div>
                   </div>
   );

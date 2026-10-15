@@ -8,6 +8,7 @@ import { isPreviewReady, shortTitleOutputExpected } from "../preview";
 import { normalizeReviewTitle } from "../text";
 import { contentDraftForClip, isClipContentDirty } from "../drafts";
 import { shortFramingEquals } from "../framing";
+import { usePersistedReviewDrafts } from "./usePersistedReviewDrafts";
 import { useSubtitleReviewState } from "./useSubtitleReviewState";
 import type { SubtitleReviewContext } from "./context";
 import { useReviewMutations } from "./useReviewMutations";
@@ -109,7 +110,7 @@ export function useSubtitleReviewDocument() {
       (clip) =>
         clip.previewState === "queued" ||
         clip.previewState === "rendering" ||
-        (review.state === "awaiting_review" && !clip.livePreviewVideoUrl)
+        (review.state === "awaiting_review" && !clip.livePreviewVideoUrl && clip.previewState !== "failed")
     )
   );
 
@@ -174,16 +175,13 @@ export function useSubtitleReviewDocument() {
   useSuggestionHydration({ jobId, selectedSuggestionClipId, selectedSuggestionRecord, selectedSuggestionInputSnapshot, suggestionRequestGenerationRef, selectedSuggestionSegments, setSuggestionHydrationRetryVersion, setTitleHookSuggestionRecords, suggestionHydrationRetryVersion });
 
   useSuggestionStatusPoll({ jobId, selectedSuggestionClipId, selectedSuggestionInputHash, selectedSuggestionState, selectedSuggestionRequestGeneration, setTitleHookSuggestionRecords });
+  const selectedClipContentDraft = selectedClip
+    ? clipContentDrafts[selectedClip.id] ?? contentDraftForClip(selectedClip) : null;
   const bodyDuration = selectedClip
     ? Math.max(0, selectedClip.end - selectedClip.start)
     : 0;
-  const hookSceneDuration =
-    selectedClip?.hookSceneStart !== null &&
-    selectedClip?.hookSceneStart !== undefined &&
-    selectedClip.hookSceneEnd !== null &&
-    selectedClip.hookSceneEnd !== undefined
-      ? Math.max(0, selectedClip.hookSceneEnd - selectedClip.hookSceneStart)
-      : 0;
+  const hookSceneDuration = selectedClipContentDraft?.hookSceneStart != null && selectedClipContentDraft.hookSceneEnd != null
+    ? Math.max(0, selectedClipContentDraft.hookSceneEnd - selectedClipContentDraft.hookSceneStart) : 0;
   const clipDuration = bodyDuration + hookSceneDuration;
   const selectedPreviewReady = isPreviewReady(selectedClip, review?.state);
   const allPreviewsReady = Boolean(
@@ -205,12 +203,10 @@ export function useSubtitleReviewDocument() {
   const selectedLivePreviewVersion = selectedClip?.livePreviewVideoUrl
     ? selectedClip.livePreviewSpecHash ?? ""
     : retainedLivePreview?.version ?? "";
-  const livePreviewReady = Boolean(
-    selectedLiveVideoUrl && selectedLivePreviewVersion
-  );
+  const livePreviewReady = Boolean(review?.sourceVideoUrl && review.state === "awaiting_review");
   const isShowingLivePreview = livePreviewReady && !showSavedPreview;
   const selectedPlayerVideoUrl = isShowingLivePreview
-    ? selectedLiveVideoUrl
+    ? selectedLiveVideoUrl ?? review?.sourceVideoUrl ?? null
     : selectedVideoUrl;
   const selectedPlayerPreviewVersion = isShowingLivePreview
     ? selectedLivePreviewVersion
@@ -226,15 +222,13 @@ export function useSubtitleReviewDocument() {
   const selectedClipHasDirtySegments = selectedSegments.some((segment) =>
     dirtySegmentIds.has(segment.id)
   );
-  const selectedClipContentDraft = selectedClip
-    ? clipContentDrafts[selectedClip.id] ?? contentDraftForClip(selectedClip)
-    : null;
   const selectedSavedShortFraming =
     selectedClip?.type === "short"
       ? {
           framingOffsetX: selectedClip.framingOffsetX,
           framingOffsetY: selectedClip.framingOffsetY,
-          framingZoom: selectedClip.framingZoom
+          framingZoom: selectedClip.framingZoom,
+          shortLayout: selectedClip.shortLayout ?? review?.shortLayout
         }
       : null;
   const selectedShortFramingDraft =
@@ -258,7 +252,8 @@ export function useSubtitleReviewDocument() {
           !shortFramingEquals(draft, {
             framingOffsetX: clip.framingOffsetX,
             framingOffsetY: clip.framingOffsetY,
-            framingZoom: clip.framingZoom
+            framingZoom: clip.framingZoom,
+            shortLayout: clip.shortLayout ?? review?.shortLayout
           })
       );
     })
@@ -293,12 +288,12 @@ export function useSubtitleReviewDocument() {
   const isInHookSuppression = clipTime < hookSuppressionEnd;
   const absolutePlaybackTime = selectedClip
     ? hookSceneDuration > 0 &&
-      selectedClip.hookSceneStart !== null &&
-      selectedClip.hookSceneEnd !== null &&
+      selectedClipContentDraft?.hookSceneStart != null &&
+      selectedClipContentDraft?.hookSceneEnd != null &&
       clipTime < hookSceneDuration
       ? Math.min(
-          selectedClip.hookSceneEnd,
-          selectedClip.hookSceneStart + clipTime
+          selectedClipContentDraft.hookSceneEnd,
+          selectedClipContentDraft.hookSceneStart + clipTime
         )
       : selectedClip.start + Math.max(0, clipTime - hookSceneDuration)
     : 0;
@@ -436,6 +431,7 @@ export function useSubtitleReviewDocument() {
   // Keep one render's values together, as in the original page's closures.
   // Function getters preserve cross-handler calls while the action hooks below
   // create their callbacks; they are only read when an event handler runs.
+  usePersistedReviewDrafts(state);
   const context: SubtitleReviewContext = {
     ...state,
     selectedClip,

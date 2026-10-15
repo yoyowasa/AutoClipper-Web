@@ -86,7 +86,7 @@ export function ReviewShortFraming({ context }: { context: SubtitleReviewViewCon
                           key={`${selectedClip.id}:${selectedClip.start}:${selectedClip.end}:${review.sourceVideoUrl}:${review.shortTopBannerEnabled}:${review.shortBottomBannerEnabled}`}
                           jobId={jobId} clipId={selectedClip.id} sourceUrl={review.sourceVideoUrl}
                           start={selectedClip.start} end={selectedClip.end}
-                          value={selectedShortFramingDraft} layout={selectedClip.shortLayout ?? review.shortLayout} editable={isEditable && !hasReviewMutationInFlight}
+                          draftOnly value={selectedShortFramingDraft} layout={selectedShortFramingDraft.shortLayout ?? selectedClip.shortLayout ?? review.shortLayout} editable={isEditable && !hasReviewMutationInFlight}
                           onSave={async (next) => {
                             changeSelectedShortFraming(next);
                             return saveSelectedShortFraming(selectedClip.id, next);
