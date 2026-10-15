@@ -1,7 +1,8 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
+from urllib.parse import urlsplit
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,12 @@ class Settings(BaseSettings):
     rq_queue_name: str = "autoclipper"
     autoclipper_runtime_profile: Literal["cpu", "gpu"] = "cpu"
     storage_root: str = "../storage"
+    youtube_oauth_redirect_uri: str = "http://localhost:8000/api/intelligence/oauth/callback"
+    youtube_sync_budget_seconds: int = Field(default=120, ge=30, le=300)
+    youtube_derived_allowed: bool = True
+    youtube_extended_storage: bool = True
+    youtube_policy_reviewed_at: str = "2026-10-15"
+    youtube_policy_reference: str = "https://developers.google.com/youtube/terms/derived-metrics-policy"
     source_library_root: str = "../youtube"
     max_upload_size_bytes: int = DEFAULT_MAX_UPLOAD_SIZE_BYTES
     max_heatmap_sidecar_size_bytes: int = DEFAULT_MAX_HEATMAP_SIDECAR_SIZE_BYTES
@@ -44,6 +51,16 @@ class Settings(BaseSettings):
     allowed_video_content_types: str = "video/mp4,video/quicktime,video/x-matroska,video/webm"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator("youtube_oauth_redirect_uri")
+    @classmethod
+    def validate_youtube_loopback(cls, value: str) -> str:
+        url = urlsplit(value)
+        if (url.scheme != "http" or url.hostname not in {"localhost", "127.0.0.1", "::1"}
+                or url.username or url.password or not url.port or url.query or url.fragment
+                or url.path != "/api/intelligence/oauth/callback"):
+            raise ValueError("YouTube OAuth redirect must be a loopback callback with an explicit port")
+        return value
 
     @property
     def cors_origins(self) -> list[str]:

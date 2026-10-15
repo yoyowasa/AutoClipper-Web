@@ -37,6 +37,19 @@ class StoragePaths:
     def production_records(self) -> Path:
         return self.root / "production_records"
 
+    @property
+    def google_client(self) -> Path:
+        return self.root / "secrets" / "google-client.json"
+
+    def youtube_token(self, channel_external_id: str) -> Path:
+        if not re.fullmatch(r"UC[A-Za-z0-9_-]{22}", channel_external_id):
+            raise ValueError("Invalid YouTube channel identifier")
+        return self.root / "secrets" / "youtube_tokens" / f"{channel_external_id}.json"
+
+    @property
+    def youtube_oauth_states(self) -> Path:
+        return self.root / "secrets" / "youtube_oauth_states"
+
     def production_record(self, export_id: str) -> Path:
         if not re.fullmatch(r"[A-Za-z0-9_-]+", export_id):
             raise ValueError("Invalid export identifier")

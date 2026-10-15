@@ -28,6 +28,10 @@ def test_openapi_paths_and_methods_match_before_clip_plan_split() -> None:
         "/api/exports/{export_id}/posting-text": ["get"],
         "/api/exports/{export_id}/posting-set.zip": ["get"],
         "/api/jobs/{job_id}/subtitle-review/clips/{clip_id}/gaps/{gap_id}": ["patch"],
+        "/api/intelligence/channels": ["get"],
+        "/api/intelligence/oauth/start": ["post"],
+        "/api/intelligence/oauth/callback": ["get"],
+        "/api/intelligence/channels/{channel_id}/sync": ["post"],
     }
 
 

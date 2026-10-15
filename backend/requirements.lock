@@ -27,6 +27,11 @@ certifi==2026.7.22
     #   -c requirements-runtime-constraints.txt
     #   httpcore
     #   httpx
+    #   requests
+cffi==2.1.1 ; platform_python_implementation != 'PyPy'
+    # via cryptography
+charset-normalizer==3.5.2
+    # via requests
 click==8.2.1
     # via
     #   -c requirements-runtime-constraints.txt
@@ -42,6 +47,8 @@ croniter==6.2.4
     # via
     #   -c requirements-runtime-constraints.txt
     #   rq
+cryptography==50.0.2
+    # via google-auth
 ctranslate2==4.8.2
     # via
     #   -c requirements-runtime-constraints.txt
@@ -67,6 +74,10 @@ fsspec==2026.9.0
     # via
     #   -c requirements-runtime-constraints.txt
     #   huggingface-hub
+google-auth==2.62.0
+    # via google-auth-oauthlib
+google-auth-oauthlib==1.5.0
+    # via autoclipper-backend (pyproject.toml)
 h11==0.16.0
     # via
     #   -c requirements-runtime-constraints.txt
@@ -87,6 +98,7 @@ httptools==0.8.0
 httpx==0.28.1
     # via
     #   -c requirements-runtime-constraints.txt
+    #   autoclipper-backend (pyproject.toml)
     #   huggingface-hub
 huggingface-hub==1.16.1
     # via
@@ -98,6 +110,7 @@ idna==3.20
     #   -c requirements-runtime-constraints.txt
     #   anyio
     #   httpx
+    #   requests
 markdown-it-py==4.2.0
     # via
     #   -c requirements-runtime-constraints.txt
@@ -120,6 +133,8 @@ numpy==2.5.3 ; python_full_version >= '3.12'
     #   onnxruntime
     #   opencv-python
     #   scenedetect
+oauthlib==4.0.0
+    # via requests-oauthlib
 onnxruntime==1.30.0
     # via
     #   -c requirements-runtime-constraints.txt
@@ -151,6 +166,12 @@ protobuf==7.36.2
     # via
     #   -c requirements-runtime-constraints.txt
     #   onnxruntime
+pyasn1==0.6.4
+    # via pyasn1-modules
+pyasn1-modules==0.4.2
+    # via google-auth
+pycparser==3.11 ; implementation_name != 'PyPy' and platform_python_implementation != 'PyPy'
+    # via cffi
 pydantic==2.13.5
     # via
     #   -c requirements-runtime-constraints.txt
@@ -192,6 +213,10 @@ redis==6.4.0
     #   -c requirements-runtime-constraints.txt
     #   autoclipper-backend (pyproject.toml)
     #   rq
+requests==2.34.2
+    # via requests-oauthlib
+requests-oauthlib==2.0.0
+    # via google-auth-oauthlib
 rich==15.0.0
     # via
     #   -c requirements-runtime-constraints.txt
@@ -252,6 +277,10 @@ typing-inspection==0.4.4
     #   fastapi
     #   pydantic
     #   pydantic-settings
+tzdata==2026.5
+    # via autoclipper-backend (pyproject.toml)
+urllib3==2.8.0
+    # via requests
 uvicorn==0.54.0
     # via
     #   -c requirements-runtime-constraints.txt

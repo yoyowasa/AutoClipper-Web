@@ -43,6 +43,7 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 def init_db() -> None:
     import app.models  # noqa: F401
+    import app.intelligence.models  # noqa: F401
     from pathlib import Path
     from app.source_clip_history import backfill_completed_history
     from app.storage.paths import StoragePaths
