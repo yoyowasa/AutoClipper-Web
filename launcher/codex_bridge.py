@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -523,24 +524,29 @@ def run_codex_command(
     except OSError:
         return CodexRunResult(127, "", "codex_start_failed")
 
-    deadline = time.monotonic() + max(0.1, timeout)
-    input_text: str | None = prompt
-    while True:
-        remaining = deadline - time.monotonic()
-        if stop_request is not None and stop_request.exists():
-            stdout, stderr = _terminate_child_process(process)
-            return CodexRunResult(130, stdout, stderr)
-        if remaining <= 0:
-            stdout, stderr = _terminate_child_process(process)
-            return CodexRunResult(124, stdout, stderr)
-        try:
-            stdout, stderr = process.communicate(
-                input=input_text,
-                timeout=min(POLL_INTERVAL_SECONDS, remaining),
-            )
-            return CodexRunResult(process.returncode, stdout, stderr)
-        except subprocess.TimeoutExpired:
-            input_text = None
+    try:
+        deadline = time.monotonic() + max(0.1, timeout)
+        input_text: str | None = prompt
+        while True:
+            remaining = deadline - time.monotonic()
+            if stop_request is not None and stop_request.exists():
+                stdout, stderr = _terminate_child_process(process)
+                return CodexRunResult(130, stdout, stderr)
+            if remaining <= 0:
+                stdout, stderr = _terminate_child_process(process)
+                return CodexRunResult(124, stdout, stderr)
+            try:
+                stdout, stderr = process.communicate(
+                    input=input_text,
+                    timeout=min(POLL_INTERVAL_SECONDS, remaining),
+                )
+                return CodexRunResult(process.returncode, stdout, stderr)
+            except subprocess.TimeoutExpired:
+                input_text = None
+    finally:
+        # Also cover an interrupted bridge main thread, not just timeout/stop polling.
+        if process.poll() is None:
+            _terminate_child_process(process)
 
 
 def _terminate_child_process(
@@ -1271,6 +1277,21 @@ def record_bridge_error(paths: BridgePaths, phase: str, exc: Exception) -> None:
         pass
 
 
+class _RequestStatusPublisher:
+    def __init__(self, paths: BridgePaths) -> None:
+        self.paths = paths
+        self.lock = threading.RLock()
+        self.active: dict[str, str | None] = {"normal": None, "analysis": None}
+
+    def update(self, lane: str, request_id: str | None) -> None:
+        with self.lock:
+            self.active[lane] = request_id
+            current = self.active["normal"] or self.active["analysis"]
+            _write_status(self.paths, "ready", codexAuthenticated=True,
+                requestId=current, requestState="processing" if current else "idle",
+                normalRequestId=self.active["normal"], analysisRequestId=self.active["analysis"])
+
+
 def process_pending_requests(
     paths: BridgePaths,
     *,
@@ -1279,24 +1300,38 @@ def process_pending_requests(
     runner: CodexRunner = run_codex_command,
     timeout: float = DEFAULT_CODEX_TIMEOUT_SECONDS,
     status_heartbeat_seconds: float = STATUS_HEARTBEAT_INTERVAL_SECONDS,
+    analysis_only: bool = False,
+    status_publisher: _RequestStatusPublisher | None = None,
 ) -> int:
+    publisher = status_publisher or _RequestStatusPublisher(paths)
     processed = 0
     for request_path in sorted(paths.requests.glob("*.json")):
         if paths.stop_request.exists():
             break
         response_path = paths.responses / request_path.name
-        if response_path.is_file():
-            request_path.unlink(missing_ok=True)
-            continue
         processing_path = paths.processing / request_path.name
-        try:
-            os.replace(request_path, processing_path)
-        except OSError:
-            continue
+        with publisher.lock:
+            try:
+                is_analysis = read_json_object(request_path).get("task") == CHANNEL_SELF_ANALYSIS_TASK
+            except (OSError, ValueError):
+                is_analysis = False  # Malformed requests keep the normal validation/error path.
+            if is_analysis != analysis_only:
+                continue
+            if response_path.is_file():
+                request_path.unlink(missing_ok=True)
+                continue
+            if processing_path.exists():
+                continue
+            try:
+                os.replace(request_path, processing_path)
+            except OSError:
+                continue
         with _request_status_heartbeat(
             paths,
             request_id=request_path.stem,
             interval_seconds=status_heartbeat_seconds,
+            publisher=publisher,
+            lane="analysis" if analysis_only else "normal",
         ):
             try:
                 response = process_request_file(
@@ -1392,17 +1427,18 @@ def _request_status_heartbeat(
     *,
     request_id: str,
     interval_seconds: float,
+    publisher: _RequestStatusPublisher | None = None,
+    lane: str = "normal",
 ) -> Iterator[None]:
     safe_interval = max(0.05, float(interval_seconds))
     stopped = threading.Event()
 
     def write_processing_status() -> None:
         try:
-            _write_request_status(
-                paths,
-                request_id=request_id,
-                request_state="processing",
-            )
+            if publisher is not None:
+                publisher.update(lane, request_id)
+            else:
+                _write_request_status(paths, request_id=request_id, request_state="processing")
         except OSError:
             return
 
@@ -1421,15 +1457,31 @@ def _request_status_heartbeat(
         yield
     finally:
         stopped.set()
-        heartbeat_thread.join(timeout=max(1.0, safe_interval * 2))
+        heartbeat_thread.join()
         try:
-            _write_request_status(
-                paths,
-                request_id=None,
-                request_state="idle",
-            )
+            if publisher is not None:
+                publisher.update(lane, None)
+            else:
+                _write_request_status(paths, request_id=None, request_state="idle")
         except OSError:
             pass
+
+
+@contextmanager
+def _bridge_shutdown_signals(paths: BridgePaths) -> Iterator[None]:
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def stop(_signum, _frame):
+        paths.stop_request.touch()
+
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 def serve(
@@ -1456,25 +1508,52 @@ def serve(
             return 5
         recover_processing_requests(paths)
         _write_request_status(paths, request_id=None, request_state="idle")
-        last_analysis_cleanup = 0.0
-        while True:
+        publisher = _RequestStatusPublisher(paths)
+        shutdown = threading.Event()
+        analysis_finished = threading.Event()
+
+        def analysis_loop() -> None:
             try:
-                if time.monotonic() - last_analysis_cleanup >= 3600 or last_analysis_cleanup == 0:
-                    expire_analysis_scratch(root)
-                    last_analysis_cleanup = time.monotonic()
-                process_pending_requests(
-                    paths,
-                    project_root=root,
-                    runner=runner,
-                    timeout=timeout,
-                )
-            except Exception as exc:
-                record_bridge_error(paths, "poll", exc)
-            if once or paths.stop_request.exists():
-                break
-            sleeper(POLL_INTERVAL_SECONDS)
-        paths.stop_request.unlink(missing_ok=True)
-        _write_status(paths, "stopped", codexAuthenticated=True)
+                while not shutdown.is_set() and not paths.stop_request.exists():
+                    try:
+                        process_pending_requests(paths, project_root=root, runner=runner, timeout=timeout,
+                                                 analysis_only=True, status_publisher=publisher)
+                    except Exception as exc:
+                        record_bridge_error(paths, "analysis_poll", exc)
+                    if once:
+                        break
+                    shutdown.wait(POLL_INTERVAL_SECONDS)
+            finally:
+                analysis_finished.set()
+
+        with _bridge_shutdown_signals(paths):
+            analysis_thread = threading.Thread(target=analysis_loop, name="codex-bridge-analysis", daemon=False)
+            analysis_thread.start()
+            try:
+                last_analysis_cleanup = 0.0
+                while True:
+                    try:
+                        if time.monotonic() - last_analysis_cleanup >= 3600 or last_analysis_cleanup == 0:
+                            expire_analysis_scratch(root)
+                            last_analysis_cleanup = time.monotonic()
+                        process_pending_requests(paths, project_root=root, runner=runner, timeout=timeout,
+                                                 status_publisher=publisher)
+                    except Exception as exc:
+                        record_bridge_error(paths, "poll", exc)
+                    if once or paths.stop_request.exists():
+                        break
+                    sleeper(POLL_INTERVAL_SECONDS)
+                if once and not paths.stop_request.exists():
+                    # Wait interruptibly without holding Thread.join's internal lock.
+                    while not analysis_finished.wait(POLL_INTERVAL_SECONDS):
+                        pass  # --once drains both initial snapshots without cancelling analysis.
+            finally:
+                paths.stop_request.touch()
+                shutdown.set()
+                analysis_finished.wait()
+                analysis_thread.join()
+                paths.stop_request.unlink(missing_ok=True)
+                _write_status(paths, "stopped", codexAuthenticated=True)
     return 0
 
 

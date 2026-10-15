@@ -994,3 +994,14 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 分離起動/問題への検証: task208-queues専用DB/Redis/ボリューム・18177/13177ポートでbackend/worker/intelligence-worker/frontendをbuildして起動、backend healthy、/health・/settingsが200。設定名をqa-media/qa-intelligenceに変え、RQ登録が各worker1キューずつであることを確認。専用キューの偽仕事を待機させたまま切り抜き側の偽仕事が完了し、その時点で専用仕事はstartedのまま、解除後に両キューが空になることを確認した。実Codex・Google・実動画は実行していない。GPU構成の解決結果でも専用workerはCPU Dockerfile/CPUプロファイル/GPU割当なし。検証用コンテナ/イメージ/ボリュームは削除済み。稼働DBのサイズと更新時刻は不変。
 - 反映前提: 従来キューと新キューの両方で順番待ち・実行中登録・取り出し中が0件、実行中のアプリジョブなし、Codex中継requests/processingが空を確認し、DB backup()と整合確認後にbackend/worker/intelligence-worker/frontendを反映する。旧キューから仕事を自動移動しない。手順はdocsへ記載した。task-208全体の反映ではCodex中継の再起動も必要。
 - 残る制約/未確認: ホストのCodex中継自体は共用・直列のままなので、Codexを使うサムネ文言などは中継側の待ちや既存待機上限による時間切れの可能性が残る。中継の並列化/優先順位変更は行わない。実Codexの受入・稼働環境への反映は未実施。CI（Python 3.11/3.12・frontend）確認後もPR #142をマージせず止める。
+
+## 2026-10-16 task-208追加② Codex中継の分析レーン
+
+- 目的/原因: workerを分離しても中継のprocess_pending_requestsが自己分析を含め直列実行するため、最大900秒の分析で通常依頼が待たされ、既存クライアントの待機上限に達する問題を解消する。
+- 変更ファイル: launcher/codex_bridge.py、backend/tests/test_codex_analysis_lane.py、docs/INTELLIGENCE_SELF_ANALYSIS.md、本記録。既存の依頼モデル/推論/時間上限/応答スキーマ指紋と、RQキュー・worker構成は変えない。
+- 処理: channel_self_analysis専用の非daemonスレッドを中継起動ごとに1つ作り、分析を1件ずつ処理する。通常ループは分析を取り出さず、従来の依頼を同じ順序で直列処理する。分析と通常は並行、分析同士・通常同士は並行にしない。requests→processingのos.replaceによるclaimを維持し、共有ロックとprocessing同一IDの存在確認で進行中ファイルを上書きしない。応答済みのコピーも再実行しない。
+- 心拍: 両レーンの状態を共有ロックの下でまとめて公開する。requestId/requestStateはどちらかが稼働中ならprocessingを保ち、通常が稼働中なら通常IDを優先。normalRequestId/analysisRequestIdを追加し、片方の完了や心拍が他方のprocessingをidleで消さない。心拍スレッドは終了待ちしてから状態を閉じる。
+- 停止/復旧: stop_requestを両レーンの子プロセスと共有。中継のfinallyで停止要求を出し、分析スレッドと心拍が終わってからstoppedを書き、ロックを解放する。メインスレッドのSIGTERMを停止要求に変換し、ハンドラを復元する。実行関数の割り込み脱出でも子プロセスを終了する。--onceは両レーンの初回依頼を処理し終えて終了。強制kill等で残ったprocessingは従来のrecover_processing_requestsでrequestsへ戻し、応答済み/queuedコピーがある場合も重複実行しない。
+- 検証: ruff 0.16.10のcheck . ../launcher ../scripts成功。Python 3.11.9のbackend全件pytestは1905 passed・2 skipped（追加修正①の1892件＋新レーン13件）。既存中継・分析中継・ランチャーを含む。frontendは変更なし、この追加②では手元で再実行していない。CIでPython 3.11/3.12・frontendを確認する。
+- 問題への検証: runnerをモックして分析を待機させ、その間に通常の2依頼が従来どおり1件ずつ完了すること、分析2依頼の同時実行が1件以下であること、両方向の完了順で心拍が他方の稼働を保つことを確認。重複コピー、停止要求、SIGTERMハンドラ、異常終了、再起動時のprocessing/応答済み/queuedコピーを検証する。停止の試験ではCodexの代わりにPythonの待機子プロセスを実際に起動し、終了・スレッド終了・私有一時領域の掃除まで確かめる。
+- 未確認/範囲: 実Codexの同時実行・分析品質は未確認。通常レーン内や分析レーン内の順番待ちは従来どおり残る。稼働中継の再起動やDocker反映は行わない。反映時はホスト側Codex中継の再起動が必要。PR #142へ追加し、CI成功後もマージせず止める。
