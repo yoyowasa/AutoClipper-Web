@@ -12,47 +12,67 @@ METRICS = ("views", "engagedViews", "estimatedMinutesWatched", "averageViewDurat
 MAX_REQUESTS = 90
 DISCOVERY_LIMIT = 200
 INITIAL_LIMIT = 50
+REPORT_PAGE_SIZE = 200
+RETRYABLE_STATUS = {500, 502, 503, 504}
+RETRY_DELAYS = (0.25, 0.5)
+
+
+def response_error(response: httpx.Response) -> YouTubeError:
+    try:
+        reasons = [row.get("reason") for row in response.json().get("error", {}).get("errors", [])]
+    except (ValueError, AttributeError, TypeError):
+        reasons = []
+    status = response.status_code
+    if status == 401:
+        code = "RECONNECT_REQUIRED"
+    elif status == 429 or (status == 403 and any(reason in {"quotaExceeded", "dailyLimitExceeded"} for reason in reasons
+                                               if isinstance(reason, str))):
+        code = "QUOTA_EXCEEDED"
+    elif status == 403:
+        code = "FORBIDDEN"
+    elif 500 <= status < 600:
+        code = "API_5XX"
+    else:
+        code = {400: "API_BAD_REQUEST", 404: "API_NOT_FOUND", 409: "API_CONFLICT", 410: "API_GONE"}.get(status, "API_HTTP_ERROR")
+    return YouTubeError(code, http_status=status, reasons=reasons)
 
 
 class YouTubeClient:
-    def __init__(self, access_token: str, *, budget_seconds: int = 120, transport=None, clock=time.monotonic):
+    def __init__(self, access_token: str, *, budget_seconds: int = 120, transport=None, clock=time.monotonic, sleep=time.sleep):
         self._token = access_token
         self._transport = transport
         self._clock = clock
+        self._sleep = sleep
         self._deadline = clock() + budget_seconds
         self.requests = 0
 
     def get(self, endpoint: str, params: dict[str, Any], *, analytics: bool = False) -> dict[str, Any]:
         if endpoint not in ({"reports"} if analytics else {"channels", "playlistItems", "videos"}):
             raise YouTubeError("API_REJECTED")
-        remaining = self._deadline - self._clock()
-        if remaining <= 0 or self.requests >= MAX_REQUESTS:
-            raise YouTubeError("SYNC_LIMIT")
-        self.requests += 1
         base = "https://youtubeanalytics.googleapis.com/v2/" if analytics else "https://www.googleapis.com/youtube/v3/"
         try:
-            with httpx.Client(transport=self._transport, timeout=min(10, remaining), follow_redirects=False) as client:
-                response = client.get(base + endpoint, params=params, headers={"Authorization": "Bearer " + self._token})
-            if self._clock() >= self._deadline:
-                raise YouTubeError("SYNC_LIMIT")
-            if response.status_code == 401:
-                raise YouTubeError("RECONNECT_REQUIRED")
-            if response.status_code == 403:
-                try:
-                    reasons = {row.get("reason") for row in response.json().get("error", {}).get("errors", [])}
-                except (ValueError, AttributeError, TypeError):
-                    reasons = set()
-                raise YouTubeError("QUOTA_EXCEEDED" if reasons & {"quotaExceeded", "dailyLimitExceeded"} else "FORBIDDEN")
-            if response.status_code == 429:
-                raise YouTubeError("QUOTA_EXCEEDED")
-            if response.status_code != 200:
-                raise YouTubeError("API_REJECTED")
-            result = response.json()
-            if not isinstance(result, dict):
-                raise YouTubeError("INVALID_RESPONSE")
-            return result
+            for attempt in range(len(RETRY_DELAYS) + 1):
+                remaining = self._deadline - self._clock()
+                if remaining <= 0 or self.requests >= MAX_REQUESTS:
+                    raise YouTubeError("SYNC_LIMIT")
+                self.requests += 1
+                with httpx.Client(transport=self._transport, timeout=min(10, remaining), follow_redirects=False) as client:
+                    response = client.get(base + endpoint, params=params, headers={"Authorization": "Bearer " + self._token})
+                if self._clock() >= self._deadline:
+                    raise YouTubeError("SYNC_LIMIT")
+                if response.status_code == 200:
+                    result = response.json()
+                    if not isinstance(result, dict):
+                        raise YouTubeError("INVALID_RESPONSE")
+                    return result
+                if response.status_code not in RETRYABLE_STATUS or attempt == len(RETRY_DELAYS):
+                    raise response_error(response)
+                delay = RETRY_DELAYS[attempt]
+                if self.requests >= MAX_REQUESTS or self._deadline - self._clock() <= delay:
+                    raise YouTubeError("SYNC_LIMIT")
+                self._sleep(delay)
         except httpx.HTTPError:
-            raise YouTubeError("NETWORK_ERROR") from None
+            raise YouTubeError("SYNC_LIMIT" if self._clock() >= self._deadline else "NETWORK_ERROR") from None
         except ValueError:
             raise YouTubeError("INVALID_RESPONSE") from None
 
@@ -86,12 +106,15 @@ class YouTubeClient:
             yield batch, result.get("items", [])
 
     def report(self, channel_id: str, start: date, end: date, dimensions: str = "", video_ids: list[str] | None = None):
+        single_page = dimensions == "day,video"
+        if single_page and (not video_ids or end < start or len(video_ids) * ((end - start).days + 1) > REPORT_PAGE_SIZE):
+            raise YouTubeError("API_BAD_REQUEST")
         # The API permits adding a multi-value filter as a dimension. A single
         # video uses the base report and we attach that known ID to the result.
         single_video = bool(video_ids and len(video_ids) == 1 and "video" in dimensions.split(","))
         wire_dimensions = ",".join(key for key in dimensions.split(",") if not (single_video and key == "video"))
         params = {"ids": "channel==" + channel_id, "startDate": str(start), "endDate": str(end),
-                  "metrics": ",".join(METRICS), "maxResults": 200}
+                  "metrics": ",".join(METRICS), "maxResults": REPORT_PAGE_SIZE}
         if wire_dimensions:
             params.update(dimensions=wire_dimensions, sort="-views" if "video" in wire_dimensions.split(",") else wire_dimensions)
         if video_ids:
@@ -104,6 +127,8 @@ class YouTubeClient:
             raw = result.get("rows", [])
             if not isinstance(raw, list) or len(rows) + len(raw) > 2000:
                 raise YouTubeError("SYNC_LIMIT")
+            if len(raw) > REPORT_PAGE_SIZE:
+                raise YouTubeError("INVALID_RESPONSE")
             if raw and (set(columns) != expected or len(columns) != len(expected)):
                 raise YouTubeError("INVALID_RESPONSE")
             for values in raw:
@@ -126,6 +151,6 @@ class YouTubeClient:
                 if "video" in row and video_ids and row["video"] not in video_ids:
                     raise YouTubeError("CHANNEL_MISMATCH")
                 rows.append(row)
-            if len(raw) < 200:
+            if single_page or len(raw) < REPORT_PAGE_SIZE:
                 return rows
             index += len(raw)

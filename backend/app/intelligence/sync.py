@@ -70,15 +70,25 @@ def run_youtube_sync(run_id: str, *, session_factory: Callable[[], Session] = Se
                         if old:
                             old.availability = "unavailable_unconfirmed"
                 videos = sorted(prepared, key=lambda video: (video.published_at, video.id), reverse=True)
-                start, end, last, reports, initial_truncated = collect_reports(client, channel.external_id, videos, stamp)
+                previous = db.scalar(select(SyncRun).where(SyncRun.channel_id == channel.id, SyncRun.status.in_(["success", "partial"]))
+                                     .order_by(SyncRun.queued_at.desc(), SyncRun.id.desc()).limit(1))
+                pending = next((entry["requests"] for entry in previous.missing_reports if entry.get("kind") == "pending_reports"),
+                               []) if previous else []
+                start, end, last, reports, pending = collect_reports(client, channel.external_id, videos, stamp, pending=pending)
             db.flush()
-            for kind, begin, finish, rows, video_id in reports:
-                save_report(db, run, settings, kind, begin, finish, rows, stamp, video_id)
+            for report in reports:
+                save_report(db, run, settings, report.kind, report.start, report.end, report.rows, stamp, report.video_id,
+                            error=report.error)
+            if pending:
+                run.missing_reports = [*run.missing_reports, {"kind": "pending_reports", "reason": "SYNC_LIMIT", "requests": pending}]
             channel.name, channel.metadata_updated_at, channel.last_sync_at = identity["snippet"]["title"], stamp, stamp
             run.requested_start, run.requested_end, run.last_report_date = start, end, last
-            run.truncated = truncated or initial_truncated
-            run.status, run.finished_at, run.active_channel_id = "partial" if run.truncated else "success", now(), None
-            run.fetched_count, run.request_count = sum(len(report[3]) for report in reports), client.requests
+            run.truncated = truncated or bool(pending)
+            partial_failure = any(report.error for report in reports)
+            run.error_code = "API_5XX" if partial_failure else "SYNC_LIMIT" if pending else None
+            run.status = "partial" if run.truncated or partial_failure else "success"
+            run.finished_at, run.active_channel_id = now(), None
+            run.fetched_count, run.request_count = sum(len(report.rows) for report in reports), client.requests
             db.commit()
         except Exception as error:
             db.rollback()
@@ -90,6 +100,8 @@ def run_youtube_sync(run_id: str, *, session_factory: Callable[[], Session] = Se
                 code = "SYNC_FAILED"
             run = db.get(SyncRun, run_id)
             run.request_count = client.requests if client else 0
+            if isinstance(error, YouTubeError):
+                run.missing_reports = [*run.missing_reports, {"kind": "sync_failure", **error.details()}]
             if code == "RECONNECT_REQUIRED":
                 connection = db.get(ChannelConnection, channel.id)
                 if connection:

@@ -940,3 +940,15 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - ローカル検証: Python 3.11.9の`python -m pytest -q`は1777 passed・2 skipped。ruff 0.16.10の`cd backend; python -m ruff check . ../launcher ../scripts`成功。frontendのlint/typecheck/test（29ファイル）/build成功。OAuth/state/本人不一致/権限不足/トークン非表示/atomic保存失敗/invalid_grant/欠損/期間/再同期/二重登録/キュー失敗/時間制限/強制終了/DBロック回避/保持期限/既存schema不変をモックと隔離DBで確認した。
 - compose/ブラウザ: task205-validationの専用CPU構成、専用DBボリューム、18050/13050ポートでbuild/起動。最終APIは読み取り専用source bindでも起動確認した。backend healthy、worker/frontend/redis running、/healthと/settingsが200、5テーブル作成、Linuxの合成トークンファイル600、av 18.1.0/faster-whisper 1.2.1を確認。ブラウザでも連携設定画面を確認。外部Originの同期POSTは403。検証専用コンテナ・ボリューム・イメージは終了後に削除した。稼働コンテナの作り直しは行わず、稼働DBの536,576 bytes・更新時刻2026-10-14T23:52:24.2735236Zが検証前後で不変。
 - 未確認: 実際のGoogle認可・実チャンネル同期は未実施（ユーザーが反映後に行う）。既存チャンネル/過去統計/手入力データは移行していない。CIの3.11/3.12/frontendはPRで確認し、成功後もレビュー待ちで未マージとする。稼働環境へは未反映、Codex中継の変更/再起動なし。
+
+## 2026-10-15 task-206 YouTube動画別日次の分割と一時障害の扱い
+
+- 目的/原因: day,videoを85本・60日まとめて要求すると、200行ごとの2ページ目（startIndex=201）に進み、Googleの500で全体がAPI_REJECTEDになっていた。指標と取得期間を維持し、ページ送りを不要にする。
+- 変更ファイル: backend/app/intelligence/collection.py・youtube_client.py・common.py・ingest.py・sync.py、backend/app/api/intelligence.py、新規backend/tests/test_intelligence_report_chunking.py、docs/INTELLIGENCE_YOUTUBE_SYNC.md、本記録。frontendとlauncher、依存・DBの列は変更しない。
+- 分割: split_video_day_requestsで動画数×暦日数を200以下にする。60日は3本ずつ・最大180行、85本は29要求、20本は7要求、1本は1要求。200行ちょうども追加ページを要求しない。
+- 一時障害: HTTP 500/502/503/504は0.25秒・0.5秒待ち、最大2回再試行する。各試行を90要求と既定120秒の期限に数える。動画別日次/28日/形式/初期7日は、5xxが続いてもAPI_5XXの欠損を記録し、他の集計を保存してpartialにする。既知の値を障害時のNULLで消さず、新規欠損行は同じ範囲の回復時に置き換える。
+- 必須/エラー: 本人確認・動画一覧/メタデータ・チャンネル日次/28日/前28日は失敗時に全体をfailedにする。400/404/409/410は別コード、他のHTTP失敗はステータスを記録。401・403・429・通信失敗は引き続き全体失敗。errors[].reasonの識別子だけを履歴へ残し、本文・トークンは記録しない。NO_ROWSとAPI障害を区別し、既存画面のNO_ROWS件数に障害や打切りを数えない。
+- 打切り/継続: 任意レポートの時間・要求数制限と初期7日の50本制限では取得済み分を保存し、truncated/partialにする。未実行の動画・種別・期間を既存sync_runs.missing_reportsのpending_reportsに保存し、次の手動同期で必須部分を更新してから続きを取得する。続きが完了した次の同期から全体の現在期間に戻る。非公開/削除済み動画は継続対象から外す。
+- 関連検証: モックと隔離DBで70 passed。全日データあり・形式1種類・初期7日対象85本では5,100行を全件保存し、最初89要求、残り35本の次回43要求で完了。20本は1,200行・35要求で完了。要求数8の制限/120秒の模擬期限からの再開、必須失敗、権限/利用枠失敗、欠損・回復、秘密の本文非保存も確認した。
+- 検証結果: Python 3.11.9でbackend全件pytestは1821 passed・2 skipped（既存1777件＋追加44件）、ruff 0.16.10の`check . ../launcher ../scripts`成功。frontendのlint/typecheck/test（29ファイル）/build成功。task206-validationの専用DBボリューム・18060/13060ポートでcompose build/起動し、backend healthy、worker起動、/health・/settings・連携一覧APIが200。検証専用コンテナ/ボリューム/イメージは削除した。稼働DBは検証前後で536,576 bytes・更新時刻2026-10-15T10:41:43.0585299Zが不変。CIのPython 3.11/3.12とfrontendはPRで確認する。
+- 未確認: 実チャンネルのGoogle応答・所要時間・反映後の受入はユーザーが「同期する」で確認する。実チャンネルへの同期・稼働コンテナへの反映は行わない。Codex中継の変更/再起動なし。PRはCI成功後もレビュー待ちで止め、マージしない。
