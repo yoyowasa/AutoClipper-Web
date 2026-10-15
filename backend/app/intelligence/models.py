@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -16,6 +16,19 @@ class Channel(Base):
     metadata_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class ProductionLink(Base):
+    __tablename__ = "production_links"
+    __table_args__ = (CheckConstraint("mode IN ('auto', 'manual', 'manual_unlinked')"),
+                     CheckConstraint("(mode = 'manual_unlinked' AND youtube_video_id IS NULL) OR "
+                                     "(mode IN ('auto', 'manual') AND youtube_video_id IS NOT NULL)"))
+    record_family_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    record_id: Mapped[str] = mapped_column(String(100))
+    youtube_video_id: Mapped[str | None] = mapped_column(ForeignKey("youtube_videos.id"), unique=True)
+    mode: Mapped[str] = mapped_column(String(20))
+    linked_at: Mapped[datetime | None] = mapped_column(DateTime)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
 class ChannelConnection(Base):

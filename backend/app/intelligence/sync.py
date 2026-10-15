@@ -11,6 +11,7 @@ from app.intelligence.common import YouTubeError, now
 from app.intelligence.credentials import load_credentials
 from app.intelligence.ingest import ingest_video, save_report
 from app.intelligence.models import Channel, ChannelConnection, SyncRun, YouTubeVideo
+from app.intelligence.production_links import reconcile_safely
 from app.intelligence.youtube_client import YouTubeClient
 from app.storage.paths import StoragePaths, get_storage_paths
 
@@ -90,6 +91,7 @@ def run_youtube_sync(run_id: str, *, session_factory: Callable[[], Session] = Se
             run.finished_at, run.active_channel_id = now(), None
             run.fetched_count, run.request_count = sum(len(report.rows) for report in reports), client.requests
             db.commit()
+            reconcile_safely(db, storage)
         except Exception as error:
             db.rollback()
             if isinstance(error, YouTubeError):

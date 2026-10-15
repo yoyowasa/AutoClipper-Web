@@ -220,6 +220,8 @@ def record_completed_productions(
                 write_production_record(job, export, paths, previous_export=previous_by_candidate.get(export.candidate_id))
             except Exception as exc:
                 logger.warning("Production record failed: job=%s export=%s errorType=%s", job.id, export.id, type(exc).__name__)
+        from app.intelligence.production_links import reconcile_safely
+        reconcile_safely(db, paths)
     except Exception as exc:
         logger.warning("Production records failed: job=%s errorType=%s", job.id, type(exc).__name__)
 
@@ -253,4 +255,7 @@ def backfill_production_records(db: Session, paths: StoragePaths, *, execute: bo
                     report["written"] += 1
         except Exception as exc:
             report["errors"].append({"exportId": export.id, "errorType": type(exc).__name__})
+    if report["written"]:
+        from app.intelligence.production_links import reconcile_safely
+        reconcile_safely(db, paths)
     return report
