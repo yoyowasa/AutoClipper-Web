@@ -5,7 +5,8 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
-    character_assets, character_presets, clip_plan, exports, framing_guide, intelligence, jobs, preferences, short_banners, storage, videos,
+    character_assets, character_presets, clip_plan, exports, framing_guide, intelligence, jobs, preferences,
+    production_links, short_banners, storage, videos,
 )
 from app.config import Settings, get_settings
 from app.db import init_db
@@ -43,6 +44,7 @@ app.include_router(character_assets.router)
 app.include_router(short_banners.router)
 app.include_router(storage.router)
 app.include_router(intelligence.router)
+app.include_router(production_links.router)
 
 
 @app.get("/health")

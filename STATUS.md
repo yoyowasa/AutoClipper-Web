@@ -952,3 +952,16 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 関連検証: モックと隔離DBで70 passed。全日データあり・形式1種類・初期7日対象85本では5,100行を全件保存し、最初89要求、残り35本の次回43要求で完了。20本は1,200行・35要求で完了。要求数8の制限/120秒の模擬期限からの再開、必須失敗、権限/利用枠失敗、欠損・回復、秘密の本文非保存も確認した。
 - 検証結果: Python 3.11.9でbackend全件pytestは1821 passed・2 skipped（既存1777件＋追加44件）、ruff 0.16.10の`check . ../launcher ../scripts`成功。frontendのlint/typecheck/test（29ファイル）/build成功。task206-validationの専用DBボリューム・18060/13060ポートでcompose build/起動し、backend healthy、worker起動、/health・/settings・連携一覧APIが200。検証専用コンテナ/ボリューム/イメージは削除した。稼働DBは検証前後で536,576 bytes・更新時刻2026-10-15T10:41:43.0585299Zが不変。CIのPython 3.11/3.12とfrontendはPRで確認する。
 - 未確認: 実チャンネルのGoogle応答・所要時間・反映後の受入はユーザーが「同期する」で確認する。実チャンネルへの同期・稼働コンテナへの反映は行わない。Codex中継の変更/再起動なし。PRはCI成功後もレビュー待ちで止め、マージしない。
+
+## 2026-10-15 task-207 制作記録とYouTube動画のDB内結び付け
+
+- 目的: Clip Intelligence統合②。自チャンネルのYouTube動画と永久保存の制作記録をAutoClipper内で照合・手動管理する。参照元Clip Intelligenceのproduction_records.pyは読み取りのみ、手動結合0件のため移行なし。分析・統計表示・Codex分析は含めない。
+- 変更ファイル: intelligence/models.py（production_links）、新規production_catalog.py/production_links.py/production_link_schemas.py、api/production_links.py、main.py、intelligence/sync.py、production_records.pyの保存後フック。frontendのProductionLinkSettings、lib/productionLinks、intelligence requestのexport、settingsへの接続。backend/frontendテスト、API一覧契約、docs/INTELLIGENCE_PRODUCTION_LINKS.md、本記録。
+- DB: record_family_id主キー、record_id、youtube_video_id（nullable・一意・youtube_videosへの外部キー）、mode（auto/manual/manual_unlinked）、linked_at、updated_at。create_allで追加する。Job/ExportItemへの外部キーは張らず、ジョブ/出力削除後も記録と結び付きを残す。制作記録の形式は変更しない。
+- 照合: NFKC・前後空白除去・連続空白1個化だけで投稿タイトルを比較。previousRecordIdをたどった最初のrecordIdをファミリーとし、そのcreatedAt以降に公開された取得済み自動画が両側1対1のときだけauto。再書き出しの最新revisionへrecord_idを追従する。祖先欠落/循環/別job/revision逆転/枝分かれ/不正JSONは自動で選ばない。既存autoは再評価するが、manual/manual_unlinkedの動画・modeは上書きしない（最新record_idへの追従は行う）。
+- 実行時点/失敗: 同期success/partialのcommit後、完成動画の記録保存後、実行したbackfill後、手動の再照合。保存済みデータから照合し、YouTubeへ通信しない。storage_mutation_lockと独立DBセッションで公開し、失敗は例外の種類だけを警告して同期や動画の成功を戻さない。手動操作もロックと一意制約で保護し、他の記録への横取りは409。
+- API/画面: GET一覧、PUTファミリー（youtubeVideoIdの指定/NULLで手動結合/解除）、POST reconcile。更新はtask-205と同じOrigin確認。GETは読取のみ。設定画面のYouTube連携下に件数、未結合記録と動画選択、結合/解除/再照合/一覧更新を追加。解除はmanual_unlinkedとして残し、手動で結び直せる。数値統計は返さず表示しない。
+- 実データdry-run: 稼働DBをsqlite3.backupでGit対象外のコピーへ複製し、integrity_check=okを確認。コピーの照合をrollback。元DBはjobs 15件・export_items 16件・youtube_videos 86本、制作記録21ファイル/21ファミリー、読込異常0件。自動結合0件・未結合記録21件・未結合動画86本。正規化タイトルの一致が0組で、動画タイトル/公開日時の欠損も0件。あいまい一致で補わず、必要な結合は反映後にユーザーが手動で指定する。稼働DBの1,404,928 bytes・更新時刻2026-10-15T11:35:33.0874874Zと、全制作記録のSHA256が不変。
+- 検証: 最終差分のPython 3.11.9・backend全件pytestは1845 passed・2 skipped（既存1821件＋追加24件）。関連24件とruff 0.16.10の`check . ../launcher ../scripts`成功。frontendのlint/typecheck/test（30ファイル）/build成功。CIのPython 3.11/3.12とfrontendはPRで確認する。
+- 隔離起動/画面: task207-validationの専用DBボリューム・18070/13070ポートでbuild/起動し、backend healthy、worker起動、/healthと/settingsが200。合成データで自動1件→画面から手動結合で2件→解除で1件、再照合でもmanual_unlinked維持を確認。検証コンテナ/ボリューム/イメージは削除。稼働autoclipperwebは作り直していない。
+- 未確認/範囲: 実データの結合操作・稼働環境への反映は未実施。制作記録にYouTubeの数値は書き込まない。launcherとCodex中継の変更なし。PRはCI（Python 3.11/3.12・frontend）を確認後も未マージでレビュー待ちにする。
