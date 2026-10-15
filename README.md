@@ -47,7 +47,7 @@ Double-click:
 Start AutoClipper.cmd
 ```
 
-The desktop entrypoint starts an installed Docker Desktop when its daemon is stopped, waits for the engine, starts the recommended four-service profile, waits for the app, and opens `/upload`. On a compatible NVIDIA system, the recommended profile uses the GPU worker and preselects `turbo / ja / cuda / float16`. Otherwise it starts the CPU-compatible profile and shows the reason. An explicit GPU start never falls back silently. The launcher can also retry a selected profile, show logs, and open the uploads/outputs folders. Normal stop uses `docker compose stop` and preserves SQLite, Redis data, uploads, outputs, and the Whisper model cache.
+The desktop entrypoint starts an installed Docker Desktop when its daemon is stopped, waits for the engine, starts the recommended five-service profile, waits for the app, and opens `/upload`. On a compatible NVIDIA system, the recommended profile uses the GPU worker and preselects `turbo / ja / cuda / float16`. Otherwise it starts the CPU-compatible profile and shows the reason. An explicit GPU start never falls back silently. The launcher can also retry a selected profile, show logs, and open the uploads/outputs folders. Normal stop uses `docker compose stop` and preserves SQLite, Redis data, uploads, outputs, and the Whisper model cache.
 
 The launcher MVP requires Python 3.11+. Docker Desktop remains required. See `docs/WINDOWS_LAUNCHER.md` for controls and troubleshooting.
 
@@ -80,7 +80,8 @@ Expected services:
 
 - `frontend`: `http://localhost:3000`
 - `backend`: `http://localhost:8000`
-- `worker`: RQ worker process
+- `worker`: media RQ worker (`RQ_QUEUE_NAME`, default `autoclipper`)
+- `intelligence-worker`: CPU-only YouTube sync/analysis worker (`RQ_INTELLIGENCE_QUEUE_NAME`, default `autoclipper-intelligence`)
 - `redis`: queue backend
 
 Stop all services:
@@ -92,7 +93,7 @@ docker compose down
 Follow logs:
 
 ```powershell
-docker compose logs -f backend frontend worker redis
+docker compose logs -f backend frontend worker intelligence-worker redis
 ```
 
 Run or restart only the worker:

@@ -32,7 +32,7 @@ def compose_ps(*, running: bool = True) -> str:
     state = "running" if running else "exited"
     rows = (
         {"Service": name, "State": state, "Health": "healthy" if name == "backend" else ""}
-        for name in ("backend", "frontend", "worker", "redis")
+        for name in ("backend", "frontend", "worker", "intelligence-worker", "redis")
     )
     return "\n".join(json.dumps(row) for row in rows)
 
@@ -208,7 +208,7 @@ def make_controller(
 def test_parse_compose_ps_accepts_json_lines() -> None:
     states = parse_compose_ps(compose_ps())
 
-    assert set(states) == {"backend", "frontend", "worker", "redis"}
+    assert set(states) == {"backend", "frontend", "worker", "intelligence-worker", "redis"}
     assert all(state.running for state in states.values())
 
 
@@ -259,6 +259,15 @@ def test_start_does_not_relaunch_ready_docker_desktop(tmp_path: Path) -> None:
 
     assert result.docker_desktop_started is False
     assert not any(call[0][1:3] == ["desktop", "start"] for call in runner.calls)
+
+
+def test_start_adds_missing_intelligence_worker_instead_of_accepting_old_four_services(tmp_path: Path) -> None:
+    previous = "\n".join(line for line in compose_ps().splitlines() if json.loads(line)["Service"] != "intelligence-worker")
+    runner = FakeRunner(ps_output=previous)
+    controller = make_controller(make_project(tmp_path), runner, ready=True)
+    result = controller.start(open_browser=False)
+    assert result.already_running is False and result.status.ready is True
+    assert any("up" in call[0] for call in runner.calls)
 
 
 def test_start_falls_back_to_desktop_executable_without_cli_plugin(

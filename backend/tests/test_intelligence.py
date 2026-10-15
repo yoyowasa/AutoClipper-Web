@@ -309,10 +309,10 @@ def test_rq_timeout_and_killed_worker_record_sync_failure(client, environment):
 
 
 def test_queue_timeout_and_request_budget(monkeypatch):
-    import app.jobs.queue as queue
+    import app.intelligence.queue as queue
     from app.intelligence.queue import enqueue_youtube_sync
     captured = []
-    monkeypatch.setattr(queue, "get_queue", lambda: SimpleNamespace(enqueue=lambda *args, **kwargs: captured.append(kwargs)))
+    monkeypatch.setattr(queue, "get_intelligence_queue", lambda: SimpleNamespace(enqueue=lambda *args, **kwargs: captured.append(kwargs)))
     enqueue_youtube_sync("sync_test")
     assert captured[0]["job_timeout"] == get_settings().youtube_sync_budget_seconds + 30
     clock = [0]

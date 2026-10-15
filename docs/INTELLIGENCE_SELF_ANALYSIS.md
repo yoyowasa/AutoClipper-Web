@@ -5,6 +5,56 @@
 「保存済みの統計で分析」から選ぶ。同じチャンネルの分析は同時に1件だけ。
 同期・Codex生成・検証はRQで行い、HTTPは開始の受付だけを返す。
 
+## 専用キューとworker
+
+- 切り抜き・字幕プレビュー・サムネ文言・書き出しは従来の `RQ_QUEUE_NAME`
+  （既定 `autoclipper`）を `worker` が処理する。
+- YouTube同期と自己分析は `RQ_INTELLIGENCE_QUEUE_NAME`
+  （既定 `autoclipper-intelligence`）を `intelligence-worker` が処理する。
+  設定で同じキュー名にはできない。Codexの応答待ちは切り抜きworkerを占有しない。
+- Codex中継自体は共用・直列のまま。分析と同時にCodexを使うサムネ文言などを依頼すると、
+  中継側の順番待ちや既存の待機上限による時間切れの可能性は残る。中継の並列化や優先順位変更は行わない。
+- `intelligence-worker` はCPU用DockerfileとCPUプロファイルを使う。
+  GPU構成でもGPUの割り当てやCUDA事前検証は行わない。storageとRedisは共通。
+- RQの失敗記録（時間切れ・例外・親プロセスが検知したSIGKILL）は両workerで共用する。
+  アプリの保守処理は担当を分け、切り抜きの孤立ジョブ点検は `worker` だけ、
+  同期/分析の取り残し・YouTube保持期限・認可stateの期限切れ点検は `intelligence-worker` だけが行う。
+  RQ自体の保守処理はそれぞれ自分のキューだけを対象にする。各サービスは1プロセスで運用する。
+
+### 反映前の確認
+
+旧キューの仕事を自動移動する処理は無い。両キューの順番待ち・実行中・取り出し中が0件、
+DBに実行中ジョブが無いこと、Codex中継のrequests/processingが空であることを確認してから反映する。
+実行中として残った行の例外扱いは、従来どおりユーザーの明示指示がある場合だけ。
+次の読み取りではRedis登録のcleanupを行わない。`$intelligenceQueue` は反映予定の
+`RQ_INTELLIGENCE_QUEUE_NAME` の値に合わせる（下は既定値の例）。旧backendには新設定が無いため引数で渡す。
+
+```powershell
+$intelligenceQueue = "autoclipper-intelligence"
+@'
+import sys
+from app.config import get_settings
+from app.jobs.queue import get_redis_connection
+from rq import Queue
+settings = get_settings()
+for name in (settings.rq_queue_name, sys.argv[1]):
+    queue = Queue(name, connection=get_redis_connection())
+    print(name, "queued", queue.count,
+          "started", len(queue.started_job_registry.get_job_ids(cleanup=False)),
+          "intermediate", len(queue.intermediate_queue.get_job_ids()))
+'@ | docker compose exec -T backend python - $intelligenceQueue
+```
+
+DBをbackup()で複製・検証してから、GPU構成なら次の4サービスを作り直す（Redisは作り直さない）。
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker intelligence-worker frontend
+```
+
+起動後は4サービス、backendのhealth、画面、両workerの監視キューと専用workerのCPUプロファイルを確認する。
+task-208全体では新しいCodex依頼種別も追加しているため、ホスト側Codex中継の再起動も必要。
+このPRでは稼働環境への反映は行わない。
+
 ## 入力と根拠
 
 - 最新の成功または一部成功した同期の最終返却日を基準に、直近28日・前28日、

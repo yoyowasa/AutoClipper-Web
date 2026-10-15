@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from urllib.parse import urlsplit
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///../storage/autoclipper.db"
     redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "autoclipper"
+    rq_intelligence_queue_name: str = Field(default="autoclipper-intelligence", min_length=1)
     autoclipper_runtime_profile: Literal["cpu", "gpu"] = "cpu"
     storage_root: str = "../storage"
     youtube_oauth_redirect_uri: str = "http://localhost:8000/api/intelligence/oauth/callback"
@@ -51,6 +52,12 @@ class Settings(BaseSettings):
     allowed_video_content_types: str = "video/mp4,video/quicktime,video/x-matroska,video/webm"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @model_validator(mode="after")
+    def distinct_worker_queues(self):
+        if not self.rq_intelligence_queue_name.strip() or self.rq_intelligence_queue_name == self.rq_queue_name:
+            raise ValueError("Intelligence queue must be nonempty and separate from the media queue")
+        return self
 
     @field_validator("youtube_oauth_redirect_uri")
     @classmethod

@@ -123,10 +123,10 @@ def test_real_bridge_envelope_and_parser_without_codex_execution(prepared):
 
 
 def test_queue_time_budget_and_expired_bridge_cleanup(client, prepared, monkeypatch):
-    import app.jobs.queue as queue
+    import app.intelligence.queue as queue
     from datetime import timedelta
     captured = []
-    monkeypatch.setattr(queue, "get_queue", lambda: SimpleNamespace(enqueue=lambda *args, **kwargs: captured.append(kwargs)))
+    monkeypatch.setattr(queue, "get_intelligence_queue", lambda: SimpleNamespace(enqueue=lambda *args, **kwargs: captured.append(kwargs)))
     enqueue_channel_analysis("analysis_test")
     assert captured[0]["job_timeout"] == analysis_job_timeout(get_settings()) == 1140
     id = client.post(URL, json={"syncBefore": "never"}).json()["id"]

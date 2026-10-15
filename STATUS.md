@@ -981,3 +981,16 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: ruff 0.16.10のcheck . ../launcher ../scripts成功。最終差分のPython 3.11.9・backend全件pytestは1877 passed・2 skipped（既存1845件＋追加32件）。分析/共用中継/ホスト関連106件成功。frontend lint/typecheck/test（31ファイル）/build成功。
 - 分離起動/画面: task208-validation専用DB/Redis/ポート18177・13177でbackend healthy、worker起動、/health・/settingsが200。架空の検証済みReviewで所見/仮説/提案/推薦面を表示し、実RQ受付→統計不足で理由付き失敗→前回成功結果を維持することをブラウザで確認。中継依頼は0件。検証コンテナ/ボリューム/イメージを削除済み。最初の検証ポート18080はWindowsに拒否され、使用可能な分離ポートへ変更して確認した。
 - 未確認/範囲: 実Codex実行・実Google同期・分析品質/改善効果は未確認で、反映後にユーザーが確認する。稼働環境のbuild/再作成、中継の再起動は行っていない。有料APIは使わず、既存切り抜き処理と制作記録の契約は変更しない。PRのCI（Python 3.11/3.12・frontend）確認後も未マージでレビュー待ちにする。
+
+## 2026-10-16 task-208追加 同期・自己分析の専用worker分離
+
+- 目的/原因: 同期（既定150秒）とCodex自己分析（中継待ち最大960秒）が切り抜き用の単一workerを占有するため、PR #142内で専用キュー・CPU workerに分離する。
+- 変更: backend/app/config.pyにRQ_INTELLIGENCE_QUEUE_NAME（既定autoclipper-intelligence）を追加し、空名と切り抜きキューと同名を拒否。intelligence/queue.pyの同期・分析enqueueだけ新キューへ変更。既存のRQ_QUEUE_NAME（既定autoclipper）と切り抜き/字幕プレビュー/サムネ文言/書き出しのenqueue先は変更しない。
+- 実行サービス: docker-compose.ymlにintelligence-worker（python -m app.intelligence.worker、CPU Dockerfile/CPUプロファイル）を追加。既存workerと同じstorage/フォントマウントと必要なDB/Redis/YouTube設定を使う。GPU overrideは変更せず、新サービスへのGPU割当なし。backend healthy後に専用workerを起動する。
+- 失敗と保守: 新しいIntelligenceWorkerは既存workerのRQ失敗フックを継承し、時間切れ/例外/親プロセスが検知した強制終了を条件付きUPDATEで記録する。切り抜きの孤立ジョブ点検は従来workerだけ、同期/分析の取り残し・YouTube本文/統計/認可stateの期限処理は専用workerだけが担当する。両workerが同じアプリ保守を重複実行しない。各workerは自分のキューだけを監視する。
+- ランチャー: controller.pyの必要サービスにintelligence-workerを追加。旧4サービスだけで起動済みと判定して専用workerを起動しないケースを修正し、回帰テストを追加。Codex中継の依頼設定/モデル/指紋は追加修正で変更しない。
+- 変更ファイル: 上記config/queue/new worker/既存worker、docker-compose.yml、launcher/controller.py、enqueue/worker/ランチャー/マウント保護のテスト、README.md、docs/INTELLIGENCE_SELF_ANALYSIS.md、本記録。既存のマウント数2固定テストは新サービス追加で失敗したため、backend/worker/intelligence-workerそれぞれのstorageマウントを確認する形に変更（素材保存・掃除・バックアップの確認は維持）。
+- 検証: 関連165件、マウント修正後の素材/専用worker36件、ruff 0.16.10（check . ../launcher ../scripts）成功。最終差分のPython 3.11.9・backend全件pytestは1892 passed・2 skipped（追加修正前1877件＋15件）。frontend lint/typecheck/test（31ファイル）/build成功。
+- 分離起動/問題への検証: task208-queues専用DB/Redis/ボリューム・18177/13177ポートでbackend/worker/intelligence-worker/frontendをbuildして起動、backend healthy、/health・/settingsが200。設定名をqa-media/qa-intelligenceに変え、RQ登録が各worker1キューずつであることを確認。専用キューの偽仕事を待機させたまま切り抜き側の偽仕事が完了し、その時点で専用仕事はstartedのまま、解除後に両キューが空になることを確認した。実Codex・Google・実動画は実行していない。GPU構成の解決結果でも専用workerはCPU Dockerfile/CPUプロファイル/GPU割当なし。検証用コンテナ/イメージ/ボリュームは削除済み。稼働DBのサイズと更新時刻は不変。
+- 反映前提: 従来キューと新キューの両方で順番待ち・実行中登録・取り出し中が0件、実行中のアプリジョブなし、Codex中継requests/processingが空を確認し、DB backup()と整合確認後にbackend/worker/intelligence-worker/frontendを反映する。旧キューから仕事を自動移動しない。手順はdocsへ記載した。task-208全体の反映ではCodex中継の再起動も必要。
+- 残る制約/未確認: ホストのCodex中継自体は共用・直列のままなので、Codexを使うサムネ文言などは中継側の待ちや既存待機上限による時間切れの可能性が残る。中継の並列化/優先順位変更は行わない。実Codexの受入・稼働環境への反映は未実施。CI（Python 3.11/3.12・frontend）確認後もPR #142をマージせず止める。
