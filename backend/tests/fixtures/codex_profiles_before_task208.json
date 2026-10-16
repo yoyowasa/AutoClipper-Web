@@ -1,0 +1,13 @@
+{
+  "schemas": {
+    "thumbnail_emotion_select": "f0c2e24958ee144da98757ff6382790ddc4b6b8553e7a52a08fa9904617ddbcb",
+    "character_asset_classify": "0d4baaf7e17e83d4f42f8fac2685d6cfc8e0acd16fc93b186e29e4ba5efee7c6",
+    "thumbnail_frame_rank": "eb98de5fc047f2d5a8a8a9350108e9cb949ae6d4607c405966ec46cc46110097",
+    "thumbnail_copy_suggestions": "401d21265de2de201f89a4260b3f04980c564c94204ae25c59f109d6c35dd5ea",
+    "title_hook_suggestions": "1132f309829659084401c1de4b53bb4b5b3f2fd7ef7e5977e8951089c47950bb",
+    "initial_clip_topic_selection": "59ca081d816d0bcd089a25c9dea23cd196cbbd854801c49f70438b330517ebef",
+    "initial_clip_selection": "47746a310aa052bedc88205c2ecd3d2129dbc584283e147fef49f1764e4a87fa"
+  },
+  "model": "gpt-5.6-sol",
+  "effort": "high"
+}

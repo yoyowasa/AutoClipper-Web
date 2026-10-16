@@ -965,3 +965,43 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: 最終差分のPython 3.11.9・backend全件pytestは1845 passed・2 skipped（既存1821件＋追加24件）。関連24件とruff 0.16.10の`check . ../launcher ../scripts`成功。frontendのlint/typecheck/test（30ファイル）/build成功。CIのPython 3.11/3.12とfrontendはPRで確認する。
 - 隔離起動/画面: task207-validationの専用DBボリューム・18070/13070ポートでbuild/起動し、backend healthy、worker起動、/healthと/settingsが200。合成データで自動1件→画面から手動結合で2件→解除で1件、再照合でもmanual_unlinked維持を確認。検証コンテナ/ボリューム/イメージは削除。稼働autoclipperwebは作り直していない。
 - 未確認/範囲: 実データの結合操作・稼働環境への反映は未実施。制作記録にYouTubeの数値は書き込まない。launcherとCodex中継の変更なし。PRはCI（Python 3.11/3.12・frontend）を確認後も未マージでレビュー待ちにする。
+
+## 2026-10-16 task-208 Clip Intelligence統合③ Codexによる自己分析
+
+- 目的: 自チャンネルの統計と結び付いた制作記録を、既存のホスト側Codex中継経由で分析し、検証済みの所見・仮説・提案を保存・表示する。Clip Intelligenceは参照のみで編集せず、採用/改善試験や制作への自動反映は統合⑤以降とする。
+- 変更ファイル: backend/app/intelligence/analysis_*・recommendation_rules.py、api/channel_analysis.py、既存intelligenceのmodels/queue/policy/maintenance、worker/main、共用中継envelope、storage/paths.py、launcher/codex_bridge.py、frontendのChannelAnalysisSettings/channelAnalysisとYouTube連携欄、backend/frontendの関連テスト・API一覧契約・旧中継指紋fixture、docs/INTELLIGENCE_SELF_ANALYSIS.md、本記録。
+- 根拠: 最新のsuccess/partial同期の最終返却日を基準に直近28日・前28日、チャンネル日次推移、動画別期間・初期7日のネイティブ値、公式形式別の動画一覧、欠損理由を組み立てる。形式別全体集計・流入元・維持率等の未取得値は作らない。動画別×日別の全行は重ねて渡さず、動画比較は期間/初期7日の原値を使う。欠損を0にしない。
+- 制作情報: production_linksの最新記録と一致するファミリーだけ、尺、フック映像の有無/長さ/文言、タイトル候補/選択/推薦/intent、選定理由・topicKey・openingScore・score・キャラを付ける。未結合には補わない。統計/公開累計/制作情報に別の根拠IDを振り、出所・期間・観測日時・定義を渡す。公式統計と制作情報を区別する。
+- 返答/保存: Clip IntelligenceのFinding/Proposal/Reviewと公式推薦面の説明を移植。baseline_video_idのみAutoClipperの動画キーに合わせ11文字のYouTube ID文字列にする。channel/batch/根拠ID/基準動画と形式/主要指標views/推薦面の対応を検証し、不正出力は保存しない。生成中に根拠が変わった場合も不採用。新テーブルchannel_analysis_runsはcreate_allで作り、既存テーブルを変更しない。実行状態・入力スナップショット・検証済みReview・モデル/推論/中継依頼IDを記録する。
+- 実行: POST/GET /api/intelligence/channels/{id}/analysis。POSTは既存連携と同じOrigin確認、202でRQに受付。同一チャンネルのactive claimをDB一意制約で1件に制限。事前同期はauto（最終同期から24時間以上、既定）/always/never。同じRQ仕事の中で同期し、単一workerで子仕事を待たない。同期失敗時のclaimも閉じる。worker失敗フックと孤立仕事の保守点検を追加。
+- 中継: 新しいchannel_self_analysisだけgpt-6-astra/high、文字入力のみ・再開なし・履歴なしの一時セッション。ホスト上限900秒、backend待ち960秒、RQは同期予算+1020秒（既定1140秒）。既存種別のモデル/推論・全スキーマ指紋はmainから保存したfixtureとの照合で維持する。共用envelopeの期限は分析だけに付け、既存種別の送信内容に追加しない。ホスト側Codex中継の再起動が反映時に必要。
+- 保持: 入力/ReviewはYouTubeメタデータとして最長30日か、参照元の最短期限まで。36か月の統計保持で延長しない。期限処理で本文を消し、本文を含まない監査ID/モデル/時刻等だけ残す。GETは期限切れ本文を返さない。中継ファイルは終了時/保守で片付け、ホストの分析専用一時領域も終了時に削除する。強制終了時の残骸には根拠と同じ期限を持たせ、起動時・1時間ごとの点検で削除する。既存種別の再開用領域は消さない。
+- 画面: 設定のYouTube連携内に分析開始、事前同期の選択、状態、保持期限内の最新成功結果、所見/代替説明/反対証拠/次の確認、提案/推薦面/根拠ID、直近20件の履歴を文章で表示。新しい分析が失敗しても前回成功を残す。
+- 実データの入力確認: 稼働DBを読み取り専用接続のbackup()でGit対象外のコピーへ複製し、integrity_check=ok。チャンネル1は66本/根拠2568件/prompt230213文字、チャンネル2は20本/根拠680件/prompt67896文字で上限280000内。上限を超えた場合は理由付き失敗とし黙って切り落とさない。元DBの1,421,312 bytes・更新時刻2026-10-15T14:19:34 UTCは検証前後で不変。
+- 検証: ruff 0.16.10のcheck . ../launcher ../scripts成功。最終差分のPython 3.11.9・backend全件pytestは1877 passed・2 skipped（既存1845件＋追加32件）。分析/共用中継/ホスト関連106件成功。frontend lint/typecheck/test（31ファイル）/build成功。
+- 分離起動/画面: task208-validation専用DB/Redis/ポート18177・13177でbackend healthy、worker起動、/health・/settingsが200。架空の検証済みReviewで所見/仮説/提案/推薦面を表示し、実RQ受付→統計不足で理由付き失敗→前回成功結果を維持することをブラウザで確認。中継依頼は0件。検証コンテナ/ボリューム/イメージを削除済み。最初の検証ポート18080はWindowsに拒否され、使用可能な分離ポートへ変更して確認した。
+- 未確認/範囲: 実Codex実行・実Google同期・分析品質/改善効果は未確認で、反映後にユーザーが確認する。稼働環境のbuild/再作成、中継の再起動は行っていない。有料APIは使わず、既存切り抜き処理と制作記録の契約は変更しない。PRのCI（Python 3.11/3.12・frontend）確認後も未マージでレビュー待ちにする。
+
+## 2026-10-16 task-208追加 同期・自己分析の専用worker分離
+
+- 目的/原因: 同期（既定150秒）とCodex自己分析（中継待ち最大960秒）が切り抜き用の単一workerを占有するため、PR #142内で専用キュー・CPU workerに分離する。
+- 変更: backend/app/config.pyにRQ_INTELLIGENCE_QUEUE_NAME（既定autoclipper-intelligence）を追加し、空名と切り抜きキューと同名を拒否。intelligence/queue.pyの同期・分析enqueueだけ新キューへ変更。既存のRQ_QUEUE_NAME（既定autoclipper）と切り抜き/字幕プレビュー/サムネ文言/書き出しのenqueue先は変更しない。
+- 実行サービス: docker-compose.ymlにintelligence-worker（python -m app.intelligence.worker、CPU Dockerfile/CPUプロファイル）を追加。既存workerと同じstorage/フォントマウントと必要なDB/Redis/YouTube設定を使う。GPU overrideは変更せず、新サービスへのGPU割当なし。backend healthy後に専用workerを起動する。
+- 失敗と保守: 新しいIntelligenceWorkerは既存workerのRQ失敗フックを継承し、時間切れ/例外/親プロセスが検知した強制終了を条件付きUPDATEで記録する。切り抜きの孤立ジョブ点検は従来workerだけ、同期/分析の取り残し・YouTube本文/統計/認可stateの期限処理は専用workerだけが担当する。両workerが同じアプリ保守を重複実行しない。各workerは自分のキューだけを監視する。
+- ランチャー: controller.pyの必要サービスにintelligence-workerを追加。旧4サービスだけで起動済みと判定して専用workerを起動しないケースを修正し、回帰テストを追加。Codex中継の依頼設定/モデル/指紋は追加修正で変更しない。
+- 変更ファイル: 上記config/queue/new worker/既存worker、docker-compose.yml、launcher/controller.py、enqueue/worker/ランチャー/マウント保護のテスト、README.md、docs/INTELLIGENCE_SELF_ANALYSIS.md、本記録。既存のマウント数2固定テストは新サービス追加で失敗したため、backend/worker/intelligence-workerそれぞれのstorageマウントを確認する形に変更（素材保存・掃除・バックアップの確認は維持）。
+- 検証: 関連165件、マウント修正後の素材/専用worker36件、ruff 0.16.10（check . ../launcher ../scripts）成功。最終差分のPython 3.11.9・backend全件pytestは1892 passed・2 skipped（追加修正前1877件＋15件）。frontend lint/typecheck/test（31ファイル）/build成功。
+- 分離起動/問題への検証: task208-queues専用DB/Redis/ボリューム・18177/13177ポートでbackend/worker/intelligence-worker/frontendをbuildして起動、backend healthy、/health・/settingsが200。設定名をqa-media/qa-intelligenceに変え、RQ登録が各worker1キューずつであることを確認。専用キューの偽仕事を待機させたまま切り抜き側の偽仕事が完了し、その時点で専用仕事はstartedのまま、解除後に両キューが空になることを確認した。実Codex・Google・実動画は実行していない。GPU構成の解決結果でも専用workerはCPU Dockerfile/CPUプロファイル/GPU割当なし。検証用コンテナ/イメージ/ボリュームは削除済み。稼働DBのサイズと更新時刻は不変。
+- 反映前提: 従来キューと新キューの両方で順番待ち・実行中登録・取り出し中が0件、実行中のアプリジョブなし、Codex中継requests/processingが空を確認し、DB backup()と整合確認後にbackend/worker/intelligence-worker/frontendを反映する。旧キューから仕事を自動移動しない。手順はdocsへ記載した。task-208全体の反映ではCodex中継の再起動も必要。
+- 残る制約/未確認: ホストのCodex中継自体は共用・直列のままなので、Codexを使うサムネ文言などは中継側の待ちや既存待機上限による時間切れの可能性が残る。中継の並列化/優先順位変更は行わない。実Codexの受入・稼働環境への反映は未実施。CI（Python 3.11/3.12・frontend）確認後もPR #142をマージせず止める。
+
+## 2026-10-16 task-208追加② Codex中継の分析レーン
+
+- 目的/原因: workerを分離しても中継のprocess_pending_requestsが自己分析を含め直列実行するため、最大900秒の分析で通常依頼が待たされ、既存クライアントの待機上限に達する問題を解消する。
+- 変更ファイル: launcher/codex_bridge.py、backend/tests/test_codex_analysis_lane.py、docs/INTELLIGENCE_SELF_ANALYSIS.md、本記録。既存の依頼モデル/推論/時間上限/応答スキーマ指紋と、RQキュー・worker構成は変えない。
+- 処理: channel_self_analysis専用の非daemonスレッドを中継起動ごとに1つ作り、分析を1件ずつ処理する。通常ループは分析を取り出さず、従来の依頼を同じ順序で直列処理する。分析と通常は並行、分析同士・通常同士は並行にしない。requests→processingのos.replaceによるclaimを維持し、共有ロックとprocessing同一IDの存在確認で進行中ファイルを上書きしない。応答済みのコピーも再実行しない。
+- 心拍: 両レーンの状態を共有ロックの下でまとめて公開する。requestId/requestStateはどちらかが稼働中ならprocessingを保ち、通常が稼働中なら通常IDを優先。normalRequestId/analysisRequestIdを追加し、片方の完了や心拍が他方のprocessingをidleで消さない。心拍スレッドは終了待ちしてから状態を閉じる。
+- 停止/復旧: stop_requestを両レーンの子プロセスと共有。中継のfinallyで停止要求を出し、分析スレッドと心拍が終わってからstoppedを書き、ロックを解放する。メインスレッドのSIGTERMを停止要求に変換し、ハンドラを復元する。実行関数の割り込み脱出でも子プロセスを終了する。--onceは両レーンの初回依頼を処理し終えて終了。強制kill等で残ったprocessingは従来のrecover_processing_requestsでrequestsへ戻し、応答済み/queuedコピーがある場合も重複実行しない。
+- 検証: ruff 0.16.10のcheck . ../launcher ../scripts成功。Python 3.11.9のbackend全件pytestは1905 passed・2 skipped（追加修正①の1892件＋新レーン13件）。既存中継・分析中継・ランチャーを含む。frontendは変更なし、この追加②では手元で再実行していない。CIでPython 3.11/3.12・frontendを確認する。
+- 問題への検証: runnerをモックして分析を待機させ、その間に通常の2依頼が従来どおり1件ずつ完了すること、分析2依頼の同時実行が1件以下であること、両方向の完了順で心拍が他方の稼働を保つことを確認。重複コピー、停止要求、SIGTERMハンドラ、異常終了、再起動時のprocessing/応答済み/queuedコピーを検証する。停止の試験ではCodexの代わりにPythonの待機子プロセスを実際に起動し、終了・スレッド終了・私有一時領域の掃除まで確かめる。
+- 未確認/範囲: 実Codexの同時実行・分析品質は未確認。通常レーン内や分析レーン内の順番待ちは従来どおり残る。稼働中継の再起動やDocker反映は行わない。反映時はホスト側Codex中継の再起動が必要。PR #142へ追加し、CI成功後もマージせず止める。

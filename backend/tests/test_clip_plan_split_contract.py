@@ -35,6 +35,7 @@ def test_openapi_paths_and_methods_match_before_clip_plan_split() -> None:
         "/api/intelligence/production-links": ["get"],
         "/api/intelligence/production-links/{record_family_id}": ["put"],
         "/api/intelligence/production-links/reconcile": ["post"],
+        "/api/intelligence/channels/{channel_id}/analysis": ["get", "post"],
     }
 
 

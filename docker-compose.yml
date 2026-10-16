@@ -8,6 +8,7 @@ services:
       DATABASE_URL: sqlite:////app/storage/autoclipper.db
       REDIS_URL: redis://redis:6379/0
       RQ_QUEUE_NAME: autoclipper
+      RQ_INTELLIGENCE_QUEUE_NAME: ${RQ_INTELLIGENCE_QUEUE_NAME:-autoclipper-intelligence}
       STORAGE_ROOT: /app/storage
       YOUTUBE_OAUTH_REDIRECT_URI: ${YOUTUBE_OAUTH_REDIRECT_URI:-http://localhost:8000/api/intelligence/oauth/callback}
       YOUTUBE_SYNC_BUDGET_SECONDS: ${YOUTUBE_SYNC_BUDGET_SECONDS:-120}
@@ -46,6 +47,7 @@ services:
       DATABASE_URL: sqlite:////app/storage/autoclipper.db
       REDIS_URL: redis://redis:6379/0
       RQ_QUEUE_NAME: autoclipper
+      RQ_INTELLIGENCE_QUEUE_NAME: ${RQ_INTELLIGENCE_QUEUE_NAME:-autoclipper-intelligence}
       STORAGE_ROOT: /app/storage
       ASS_FONTS_DIR: /app/fonts
       MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-8589934592}
@@ -59,6 +61,34 @@ services:
       - ./frontend/public/fonts:/app/fonts:ro
     depends_on:
       - redis
+
+  intelligence-worker:
+    image: ${COMPOSE_PROJECT_NAME:-autoclipperweb}-intelligence-worker-cpu
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.intelligence.worker"]
+    environment:
+      DATABASE_URL: sqlite:////app/storage/autoclipper.db
+      REDIS_URL: redis://redis:6379/0
+      RQ_QUEUE_NAME: autoclipper
+      RQ_INTELLIGENCE_QUEUE_NAME: ${RQ_INTELLIGENCE_QUEUE_NAME:-autoclipper-intelligence}
+      STORAGE_ROOT: /app/storage
+      ASS_FONTS_DIR: /app/fonts
+      MAX_UPLOAD_SIZE_BYTES: ${MAX_UPLOAD_SIZE_BYTES:-8589934592}
+      MAX_HEATMAP_SIDECAR_SIZE_BYTES: ${MAX_HEATMAP_SIDECAR_SIZE_BYTES:-5242880}
+      AUTOCLIPPER_RUNTIME_PROFILE: cpu
+      YOUTUBE_SYNC_BUDGET_SECONDS: ${YOUTUBE_SYNC_BUDGET_SECONDS:-120}
+      YOUTUBE_DERIVED_ALLOWED: ${YOUTUBE_DERIVED_ALLOWED:-true}
+      YOUTUBE_EXTENDED_STORAGE: ${YOUTUBE_EXTENDED_STORAGE:-true}
+    volumes:
+      - ./storage:/app/storage
+      - ./frontend/public/fonts:/app/fonts:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   frontend:
     build:

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.intelligence.common import now
-from app.intelligence.models import Channel, VideoDailyStat, YouTubeVideo
+from app.intelligence.models import AnalysisRun, Channel, VideoDailyStat, YouTubeVideo
 
 POLICY_URL = "https://developers.google.com/youtube/terms/derived-metrics-policy"
 
@@ -25,6 +25,10 @@ def expire_youtube_data(db: Session, config: Settings, *, clock: datetime | None
         db.execute(delete(VideoDailyStat).where(VideoDailyStat.observed_at <= stamp - timedelta(days=30)))
     # Retain opaque IDs and statistical records, never stale titles/names.
     cutoff = stamp - timedelta(days=30)
+    # Reviews and prompts can quote titles; extended statistics retention must
+    # never extend their metadata lifetime. Keep only content-free audit fields.
+    db.execute(update(AnalysisRun).where(AnalysisRun.expires_at <= stamp).values(
+        input_snapshot=None, review=None, status="expired", active_channel_id=None))
     db.execute(update(Channel).where(Channel.metadata_updated_at <= cutoff).values(name=None, metadata_updated_at=None))
     db.execute(update(YouTubeVideo).where(YouTubeVideo.metadata_updated_at <= cutoff).values(
         title=None, published_at=None, duration_seconds=None, format="unknown", format_source="unknown", metadata_updated_at=None))

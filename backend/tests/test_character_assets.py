@@ -9,6 +9,7 @@ import shutil
 import numpy as np
 from PIL import Image
 import pytest
+import yaml
 from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -256,7 +257,9 @@ def test_assets_survive_storage_cleanup_and_whole_storage_backup(assets_client, 
     assert (backup / png.relative_to(paths.root)).read_bytes() == original_bytes
     root = Path(__file__).resolve().parents[2]
     compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
-    assert compose.count("./storage:/app/storage") == 2
+    services = yaml.safe_load(compose)["services"]
+    for name in ("backend", "worker", "intelligence-worker"):
+        assert "./storage:/app/storage" in services[name]["volumes"]
     gpu = (root / "docker-compose.gpu.yml").read_text(encoding="utf-8")
     assert ":/app/storage" not in gpu  # Extra model-cache mounts do not replace the storage bind mount.
 

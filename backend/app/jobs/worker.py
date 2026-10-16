@@ -11,8 +11,7 @@ from app.config import get_settings
 from app.jobs.queue import get_redis_connection
 from app.db import SessionLocal
 from app.intelligence.sync import record_rq_sync_failure
-from app.intelligence.maintenance import maintain_youtube
-from app.storage.paths import get_storage_paths
+from app.intelligence.analysis_runner import record_rq_analysis_failure
 
 
 class CharacterAssetWorker(Worker):
@@ -27,6 +26,7 @@ class CharacterAssetWorker(Worker):
                 with SessionLocal() as db:
                     mark_rq_failure(db, job, exc_string)
                     record_rq_sync_failure(db, job)
+                    record_rq_analysis_failure(db, job)
         except Exception:
             logging.getLogger(__name__).warning("Application job failure could not be recorded; maintenance will reconcile it")
 
@@ -39,11 +39,6 @@ class CharacterAssetWorker(Worker):
                     logging.getLogger(__name__).warning("Marked orphaned application jobs failed: %s", ", ".join(failed))
         except Exception:
             logging.getLogger(__name__).warning("Orphan job reconciliation skipped: RQ or database state could not be checked")
-        try:
-            with SessionLocal() as db:
-                maintain_youtube(db, get_settings(), get_storage_paths(), self.queues)
-        except Exception:
-            logging.getLogger(__name__).warning("YouTube maintenance could not be completed")
 
 
 def main() -> None:

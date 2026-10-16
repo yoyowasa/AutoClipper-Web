@@ -24,7 +24,7 @@ from .codex_bridge import (
 )
 
 
-REQUIRED_SERVICES = ("backend", "frontend", "worker", "redis")
+REQUIRED_SERVICES = ("backend", "frontend", "worker", "intelligence-worker", "redis")
 BACKEND_URL = "http://localhost:8000/health"
 FRONTEND_URL = "http://localhost:3000/upload"
 DOCKER_BIN_DIR = Path(r"C:\Program Files\Docker\Docker\resources\bin")

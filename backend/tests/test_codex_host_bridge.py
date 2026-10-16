@@ -220,7 +220,7 @@ def test_resume_codex_command_reuses_thread_with_read_only_override(tmp_path: Pa
     assert "--ephemeral" not in command
 
 
-@pytest.mark.parametrize("task", sorted(ALLOWED_REQUEST_TASKS))
+@pytest.mark.parametrize("task", sorted(ALLOWED_REQUEST_TASKS - {"channel_self_analysis"}))
 @pytest.mark.parametrize("resume", [False, True])
 @pytest.mark.parametrize("model", [None, "gpt-6-astra"])
 def test_all_tasks_use_sol_high_even_for_legacy_threads(

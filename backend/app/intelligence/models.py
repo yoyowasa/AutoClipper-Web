@@ -39,6 +39,26 @@ class ChannelConnection(Base):
     verified_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class AnalysisRun(Base):
+    __tablename__ = "channel_analysis_runs"
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    active_channel_id: Mapped[int | None] = mapped_column(Integer, unique=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    sync_before: Mapped[str] = mapped_column(String(8), default="auto")
+    sync_run_id: Mapped[str | None] = mapped_column(String(40))
+    requested_model: Mapped[str] = mapped_column(String(64), default="gpt-6-astra")
+    requested_effort: Mapped[str] = mapped_column(String(16), default="high")
+    request_id: Mapped[str | None] = mapped_column(String(32))
+    queued_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    error_code: Mapped[str | None] = mapped_column(String(40))
+    input_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    review: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+
+
 class SyncRun(Base):
     __tablename__ = "sync_runs"
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
