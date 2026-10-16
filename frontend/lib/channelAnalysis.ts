@@ -23,11 +23,16 @@ export type AnalysisReview = {
   recommendation_framework_version: string | null; reviewed_material: "statistics_and_titles";
   limitations: string[]; findings: AnalysisFinding[]; proposals: AnalysisProposal[];
 };
+export type AnalysisValidationReport = {
+  excludedFindings: number; excludedProposals: number; reasonCounts: Record<string, number>;
+  issues: Array<{ code: string; loc: Array<string | number> }>; fatal: boolean;
+};
 export type AnalysisRun = {
   id: string; status: "queued" | "running" | "success" | "failed" | "expired";
   queuedAt: string; startedAt: string | null; finishedAt: string | null; expiresAt: string;
   errorCode: string | null; errorMessage: string | null; model: string; reasoning: string;
   requestId: string | null; syncBefore: string; syncRunId: string | null; review: AnalysisReview | null;
+  validation?: AnalysisValidationReport | null;
 };
 export type AnalysisHistory = { latestRun: AnalysisRun | null; latestResult: AnalysisRun | null; history: AnalysisRun[] };
 

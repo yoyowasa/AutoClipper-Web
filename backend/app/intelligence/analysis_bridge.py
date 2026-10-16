@@ -2,7 +2,7 @@ from pathlib import Path
 from datetime import UTC
 
 from app.intelligence.analysis_prompt import analysis_prompt
-from app.intelligence.analysis_schema import Review, analysis_response_schema
+from app.intelligence.analysis_schema import analysis_response_schema
 from app.scoring.codex_title_hook_suggestions import CodexTitleHookSuggestionGenerator
 from app.storage.paths import StoragePaths
 
@@ -34,8 +34,9 @@ class ChannelAnalysisGenerator(CodexTitleHookSuggestionGenerator):
             self.on_request(request_id)
         return super().request_path(request_id)
 
-    def parse_output(self, output: dict) -> Review:
-        return Review.model_validate(output)
+    def parse_output(self, output: dict) -> dict:
+        # Item validation belongs to analysis_validation, which preserves valid peers.
+        return output
 
     def analyze(self, context):
         self.system_prompt = analysis_prompt(context.payload)

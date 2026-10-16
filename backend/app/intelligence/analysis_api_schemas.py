@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.intelligence.analysis_schema import Review
 
@@ -9,6 +9,19 @@ from app.intelligence.analysis_schema import Review
 class AnalysisStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     syncBefore: Literal["auto", "always", "never"] = "auto"
+
+
+class ValidationIssueRead(BaseModel):
+    code: str
+    loc: list[str | int]
+
+
+class ValidationReportRead(BaseModel):
+    excludedFindings: int = 0
+    excludedProposals: int = 0
+    reasonCounts: dict[str, int] = Field(default_factory=dict)
+    issues: list[ValidationIssueRead] = Field(default_factory=list)
+    fatal: bool = False
 
 
 class AnalysisRunRead(BaseModel):
@@ -26,6 +39,7 @@ class AnalysisRunRead(BaseModel):
     syncBefore: str
     syncRunId: str | None
     review: Review | None
+    validation: ValidationReportRead | None = None
 
 
 class AnalysisHistoryRead(BaseModel):

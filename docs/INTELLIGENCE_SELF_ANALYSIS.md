@@ -77,6 +77,44 @@ Clip IntelligenceのReviewスキーマ（所見、仮説、代替説明、反対
 YouTube動画ID文字列とした。所見・制作案の根拠ID、チャンネル、同期ID、基準動画の形式、
 推薦面の公式説明との対応を検証する。不正な返答は保存しない。
 
+### 個別の不備と診断（task-209）
+
+分析ID・チャンネルID・同期ID・frameworkの不一致は、従来どおり分析全体を失敗にする。
+それ以外の所見・提案は1件ずつ検証し、存在しない根拠ID、基準動画の形式不一致、
+評価指標や項目形式の不備があるものだけを除外する。有効な所見が1件以上残れば、
+提案が0件でも残った部分を成功として保存する。基準動画の形式がunknownの場合は
+`BASELINE_FORMAT_UNKNOWN` とし、`BASELINE_FORMAT_MISMATCH` と区別する。
+所見の形式と根拠動画の形式が違う場合も、勝手に全体形式へ置き換えず、その所見を除外する。
+
+実行IDごとの `channel_analysis_validation` テーブルに除外件数・理由コード別件数・
+項目位置（loc）を保存し、GETの `validation` と設定画面の最新状態・履歴で表示する。
+同じ1件に複数理由が付く場合があるため、理由件数の合計と除外件数は必ずしも一致しない。
+既存DBの列は変更せず、起動時のcreate_allで新テーブルを追加する。
+診断にはCodexの出力値・本文・例外メッセージを含めず、未知の項目名も `[extra]` に置き換える。
+出力本文はログに出さない。検証済みの所見・提案だけが既存の保持期限で保存される。
+旧版で失敗した実行には診断が無く、消去済みの返答から後付けで復元はしない。
+Codexの指示文・返答スキーマと中継の指紋は変更していない。
+
+### 保存済み動画の形式を修復する
+
+`creatorContentType` は、実データの `shorts` / `videoOnDemand` と、
+[公式の列挙値](https://developers.google.com/youtube/analytics/dimensions#creatorContentType)
+（`SHORTS` / `VIDEO_ON_DEMAND` / `LIVE_STREAM`）を同じように認識する。
+大文字小文字・区切り文字を正規化し、liveStreamもliveとして扱う。
+Storyや未指定などはunknownのままにし、動画の尺から形式を推定しない。
+
+既存データの修復は、保存済みvideo_format / first7レポートを使う管理コマンドで行う。
+既定はdry-runで、`--execute` を明示したときだけDBを更新する。
+
+```bash
+python -m app.maintenance repair-youtube-video-formats --dry-run
+python -m app.maintenance repair-youtube-video-formats --execute
+```
+
+最新の観測にある形式が1つに定まる場合だけ更新する。値のない欠損レポートは無視する。
+形式が競合する場合・根拠が無い場合・メタデータまたは統計の期限切れの場合は推定しない。
+修復は勝手に起動時実行しない。稼働DBでの実行は反映後に別途承認して行う。
+
 `channel_analysis_runs` に状態、入力スナップショット、検証済みReview、モデル、推論、
 中継依頼IDを保存する。生成中に元の根拠が変わった場合も保存しない。
 新しい分析が失敗しても、保持期限内の直近の成功結果は表示する。

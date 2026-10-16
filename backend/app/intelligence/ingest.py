@@ -10,6 +10,7 @@ from app.intelligence.common import YouTubeError
 from app.intelligence.models import SyncRun, VideoDailyStat, YouTubeVideo
 from app.intelligence.policy import statistical_expiry
 from app.intelligence.youtube_client import METRICS
+from app.intelligence.video_formats import content_format
 
 
 def ingest_video(db: Session, channel_id: int, item: dict[str, Any], observed: datetime) -> YouTubeVideo:
@@ -31,7 +32,7 @@ def ingest_video(db: Session, channel_id: int, item: dict[str, Any], observed: d
     video.availability = "available"
     if item.get("liveStreamingDetails"):
         video.format, video.format_source = "live", "youtube_public"
-    else:
+    elif video.format_source != "youtube_analytics":
         video.format, video.format_source = "unknown", "unknown"
     values, missing = {}, {}
     for name, api_name in {"views": "viewCount", "likes": "likeCount", "comments": "commentCount"}.items():
@@ -62,11 +63,11 @@ def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, r
             db.flush()
     if kind in {"first7", "video_format"} and video_id:
         video = db.get(YouTubeVideo, video_id)
-        content_types = {row.get("creatorContentType") for row in rows}
+        content_types = {content_format(row.get("creatorContentType")) for row in rows}
         if video and len(content_types) == 1:
-            video.format = {"SHORTS": "shorts", "VIDEO_ON_DEMAND": "long", "LIVE_STREAM": "live"}.get(
-                next(iter(content_types)), "unknown")
-            video.format_source = "youtube_analytics"
+            detected = next(iter(content_types))
+            if detected != "unknown":
+                video.format, video.format_source = detected, "youtube_analytics"
     # Persist a null report row instead of inventing zeroes when no rows return.
     for row in rows or [{}]:
         selected_id = row.get("video", video_id)

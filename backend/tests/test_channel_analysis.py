@@ -204,12 +204,21 @@ def test_invalid_output_is_not_saved(client, prepared, problem):
                 output["proposals"][0]["recommendation_link"] = None
             return output
 
-    with pytest.raises(AnalysisError) as error:
+    fatal = problem in {"unknown_evidence", "wrong_channel", "wrong_batch", "bad_schema"}
+    if fatal:
+        with pytest.raises(AnalysisError) as error:
+            execute(prepared, id, Invalid)
+        assert error.value.code == "CODEX_INVALID_OUTPUT"
+    else:
         execute(prepared, id, Invalid)
-    assert error.value.code == "CODEX_INVALID_OUTPUT"
     prepared.db.expire_all()
     saved = prepared.db.get(AnalysisRun, id)
-    assert saved.status == "failed" and saved.review is None and saved.active_channel_id is None
+    assert saved.status == ("failed" if fatal else "success") and saved.active_channel_id is None
+    assert saved.validation.report["issues"]
+    if fatal:
+        assert saved.review is None
+    else:
+        assert len(saved.review["findings"]) == 1 and saved.review["proposals"] == []
 
 
 def test_context_change_during_generation_rejects_result(client, prepared):

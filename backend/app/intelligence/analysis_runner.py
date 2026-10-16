@@ -11,9 +11,9 @@ from app.db import SessionLocal
 from app.intelligence.analysis_bridge import ANALYSIS_TIMEOUT_SECONDS, ChannelAnalysisGenerator, cleanup_analysis_files
 from app.intelligence.analysis_errors import AnalysisError, MESSAGES
 from app.intelligence.analysis_input import build_analysis_input
-from app.intelligence.analysis_validation import validate_review
+from app.intelligence.analysis_validation import ReviewValidationError, validate_review
 from app.intelligence.common import now
-from app.intelligence.models import AnalysisRun, Channel, SyncRun
+from app.intelligence.models import AnalysisRun, AnalysisValidationDiagnostics, Channel, SyncRun
 from app.intelligence.sync import mark_sync_failed, run_youtube_sync
 from app.scoring.codex_title_hook_suggestions import CodexTitleHookSuggestionError
 from app.storage.paths import get_storage_paths
@@ -77,7 +77,8 @@ def run_channel_analysis(id: str, *, session_factory=SessionLocal, paths=None, c
             generator = generator_factory(paths=storage, run_id=id, on_request=remember)
             result = generator.analyze(context)
             output = result.model_dump() if hasattr(result, "model_dump") else result
-            validated = validate_review(output, context)
+            diagnostics = {}
+            validated = validate_review(output, context, diagnostics=diagnostics)
             db.expire_all()
             try:
                 fresh = build_analysis_input(db, storage, settings, run.channel_id, id, now())
@@ -86,10 +87,13 @@ def run_channel_analysis(id: str, *, session_factory=SessionLocal, paths=None, c
             if run.status != "running" or fresh.fingerprint != context.fingerprint or now() >= context.expires_at:
                 raise AnalysisError("CODEX_STALE_EVIDENCE")
             run.review = validated.model_dump(mode="json")
+            run.validation = AnalysisValidationDiagnostics(report=diagnostics)
             run.status, run.finished_at, run.active_channel_id = "success", now(), None
             db.commit()
         except Exception as error:
             db.rollback()
+            if isinstance(error, ReviewValidationError):
+                db.get(AnalysisRun, id).validation = AnalysisValidationDiagnostics(report=error.report)
             if isinstance(error, AnalysisError):
                 code = error.code
             elif isinstance(error, JobTimeoutException):
