@@ -23,7 +23,7 @@ def read_analysis(run: AnalysisRun) -> AnalysisRunRead:
     return AnalysisRunRead(id=run.id, status=run.status, queuedAt=run.queued_at, startedAt=run.started_at,
         finishedAt=run.finished_at, expiresAt=run.expires_at, errorCode=run.error_code, errorMessage=MESSAGES.get(run.error_code),
         model=run.requested_model, reasoning=run.requested_effort, requestId=run.request_id, syncBefore=run.sync_before,
-        syncRunId=run.sync_run_id, review=run.review)
+        syncRunId=run.sync_run_id, review=run.review, validation=run.validation.report if run.validation else None)
 
 
 @router.post("/{channel_id}/analysis", response_model=AnalysisRunRead, status_code=202)

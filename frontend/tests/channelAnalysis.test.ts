@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { AnalysisReviewText, ChannelAnalysisSettings } from "../components/ChannelAnalysisSettings";
+import { AnalysisReviewText, AnalysisValidationText, ChannelAnalysisSettings } from "../components/ChannelAnalysisSettings";
 import { analysisStatus, getChannelAnalysis, startChannelAnalysis, type AnalysisReview } from "../lib/channelAnalysis";
 
 const review: AnalysisReview = {
@@ -29,6 +29,15 @@ assert.match(settings, /24時間以上/);
 assert.match(settings, /disabled=""/);
 assert.match(settings, /分析する/);
 assert.equal(analysisStatus(null), "未分析");
+const validation = { excludedFindings: 1, excludedProposals: 2, fatal: false,
+  reasonCounts: { BASELINE_FORMAT_UNKNOWN: 1, SCHEMA_INVALID: 2 },
+  issues: [{ code: "SCHEMA_INVALID", loc: ["proposals", 0, "structure"] }] };
+const diagnostic = renderToStaticMarkup(createElement(AnalysisValidationText, { validation }));
+for (const value of ["有効な部分を保存", "所見1件・提案2件", "BASELINE_FORMAT_UNKNOWN", "基準動画の形式が不明",
+  "SCHEMA_INVALID", "proposals.0.structure"]) assert.ok(diagnostic.includes(value), value);
+assert.match(renderToStaticMarkup(createElement(AnalysisValidationText,
+  { validation: { ...validation, fatal: true } })), /分析全体を保存できません/);
+assert.equal(renderToStaticMarkup(createElement(AnalysisValidationText, {})), "");
 
 async function main() {
   const previous = globalThis.fetch;

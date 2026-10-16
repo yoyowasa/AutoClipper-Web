@@ -205,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for command in ("prune-completed-previews", "delete-jobs", "backfill-production-records"):
+    for command in ("prune-completed-previews", "delete-jobs", "backfill-production-records", "repair-youtube-video-formats"):
         child = commands.add_parser(command)
         mode = child.add_mutually_exclusive_group()
         mode.add_argument("--dry-run", action="store_true")
@@ -222,6 +222,9 @@ def main(argv: list[str] | None = None) -> int:
                 report = prune_completed_previews(db, paths, execute=args.execute)
             elif args.command == "delete-jobs":
                 report = delete_jobs(db, paths, args.job_id, execute=args.execute)
+            elif args.command == "repair-youtube-video-formats":
+                from app.intelligence.video_formats import repair_video_formats
+                report = repair_video_formats(db, execute=args.execute)
             else:
                 report = backfill_production_records(db, paths, execute=args.execute, force=args.force)
         print(json.dumps(report, ensure_ascii=False, indent=2))

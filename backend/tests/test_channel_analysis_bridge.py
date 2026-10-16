@@ -112,7 +112,7 @@ def test_real_bridge_envelope_and_parser_without_codex_execution(prepared):
             "state": "ready", "threadId": None, "output": valid_review(context), "error": None})
     generator = ChannelAnalysisGenerator(paths=prepared.paths, run_id="analysis_test", on_request=respond)
     result = generator.analyze(context)
-    assert result.id == "analysis_test" and len(requests) == 1
+    assert result["id"] == "analysis_test" and len(requests) == 1
     envelope = json.loads(prepared.paths.analysis_bridge_files(requests[0])[0].read_text(encoding="utf-8"))
     assert envelope["task"] == "channel_self_analysis" and envelope["model"] == "gpt-6-astra"
     assert datetime.fromisoformat(envelope["expiresAt"]).replace(tzinfo=None) == context.expires_at

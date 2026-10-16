@@ -2,7 +2,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import CheckConstraint, Date, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 from app.intelligence.common import now
@@ -57,6 +57,14 @@ class AnalysisRun(Base):
     error_code: Mapped[str | None] = mapped_column(String(40))
     input_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     review: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    validation: Mapped["AnalysisValidationDiagnostics | None"] = relationship(cascade="all, delete-orphan", uselist=False)
+
+
+class AnalysisValidationDiagnostics(Base):
+    """Content-free diagnostics; create_all also adds this to existing databases."""
+    __tablename__ = "channel_analysis_validation"
+    run_id: Mapped[str] = mapped_column(ForeignKey("channel_analysis_runs.id"), primary_key=True)
+    report: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
 class SyncRun(Base):

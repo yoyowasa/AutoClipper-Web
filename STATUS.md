@@ -1005,3 +1005,28 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: ruff 0.16.10のcheck . ../launcher ../scripts成功。Python 3.11.9のbackend全件pytestは1905 passed・2 skipped（追加修正①の1892件＋新レーン13件）。既存中継・分析中継・ランチャーを含む。frontendは変更なし、この追加②では手元で再実行していない。CIでPython 3.11/3.12・frontendを確認する。
 - 問題への検証: runnerをモックして分析を待機させ、その間に通常の2依頼が従来どおり1件ずつ完了すること、分析2依頼の同時実行が1件以下であること、両方向の完了順で心拍が他方の稼働を保つことを確認。重複コピー、停止要求、SIGTERMハンドラ、異常終了、再起動時のprocessing/応答済み/queuedコピーを検証する。停止の試験ではCodexの代わりにPythonの待機子プロセスを実際に起動し、終了・スレッド終了・私有一時領域の掃除まで確かめる。
 - 未確認/範囲: 実Codexの同時実行・分析品質は未確認。通常レーン内や分析レーン内の順番待ちは従来どおり残る。稼働中継の再起動やDocker反映は行わない。反映時はホスト側Codex中継の再起動が必要。PR #142へ追加し、CI成功後もマージせず止める。
+
+
+## 2026-10-17 task-208 PR #142のマージと稼働環境への反映
+
+- 承認: ユーザーの「マージして反映」により実施。PR #142（CI: Python 3.11/3.12・frontend成功）をmerge commitでマージし、mainをe35cd7b3b8e4efdda61bd9840a43a4ef8a284046へ早送り。ブランチは削除していない。アプリコードの追加変更なし。
+- 事前確認: Docker起動後も既存コンテナは停止中だったため、既存Redisだけを起動してworkerを動かさず確認。autoclipper/autoclipper-intelligenceのqueued/started/intermediateはすべて0件、DBの実行中ジョブなし、中継requests/processingは空。ジョブ15件（awaiting_clip_review 6、awaiting_subtitle_review 5、completed 3、failed 1）。
+- バックアップ: storage/backups/autoclipper-20261017-014841-before-task208.dbをsqlite3.Connection.backup()で作成。integrity_check=ok、jobs 15件・export_items 16件が元DBと一致。
+- 反映: GPU構成のcomposeでbackend/worker/intelligence-worker/frontendをup -d --build。Redisのコンテナ・データは作り直していない。従来workerはGPU、新intelligence-workerはCPU・GPU割当なし。
+- 中継: LauncherController.stop_codex_bridge()→ensure_codex_bridge_running()で再起動。ready、PID生存、contractFingerprintとbridgeBuildFingerprintがmainのコードと一致することを確認。
+- 検証: 4アプリサービスがUp・再起動回数0、backend healthy。/health・/api/health・/settings・/uploadが200。各起動ログにTraceback/ImportError等のエラー検出なし。両workerは対応キュー1つだけを監視してidle、queued/started/intermediateは両方0件。worker内av 18.1.0/faster-whisper 1.2.1。channel_analysis_runsテーブルあり・0件。反映前後で全ジョブのID/状態と書き出し件数は不変。
+- 画面: /settingsをブラウザで開き、接続済み2チャンネルに「Codex自己分析（gpt-6-astra / high）」「分析する」「未分析」が表示されることを確認。分析・同期ボタンは押していない。
+- 未確認: 実Codexによる自己分析、分析中のタイトル/フック案の同時受入、分析品質はユーザーの画面操作で確認する。実動画ジョブは実行せず、個別ジョブGET・字幕確認GETも呼んでいない。本項は未コミットの運用記録として残す。
+
+## 2026-10-17 task-209 YouTube形式判定と自己分析の部分採用・診断
+
+- 目的/原因: 保存済みcreatorContentTypeがshorts/videoOnDemandなのに、大文字の対応表だけで照合していたため全88動画がunknownになっていた。分析はChannelAnalysisGenerator.parse_outputとvalidate_reviewの両方で全体検証し、所見/提案1件の不備でも全返答を失っていた。
+- 形式判定: intelligence/video_formats.pyで大文字小文字・空白・区切り文字を正規化。実データのshorts/videoOnDemandと公式のSHORTS/VIDEO_ON_DEMAND/LIVE_STREAM（liveStreamも同様）を扱う。STORY/UNSPECIFIED等はunknown。ingest.pyはこの共通判定を使い、公開メタデータの再取得や欠損レポートで既知のAnalytics形式を消さない。
+- 既存分の修復: python -m app.maintenance repair-youtube-video-formatsを追加。既定dry-run、--executeのみ更新。最新観測のvideo_format/first7から、値のある形式が一意なら修復。空の欠損行は無視、競合・期限切れ・根拠なしは推定しない。稼働DBに自動適用しない。
+- コピーでの実データ検証: 稼働DBを読み取り専用でbackup()して.codex_tmp/task209/runtime-copy.dbへ複製。unknown 88本から81本を修復でき、shorts 56本・long 25本・unknown 7本。残る7本はcreatorContentTypeの保存行が0件。dry-run/コピーでの実行が一致し、再実行0変更、integrity_check=ok。稼働DBはunknown 88本のまま。
+- 分析: ID/channel_id/batch_run_id/frameworkと全体の項目構造は厳格に検証。所見/提案は個別に検証し、不正なものだけ除外。有効な所見が1件以上なら提案0件でも成功。根拠不明・形式不一致・unknownの基準動画・primary_metric違反・項目スキーマ違反・重複等を理由コードで区別する。所見の形式を勝手にallへ変える処理はやめ、不整合な所見だけを除外する。
+- 診断: 新テーブルchannel_analysis_validationをAnalysisRunの実行IDと1対1で関連付け、create_allで既存DBにも追加（既存テーブルの列変更なし）。除外した所見/提案の件数・理由別件数・loc・全体失敗フラグだけを保存し、APIのvalidationと設定画面の最新結果/失敗・履歴に表示。値・本文・例外文は保存/ログ出力せず、未知の追加キー名も[extra]へ置換。理由は1件に複数付くことがある。
+- 変更ファイル: backendのingest/video_formats、analysis_validation/bridge/runner/API schemas/models、api/channel_analysis、maintenance、関連テスト。frontendのChannelAnalysisSettings/channelAnalysisとテスト、docs/INTELLIGENCE_SELF_ANALYSIS.md、本記録。未コミットだったtask-208の反映記録もこのPRに含める。launcher・Codex prompt・返答スキーマ/中継指紋は変更しない。
+- 検証: Python 3.11.9、ruff 0.16.10のcheck . ../launcher ../scripts成功。backend全件1955 passed・2 skipped（従来1905件＋50件）。frontend lint/typecheck/test（31ファイル）/build成功。実表記・旧データ修復・dry-run・CLI・新テーブル作成・部分採用・全体失敗・安全なloc・診断保存/API・画面文言を確認。
+- Compose: task209-validation専用DB/Redis/18179・13179ポートで4アプリサービスをbuild/起動し、backend healthy、health/settings 200、診断テーブル作成を確認。最初に生成した検証設定が既存ネットワーク名を引き継いでいたため検証用を停止し、専用ネットワークへ修正して全コンテナを再作成。最終的に5コンテナすべてtask209-validation_defaultだけへ接続を確認。検証用コンテナ/ネットワーク/イメージ/ボリュームは削除済み。稼働4サービスは作り直さずhealthy/Up、稼働DBに診断テーブルはまだ無く、ジョブ状態内訳も不変。
+- 未確認/制限: 実Codexによる再分析は実行していない。analysis_15500a7fc52e4c94a9a308f89e78755fはCODEX_INVALID_OUTPUTで失敗しており、返答ファイルが残っていないため当時の個別原因は復元できない。過去の失敗に診断を後付けしない。CIのPython 3.11/3.12・frontend成功を確認後もマージせず、稼働環境への反映・実DB修復は行わない。

@@ -2,11 +2,33 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { getChannelAnalysis, startChannelAnalysis, analysisStatus,
-  type AnalysisHistory, type AnalysisReview, type SyncBeforeAnalysis } from "../lib/channelAnalysis";
+  type AnalysisHistory, type AnalysisReview, type AnalysisValidationReport, type SyncBeforeAnalysis } from "../lib/channelAnalysis";
 import { youtubeSyncTime } from "../lib/intelligence";
 
 const formatLabel = { all: "全体", shorts: "ショート", videoondemand: "通常" };
 const surfaceLabel = { shorts_feed: "Shortsフィード", home: "ホーム", up_next: "次の動画", search: "検索", multi_surface: "複数の表示面" };
+
+const validationReasons: Record<string, string> = {
+  EVIDENCE_UNKNOWN: "存在しない根拠ID", BASELINE_FORMAT_MISMATCH: "基準動画の形式が不一致",
+  BASELINE_FORMAT_UNKNOWN: "基準動画の形式が不明", BASELINE_NOT_FOUND: "基準動画がない",
+  PRIMARY_METRIC_INVALID: "評価指標が不正", SCHEMA_INVALID: "項目の形式が不正",
+  BASELINE_EVIDENCE_MISSING: "基準動画の根拠が不足", FINDING_FORMAT_MISMATCH: "所見と根拠動画の形式が不一致",
+  RECOMMENDATION_LINK_REQUIRED: "推薦面との関係が未指定", DUPLICATE_ITEM: "項目IDが重複",
+  NO_VALID_FINDINGS: "有効な所見がない", REVIEW_ID_MISMATCH: "分析IDが不一致",
+  CHANNEL_MISMATCH: "チャンネルが不一致", BATCH_MISMATCH: "同期IDが不一致", FRAMEWORK_MISMATCH: "分析基準が不一致",
+};
+
+export function AnalysisValidationText({ validation }: { validation?: AnalysisValidationReport | null }) {
+  if (!validation || validation.issues.length === 0) return null;
+  return <div className="space-y-1 text-sm text-amber-900" aria-label="分析の検証結果">
+    <p>{validation.fatal ? "分析全体を保存できませんでした。" : "有効な部分を保存しました。"}
+      除外: 所見{validation.excludedFindings}件・提案{validation.excludedProposals}件</p>
+    <ul>{Object.entries(validation.reasonCounts).map(([code, count]) =>
+      <li key={code}>{validationReasons[code] ?? code}（{code}）: {count}件</li>)}</ul>
+    <details><summary>該当項目</summary><ul>{validation.issues.map((issue, index) =>
+      <li key={index}>{issue.code}: {issue.loc.join(".") || "全体"}</li>)}</ul></details>
+  </div>;
+}
 
 export function AnalysisReviewText({ review }: { review: AnalysisReview }) {
   return <div className="space-y-3 text-sm">
@@ -87,15 +109,18 @@ export function ChannelAnalysisSettings({ channelId, connected, syncActive }: {
       className="border px-3 py-2 disabled:opacity-40" onClick={() => void start()}>分析する</button>
     <p className="text-sm" aria-live="polite">{analysisStatus(data?.latestRun ?? null)}</p>
     {error || data?.latestRun?.errorMessage ? <p role="alert" className="text-sm text-red-700">{error ?? data?.latestRun?.errorMessage}</p> : null}
+    <AnalysisValidationText validation={data?.latestRun?.validation} />
     {data?.latestResult?.review ? <>
       <p className="text-xs">最新の保存済み分析: {youtubeSyncTime(data.latestResult.finishedAt)} ／
         保持期限: {youtubeSyncTime(data.latestResult.expiresAt)}</p>
+      {data.latestResult.id !== data.latestRun?.id ? <AnalysisValidationText validation={data.latestResult.validation} /> : null}
       <AnalysisReviewText review={data.latestResult.review} />
     </> : null}
     {data && data.history.length > 0 ? <details className="text-sm"><summary>分析履歴（{data.history.length}件）</summary>
       {data.history.map(run => <details key={run.id} className="mt-2 border p-2">
         <summary>{youtubeSyncTime(run.queuedAt)}：{analysisStatus(run)}</summary>
         <p>{run.model} / {run.reasoning} ／ {run.errorMessage ?? ""}</p>
+        <AnalysisValidationText validation={run.validation} />
         {run.review ? <AnalysisReviewText review={run.review} /> : null}
       </details>)}
     </details> : null}
