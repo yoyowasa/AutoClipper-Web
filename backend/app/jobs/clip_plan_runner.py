@@ -45,6 +45,8 @@ from app.candidates.select_candidates import (
     parse_selection_settings,
     select_candidates,
     write_selected_clips,
+    convert_selected_clip_to_normal,
+    convert_selected_clip_to_short,
 )
 from app.config import get_settings
 from app.jobs.reselection_keep import prepare_kept_candidates, merge_kept_candidates
@@ -56,6 +58,8 @@ from app.jobs.clip_plan import (
     update_clip_plan_boundary,
     update_clip_plan_hook_scene,
     write_clip_plan,
+    convert_clip_plan_clip_to_normal,
+    convert_clip_plan_clip_to_short,
 )
 from app.jobs.quality_gate import (
     invalidate_quality_gate_decisions,
@@ -603,6 +607,8 @@ def run_clip_plan_boundary_update(
     session_factory: SessionFactory = SessionLocal,
     paths: StoragePaths | None = None,
     dependencies: AutoClipperPipelineDependencies | None = None,
+    *,
+    clip_type: str | None = None,
 ) -> list[str]:
     storage_paths = paths or get_storage_paths()
     deps = dependencies or AutoClipperPipelineDependencies()
@@ -621,10 +627,13 @@ def run_clip_plan_boundary_update(
         selected_path = job_dir / "selected_clips.json"
         preview_path = subtitle_review_preview_path(job_dir, clip_id)
         document = None
+        original_document = None
+        original_settings = dict(job.settings_json or {})
         selected_payload = selected_path.read_bytes() if selected_path.is_file() else None
         preview_payload = preview_path.read_bytes() if preview_path.is_file() else None
         try:
             document = load_clip_plan(plan_path)
+            original_document = document.model_copy(deep=True)
             selection = CandidateSelection.model_validate(_read_json_file(selected_path))
             transcript_segments = _read_transcript_segments(transcript_output_path(job_dir))
             planned_clip = next(
@@ -640,6 +649,23 @@ def run_clip_plan_boundary_update(
             )
             if candidate is None:
                 raise ValueError(f"selected clip not found: {clip_id}")
+
+            target_type = clip_type or planned_clip.type
+            if target_type not in {"normal", "short"}:
+                raise ValueError("切り抜きの種類を正しく指定してください。")
+            type_changed = target_type != planned_clip.type
+            if type_changed and document.boundary_reedit:
+                raise ValueError("字幕編集から戻った場合は尺だけ変更できます。")
+            if type_changed:
+                if sum(clip.type == target_type for clip in document.clips) >= (12 if target_type == "normal" else 24):
+                    raise ValueError("通常切り抜きは12本、ショートは24本までです。")
+                if target_type == "normal":
+                    selection = convert_selected_clip_to_normal(selection, clip_id)
+                    convert_clip_plan_clip_to_normal(document, clip_id)
+                else:
+                    selection = convert_selected_clip_to_short(selection, clip_id)
+                    convert_clip_plan_clip_to_short(document, clip_id)
+                candidate = next(item for item in [*selection.normal_clips, *selection.shorts] if item.id == clip_id)
 
             source_duration = float(video.duration or document.source_duration or max((clip.end for clip in document.clips), default=0.0))
             if start < 0 or end <= start or end > source_duration + 0.001:
@@ -700,16 +726,22 @@ def run_clip_plan_boundary_update(
                 ("selection", "content", "post_render"),
             )
             _set_status(db, job, "awaiting_clip_review")
+            if type_changed:
+                job.settings_json = {
+                    **original_settings, "normalClipCount": len(selection.normal_clips), "shortCount": len(selection.shorts),
+                }
             job.error_code = None
             job.error_message = None
             db.commit()
             db.refresh(job)
             visited_statuses.append("awaiting_clip_review")
         except Exception as exc:
+            db.rollback()
+            job.settings_json = original_settings
             _restore_clip_plan_after_boundary_failure(
                 db,
                 job,
-                document=document,
+                document=original_document,
                 plan_path=plan_path,
                 selected_path=selected_path,
                 selected_payload=selected_payload,

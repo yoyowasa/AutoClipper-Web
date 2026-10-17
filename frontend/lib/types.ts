@@ -693,6 +693,7 @@ export type ClipPlanActionResponse = {
 export type ClipPlanBoundaryUpdateRequest = {
   start: number;
   end: number;
+  type?: ExportType;
 };
 
 export type ClipPlanTypeUpdateRequest = {

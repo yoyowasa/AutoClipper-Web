@@ -1042,3 +1042,14 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 保護/保存: GPU検証は稼働RQのqueued/started/intermediateが0件でworkerがidleのときに実施し、仕事が入れば中止する監視付き。元storageとモデルキャッシュを読み取り専用マウント。結果は`storage/qa/task210/comparison.json`、mainとの比較は`before-after.json`。元ジョブのraw/transcript/subtitle_review JSONのSHA256、稼働DBのサイズ・更新時刻は不変。既存ジョブへの再適用・稼働コンテナのbuild/再起動は実施しない。
 - 検証結果: backend全件`1993 passed, 2 skipped`。backend/launcher/scripts Ruff成功。frontend全32テストファイル・typecheck・lint成功。共通17ケースでTSプレビューとPython/ASSの本文・時刻を固定し、短文/無発話の余白、単語境界/6文字、編集後の不一致、旧JSON、手動境界、clip境界、フック、0秒句読点、半ミリ秒丸めを検証。確認JSONの保存/復元・長文確認行・品質ゲート・手動分割も検証。
 - 起動/制限: Windowsのproduction buildはTurbopack子プロセス接続で失敗。最終ソースのLinux隔離コンテナでproduction build成功。専用DB/Redis/18178・13178ポートのComposeでbackend/frontend/worker/intelligence-worker/redis起動、backend healthy、/health・/settings・/uploadがHTTP 200。検証コンテナ・ネットワーク・検証イメージは片付け済み。本番の動画書き出しとブラウザでの目視確認は未実施。PR/CIは別途確認する。
+
+## 2026-10-18 task-211 切り抜きの範囲と種類を同時に保存
+
+- 目的/原因: ショートの範囲編集と種類変更が別々に尺を検証していたため、74秒のショートを90秒以上へ伸ばして通常にする操作ができなかった。範囲編集に種類を含め、変更後の種類と範囲を1リクエストで検証・保存する。
+- backend: `schemas.py`の既存boundaryリクエストに任意のtypeを追加。`api/clip_plan.py`、`jobs/queue.py`、`jobs/clip_plan_runner.py`で対象clipだけを変換し、選定JSON・計画・本数設定・軽量プレビューを更新する。手動編集の既存PATCHも種類変更時にフックを解除する。両方向とも新しい種類ではフック無しで開始し、タイトル・ID・他clipは維持。キュー登録/描画/公開の失敗時は元の種類・範囲・設定・プレビューへ戻す。
+- 互換/制約: type省略は従来どおりで、既存4引数のRQ仕事を変更しない。既存の種類変更APIも残す。通常90〜1800秒、ショート本編の設定上限、通常12本/ショート24本の上限は維持。shortMinDurationは従来どおり探索の目安で、新たな強制下限は追加しない。字幕確認から尺の再編集へ戻った経路は既存どおり種類変更不可。
+- frontend: `ClipBoundaryEditor`・`ManualClipPlanEditor`とclips/page.tsxに種類の選択と「通常切り抜きとして保存/ショートとして保存」を追加。`lib/clipRangeType.ts`で現種類が尺に合わなければ適合する別種類を提示し、どちらにも合わなければ日本語の理由で保存を無効にする。両方に適合する場合は選んだ種類を維持。通常への変更中/変更後はフック欄を出さない。自動選定側は「プレビュー映像は保存すると更新されます」と明示し、手動側は入力範囲をそのまま試聴できる。
+- 回帰検証: 新規backend `test_clip_range_conversion.py`と既存job claimテストで、自動/手動/手動boundaryの両方向、80秒の拒否、フック解除、他clip維持、失敗復元、二重登録防止、旧リクエスト/RQ互換、本数制約を確認。frontend `clipRangeType.test.ts`で種類判定、日本語理由、両編集欄、1回の送信を確認。
+- 実行結果: Python 3.11.9、Ruff 0.16.10の`check . ../launcher ../scripts`成功。backend全件2012 passed・2 skipped（mainの1993件から19件追加）。最後のエラー文調整後の関連66件も成功。frontend lint/typecheck/全33テストファイル/build成功。Windows buildは既存.next生成物でTurbopack子プロセス接続エラーが出たが、生成物を作業用ディレクトリへ退避した後に成功。QAコンテナ内のLinux buildも成功。
+- 画面/実処理: task211-validation専用DB/Redis/ネットワークと18181・13181ポートでbackend healthy、worker/frontend起動を確認。120秒の合成動画を使い、自動選定・手動の両画面で74秒ショート→100秒通常→70秒ショートを1回ずつの保存で確認。自動経路の生成プレビューはffprobeで100秒/70秒、保存済み計画は両経路ともフック未設定。80秒では日本語理由付きで保存不可。検証用コンテナ/ネットワーク/ボリューム/イメージは片付け済み。
+- 未確認/運用: 実ジョブjob_6dbcc15b16994d18894b01e3f338a682での受入は未実施。稼働ジョブ・保存済みデータは変更せず、稼働環境のbuild/反映も行わない。launcher・尺定数は変更なし。PRのCIは別途確認し、ユーザー指示どおりマージしない。

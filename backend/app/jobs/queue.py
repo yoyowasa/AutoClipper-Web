@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from typing import Protocol
 
 from redis import Redis
 from rq import Queue, Retry
@@ -26,7 +27,12 @@ JobEnqueue = Callable[[str], None]
 TerminalRetryAllowed = Callable[[], bool]
 RetryJobEnqueue = Callable[[str, TerminalRetryAllowed], None]
 ClipPlanReselectionEnqueue = Callable[[str], None]
-ClipPlanBoundaryUpdateEnqueue = Callable[[str, str, float, float], None]
+
+
+class ClipPlanBoundaryUpdateEnqueue(Protocol):
+    def __call__(self, job_id: str, clip_id: str, start: float, end: float, *, clip_type: str | None = None) -> None: ...
+
+
 ClipPlanHookSceneUpdateEnqueue = Callable[
     [str, str, float | None, float | None],
     None,
@@ -309,6 +315,8 @@ def enqueue_clip_plan_boundary_update(
     clip_id: str,
     start: float,
     end: float,
+    *,
+    clip_type: str | None = None,
 ) -> None:
     queue = get_queue()
     queue.enqueue(
@@ -317,6 +325,7 @@ def enqueue_clip_plan_boundary_update(
         clip_id,
         start,
         end,
+        **({"clip_type": clip_type} if clip_type is not None else {}),
         job_timeout=job_media_timeout(job_id, proposed_duration=end - start),
     )
 
