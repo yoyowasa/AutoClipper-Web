@@ -616,10 +616,8 @@ def test_auto_content_overlay_gate_uses_render_events_for_long_shared_segments()
             len(event.text) <= layout.max_chars_per_line * layout.max_lines
             for event in events
         )
-        assert all(
-            0 < event.end - event.start <= layout.max_subtitle_duration
-            for event in events
-        )
+        assert all(0 <= event.start < event.end <= clip.duration for event in events)
+        assert all(len(event.text) >= 6 for event in events)
 
 
 def test_auto_content_overlay_gate_rejects_unfit_single_render_event() -> None:
@@ -637,6 +635,7 @@ def test_auto_content_overlay_gate_rejects_unfit_single_render_event() -> None:
                 start=0.0,
                 end=1.0,
                 text="長文" * 120,
+                preserveSegmentation=True,
                 confidence=0.9,
             )
         ],

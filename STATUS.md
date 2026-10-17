@@ -1030,3 +1030,15 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: Python 3.11.9、ruff 0.16.10のcheck . ../launcher ../scripts成功。backend全件1955 passed・2 skipped（従来1905件＋50件）。frontend lint/typecheck/test（31ファイル）/build成功。実表記・旧データ修復・dry-run・CLI・新テーブル作成・部分採用・全体失敗・安全なloc・診断保存/API・画面文言を確認。
 - Compose: task209-validation専用DB/Redis/18179・13179ポートで4アプリサービスをbuild/起動し、backend healthy、health/settings 200、診断テーブル作成を確認。最初に生成した検証設定が既存ネットワーク名を引き継いでいたため検証用を停止し、専用ネットワークへ修正して全コンテナを再作成。最終的に5コンテナすべてtask209-validation_defaultだけへ接続を確認。検証用コンテナ/ネットワーク/イメージ/ボリュームは削除済み。稼働4サービスは作り直さずhealthy/Up、稼働DBに診断テーブルはまだ無く、ジョブ状態内訳も不変。
 - 未確認/制限: 実Codexによる再分析は実行していない。analysis_15500a7fc52e4c94a9a308f89e78755fはCODEX_INVALID_OUTPUTで失敗しており、返答ファイルが残っていないため当時の個別原因は復元できない。過去の失敗に診断を後付けしない。CIのPython 3.11/3.12・frontend成功を確認後もマージせず、稼働環境への反映・実DB修復は行わない。
+
+## 2026-10-17 task-210 伸びた単語の読み直しと発話時刻による字幕分割
+
+- 目的: 伸ばし棒1単語が数秒を埋める文字起こし欠落を方式Dで検出し、短文字幕を区間時間だけで細切れにしない。
+- 検出: `audio/transcript_runaway_repair.py`に、句読点のみを除く単語2.5秒以上、および4秒以上で正規化文字密度1文字/秒未満の条件と定数を追加。空/句読点のみの本文は密度検出から除外。読み直しの暴走なし・文字種類増加・既存字幕と重ならない置換条件は変更しない。
+- 字幕: `render/subtitle_timing.py`とfrontend `lib/subtitleTiming.ts`で句読点・助詞・単語境界を優先し、分割片を6文字以上にする。単語時刻が本文と一致し、有限・順序正常なら、その単語の開始/終了を表示時刻に使う。1行に収まる短文は1枚とし、単語時刻がなければ先頭から最大表示秒まで。時間だけによる4文字分割、後処理による自動結合・無発話部分への表示延長を止める。長文で単語時刻がない場合の時間配分は文字数比を保持する。
+- データ/編集: `jobs/subtitle_review.py`とfrontend型/プレビューへwordsを追加。旧JSONの省略は許容し、単語時刻なしとして扱う。長大なASR字幕の確認行も共通分割で生成し、単語を保持する。本文変更では一致しない単語時刻を使わず、手動結合/分割/挿入では古い単語時刻を無効化。6秒以上の手編集/追加欄には「区間が長すぎます。再生して分割してください」を表示する。品質ゲートにもwordsを渡し、正式プレビューのrenderer versionをv6に更新する。
+- 主な変更ファイル: 上記に加え`render/subtitles_ass.py`・`render/render_exact_review_preview.py`・`jobs/subtitle_structure.py`・`jobs/quality_gate.py`、frontend `lib/subtitlePreview.ts`・`lib/types.ts`・`lib/subtitleReview/hooks/useSubtitleReviewDocument.ts`・`components/subtitleReview/ReviewSubtitleSegments.tsx`。backend/frontendの関連テスト、新規`tests/fixtures/subtitle_timing.json`、本記録。
+- 問題への検証: mainの検出では指定2セグメントを0件、新実装では2件検出。`job_043dbfaea2274abc833ccf661343f407`の1390〜1415秒を隔離GPUコンテナで実音声検証し、2件とも置換、計5セグメントを取得した。モデルはlarge-v3-turbo/CUDA/float16、beam=5、VADなし、前文コンテキストなし、モデルロード込み9.467秒。戻った認識結果には1393.90〜1395.08「開けてみればなんてことない」、1396.40〜1398.14「体育大会に出なくなかったから」、1401.90〜1409.08「で まあ あの そんな こんな で です ね まあ その 生徒 会 執行 部 に 無事 に 入れ まし て その 面 だけ は いい の で」がある。ASR結果の引用であり人手の聞き合わせは未実施。
+- 保護/保存: GPU検証は稼働RQのqueued/started/intermediateが0件でworkerがidleのときに実施し、仕事が入れば中止する監視付き。元storageとモデルキャッシュを読み取り専用マウント。結果は`storage/qa/task210/comparison.json`、mainとの比較は`before-after.json`。元ジョブのraw/transcript/subtitle_review JSONのSHA256、稼働DBのサイズ・更新時刻は不変。既存ジョブへの再適用・稼働コンテナのbuild/再起動は実施しない。
+- 検証結果: backend全件`1993 passed, 2 skipped`。backend/launcher/scripts Ruff成功。frontend全32テストファイル・typecheck・lint成功。共通17ケースでTSプレビューとPython/ASSの本文・時刻を固定し、短文/無発話の余白、単語境界/6文字、編集後の不一致、旧JSON、手動境界、clip境界、フック、0秒句読点、半ミリ秒丸めを検証。確認JSONの保存/復元・長文確認行・品質ゲート・手動分割も検証。
+- 起動/制限: Windowsのproduction buildはTurbopack子プロセス接続で失敗。最終ソースのLinux隔離コンテナでproduction build成功。専用DB/Redis/18178・13178ポートのComposeでbackend/frontend/worker/intelligence-worker/redis起動、backend healthy、/health・/settings・/uploadがHTTP 200。検証コンテナ・ネットワーク・検証イメージは片付け済み。本番の動画書き出しとブラウザでの目視確認は未実施。PR/CIは別途確認する。

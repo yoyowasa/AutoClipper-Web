@@ -994,6 +994,7 @@ def _subtitle_events_for_review_clip(
             start=segment.start,
             end=segment.end,
             text=segment.text,
+            words=segment.words,
             confidence=segment.confidence,
             clipId=clip.id,
             preserveSegmentation=segment.preserve_segmentation,

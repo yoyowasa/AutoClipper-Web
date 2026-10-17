@@ -231,6 +231,11 @@ def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleS
             )
         ]
     removed = {s.id for s in selected}
+    # User-selected boundaries/text supersede ASR alignment. Do not reuse stale
+    # words inherited by model_copy (an unchanged delete neighbor keeps its words).
+    if request.action in {"merge", "split", "insert"}:
+        for replacement in replacements:
+            replacement.words = None
     if any(len(s.text) > 4000 for s in replacements):
         raise ValueError("１区間の字幕は4000文字以内にしてください。")
     document.segments = sorted([s for s in document.segments if s.id not in removed] + replacements, key=lambda s: (s.start, s.end))

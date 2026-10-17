@@ -5,6 +5,7 @@ import { SubtitleBulkCorrection } from "../SubtitleBulkCorrection";
 import { formatTime, clipLabel, clamp } from "../../lib/subtitleReview/display";
 import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/context";
 import { ReviewClipActions } from "./ReviewActions";
+import { longEditedSubtitleWarning } from "../../lib/subtitleTiming";
 
 export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewViewContext }) {
   const {
@@ -72,6 +73,11 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
                       value={pausedSubtitleDraft.text}
                       onChange={(event) => setPausedSubtitleDraft((current) => current ? { ...current, text: event.target.value } : current)}
                     />
+                    {longEditedSubtitleWarning({ ...pausedSubtitleDraft, originalText: "" }) ? (
+                      <p role="status" className="mt-2 text-xs font-medium text-amber-800">
+                        区間が長すぎます。再生して分割してください
+                      </p>
+                    ) : null}
                     <div className="mt-2 grid grid-cols-2 gap-2">
                       {(["start", "end"] as const).map((field) => (
                         <div key={field}>
@@ -219,6 +225,11 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
                             cursor={segmentCursor?.id === segment.id ? segmentCursor.offset : null}
                             origin={selectedClip.start - hookSceneDuration} playhead={absolutePlaybackTime}
                             disabled={!isEditable} onEdit={async (request) => { await saveSubtitleStructure(request); }} />
+                          {longEditedSubtitleWarning(segment, drafts[segment.id] ?? segment.text) ? (
+                            <p role="status" className="mt-2 text-xs font-medium text-amber-800">
+                              区間が長すぎます。再生して分割してください
+                            </p>
+                          ) : null}
                           <div className="mt-2 flex items-center justify-between gap-3">
                             <span className="text-[11px] text-neutral-400">
                               元動画 {formatTime(segment.start)}

@@ -372,6 +372,7 @@ export type JobResultsResponse = {
 };
 
 export type SubtitleReviewSegment = {
+  words?: import("./subtitleTiming").SubtitleWord[] | null;
   repaired?: boolean;
   repairWindows?: { start: number; end: number }[];
   sourceIndices?: number[];
