@@ -1,0 +1,556 @@
+{
+  "options": {
+    "candidateStart": 0,
+    "candidateEnd": 20,
+    "hookSceneDuration": 0,
+    "suppressionEnd": 0,
+    "maxCharsPerLine": 16,
+    "maxLines": 2,
+    "minSubtitleDuration": 1.1,
+    "maxSubtitleDuration": 4.2,
+    "minGapBetweenSubtitles": 0.08
+  },
+  "cases": [
+    {
+      "name": "short text leaves silence empty",
+      "segments": [
+        {
+          "text": "短い字幕です",
+          "start": 0,
+          "end": 12
+        }
+      ],
+      "expected": [
+        {
+          "start": 0,
+          "end": 4.2,
+          "text": "短い字幕です"
+        }
+      ]
+    },
+    {
+      "name": "short text uses speech envelope",
+      "segments": [
+        {
+          "text": "短い字幕です",
+          "start": 0,
+          "end": 12,
+          "words": [
+            {
+              "start": 1.25,
+              "end": 2.1,
+              "word": "短い字幕です"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 1.25,
+          "end": 2.1,
+          "text": "短い字幕です"
+        }
+      ]
+    },
+    {
+      "name": "slow short speech stays one caption",
+      "segments": [
+        {
+          "text": "引き延ばした言葉",
+          "start": 0,
+          "end": 12,
+          "words": [
+            {
+              "start": 0.5,
+              "end": 8,
+              "word": "引き延ばした言葉"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 0.5,
+          "end": 8,
+          "text": "引き延ばした言葉"
+        }
+      ]
+    },
+    {
+      "name": "timed phrases split at punctuation and preserve silence",
+      "segments": [
+        {
+          "text": "今日はお菓子を作ります。そしてみんなで食べます。",
+          "start": 0,
+          "end": 12,
+          "words": [
+            {
+              "start": 0.4,
+              "end": 0.9,
+              "word": "今日は"
+            },
+            {
+              "start": 1,
+              "end": 1.4,
+              "word": "お菓子を"
+            },
+            {
+              "start": 1.6,
+              "end": 2.1,
+              "word": "作ります。"
+            },
+            {
+              "start": 4,
+              "end": 4.4,
+              "word": "そして"
+            },
+            {
+              "start": 4.5,
+              "end": 5,
+              "word": "みんなで"
+            },
+            {
+              "start": 5.1,
+              "end": 5.8,
+              "word": "食べます。"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 0.4,
+          "end": 2.1,
+          "text": "今日はお菓子を作ります。"
+        },
+        {
+          "start": 4,
+          "end": 5.8,
+          "text": "そしてみんなで食べます。"
+        }
+      ],
+      "options": {
+        "maxCharsPerLine": 6,
+        "maxLines": 2
+      }
+    },
+    {
+      "name": "word boundaries and six character minimum",
+      "segments": [
+        {
+          "text": "今日はお菓子を作ります。そしてみんなで食べます。",
+          "start": 0,
+          "end": 12,
+          "words": [
+            {
+              "start": 0.4,
+              "end": 0.9,
+              "word": "今日は"
+            },
+            {
+              "start": 1,
+              "end": 1.4,
+              "word": "お菓子を"
+            },
+            {
+              "start": 1.6,
+              "end": 2.1,
+              "word": "作ります。"
+            },
+            {
+              "start": 4,
+              "end": 4.4,
+              "word": "そして"
+            },
+            {
+              "start": 4.5,
+              "end": 5,
+              "word": "みんなで"
+            },
+            {
+              "start": 5.1,
+              "end": 5.8,
+              "word": "食べます。"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 0.4,
+          "end": 1.4,
+          "text": "今日はお菓子を"
+        },
+        {
+          "start": 1.6,
+          "end": 4.4,
+          "text": "作ります。そして"
+        },
+        {
+          "start": 4.5,
+          "end": 5.8,
+          "text": "みんなで食べます。"
+        }
+      ],
+      "options": {
+        "maxCharsPerLine": 8,
+        "maxLines": 1
+      }
+    },
+    {
+      "name": "long word never cut",
+      "segments": [
+        {
+          "text": "これは非常に長い一つの単語です",
+          "start": 0,
+          "end": 12,
+          "words": [
+            {
+              "start": 1,
+              "end": 3,
+              "word": "これは非常に長い一つの単語です"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 1,
+          "end": 3,
+          "text": "これは非常に長い一つの単語です"
+        }
+      ],
+      "options": {
+        "maxCharsPerLine": 6,
+        "maxLines": 1
+      }
+    },
+    {
+      "name": "edited text ignores stale words",
+      "segments": [
+        {
+          "text": "編集した短い字幕",
+          "start": 0,
+          "end": 12,
+          "words": [
+            {
+              "start": 3,
+              "end": 4,
+              "word": "元の字幕"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 0,
+          "end": 4.2,
+          "text": "編集した短い字幕"
+        }
+      ]
+    },
+    {
+      "name": "adjacent short captions never merge or extend",
+      "segments": [
+        {
+          "text": "はい",
+          "start": 0,
+          "end": 0.45
+        },
+        {
+          "text": "次です",
+          "start": 0.45,
+          "end": 0.9
+        }
+      ],
+      "expected": [
+        {
+          "start": 0,
+          "end": 0.45,
+          "text": "はい"
+        },
+        {
+          "start": 0.45,
+          "end": 0.9,
+          "text": "次です"
+        }
+      ]
+    },
+    {
+      "name": "clip shifts words and excludes outside speech",
+      "segments": [
+        {
+          "text": "今日はお菓子を作ります。そしてみんなで食べます。",
+          "start": 0,
+          "end": 12,
+          "words": [
+            {
+              "start": 0.4,
+              "end": 0.9,
+              "word": "今日は"
+            },
+            {
+              "start": 1,
+              "end": 1.4,
+              "word": "お菓子を"
+            },
+            {
+              "start": 1.6,
+              "end": 2.1,
+              "word": "作ります。"
+            },
+            {
+              "start": 4,
+              "end": 4.4,
+              "word": "そして"
+            },
+            {
+              "start": 4.5,
+              "end": 5,
+              "word": "みんなで"
+            },
+            {
+              "start": 5.1,
+              "end": 5.8,
+              "word": "食べます。"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 0.1,
+          "end": 2.9,
+          "text": "作ります。そして"
+        },
+        {
+          "start": 3,
+          "end": 4.3,
+          "text": "みんなで食べます。"
+        }
+      ],
+      "options": {
+        "candidateStart": 1.5,
+        "candidateEnd": 6,
+        "maxCharsPerLine": 6,
+        "maxLines": 2
+      }
+    },
+    {
+      "name": "hook shifts and suppresses timed subtitle",
+      "segments": [
+        {
+          "text": "短い字幕です",
+          "start": 0,
+          "end": 12,
+          "words": [
+            {
+              "start": 1,
+              "end": 2,
+              "word": "短い字幕です"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 3.5,
+          "end": 4,
+          "text": "短い字幕です"
+        }
+      ],
+      "options": {
+        "hookSceneDuration": 2,
+        "suppressionEnd": 3.5
+      }
+    },
+    {
+      "name": "manual boundary long text stays intact",
+      "segments": [
+        {
+          "text": "今日はお菓子を作ります。そしてみんなで食べます。",
+          "start": 0,
+          "end": 12,
+          "preserveSegmentation": true,
+          "singleLine": true
+        }
+      ],
+      "expected": [
+        {
+          "start": 0,
+          "end": 12,
+          "text": "今日はお菓子を作ります。そしてみんなで食べます。"
+        }
+      ],
+      "options": {
+        "maxCharsPerLine": 8,
+        "maxLines": 1
+      }
+    },
+    {
+      "name": "legacy proportional long text",
+      "segments": [
+        {
+          "text": "あいうえおかきくけこさしすせそたちつてと",
+          "start": 0,
+          "end": 10
+        }
+      ],
+      "expected": [
+        {
+          "start": 0,
+          "end": 6,
+          "text": "あいうえおかきくけこさし"
+        },
+        {
+          "start": 6,
+          "end": 10,
+          "text": "すせそたちつてと"
+        }
+      ],
+      "options": {
+        "maxCharsPerLine": 6,
+        "maxLines": 2
+      }
+    },
+    {
+      "name": "half millisecond rounding agrees across runtimes",
+      "segments": [
+        {
+          "start": 0,
+          "end": 3,
+          "text": "半秒ではない",
+          "words": [
+            {
+              "start": 0.0625,
+              "end": 1.0625,
+              "word": "半秒ではない"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 0.063,
+          "end": 1.063,
+          "text": "半秒ではない"
+        }
+      ]
+    },
+    {
+      "name": "zero duration punctuation stays attached",
+      "segments": [
+        {
+          "start": 0,
+          "end": 2,
+          "text": "字幕の末尾。",
+          "words": [
+            {
+              "start": 0.5,
+              "end": 1.5,
+              "word": "字幕の末尾"
+            },
+            {
+              "start": 1.5,
+              "end": 1.5,
+              "word": "。"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 0.5,
+          "end": 1.5,
+          "text": "字幕の末尾。"
+        }
+      ]
+    },
+    {
+      "name": "timed manual one line keeps words together",
+      "options": {
+        "maxCharsPerLine": 6,
+        "maxLines": 1
+      },
+      "segments": [
+        {
+          "start": 0,
+          "end": 8,
+          "text": "長めの字幕を一行にします",
+          "singleLine": true,
+          "preserveSegmentation": true,
+          "words": [
+            {
+              "start": 1,
+              "end": 2,
+              "word": "長めの字幕を"
+            },
+            {
+              "start": 3,
+              "end": 4,
+              "word": "一行にします"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 1,
+          "end": 4,
+          "text": "長めの字幕を一行にします"
+        }
+      ]
+    },
+    {
+      "name": "no speech inside clip produces no caption",
+      "options": {
+        "candidateStart": 5,
+        "candidateEnd": 10
+      },
+      "segments": [
+        {
+          "start": 0,
+          "end": 12,
+          "text": "先の発話です",
+          "words": [
+            {
+              "start": 1,
+              "end": 2,
+              "word": "先の発話です"
+            }
+          ]
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "whitespace normalized speech tokens",
+      "segments": [
+        {
+          "start": 0,
+          "end": 8,
+          "text": "hello world",
+          "words": [
+            {
+              "start": 1,
+              "end": 1.5,
+              "word": "hello"
+            },
+            {
+              "start": 3,
+              "end": 4,
+              "word": " world"
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "start": 1,
+          "end": 4,
+          "text": "hello world"
+        }
+      ]
+    }
+  ]
+}

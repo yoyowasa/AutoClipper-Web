@@ -1,7 +1,6 @@
 from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 import json
 from app.duration_rules import clip_body_duration, effective_short_max, validate_clip_duration
-import math
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -9,7 +8,8 @@ from typing import Any, Literal, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.audio.transcribe_faster_whisper import RepairWindow, TranscriptSegment
+from app.audio.transcribe_faster_whisper import RepairWindow, TranscriptSegment, TranscriptWord
+from app.render.subtitle_timing import chunk_units, usable_words
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, SubtitleStyleOverride, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
 from app.jobs.subtitle_gaps import SubtitleGap, refresh_review_gaps
@@ -27,7 +27,7 @@ from app.render.subtitles_ass import (
     SubtitleLayout,
     SubtitleRenderSettings,
     resolve_clip_text_style,
-    split_subtitle_text,
+    _segment_events,
 )
 from app.render.title_policy import short_overlay_title_expected
 from app.schemas import ShortLayout, ShortOverlayTitleMode
@@ -49,6 +49,7 @@ def _utc_iso() -> str:
 
 
 class SubtitleReviewSegment(BaseModel):
+    words: list[TranscriptWord] | None = None
     id: str
     index: int = Field(ge=0)
     start: float = Field(ge=0)
@@ -368,6 +369,7 @@ def _review_segments_for_source(
         "repaired": segment.repaired,
         "repairWindows": segment.repair_windows,
         "affectedClipIds": affected_clip_ids,
+        "words": segment.words,
     }
     if segment.preserve_segmentation or segment.single_line or not segment.text.strip():
         return [
@@ -385,9 +387,6 @@ def _review_segments_for_source(
 
     active_layouts = [layouts[clip_id] for clip_id in affected_clip_ids]
     max_chars = min(layout.max_chars_per_line * layout.max_lines for layout in active_layouts)
-    max_duration = min(layout.max_subtitle_duration for layout in active_layouts)
-    min_duration = max(layout.min_subtitle_duration for layout in active_layouts)
-    duration = max(0.01, segment.end - segment.start)
     # Rendering already wraps ordinary subtitle segments.  Splitting every
     # segment at the render limit would turn normal ASR output into many tiny
     # review rows and needlessly rewrite its timing.  Normalize only clear ASR
@@ -405,50 +404,20 @@ def _review_segments_for_source(
                 **base,
             )
         ]
-    chunks = split_subtitle_text(segment.text, max_chars)
-    minimum_count = max(1, math.ceil(duration / max_duration))
-    if len(chunks) < minimum_count and len(segment.text.strip()) >= minimum_count * 4:
-        chunks = split_subtitle_text(segment.text, max(4, math.ceil(len(segment.text.strip()) / minimum_count)))
-    maximum_count = max(1, int(duration // min_duration))
-    if len(chunks) > maximum_count:
-        chunks = split_subtitle_text(segment.text, max(max_chars, math.ceil(len(segment.text.strip()) / maximum_count)))
-    if len(chunks) <= 1:
-        return [
-            SubtitleReviewSegment(
-                id=_segment_id(index),
-                start=segment.start,
-                end=segment.end,
-                originalText=segment.text,
-                text=segment.text,
-                preserveSegmentation=False,
-                singleLine=False,
-                **base,
-            )
-        ]
-
-    total_weight = sum(max(1, len(chunk)) for chunk in chunks)
-    cursor = segment.start
-    review_segments: list[SubtitleReviewSegment] = []
-    for part, chunk in enumerate(chunks):
-        end = segment.end if part == len(chunks) - 1 else min(
-            segment.end,
-            cursor + duration * max(1, len(chunk)) / total_weight,
-        )
-        review_segments.append(
-            SubtitleReviewSegment(
-                id=f"{_segment_id(index)}_part_{part + 1}",
-                start=round(cursor, 3),
-                end=round(end, 3),
-                originalText=chunk,
-                text=chunk,
-                sourceIndices=[index],
-                preserveSegmentation=True,
-                singleLine=False,
-                **base,
-            )
-        )
-        cursor = end
-    return review_segments
+    layout = min(active_layouts, key=lambda item: item.max_chars_per_line * item.max_lines)
+    events = _segment_events(segment, layout)
+    word_groups = []
+    if usable_words(segment.text, segment.words):
+        words = segment.words or []
+        word_groups = [words[a:b] for a, b in chunk_units([word.word for word in words], max_chars)
+                       if words[b - 1].end > words[a].start and "".join(word.word for word in words[a:b]).strip()]
+    return [SubtitleReviewSegment(
+        id=f"{_segment_id(index)}_part_{part + 1}", index=index,
+        start=event.start, end=event.end, originalText=event.text, text=event.text,
+        confidence=segment.confidence, repaired=segment.repaired, repairWindows=segment.repair_windows,
+        affectedClipIds=affected_clip_ids, sourceIndices=[index], preserveSegmentation=True,
+        words=word_groups[part] if word_groups else None,
+    ) for part, event in enumerate(events)]
 
 
 def _overlaps(segment: TranscriptSegment, candidate: Candidate) -> bool:
@@ -1258,14 +1227,17 @@ def apply_reviewed_text(
             source = transcript_segments[source_index]
             output.append(source.model_copy(update={
                 "start": segment.start, "end": segment.end, "text": segment.text,
+                "words": segment.words if usable_words(segment.text, segment.words) else None,
                 "preserve_segmentation": segment.preserve_segmentation,
                 "single_line": segment.single_line,
                 "repaired": segment.repaired, "repair_windows": segment.repair_windows,
             }))
         return sorted(output, key=lambda s: (s.start, s.end))
-    reviewed_text = {segment.index: segment.text for segment in document.segments}
+    reviewed = {segment.index: segment for segment in document.segments}
     return [
-        segment.model_copy(update={"text": reviewed_text.get(index, segment.text)})
+        segment.model_copy(update={"text": reviewed[index].text,
+                                   "words": reviewed[index].words if usable_words(reviewed[index].text, reviewed[index].words) else None})
+        if index in reviewed else segment
         for index, segment in enumerate(transcript_segments)
     ]
 

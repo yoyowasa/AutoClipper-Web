@@ -10,7 +10,7 @@ const options = { candidateStart: 10, candidateEnd: 18, hookSceneDuration: 0, su
   segments: [{ start: 10, end: 12, text: "いつもの字幕" }, { start: 12, end: 14, text: "ここだけ強調", style },
     { start: 14, end: 18, text: "共通に戻る" }] };
 const events = subtitlePreviewEvents(options);
-deepStrictEqual(events.map((e) => [e.start, e.end, e.style ?? null]), [[0,1.92,null],[2,3.92,style],[4,8,null]]);
+deepStrictEqual(events.map((e) => [e.start, e.end, e.style ?? null]), [[0,2,null],[2,4,style],[4,8,null]]);
 const suppressed = subtitlePreviewEvents({ ...options, hookSceneDuration: 2, suppressionEnd: 5 });
 ok(suppressed.every((event) => event.start >= 5));
 deepStrictEqual(suppressed[0].style, style);

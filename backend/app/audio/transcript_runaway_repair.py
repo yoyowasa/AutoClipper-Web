@@ -11,6 +11,9 @@ RUNAWAY_TEXT_MIN_SECONDS = 5.0
 RUNAWAY_TEXT_MIN_CHARACTERS = 10
 RUNAWAY_WINDOW_PADDING_SECONDS = 2.0
 RUNAWAY_TEXT_PREFIX_LENGTH = 80
+STRETCHED_WORD_MIN_SECONDS = 2.5
+LOW_DENSITY_MIN_SECONDS = 4.0
+LOW_DENSITY_MAX_CHARACTERS_PER_SECOND = 1.0
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,11 @@ def detect_runaway_segments(segments: Sequence[Segment]) -> list[RunawaySegment]
     detected = []
     for index, segment in enumerate(segments):
         start, end = float(segment["start"]), float(segment["end"])
+        normalized_text = normalize_for_cer(str(segment.get("text", "")))
+        if (end - start >= LOW_DENSITY_MIN_SECONDS and normalized_text
+                and len(normalized_text) / (end - start) < LOW_DENSITY_MAX_CHARACTERS_PER_SECOND):
+            detected.append(RunawaySegment(index, start, end, "low_character_density"))
+            continue
         words = segment.get("words")
         if not words:
             normalized = normalize_for_cer(str(segment.get("text", "")))
@@ -33,6 +41,7 @@ def detect_runaway_segments(segments: Sequence[Segment]) -> list[RunawaySegment]
                 detected.append(RunawaySegment(index, start, end, "text_repetition_without_words"))
             continue
         runs: list[Range] = []
+        stretched: list[Range] = []
         key, run_start, run_end, count = "", start, start, 0
 
         def record_run() -> None:
@@ -44,6 +53,8 @@ def detect_runaway_segments(segments: Sequence[Segment]) -> list[RunawaySegment]
             word_start, word_end = max(start, float(word["start"])), min(end, float(word["end"]))
             if not normalized or word_end < word_start:
                 continue
+            if word_end - word_start >= STRETCHED_WORD_MIN_SECONDS:
+                stretched.append((word_start, word_end))
             # A token containing only repetitions of one character joins that
             # character's run even when ASR splits it into differently sized words.
             token = normalized[0] if len(set(normalized)) == 1 else normalized
@@ -55,8 +66,10 @@ def detect_runaway_segments(segments: Sequence[Segment]) -> list[RunawaySegment]
                 run_end = max(run_end, word_end)
                 count += repeats_in_token
         record_run()
-        if runs:
-            detected.append(RunawaySegment(index, min(item[0] for item in runs), max(item[1] for item in runs), "word_repetition"))
+        ranges = [*runs, *stretched]
+        if ranges:
+            detected.append(RunawaySegment(index, min(item[0] for item in ranges), max(item[1] for item in ranges),
+                                           "stretched_word" if stretched else "word_repetition"))
     return detected
 
 

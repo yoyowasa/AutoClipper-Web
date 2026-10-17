@@ -1,6 +1,8 @@
 import type { ClipTextStyle } from "./types";
+import { normalizeSubtitle, speechSubtitleChunks, subtitleTextChunks, usableSubtitleWords, type SubtitleWord } from "./subtitleTiming";
 
 type SubtitlePreviewSegment = {
+  words?: SubtitleWord[] | null;
   preserveSegmentation?: boolean;
   singleLine?: boolean;
   style?: ClipTextStyle;
@@ -285,33 +287,6 @@ function bestBreakIndex(
   return limit;
 }
 
-function splitSubtitleText(text: string, maxCharactersPerEvent: number): string[] {
-  const cleanText = normalizeText(text);
-  if (!cleanText) {
-    return [];
-  }
-
-  const chunks: string[] = [];
-  let remaining = Array.from(cleanText);
-  while (remaining.length > 0) {
-    if (remaining.length <= maxCharactersPerEvent) {
-      chunks.push(remaining.join(""));
-      break;
-    }
-    const breakIndex = bestBreakIndex(remaining, maxCharactersPerEvent);
-    let chunk = remaining.slice(0, breakIndex).join("").trim();
-    remaining = Array.from(remaining.slice(breakIndex).join("").trim());
-    if (!chunk) {
-      chunk = remaining.slice(0, maxCharactersPerEvent).join("").trim();
-      remaining = Array.from(
-        remaining.slice(maxCharactersPerEvent).join("").trim()
-      );
-    }
-    chunks.push(chunk);
-  }
-  return chunks;
-}
-
 export function splitSubtitlePreviewLines(
   text: string,
   maxCharactersPerLine: number,
@@ -371,42 +346,21 @@ function eventsForSegment(
   if (!text) {
     return [];
   }
+  if (usableSubtitleWords(text, segment.words)) {
+    const limit = segment.preserveSegmentation || segment.singleLine ? Array.from(text).length : options.maxCharsPerLine * options.maxLines;
+    return speechSubtitleChunks(segment.words!, limit)
+      .filter(event => event.end > event.start && event.text)
+      .map(event => ({ ...event, ...(segment.style ? { style: segment.style } : {}),
+        preserveSegmentation: true, ...(segment.singleLine ? { singleLine: true } : {}) }));
+  }
+  if (Array.from(text).length <= options.maxCharsPerLine) {
+    return [{ ...segment, text, end: Math.min(segment.end, segment.start + options.maxSubtitleDuration), preserveSegmentation: true }];
+  }
   if (segment.preserveSegmentation || segment.singleLine) {
     return [{ ...segment, text, preserveSegmentation: true }];
   }
-
   const duration = Math.max(0.01, segment.end - segment.start);
-  const maxCharactersPerEvent = Math.max(
-    1,
-    options.maxCharsPerLine * options.maxLines
-  );
-  const maxEventsForDuration = Math.max(
-    1,
-    Math.floor(duration / options.minSubtitleDuration)
-  );
-  let eventCharacterLimit = maxCharactersPerEvent;
-  let chunks = splitSubtitleText(text, eventCharacterLimit);
-  const minEventsForMaxDuration = Math.max(
-    1,
-    Math.ceil(duration / options.maxSubtitleDuration)
-  );
-  if (
-    chunks.length < minEventsForMaxDuration &&
-    Array.from(text).length >= minEventsForMaxDuration * 4
-  ) {
-    eventCharacterLimit = Math.max(
-      4,
-      Math.ceil(Array.from(text).length / minEventsForMaxDuration)
-    );
-    chunks = splitSubtitleText(text, eventCharacterLimit);
-  }
-  if (chunks.length > maxEventsForDuration) {
-    eventCharacterLimit = Math.max(
-      maxCharactersPerEvent,
-      Math.ceil(Array.from(text).length / maxEventsForDuration)
-    );
-    chunks = splitSubtitleText(text, eventCharacterLimit);
-  }
+  const chunks = subtitleTextChunks(text, Math.max(1, options.maxCharsPerLine * options.maxLines));
 
   const totalWeight = chunks.reduce(
     (total, chunk) => total + Math.max(1, Array.from(chunk).length),
@@ -429,7 +383,8 @@ function eventsForSegment(
       ...(segment.style ? { style: segment.style } : {}),
       start: roundMilliseconds(cursor),
       end: roundMilliseconds(end),
-      text: chunk
+      text: chunk,
+      preserveSegmentation: true
     });
     cursor = end;
   });
@@ -525,7 +480,17 @@ export function subtitlePreviewEvents(
   options.segments.forEach((segment) => {
     const start = Math.max(segment.start, options.candidateStart);
     const end = Math.min(segment.end, options.candidateEnd);
-    const text = normalizeText(segment.text);
+    let text = normalizeText(segment.text);
+    let words: SubtitleWord[] | null = null;
+    if (usableSubtitleWords(text, segment.words)) {
+      words = segment.words!.filter(word => (word.end > start && word.start < end) ||
+        (word.start === word.end && start <= word.start && word.start <= end)).map(word => ({
+        ...word, start: roundMilliseconds(Math.max(start, word.start) - options.candidateStart),
+        end: roundMilliseconds(Math.min(end, word.end) - options.candidateStart)
+      }));
+      if (!words.length) return;
+      text = normalizeSubtitle(words.map(word => word.word).join(""));
+    }
     if (end <= start || !text) {
       return;
     }
@@ -534,6 +499,7 @@ export function subtitlePreviewEvents(
         {
           ...(segment.preserveSegmentation ? { preserveSegmentation: true } : {}),
           ...(segment.singleLine ? { singleLine: true } : {}),
+          words,
           start: roundMilliseconds(start - options.candidateStart),
           ...(segment.style ? { style: segment.style } : {}),
           end: roundMilliseconds(end - options.candidateStart),

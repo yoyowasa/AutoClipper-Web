@@ -26,6 +26,15 @@ def segment(start: float, end: float, text: str, **kwargs) -> TranscriptSegment:
                              words=[TranscriptWord(start=start, end=end, word=text)], **kwargs)
 
 
+def spoken_segment(start: float, end: float, text: str) -> TranscriptSegment:
+    """Normal speech: short ASR tokens, sufficient density to avoid runaway repair."""
+    return TranscriptSegment(start=start, end=end, text=text, words=[
+        TranscriptWord(start=start + i * (end - start) / len(text),
+                       end=start + (i + 1) * (end - start) / len(text), word=char)
+        for i, char in enumerate(text)
+    ])
+
+
 def wav(tmp_path: Path, duration: float = 40) -> Path:
     path = tmp_path / "audio.wav"
     with wave.open(str(path), "wb") as writer:
@@ -52,7 +61,8 @@ class Model:
 
 
 def test_only_gap_is_reread_once_with_padding_and_original_text_is_preserved(tmp_path):
-    baseline = [segment(0, 1, "前。"), segment(31, 40, "直後。")]
+    following = "直後に普通の会話を続けます。"
+    baseline = [segment(0, 1, "前。"), spoken_segment(31, 40, following)]
     # One decoded segment spans padding; only its words inside the gap are accepted.
     reread = TranscriptSegment(start=0, end=34, text="前 補った発話 直後", words=[
         TranscriptWord(start=0, end=1, word="前"), TranscriptWord(start=4, end=10, word="補った"),
@@ -62,7 +72,7 @@ def test_only_gap_is_reread_once_with_padding_and_original_text_is_preserved(tmp
     assert len(model.calls) == 1
     assert model.calls[0] == (33, dict(language=None, beam_size=5, word_timestamps=True,
                                     vad_filter=False, condition_on_previous_text=False))
-    assert [item.text for item in result] == ["前。", "補った発話", "直後。"]
+    assert [item.text for item in result] == ["前。", "補った発話", following]
     assert [(item.start, item.end) for item in result] == [(0, 1), (4, 28), (31, 40)]
     assert result[1].repaired and result[1].repair_windows[0].model_dump() == {"start": 0, "end": 33}
     assert not result[0].repaired and not result[2].repaired
@@ -70,13 +80,13 @@ def test_only_gap_is_reread_once_with_padding_and_original_text_is_preserved(tmp
     assert summary["added_characters"] == len("補った発話")
     assert summary["reread_interval_count"] == 1 and summary["reread_seconds"] == 33
     assert summary["elapsed_seconds"] >= 0
-    assert baseline[1].text == "直後。" and not baseline[1].repaired
+    assert baseline[1].text == following and not baseline[1].repaired
 
 
 @pytest.mark.parametrize("gap,expected", [(2.999, 0), (3, 1)])
 def test_word_gap_boundary_and_silence_subtraction(tmp_path, gap, expected):
     model = Model([])
-    baseline = [segment(0, 1, "前"), segment(1 + gap, 10, "後")]
+    baseline = [segment(0, 1, "前"), spoken_segment(1 + gap, 10, "その後も普通に話します")]
     _, summary = repair_transcript_gaps(wav(tmp_path, 10), lambda: model, baseline, duration=10, silence=[])
     assert summary["reread_interval_count"] == expected
     model = Model([])
@@ -85,8 +95,9 @@ def test_word_gap_boundary_and_silence_subtraction(tmp_path, gap, expected):
 
 
 def test_uses_word_times_even_when_segment_envelope_covers_gap(tmp_path):
-    baseline = [TranscriptSegment(start=0, end=40, text="前後", words=[
-        TranscriptWord(start=0, end=1, word="前"), TranscriptWord(start=31, end=40, word="後")])]
+    following = spoken_segment(31, 40, "その後の会話が普通に続いています。" * 3)
+    baseline = [TranscriptSegment(start=0, end=40, text="前" + following.text, words=[
+        TranscriptWord(start=0, end=1, word="前"), *following.words])]
     model = Model([])
     _, summary = repair_transcript_gaps(wav(tmp_path), lambda: model, baseline, duration=40, silence=[])
     assert summary["planned_interval_count"] == 1 and model.calls[0][0] == 33
@@ -156,7 +167,7 @@ def test_missing_word_times_skips_without_loading_model(tmp_path):
 
 
 def test_engine_reuses_model_and_base_transcription_keeps_default_context(tmp_path, monkeypatch):
-    model = Model([segment(0, 1, "前"), segment(31, 40, "後")])
+    model = Model([segment(0, 1, "前"), spoken_segment(31, 40, "その後も普通の会話が続きます")])
     engine = FasterWhisperTranscriptionEngine(language="ja")
     engine._model = model
     monkeypatch.setattr(engine, "_resolve_runtime", lambda: SimpleNamespace(actual_device="cpu"))

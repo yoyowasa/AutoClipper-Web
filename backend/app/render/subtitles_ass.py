@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal, Sequence
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.render.subtitle_timing import round_milliseconds, speech_chunks, text_chunks, usable_words
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
 from app.overlay_text import (
@@ -735,10 +736,20 @@ def _clip_segment_to_candidate(segment: TranscriptSegment, candidate: Candidate)
     text = _normalize_text(segment.text)
     if end <= start or not text:
         return None
+    words = None
+    if usable_words(text, segment.words):
+        words = [word.model_copy(update={"start": round_milliseconds(max(start, word.start) - candidate.start),
+                                         "end": round_milliseconds(min(end, word.end) - candidate.start)})
+                 for word in segment.words or [] if (word.end > start and word.start < end)
+                 or (word.start == word.end and start <= word.start <= end)]
+        if not words:
+            return None
+        text = _normalize_text("".join(word.word for word in words))
     return TranscriptSegment(
-        start=round(start - candidate.start, 3),
-        end=round(end - candidate.start, 3),
+        start=round_milliseconds(start - candidate.start),
+        end=round_milliseconds(end - candidate.start),
         text=text,
+        words=words,
         confidence=segment.confidence,
         clipId=segment.clip_id,
         preserveSegmentation=segment.preserve_segmentation,
@@ -762,22 +773,22 @@ def _segment_events(segment: TranscriptSegment, layout: SubtitleLayout) -> list[
     text = _normalize_text(segment.text)
     if not text:
         return []
+    if usable_words(text, segment.words):
+        limit = len(text) if segment.preserve_segmentation or segment.single_line else layout.max_chars_per_line * layout.max_lines
+        return [SubtitleEvent(start=start, end=end, text=chunk, preserve_segmentation=True,
+                              single_line=segment.single_line)
+                for start, end, chunk in speech_chunks(segment.words or [], limit)
+                if end > start and chunk]
+    if len(text) <= layout.max_chars_per_line:
+        return [SubtitleEvent(start=segment.start, end=min(segment.end, segment.start + layout.max_subtitle_duration),
+                              text=text, preserve_segmentation=True, single_line=segment.single_line)]
     if segment.preserve_segmentation or segment.single_line:
         return [SubtitleEvent(start=segment.start, end=segment.end, text=text,
                               preserve_segmentation=True, single_line=segment.single_line)]
 
     duration = max(0.01, segment.end - segment.start)
     max_chars_per_event = max(1, layout.max_chars_per_line * layout.max_lines)
-    max_events_for_duration = max(1, int(duration // layout.min_subtitle_duration))
-    event_char_limit = max_chars_per_event
-    chunks = split_subtitle_text(text, event_char_limit)
-    min_events_for_max_duration = max(1, math.ceil(duration / layout.max_subtitle_duration))
-    if len(chunks) < min_events_for_max_duration and len(text) >= min_events_for_max_duration * 4:
-        event_char_limit = max(4, math.ceil(len(text) / min_events_for_max_duration))
-        chunks = split_subtitle_text(text, event_char_limit)
-    if len(chunks) > max_events_for_duration:
-        event_char_limit = max(max_chars_per_event, math.ceil(len(text) / max_events_for_duration))
-        chunks = split_subtitle_text(text, event_char_limit)
+    chunks = text_chunks(text, max_chars_per_event)
 
     total_weight = sum(max(1, len(chunk)) for chunk in chunks)
     cursor = segment.start
@@ -791,7 +802,7 @@ def _segment_events(segment: TranscriptSegment, layout: SubtitleLayout) -> list[
             end = min(end, segment.end)
         if end <= cursor:
             end = min(segment.end, cursor + 0.01)
-        events.append(SubtitleEvent(start=round(cursor, 3), end=round(end, 3), text=chunk))
+        events.append(SubtitleEvent(start=round_milliseconds(cursor), end=round_milliseconds(end), text=chunk, preserve_segmentation=True))
         cursor = end
     return [event for event in events if event.end > event.start and event.text]
 
@@ -855,7 +866,7 @@ def _apply_minimum_display_duration(
         end = min(target_end, max_end) if max_end > event.start else event.end
         if end <= event.start:
             end = event.end
-        adjusted.append(replace(event, end=round(end, 3)))
+        adjusted.append(replace(event, end=round_milliseconds(end)))
     return adjusted
 
 
@@ -913,22 +924,21 @@ def _subtitle_events_with_hook_scene(
         return body_events, candidate.duration
 
     output_duration = candidate.duration + hook_scene_duration
-    suppression_end = round(
+    suppression_end = round_milliseconds(
         min(
             output_duration,
             max(hook_scene_duration, hook_text_duration),
-        ),
-        3,
+        )
     )
     shifted_body_events: list[SubtitleEvent] = []
     for event in body_events:
-        shifted_start = round(event.start + hook_scene_duration, 3)
-        shifted_end = round(event.end + hook_scene_duration, 3)
+        shifted_start = round_milliseconds(event.start + hook_scene_duration)
+        shifted_end = round_milliseconds(event.end + hook_scene_duration)
         if shifted_end <= suppression_end:
             continue
         shifted_body_events.append(
             SubtitleEvent(
-                start=round(max(shifted_start, suppression_end), 3),
+                start=round_milliseconds(max(shifted_start, suppression_end)),
                 end=shifted_end,
                 text=event.text,
                 style=event.style,

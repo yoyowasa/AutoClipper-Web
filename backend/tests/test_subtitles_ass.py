@@ -166,7 +166,7 @@ def test_subtitle_events_split_long_segment_and_keep_valid_timing() -> None:
     assert all(len(event.text) <= layout.max_chars_per_line * layout.max_lines for event in events)
 
 
-def test_subtitle_events_merge_adjacent_short_segments_when_timing_allows() -> None:
+def test_short_subtitle_events_keep_their_own_speech_ranges() -> None:
     candidate = make_candidate("short_1", "short", 0.0, 4.0)
     layout = SubtitleLayout.short()
     segments = [
@@ -177,9 +177,9 @@ def test_subtitle_events_merge_adjacent_short_segments_when_timing_allows() -> N
 
     events = subtitle_events_for_candidate(segments, candidate, layout)
 
-    assert events[0].text == "はい 次です"
-    assert events[0].end - events[0].start >= 0.9
-    assert len(events) == 2
+    assert [(event.start, event.end, event.text) for event in events] == [
+        (0, .45, "はい"), (.45, .9, "次です"), (2, 3.4, "離れた字幕"),
+    ]
 
 
 def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None:
@@ -197,8 +197,7 @@ def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None
     assert "Style: Title,Noto Sans JP Black" in ass
     assert "Dialogue: 1,0:00:00.00,0:00:10.00,Title" in ass
     assert "Dialogue: 0,0:00:00.00,0:00:02.00,Subtitle" in ass
-    assert "Dialogue: 0,0:00:05.00,0:00:07.06,Subtitle" in ass
-    assert "Dialogue: 0,0:00:07.14,0:00:10.00,Subtitle" in ass
+    assert "Dialogue: 0,0:00:05.00,0:00:09.20,Subtitle" in ass
 
 
 def test_short_hook_precedes_title_without_overlapping_title_events() -> None:
@@ -389,7 +388,7 @@ def test_hook_scene_boundary_does_not_hide_first_body_subtitle() -> None:
     ass = build_ass_document(candidate, segments, layout=SubtitleLayout.short())
 
     assert "Dialogue: 0,0:00:00.00,0:00:00.50,Subtitle" not in ass
-    assert "Dialogue: 0,0:00:00.50,0:00:01.60,Subtitle" in ass
+    assert "Dialogue: 0,0:00:00.50,0:00:01.00,Subtitle" in ass
 
 
 def test_hook_text_and_regular_subtitles_never_overlap_when_hook_scene_is_shorter() -> None:
@@ -858,7 +857,7 @@ def test_ass_subtitle_fit_uses_resolved_font_position_margin_outline_and_shadow(
             )
         }
     )
-    segments = [TranscriptSegment(start=0.0, end=1.0, text=text)]
+    segments = [TranscriptSegment(start=0.0, end=1.0, text=text, preserveSegmentation=True)]
     resolved = resolve_clip_text_style(
         candidate.subtitle_style,
         layout,

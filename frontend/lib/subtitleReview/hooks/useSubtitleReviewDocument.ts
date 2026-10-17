@@ -355,6 +355,7 @@ export function useSubtitleReviewDocument() {
         start: segment.start,
         end: segment.end,
         text: drafts[segment.id] ?? segment.text,
+        words: segment.words,
         preserveSegmentation: segment.preserveSegmentation,
         singleLine: segment.singleLine,
         style: selectedClipContentDraft?.subtitleStyles.find(

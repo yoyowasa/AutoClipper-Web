@@ -124,7 +124,7 @@ def test_exact_preview_spec_is_canonical_and_ignores_unrelated_segments() -> Non
     ("changed", "value"),
     [
         ("source_fingerprint", "different-source"),
-        ("renderer_version", "exact-subtitle-review-v6"),
+        ("renderer_version", "future-subtitle-review-renderer"),
         ("candidate_index", 2),
     ],
 )
