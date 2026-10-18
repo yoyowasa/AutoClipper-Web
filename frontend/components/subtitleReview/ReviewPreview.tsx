@@ -3,7 +3,6 @@
 import { livePlaybackSource } from "../../lib/subtitleReview/livePlaybackSource";
 import { DraftReviewPlayer } from "./DraftReviewPlayer";
 import { LiveShortFramingPreview } from "../LiveShortFramingPreview";
-import { SubtitleGapMarkers } from "../SubtitleGapMarkers";
 import { ClipTextOverlay } from "../ClipTextStyleEditor";
 import { formatTime, clamp } from "../../lib/subtitleReview/display";
 import { previewVideoSrc } from "../../lib/subtitleReview/preview";
@@ -58,7 +57,6 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
     selectedPreviewReady,
     setShowSavedPreview,
     clipDuration,
-    seekToSubtitleGap,
     clipTime,
     seekToClipTime,
     isPlaying,
@@ -72,12 +70,8 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
     changePlaybackRate,
     toggleFullscreen
   } = context;
-  const savedHookDuration = savedClip?.hookSceneStart != null && savedClip.hookSceneEnd != null ? savedClip.hookSceneEnd - savedClip.hookSceneStart : 0;
-  const draftHookDuration = selectedClipContentDraft?.hookSceneStart != null && selectedClipContentDraft.hookSceneEnd != null
-    ? selectedClipContentDraft.hookSceneEnd - selectedClipContentDraft.hookSceneStart : 0;
   const selectedClip = savedClip ? { ...savedClip,
-    hookSceneStart: selectedClipContentDraft?.hookSceneStart ?? null, hookSceneEnd: selectedClipContentDraft?.hookSceneEnd ?? null,
-    gaps: savedClip.gaps?.map(gap => ({ ...gap, start: gap.start + draftHookDuration - savedHookDuration, end: gap.end + draftHookDuration - savedHookDuration }))
+    hookSceneStart: selectedClipContentDraft?.hookSceneStart ?? null, hookSceneEnd: selectedClipContentDraft?.hookSceneEnd ?? null
   } : null;
   const media = savedClip ? livePlaybackSource(savedClip, review, retainedLivePreviews[savedClip.id]) : null;
   const draftFramingKey = selectedShortFramingDraft ? JSON.stringify([selectedShortFramingDraft.framingOffsetX,
@@ -328,7 +322,6 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                         ) : null}
                         </div>
                       </div>
-                      <SubtitleGapMarkers gaps={selectedClip.gaps} duration={clipDuration} onSelect={seekToSubtitleGap} />
                       <input
                         aria-label="clip再生位置"
                         className="block h-2 w-full cursor-pointer accent-sky-500"

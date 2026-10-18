@@ -2,8 +2,6 @@
 
 import { getSubtitleReview, retrySubtitleReviewPreview } from "../../api";
 import { sourceTimeAtPlayback } from "../../subtitlePauseInsert";
-import { seekAndPauseAtSubtitleGap } from "../../subtitleGaps";
-import type { SubtitleReviewGap } from "../../types";
 import { clamp } from "../display";
 import type { SubtitleReviewContext } from "./context";
 
@@ -54,16 +52,6 @@ export function useReviewPreviews(context: SubtitleReviewContext) {
     video.pause();
     video.currentTime = relativeTime;
     setClipTime(relativeTime);
-    setIsPlaying(false);
-  }
-
-  function seekToSubtitleGap(gap: SubtitleReviewGap) {
-    const { videoRef, selectedClip, suggestionPlaybackEndRef, setPreviewingSuggestionId, setClipTime, clipDuration, setIsPlaying } = context;
-    const video = videoRef.current;
-    if (!video || !selectedClip) return;
-    suggestionPlaybackEndRef.current = null;
-    setPreviewingSuggestionId(null);
-    setClipTime(seekAndPauseAtSubtitleGap(video, gap, clipDuration));
     setIsPlaying(false);
   }
 
@@ -263,5 +251,5 @@ export function useReviewPreviews(context: SubtitleReviewContext) {
       setRetryingPreviewClipId(null);
     }
   }
-  return { seekToClipTime, playFromClipStart, seekToSubtitle, seekToSubtitleGap, togglePlayback, skipBy, currentSourceTime, handleVideoTimeUpdate, handleVideoSeeking, retryVideoLoad, handleVideoError, toggleMuted, changeVolume, changePlaybackRate, toggleFullscreen, retrySelectedPreview };
+  return { seekToClipTime, playFromClipStart, seekToSubtitle, togglePlayback, skipBy, currentSourceTime, handleVideoTimeUpdate, handleVideoSeeking, retryVideoLoad, handleVideoError, toggleMuted, changeVolume, changePlaybackRate, toggleFullscreen, retrySelectedPreview };
 }

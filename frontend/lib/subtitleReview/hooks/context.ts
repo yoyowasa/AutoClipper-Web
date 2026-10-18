@@ -9,7 +9,6 @@ import type {
   SubtitleReviewClip,
   SubtitleReviewClipFramingUpdateRequest,
   SubtitleReviewDocument,
-  SubtitleReviewGap,
   SubtitleReviewSegment,
   TitleHookSuggestion,
   TitleHookSuggestionResponse
@@ -91,7 +90,6 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   seekToClipTime: (nextTime: number) => void;
   playFromClipStart: () => void;
   seekToSubtitle: (start: number) => void;
-  seekToSubtitleGap: (gap: SubtitleReviewGap) => void;
   togglePlayback: () => void;
   skipBy: (seconds: number) => void;
   currentSourceTime: () => number | null;

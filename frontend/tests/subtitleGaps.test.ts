@@ -1,26 +1,25 @@
 import assert from "node:assert/strict";
 import { createElement, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { SubtitleGapMarkers } from "../components/SubtitleGapMarkers";
-import { seekAndPauseAtSubtitleGap, subtitleGapLabel } from "../lib/subtitleGaps";
+import { ReviewPreview } from "../components/subtitleReview/ReviewPreview";
+import { useReviewPreviews } from "../lib/subtitleReview/hooks/useReviewPreviews";
 import { ReviewClipList } from "../components/subtitleReview/ReviewClipList";
 import { ReviewSubtitleSegments } from "../components/subtitleReview/ReviewSubtitleSegments";
 import { ReviewContentEditor } from "../components/subtitleReview/ReviewContentEditor";
 import { contentDraftForClip } from "../lib/subtitleReview/drafts";
 import type { SubtitleReviewViewContext } from "../lib/subtitleReview/hooks/context";
-import type { SubtitleReviewClip, SubtitleReviewDocument, SubtitleReviewGap, SubtitleReviewSegment } from "../lib/types";
+import type { SubtitleReviewClip, SubtitleReviewDocument, SubtitleReviewSegment } from "../lib/types";
 
-const gap: SubtitleReviewGap = {
+// Backend compatibility fields may still arrive; the frontend must ignore them.
+const gap = {
   id: "gap_middle", start: 12, end: 18, sourceStart: 109, sourceEnd: 115, acknowledged: false
 };
-const acknowledgedGap: SubtitleReviewGap = { ...gap, id: "gap_checked", start: 25, end: 29, acknowledged: true };
+const acknowledgedGap = { ...gap, id: "gap_checked", start: 25, end: 29, acknowledged: true };
 function segment(id: string, start: number, end: number): SubtitleReviewSegment {
   return { id, index: 0, start, end, originalText: id, text: id,
     confidence: null, edited: false, affectedClipIds: ["clip"] };
 }
 const segments = [segment("first", 100, 109), segment("second", 115, 120)];
-assert.equal(subtitleGapLabel(gap), "字幕なし（音あり）0:12〜0:18");
-
 const events: string[] = [];
 let playbackTime = 0;
 const player = {
@@ -28,41 +27,20 @@ const player = {
   get currentTime() { return playbackTime; },
   set currentTime(value: number) { playbackTime = value; events.push(`seek:${value}`); }
 };
-const onSelect = (selected: SubtitleReviewGap) => { seekAndPauseAtSubtitleGap(player, selected, 30); };
-function buttons(node: ReactNode): Array<{ onClick?: () => void }> {
-  if (Array.isArray(node)) return node.flatMap(buttons);
-  if (!isValidElement<{ children?: ReactNode; onClick?: () => void }>(node)) return [];
-  return [...(node.type === "button" ? [node.props] : []), ...buttons(node.props.children)];
+function elements(node: ReactNode): Array<Record<string, unknown>> {
+  if (Array.isArray(node)) return node.flatMap(elements);
+  if (!isValidElement<{ children?: ReactNode }>(node)) return [];
+  return [node.props, ...elements(node.props.children)];
 }
-const markerProps = { gaps: [gap, acknowledgedGap], duration: 30, onSelect };
-const markerMarkup = renderToStaticMarkup(createElement(SubtitleGapMarkers, markerProps));
-assert.equal((markerMarkup.match(/<button/g) ?? []).length, 2, "all gaps remain visible regardless of acknowledgement");
-assert.match(markerMarkup, /left:40%;width:20%/);
-assert.match(markerMarkup, /left:83\.33333333333334%;width:13\.333333333333334%/);
-assert.doesNotMatch(markerMarkup, /確認済みにする|確認を保存中|[0-9]+か所/);
-const unconfirmedMarkup = renderToStaticMarkup(createElement(SubtitleGapMarkers, {
-  ...markerProps, gaps: markerProps.gaps.map(item => ({ ...item, acknowledged: false }))
-}));
-assert.equal(markerMarkup, unconfirmedMarkup, "confirmation flags do not change marker appearance");
-for (const [index, second] of [12, 25].entries()) {
-  buttons(SubtitleGapMarkers(markerProps))[index].onClick?.();
-  assert.deepEqual(events.slice(-2), ["pause", `seek:${second}`]);
-  assert.equal(playbackTime, second, "paused subtitle insertion continues to use the selected gap's position");
-}
-assert.equal(SubtitleGapMarkers({ ...markerProps, gaps: undefined }), null, "old responses without gaps remain usable");
-assert.equal(SubtitleGapMarkers({ ...markerProps, gaps: [] }), null);
-assert.equal(SubtitleGapMarkers({ ...markerProps, duration: 0 }), null);
-assert.equal(seekAndPauseAtSubtitleGap(player, { ...gap, start: -5 }, 30), 0);
-assert.equal(seekAndPauseAtSubtitleGap(player, { ...gap, start: 40 }, 30), 30);
-assert.deepEqual(markerProps.gaps, [gap, acknowledgedGap], "display and seeking do not change saved confirmation flags");
+const legacyGaps = [gap, acknowledgedGap];
 
 const clip = {
   id: "clip", type: "normal", title: "タイトル", publicationTitle: "投稿タイトル",
   start: 100, end: 200, duration: 100, hookText: "", hookDurationSeconds: 3,
   hookSceneStart: null, hookSceneEnd: null, titleStyle: null, hookStyle: null, subtitleStyle: null,
   previewState: "ready", previewVideoUrl: "/preview.mp4", previewSpecHash: "spec",
-  segmentIds: segments.map(item => item.id), confirmed: false, editedSegmentCount: 0, gaps: markerProps.gaps
-} as SubtitleReviewClip;
+  segmentIds: segments.map(item => item.id), confirmed: false, editedSegmentCount: 0, gaps: legacyGaps
+} as unknown as SubtitleReviewClip;
 const context = {
   selectedClip: clip, selectedClipId: clip.id, activeClipType: "normal", normalClips: [clip], shortClips: [], visibleClips: [clip],
   review: { clips: [clip], state: "awaiting_review", renderRevision: 1, totalClipCount: 1, confirmedClipCount: 0, editedSegmentCount: 0 } as SubtitleReviewDocument,
@@ -71,7 +49,7 @@ const context = {
   isEditable: true, allConfirmed: false, allPreviewsReady: true, bodyDuration: 100, clipDuration: 103,
   hookSceneDuration: 3, hookSuppressionEnd: 3, selectedHookDurationIsValid: true,
   // Supply the pre-change gap inputs so this fixture also detects the old rows/counts.
-  selectedGaps: markerProps.gaps, selectedSubtitleTimeline: [
+  selectedGaps: legacyGaps, selectedSubtitleTimeline: [
     { kind: "segment", segment: segments[0], segmentIndex: 1, start: 3 },
     { kind: "gap", gap, start: gap.start },
     { kind: "segment", segment: segments[1], segmentIndex: 0, start: 18 }
@@ -102,4 +80,46 @@ const staleMarkup = renderToStaticMarkup(createElement(ReviewClipList, { context
 } }));
 assert.match(staleMarkup, /確定すると正式プレビューを作成/);
 assert.doesNotMatch(staleMarkup, /完成表示プレビューを更新中/);
-console.log("Subtitle gaps: marker-only display, confirmation-independent rendering, seek/pause and subtitle editing preserved");
+
+const previewContext = {
+  ...context, review: { ...context.review, sourceVideoUrl: "/source.mp4" },
+  retainedLivePreviews: {}, selectedPlayerReady: true, selectedPlayerVideoUrl: "/preview.mp4",
+  selectedPlayerPreviewVersion: "spec", selectedPreviewReady: true, isPlayerReady: true,
+  isShowingLivePreview: false, clipTime: 0, isPlaying: false, playbackRate: 1, volume: 1, isMuted: false,
+  videoRef: { current: player }, suggestionPlaybackEndRef: { current: null },
+  setPreviewingSuggestionId: () => {}, setClipTime: (time: number) => { events.push(`clock:${time}`); },
+  setIsPlaying: (playing: boolean) => { events.push(`playing:${playing}`); },
+  openPausedSubtitleDraft: () => { events.push("insert"); }
+} as unknown as SubtitleReviewViewContext;
+function PreviewControlsHarness() {
+  Object.assign(previewContext, useReviewPreviews(previewContext));
+  return null;
+}
+renderToStaticMarkup(createElement(PreviewControlsHarness));
+for (const type of ["normal", "short"] as const) {
+  for (const isShowingLivePreview of [false, true]) {
+    const selectedClip = { ...clip, type };
+    const active = { ...previewContext, selectedClip, isShowingLivePreview };
+    const markup = renderToStaticMarkup(createElement(ReviewPreview, { context: active }));
+    assert.doesNotMatch(markup, /字幕なし（音あり）|橙色|bg-amber/);
+    assert.match(markup, /clip再生位置/);
+    assert.match(markup, /停止位置に字幕を追加/);
+    assert.match(markup, /5秒戻る|1秒進む|再生速度/);
+    for (const gaps of [undefined, [], legacyGaps.map(item => ({ ...item, acknowledged: true }))]) {
+      assert.equal(renderToStaticMarkup(createElement(ReviewPreview, { context: {
+        ...active, selectedClip: { ...selectedClip, gaps }
+      } as SubtitleReviewViewContext })), markup, "legacy gap data does not affect the preview");
+    }
+  }
+}
+const controls = elements(ReviewPreview({ context: previewContext }));
+const seek = controls.find(props => props["aria-label"] === "clip再生位置");
+(seek?.onChange as (event: { target: { value: string } }) => void)({ target: { value: "12" } });
+assert.equal(playbackTime, 12, "ordinary playback seeking remains available");
+previewContext.seekToSubtitle(115);
+assert.equal(playbackTime, 18, "subtitle-row seeking still uses source time and hook duration");
+assert.deepEqual(events.slice(-4), ["pause", "seek:18", "clock:18", "playing:false"]);
+const insert = controls.find(props => props.children === "停止位置に字幕を追加");
+(insert?.onClick as () => void)();
+assert.equal(events.at(-1), "insert", "paused subtitle insertion remains connected");
+console.log("Subtitle gaps: no markers or labels; legacy responses, playback seeking and subtitle editing preserved");

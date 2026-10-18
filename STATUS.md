@@ -1089,3 +1089,11 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 実データdry-run: job_6dbcc15b16994d18894b01e3f338a682の稼働DBを読み取り専用接続のbackup()でコピー（integrity_check=ok、jobs=15/export_items=16で一致）し、字幕確認と無音JSONをコピーして実行。現在の479行はoriginalTextに記号がある行198、現在のtextでは7、text/originalTextが異なる行217。変更対象は未編集6行、対象外の編集済み1行、影響は2clipだった。例:「米自体は明．．．明治じゃない」→「米自体は明、明治じゃない」、「プリんプリン、プリん．．．」→「プリんプリン、プリん」。コピーDB/字幕JSONの内容・更新時刻はdry-runで不変。稼働DBのSHA256・サイズ・更新時刻と、元ジョブ91ファイルのSHA256も前後で不変。
 - 検証: backend全件2069 passed・2 skipped（mainから39ケース追加）。新規ケースで記号の形式・句読点・空行・設定OFF・編集済み保護・stale・再実行・書き込み失敗を確認。読み直し後の除去は実際のpipeline順序と暴走補修のテストでも確認。Ruff 0.16.10の`check . ../launcher ../scripts`、frontend全34テスト・lint・typecheck・build成功。稼働DBと元ジョブ91ファイルは全件テスト・隔離Compose検証の後にも不変。
 - 起動/未確認: 専用DB/Redis/18185ポートの隔離Composeでbackend healthy、/health・/api/healthが200、Linuxコンテナ内の同じdry-runも6行/対象外1行を確認。検証コンテナとネットワークは片付け済み。稼働DB/ジョブへの--execute、実動画の新規文字起こし、稼働環境への反映は行わない。launcher・frontendは変更なし。PRのCI成功後もマージせずレビュー待ちとする。
+
+## 2026-10-19 task-214 字幕確認の空白マーカーを削除
+
+- 目的/変更: ユーザー決定により、字幕確認プレビューの「橙色: 字幕なし（音あり）」と橙色の区間マーカーを削除。`components/subtitleReview/ReviewPreview.tsx`から表示とマーカー時刻補正を外し、参照のなくなった`components/SubtitleGapMarkers.tsx`・`lib/subtitleGaps.ts`を削除した。
+- 型/接続: `lib/types.ts`のSubtitleReviewGapと未使用のgaps項目、`subtitleReview/hooks`のcontext/useReviewPreviews/useSubtitleReviewDocumentにある空白専用シークの型・関数・受け渡しを削除。他画面での使用はなく、frontendの本番ソースで削除対象の名前・importが残っていないことをgit grepで確認。backend・launcherは無変更で、空白検出・保存データ・APIを維持する。
+- 操作/テスト: 通常の再生バー、字幕行からのシーク・一時停止、停止位置への字幕追加、字幕編集・確定は維持。`frontend/tests/subtitleGaps.test.ts`を削除後の回帰テストへ変更し、通常/ショート×正式/簡易プレビューの描画でマーカー/説明がないこと、backendからgapsが届いても省略されても・確認済みフラグが違っても表示が同じであることを検証。実際の再生コントロールの関数と入力イベントを通して通常のシーク/字幕追加の接続も確認した。
+- 検証: frontend lint・typecheck・全34テスト・build成功（Windows）。backend/launcher/scriptsのRuff 0.16.10も成功。backend全件はPRのPython 3.11/3.12 CIで確認する。専用DB/Redis/18184・13184ポートの隔離Composeでbackend/frontend起動、/health・/upload・字幕確認ページのHTTP 200を確認。HTTP 200は起動確認であり、マーカー削除の確認は上記の実コンポーネントの描画テストによる。
+- 未確認/運用: ブラウザでの目視・実動画での確認、稼働環境への反映は未実施。稼働DB/ジョブ/コンテナは変更せず、検証コンテナ・ネットワーク・専用frontendイメージは片付け済み。PRのCIを確認後、未マージでレビュー待ちとする。
