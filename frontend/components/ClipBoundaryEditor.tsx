@@ -9,8 +9,9 @@ import {
   splitBoundaryTime,
   type BoundaryTimeParts
 } from "../lib/clipBoundaryTime";
-import type { ClipPlanClip } from "../lib/types";
-import { clipBodyDuration, effectiveShortMax, SHORT_MAX_DEFAULT_SECONDS, validateClipDuration, longformLabel, shortDurationLimitLabel } from "../lib/durationRules";
+import type { ClipPlanClip, ExportType } from "../lib/types";
+import { SHORT_MAX_DEFAULT_SECONDS, longformLabel, shortDurationLimitLabel } from "../lib/durationRules";
+import { clipRangeType } from "../lib/clipRangeType";
 
 type ClipBoundaryEditorProps = {
   clip: ClipPlanClip;
@@ -18,14 +19,16 @@ type ClipBoundaryEditorProps = {
   shortMaxDuration?: number;
   disabled?: boolean;
   saving?: boolean;
+  allowTypeChange?: boolean;
   onDraftChange?: (draft: ClipBoundaryDraft | null) => void;
-  onSave: (start: number, end: number) => void;
+  onSave: (start: number, end: number, type: ExportType) => void;
 };
 
 export type ClipBoundaryDraft = {
   clipId: string;
   start: number;
   end: number;
+  type?: ExportType;
 };
 
 const QUICK_ADJUSTMENTS = [1, 5, 15, 30] as const;
@@ -106,6 +109,7 @@ export function ClipBoundaryEditor({
   sourceDuration,
   disabled = false,
   saving = false,
+  allowTypeChange = true,
   shortMaxDuration = SHORT_MAX_DEFAULT_SECONDS,
   onDraftChange,
   onSave
@@ -116,6 +120,8 @@ export function ClipBoundaryEditor({
   const [endParts, setEndParts] = useState(() => splitBoundaryTime(clip.end));
   const start = combineBoundaryTime(startParts);
   const end = combineBoundaryTime(endParts);
+  const [preferredType, setPreferredType] = useState<ExportType>(clip.type);
+  const choice = clipRangeType(preferredType, (end ?? 0) - (start ?? 0), shortMaxDuration, allowTypeChange);
 
   const validation = useMemo(() => {
     if (start === null || end === null) {
@@ -127,13 +133,13 @@ export function ClipBoundaryEditor({
     if (sourceDuration !== null && end > sourceDuration + 0.001) {
       return `元動画の長さ ${formatTime(sourceDuration)} を超えています`;
     }
-    return validateClipDuration(clip.type, clipBodyDuration(start, end), effectiveShortMax(shortMaxDuration));
-  }, [clip.type, end, shortMaxDuration, sourceDuration, start]);
+    return choice.error;
+  }, [choice.error, end, sourceDuration, start]);
   const changed =
     start !== null &&
     end !== null &&
     (Math.abs(start - clip.start) >= 0.0005 ||
-      Math.abs(end - clip.end) >= 0.0005);
+      Math.abs(end - clip.end) >= 0.0005 || choice.type !== clip.type);
   const draftDuration =
     start !== null && end !== null && end > start ? end - start : null;
 
@@ -148,9 +154,10 @@ export function ClipBoundaryEditor({
     onDraftChange({
       clipId: clip.id,
       start,
-      end
+      end,
+      type: choice.type
     });
-  }, [clip.id, end, onDraftChange, start, validation]);
+  }, [choice.type, clip.id, end, onDraftChange, start, validation]);
 
   function replaceStart(value: number) {
     setStartParts(splitBoundaryTime(clampStartBoundary(value, end)));
@@ -184,6 +191,14 @@ export function ClipBoundaryEditor({
           </span>
         ) : null}
       </div>
+
+      {allowTypeChange ? <label className="mt-2 block text-xs font-semibold">種類
+        <select aria-label="保存する種類" className="ml-2 border p-1" disabled={disabled} value={choice.type}
+          onChange={event => setPreferredType(event.target.value as ExportType)}>
+          <option value="short">ショート</option><option value="normal">通常切り抜き</option>
+        </select>
+      </label> : null}
+      {choice.type !== clip.type ? <p className="mt-1 text-xs text-blue-800">種類と範囲をまとめて保存します。フック映像は外れます。</p> : null}
 
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         <div>
@@ -277,7 +292,7 @@ export function ClipBoundaryEditor({
             <p className="font-semibold text-neutral-950">
               変更後: {start === null ? "--" : formatTime(start)} -{" "}
               {end === null ? "--" : formatTime(end)}
-              {draftDuration !== null && longformLabel(clip.type, draftDuration)}
+              {draftDuration !== null && longformLabel(choice.type, draftDuration)}
               {draftDuration === null
                 ? ""
                 : `（長さ ${formatTime(draftDuration)}）`}
@@ -298,15 +313,17 @@ export function ClipBoundaryEditor({
               type="button"
               onClick={() => {
                 if (start !== null && end !== null && !validation) {
-                  onSave(start, end);
+                  onSave(start, end, choice.type);
                 }
               }}
             >
-              {saving ? "プレビュー更新中" : "この範囲でプレビュー更新"}
+              {saving ? "プレビュー更新中" : choice.type !== clip.type
+                ? `${choice.type === "normal" ? "通常切り抜き" : "ショート"}として保存` : "この範囲でプレビュー更新"}
             </button>
           </div>
         </div>
-        {clip.type === "short" ? <p className="mt-1 text-xs text-neutral-500">{shortDurationLimitLabel(shortMaxDuration)}</p> : null}
+        {choice.type === "short" ? <p className="mt-1 text-xs text-neutral-500">{shortDurationLimitLabel(shortMaxDuration)}</p> : null}
+        {changed ? <p className="mt-1 text-xs text-amber-800">プレビュー映像は保存すると更新されます。</p> : null}
         {validation ? (
           <p className="mt-1 text-xs font-medium leading-4 text-red-700">{validation}</p>
         ) : (

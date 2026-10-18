@@ -1,5 +1,5 @@
 "use client";
-import { durationSettingsError, effectiveShortMax, validateClipDuration, longformLabel, shortDurationLimitLabel } from "../../../../lib/durationRules";
+import { durationSettingsError, longformLabel } from "../../../../lib/durationRules";
 
 import { isAIAllocation, remainingClipSlots, allocationLabel, allocationSettingsError, shortageLabels } from "../../../../lib/clipAllocation";
 import Link from "next/link";
@@ -29,7 +29,6 @@ import {
   toApiUrl,
   updateClipPlanBoundary,
   updateClipPlanHookScene,
-  updateClipPlanType,
   updateManualClipPlanClip
 } from "../../../../lib/api";
 import type {
@@ -109,7 +108,6 @@ export default function ClipPlanReviewPage() {
   const [isCreatingManualClip, setIsCreatingManualClip] = useState(false);
   const [isDeletingManualClip, setIsDeletingManualClip] = useState(false);
   const [isUpdatingHookScene, setIsUpdatingHookScene] = useState(false);
-  const [isUpdatingClipType, setIsUpdatingClipType] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   const [previewPlayheadSourceTime, setPreviewPlayheadSourceTime] = useState(0);
   const [boundaryDraft, setBoundaryDraft] = useState<ClipBoundaryDraft | null>(
@@ -402,7 +400,6 @@ export default function ClipPlanReviewPage() {
     isCreatingManualClip ||
     isDeletingManualClip ||
     isUpdatingHookScene ||
-    isUpdatingClipType ||
     isApproving ||
     !planIsEditable;
 
@@ -448,14 +445,14 @@ export default function ClipPlanReviewPage() {
     };
   }, [isApproving, isManualWorkflow, jobId, router]);
 
-  async function handleBoundaryUpdate(start: number, end: number) {
+  async function handleBoundaryUpdate(start: number, end: number, type: ExportType) {
     if (!selectedClip) {
       return;
     }
     setError(null);
     setIsAdjusting(true);
     try {
-      await updateClipPlanBoundary(jobId, selectedClip.id, { start, end });
+      await updateClipPlanBoundary(jobId, selectedClip.id, { start, end, type });
       setJob((current) =>
         current
           ? {
@@ -490,7 +487,7 @@ export default function ClipPlanReviewPage() {
     }
   }
 
-  async function handleManualBoundaryUpdate(start: number, end: number) {
+  async function handleManualBoundaryUpdate(start: number, end: number, type: ExportType) {
     if (!selectedClip) {
       return;
     }
@@ -499,7 +496,8 @@ export default function ClipPlanReviewPage() {
     try {
       const document = await updateManualClipPlanClip(jobId, selectedClip.id, {
         start,
-        end
+        end,
+        type
       });
       setPlan(document);
       setDraftSettings(document.settings);
@@ -561,36 +559,6 @@ export default function ClipPlanReviewPage() {
         caught instanceof Error
           ? caught.message
           : "冒頭フック映像を更新できませんでした"
-      );
-    }
-  }
-
-  async function handleConvertType(type: ExportType) {
-    if (!selectedClip || selectedClip.type === type || controlsDisabled) {
-      return;
-    }
-    if (!selectedBoundaryDraft ||
-        Math.abs(selectedBoundaryDraft.start - selectedClip.start) >= 0.0005 ||
-        Math.abs(selectedBoundaryDraft.end - selectedClip.end) >= 0.0005) {
-      setError("開始・終了の変更を「この範囲でプレビュー更新」で反映してから種別を変更してください。");
-      return;
-    }
-    setError(null);
-    setIsUpdatingClipType(true);
-    try {
-      const document = await updateClipPlanType(jobId, selectedClip.id, {
-        type
-      });
-      setPlan(document);
-      setDraftSettings(document.settings);
-      setPreviewPlayheadSourceTime(selectedClip.start);
-      setIsUpdatingClipType(false);
-    } catch (caught) {
-      setIsUpdatingClipType(false);
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "動画の種別を変更できませんでした"
       );
     }
   }
@@ -787,7 +755,7 @@ export default function ClipPlanReviewPage() {
           onDelete={(clipId) => void handleManualClipDelete(clipId)}
           onHookSceneUpdate={(start, end) => void handleHookSceneUpdate(start, end)}
           onSelect={setSelectedClipId}
-          onUpdate={(start, end) => void handleManualBoundaryUpdate(start, end)}
+          onUpdate={(start, end, type) => void handleManualBoundaryUpdate(start, end, type)}
         />
       ) : (
 
@@ -888,43 +856,26 @@ export default function ClipPlanReviewPage() {
                         clip種別: {selectedClip.type === "short" ? "ショート" : "通常切り抜き"}
                       </p>
                       <p className="mt-1 text-xs text-neutral-600">
-                        {selectedClip.type === "short"
-                          ? "範囲とタイトルを維持したまま、通常切り抜きへ変更できます。"
-                          : `ショートへ変更できます。${shortDurationLimitLabel(plan.settings.shortMaxDuration ?? 75)}を超える場合は範囲を調整してください。`}
+                        {plan.boundaryReedit ? "字幕編集から戻った場合は尺だけ変更できます。"
+                          : "下の範囲編集で、種類と開始・終了をまとめて変更できます。"}
                       </p>
-                      {!isManualWorkflow && !plan.boundaryReedit && validateClipDuration(
-                        selectedClip.type === "short" ? "normal" : "short", selectedClip.end - selectedClip.start,
-                        effectiveShortMax(plan.settings.shortMaxDuration)) ? <p className="mt-1 text-xs text-red-700">
-                        {validateClipDuration(selectedClip.type === "short" ? "normal" : "short",
-                          selectedClip.end - selectedClip.start, effectiveShortMax(plan.settings.shortMaxDuration))}
-                      </p> : null}
                     </div>
-                    {!isManualWorkflow && !plan.boundaryReedit ? (
-                      <button
-                        className="min-h-9 border border-neutral-900 bg-white px-3 py-2 text-xs font-semibold text-neutral-950 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
-                        disabled={controlsDisabled || validateClipDuration(selectedClip.type === "short" ? "normal" : "short",
-                          selectedClip.end - selectedClip.start, effectiveShortMax(plan.settings.shortMaxDuration)) !== null}
-                        type="button"
-                        onClick={() => void handleConvertType(selectedClip.type === "short" ? "normal" : "short")}
-                      >
-                        {isUpdatingClipType ? "変更中…" : selectedClip.type === "short" ? "通常切り抜きに変更" : "ショートに変更"}
-                      </button>
-                    ) : null}
                   </div>
                   <ClipBoundaryEditor
                     clip={selectedClip}
                     disabled={controlsDisabled}
                     key={`${selectedClip.id}-${selectedClip.type}-${selectedClip.start}-${selectedClip.end}`}
                     saving={isAdjusting}
+                    allowTypeChange={!plan.boundaryReedit}
                     sourceDuration={plan.sourceDuration}
                     shortMaxDuration={plan.settings.shortMaxDuration}
                     onDraftChange={handleBoundaryDraftChange}
-                    onSave={(start, end) =>
-                      void handleBoundaryUpdate(start, end)
+                    onSave={(start, end, type) =>
+                      void handleBoundaryUpdate(start, end, type)
                     }
                   />
 
-                  {selectedClip.type === "short" && !plan.boundaryReedit ? (
+                  {selectedClip.type === "short" && (selectedBoundaryDraft?.type ?? selectedClip.type) === "short" && !plan.boundaryReedit ? (
                     <>
                     <ClipHookSceneEditor
                       clip={selectedClip}

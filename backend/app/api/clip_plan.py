@@ -168,7 +168,7 @@ def _validate_manual_clip_range(
     if end > source_duration + 0.001:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="clip end exceeds source video duration",
+            detail="元動画の長さを超えています。",
         )
     _validate_proposed_duration(clip_type, start, end, document.settings, hook_start, hook_end)
 
@@ -292,6 +292,8 @@ def update_manual_clip(
         hook_start=current.hook_scene_start, hook_end=current.hook_scene_end,
     )
     payload = current.model_dump()
+    if clip_type != current.type:
+        payload.update(hook_scene_start=None, hook_scene_end=None)
     payload.update(
         {
             "type": clip_type,
@@ -590,23 +592,38 @@ def update_clip_plan_clip_boundary(
     if request.end > source_duration + 0.001:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="clip end exceeds source video duration",
+            detail="元動画の長さを超えています。",
         )
+    target_type = request.type or planned_clip.type
+    type_changed = target_type != planned_clip.type
+    if type_changed and document.boundary_reedit:
+        raise HTTPException(status.HTTP_409_CONFLICT, "字幕編集から戻った場合は尺だけ変更できます。")
+    if type_changed:
+        proposed = [clip.model_copy(update={"type": target_type}) if clip.id == clip_id else clip for clip in document.clips]
+        try:
+            validate_manual_clip_counts(proposed)
+        except ValueError as exc:
+            raise HTTPException(422, "通常切り抜きは12本、ショートは24本までです。") from exc
     _validate_proposed_duration(
-        planned_clip.type, request.start, request.end, dict(job.settings_json or {}),
+        target_type, request.start, request.end, dict(job.settings_json or {}),
         planned_clip.hook_scene_start, planned_clip.hook_scene_end,
     )
     if (
-        planned_clip.hook_scene_start is not None
+        not type_changed and planned_clip.hook_scene_start is not None
         and planned_clip.hook_scene_end is not None
         and (request.start > planned_clip.hook_scene_start + 0.001 or request.end < planned_clip.hook_scene_end - 0.001)
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="clip boundary must continue to contain the hook scene",
+            detail="フック映像が範囲から外れます。フック映像を外すか範囲を調整してください。",
         )
 
     if manual_edit:
+        if type_changed:
+            if target_type == "normal":
+                convert_clip_plan_clip_to_normal(document, clip_id)
+            else:
+                convert_clip_plan_clip_to_short(document, clip_id)
         update_clip_plan_boundary(
             document,
             clip_id,
@@ -640,12 +657,10 @@ def update_clip_plan_clip_boundary(
         db.commit()
         raise
     try:
-        enqueue_boundary_update(
-            job.id,
-            clip_id,
-            request.start,
-            request.end,
-        )
+        if type_changed:
+            enqueue_boundary_update(job.id, clip_id, request.start, request.end, clip_type=target_type)
+        else:
+            enqueue_boundary_update(job.id, clip_id, request.start, request.end)
     except Exception as exc:
         job.status = "awaiting_clip_review"
         job.progress = PROGRESS_MAP["awaiting_clip_review"]

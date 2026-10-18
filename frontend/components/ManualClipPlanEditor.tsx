@@ -1,5 +1,6 @@
 "use client";
 import { clipBodyDuration, effectiveShortMax, validateClipDuration, shortDurationLimitLabel } from "../lib/durationRules";
+import { clipRangeType } from "../lib/clipRangeType";
 
 import { useMemo, useRef, useState } from "react";
 
@@ -25,7 +26,7 @@ type ManualClipPlanEditorProps = {
   onDelete: (clipId: string) => void;
   onHookSceneUpdate: (start: number | null, end: number | null) => void;
   onSelect: (clipId: string) => void;
-  onUpdate: (start: number, end: number) => void;
+  onUpdate: (start: number, end: number, type: ExportType) => void;
 };
 
 type TimeParts = {
@@ -184,6 +185,7 @@ export function ManualClipPlanEditor({
   const playbackUrl = toApiUrl(plan.editorVideoUrl ?? plan.sourceVideoUrl);
   const subtitleMode = plan.settings.manualSubtitleMode ?? "auto";
   const editing = selectedClip !== null;
+  const choice = clipRangeType(draftType, duration ?? 0, plan.settings.shortMaxDuration ?? 75, editing);
   const validation = useMemo(() => {
     if (start === null || end === null) {
       return "分と秒を正しく入力してください";
@@ -194,10 +196,8 @@ export function ManualClipPlanEditor({
     if (sourceDuration !== null && end > sourceDuration + 0.001) {
       return `元動画の長さ ${formatTime(sourceDuration)} を超えています`;
     }
-    const outputType = selectedClip?.type ?? draftType;
-    return validateClipDuration(outputType, clipBodyDuration(start, end), effectiveShortMax(plan.settings.shortMaxDuration));
-  }, [draftType, end, plan.settings.shortMaxDuration,
-    selectedClip?.type, sourceDuration, start]);
+    return editing ? choice.error : validateClipDuration(draftType, clipBodyDuration(start, end), effectiveShortMax(plan.settings.shortMaxDuration));
+  }, [choice.error, editing, draftType, end, plan.settings.shortMaxDuration, sourceDuration, start]);
 
   function beginCreate(type: ExportType) {
     const startAt = Math.min(playhead, Math.max(0, (sourceDuration ?? playhead) - 1));
@@ -274,7 +274,7 @@ export function ManualClipPlanEditor({
       return;
     }
     if (selectedClip) {
-      onUpdate(start, end);
+      onUpdate(start, end, choice.type);
     } else {
       onCreate(draftType, start, end);
     }
@@ -411,7 +411,7 @@ export function ManualClipPlanEditor({
           </div>
         </div>
 
-        {selectedClip ? (
+        {selectedClip?.type === "short" && choice.type === "short" ? (
           <ClipHookSceneEditor
             clip={selectedClip}
             compact
@@ -436,8 +436,18 @@ export function ManualClipPlanEditor({
           </h2>
           <p className="mt-1 text-xs leading-5 text-neutral-600">
             動画を再生し、現在位置ボタンか分・秒入力で範囲を決めます。
+            入力した範囲は「この範囲を再生」で確認できます。種類は保存時に反映されます。
           </p>
         </div>
+
+        {editing ? <label className="mt-3 block text-xs font-semibold">種類
+          <select aria-label="保存する種類" className="ml-2 border p-1" disabled={disabled} value={choice.type}
+            onChange={event => setDraftType(event.target.value as ExportType)}>
+            <option value="short">ショート</option><option value="normal">通常切り抜き</option>
+          </select>
+        </label> : null}
+        {selectedClip && choice.type !== selectedClip.type ?
+          <p className="mt-1 text-xs text-blue-800">種類と範囲をまとめて保存します。フック映像は外れます。</p> : null}
 
         <div className="mt-4 grid gap-4">
           <TimeInput
@@ -463,7 +473,7 @@ export function ManualClipPlanEditor({
           </p>
         </div>
 
-        {(selectedClip?.type ?? draftType) === "short" ? <p className="mt-2 text-xs text-neutral-500">
+        {choice.type === "short" ? <p className="mt-2 text-xs text-neutral-500">
           {shortDurationLimitLabel(plan.settings.shortMaxDuration ?? 75)}
         </p> : null}
         {validation ? <p className="mt-3 text-xs font-semibold text-red-700">{validation}</p> : null}
@@ -486,7 +496,7 @@ export function ManualClipPlanEditor({
             {isSaving
               ? "保存中"
               : editing
-                ? "この範囲に更新"
+                ? choice.type !== selectedClip.type ? `${choice.type === "normal" ? "通常切り抜き" : "ショート"}として保存` : "この範囲に更新"
                 : `${draftType === "normal" ? "通常clip" : "ショート"}として追加`}
           </button>
           {selectedClip ? (

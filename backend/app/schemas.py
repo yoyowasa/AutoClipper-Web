@@ -853,6 +853,7 @@ class ClipPlanReselectionRequest(BaseModel):
 class ClipPlanBoundaryUpdateRequest(BaseModel):
     start: float = Field(ge=0)
     end: float = Field(gt=0)
+    type: Literal["normal", "short"] | None = None
 
     @model_validator(mode="after")
     def validate_range(self) -> "ClipPlanBoundaryUpdateRequest":

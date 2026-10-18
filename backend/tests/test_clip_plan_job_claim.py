@@ -19,15 +19,17 @@ from test_api_routes import client as client
 from test_clip_plan_type_conversion import seed_plan
 
 
-@pytest.mark.parametrize("action", ["boundary", "hook-scene", "reselect", "type"])
+@pytest.mark.parametrize("action", ["boundary", "boundary-conversion", "hook-scene", "reselect", "type"])
 def test_clip_plan_action_claim_rejects_second_request_before_writing(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, action: str  # noqa: F811
 ) -> None:
     job_id, output = seed_plan(client)
-    if action == "boundary":
+    if action in {"boundary", "boundary-conversion"}:
         method = client.patch
         url = f"/api/jobs/{job_id}/clip-plan/clips/normal0/boundary"
         payload = {"start": 1, "end": 91}
+        if action == "boundary-conversion":
+            payload = {"start": 0, "end": 70, "type": "short"}
         dependency = get_enqueue_clip_plan_boundary_update
     elif action == "hook-scene":
         method = client.patch
@@ -55,7 +57,7 @@ def test_clip_plan_action_claim_rejects_second_request_before_writing(
 
     queued: list[tuple[object, ...]] = []
     if dependency is not None:
-        app.dependency_overrides[dependency] = lambda: lambda *args: queued.append(args)
+        app.dependency_overrides[dependency] = lambda: lambda *args, **kwargs: queued.append(args)
     claimed = Event()
     release = Event()
     original_claim = clip_plan_api._claim_job_status
