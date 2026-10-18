@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -55,6 +56,7 @@ def test_return_preserves_approved_selection_discards_review_and_rebuilds(client
     assert response.status_code == 200, response.text
     plan = load_clip_plan(data.output / "clip_plan.json")
     assert plan.state == "awaiting_review" and plan.boundary_reedit is False
+    assert datetime.fromisoformat(plan.updated_at).utcoffset() is not None
     assert plan.clips == data.plan.clips
     assert json.loads((data.output / "selected_clips.json").read_text(encoding="utf-8")) == original_selection
     assert preview.read_bytes() == b"clip plan preview to retain"

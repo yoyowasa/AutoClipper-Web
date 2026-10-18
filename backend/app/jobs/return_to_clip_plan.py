@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -53,7 +54,7 @@ def discard_review_and_restore_plan(
         plan.state = "awaiting_review"
         plan.boundary_reedit = False
         plan.subtitle_review_generation = uuid4().hex
-        plan.updated_at = utc_now().isoformat()
+        plan.updated_at = datetime.now(UTC).isoformat()
         write_clip_plan(plan, plan_path)
         write_selected_clips(selection, selected_path)
         # Before approval this is the exact settings snapshot; older plans store it in settings.
