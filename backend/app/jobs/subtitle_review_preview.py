@@ -349,7 +349,8 @@ def load_subtitle_review_preview_inputs(
         overlay_title_expected=review_clip.overlay_title_expected,
         transcript_segments=reviewed_segments,
         settings=dict(job.settings_json or {}),
-        source_fingerprint=subtitle_review_source_fingerprint(video, source_path),
+        source_fingerprint=subtitle_review_source_fingerprint(video, source_path)
+        + (f":review:{document.preview_generation}" if document.preview_generation else ""),
         source_width=video.width,
         source_height=video.height,
     )

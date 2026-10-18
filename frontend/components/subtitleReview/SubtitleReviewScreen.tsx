@@ -7,7 +7,7 @@ import { ReviewTextStyles } from "./ReviewStyleFraming";
 import { ReviewContentEditor } from "./ReviewContentEditor";
 import { ReviewPreview } from "./ReviewPreview";
 import { ReviewClipList } from "./ReviewClipList";
-import { ReviewBoundaryReeditButton } from "./ReviewActions";
+import { ReviewBoundaryReeditButton, ReviewReturnToClipPlanButton } from "./ReviewActions";
 
 export function SubtitleReviewScreen({ model }: { model: SubtitleReviewContext }) {
   const { review, error, jobId, workspaceTab, setWorkspaceTab, selectedClip, hasReviewMutationInFlight } = model;
@@ -48,6 +48,7 @@ export function SubtitleReviewScreen({ model }: { model: SubtitleReviewContext }
                 : "書き出し中"}
           </span>
           {review.state === "awaiting_review" && <ReviewBoundaryReeditButton context={context} />}
+          {review.state === "awaiting_review" && <ReviewReturnToClipPlanButton context={context} />}
           <Link
             className="ml-auto inline-flex min-h-9 items-center border border-neutral-300 bg-white px-3 text-xs font-medium sm:text-sm"
             href={`/jobs/${jobId}`}

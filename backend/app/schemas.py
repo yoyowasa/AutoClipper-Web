@@ -917,6 +917,10 @@ class ClipPlanHookSceneUpdateRequest(BaseModel):
         return self
 
 
+class ClipPlanApprovalRequest(BaseModel):
+    kept_clip_ids: list[str] | None = Field(default=None, max_length=36, alias="keptClipIds")
+
+
 class ClipPlanActionResponse(BaseModel):
     job_id: str = Field(alias="jobId")
     status: JobStatus

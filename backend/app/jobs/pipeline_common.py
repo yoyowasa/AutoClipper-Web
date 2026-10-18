@@ -591,6 +591,7 @@ def _prepare_clip_plan_review(
     )
     output_path = clip_plan_output_path(job_dir)
     if kept_plan is not None:
+        document.subtitle_review_generation = kept_plan.subtitle_review_generation
         kept_ids = set(settings.get("keptClipIds", []))
         kept_by_id = {clip.id: clip for clip in kept_plan.clips if clip.id in kept_ids}
         document.clips = [kept_by_id[clip.id].model_copy(deep=True) if clip.id in kept_by_id else clip

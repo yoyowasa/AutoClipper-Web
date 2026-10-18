@@ -1,6 +1,7 @@
 import hashlib
 import json
 import mimetypes
+from app.jobs.manual_workflow import is_manual_workflow
 from app.thumbnail_style import resolve_thumbnail_text_styles
 from app.short_banners import banner_asset_path, resolve_banner_path
 import shutil
@@ -1801,6 +1802,7 @@ def get_subtitle_review(
         db.refresh(job)
         document = _get_subtitle_review_or_404(job_id, paths)
         if job.status == "awaiting_subtitle_review" and document.state == "awaiting_review":
+            document.return_to_clip_plan_allowed = not is_manual_workflow(dict(job.settings_json or {}))
             document, settings_changed = _hydrate_subtitle_review_render_settings(
                 document,
                 job,
@@ -2979,6 +2981,7 @@ def apply_subtitle_review_clip(
             generate_exact=True,
         )
         document = confirm_review_clip(document, clip_id)
+        document.has_saved_review_changes = True
         _write_subtitle_review_unlocked(document, paths)
         document, auto_render_queued = _prepare_auto_review_render_unlocked(
             db=db,

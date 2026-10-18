@@ -543,6 +543,9 @@ export type SubtitleReviewClip = {
 };
 
 export type SubtitleReviewDocument = {
+  previewGeneration?: string | null;
+  hasSavedReviewChanges?: boolean | null;
+  returnToClipPlanAllowed?: boolean;
   version: number;
   jobId: string;
   state: "awaiting_review" | "render_queued" | "rendering" | "completed";

@@ -96,6 +96,8 @@ class ClipPlanDocument(BaseModel):
     state: ClipPlanState = "preparing"
     revision: int = Field(default=1, ge=1)
     boundary_reedit: bool = Field(default=False, alias="boundaryReedit")
+    subtitle_review_generation: str | None = Field(default=None, alias="subtitleReviewGeneration")
+    review_entry_settings: dict[str, Any] | None = Field(default=None, alias="reviewEntrySettings")
     source_video_url: str = Field(alias="sourceVideoUrl")
     editor_video_url: str | None = Field(default=None, alias="editorVideoUrl")
     source_duration: float | None = Field(

@@ -123,6 +123,7 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   confirmSelectedClip: () => Promise<void>;
   startRendering: () => Promise<void>;
   returnToBoundaryEditor: () => Promise<void>;
+  returnToClipPlan: () => Promise<void>;
 };
 
 export type SubtitleReviewViewContext = SubtitleReviewContext & { review: SubtitleReviewDocument; allConfirmed: boolean };

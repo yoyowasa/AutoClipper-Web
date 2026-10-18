@@ -68,6 +68,7 @@ from app.models import ClipRejection, Job, Video
 from app.models import utc_now
 from app.schemas import (
     ClipPlanActionResponse,
+    ClipPlanApprovalRequest,
     ClipPlanBoundaryUpdateRequest,
     ClipPlanHookSceneUpdateRequest,
     ClipPlanReselectionRequest,
@@ -919,6 +920,35 @@ def reselect_clip_plan(
     return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
 @router.post(
+    "/{job_id}/subtitle-review/return-to-clip-plan",
+    response_model=ClipPlanActionResponse,
+)
+def return_subtitle_review_to_clip_plan(
+    job_id: str,
+    db: Session = Depends(get_db),
+    paths: StoragePaths = Depends(get_storage_paths),
+) -> ClipPlanActionResponse:
+    from app.jobs.return_to_clip_plan import discard_review_and_restore_plan
+
+    job = _get_job_or_404(db, job_id)
+    output = paths.job_outputs(job_id)
+    with subtitle_review_document_lock(output):
+        db.refresh(job)
+        if is_manual_workflow(dict(job.settings_json or {})):
+            raise HTTPException(409, "手動ワークフローは切り抜き確認へ戻す対象外です。")
+        if job.status != "awaiting_subtitle_review":
+            raise HTTPException(409, "字幕確認中だけ戻れます。書き出し中・完了後は戻れません。")
+        if not clip_plan_output_path(output).is_file():
+            raise HTTPException(409, "この動画には戻れる切り抜き計画がありません。")
+        review = _get_subtitle_review_or_404(job_id, paths)
+        plan = _get_clip_plan_or_404(job_id, paths)
+        if review.state != "awaiting_review" or plan.state != "approved":
+            raise HTTPException(409, "字幕確認と承認済みの切り抜き計画が揃った状態でだけ戻れます。")
+        discard_review_and_restore_plan(db, job, plan, review, output)
+    return ClipPlanActionResponse(jobId=job.id, status=job.status)
+
+
+@router.post(
     "/{job_id}/subtitle-review/reopen-clip-plan",
     response_model=ClipPlanActionResponse,
 )
@@ -968,6 +998,7 @@ def reopen_clip_plan_for_boundary_reedit(
 )
 def approve_clip_plan(
     job_id: str,
+    request: ClipPlanApprovalRequest | None = None,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
     enqueue_job: JobEnqueue = Depends(get_enqueue_job),
@@ -1054,6 +1085,12 @@ def approve_clip_plan(
         )
     document = _get_clip_plan_or_404(job_id, paths)
     output_dir = paths.job_outputs(job_id)
+    if request is not None and request.kept_clip_ids is not None and not document.boundary_reedit:
+        if not set(request.kept_clip_ids).issubset({clip.id for clip in document.clips}):
+            raise HTTPException(422, "キープするclipが切り抜き計画にありません。")
+        kept_ids = list(dict.fromkeys(request.kept_clip_ids))
+        document.settings = {**document.settings, "keptClipIds": kept_ids}
+        job.settings_json = {**dict(job.settings_json or {}), "keptClipIds": kept_ids}
     selected_payload = _read_json_if_exists(output_dir / "selected_clips.json")
     transcript_payload = _read_json_if_exists(output_dir / "transcript_segments.json")
     if not isinstance(selected_payload, dict) or not isinstance(
@@ -1089,6 +1126,9 @@ def approve_clip_plan(
             review_document = retain_review_after_boundary_reedit(previous_review, review_document)
         except ValueError as exc:
             raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    else:
+        document.review_entry_settings = dict(job.settings_json or {})
+    review_document.preview_generation = document.subtitle_review_generation
     planned_titles = {clip.id: clip.title for clip in document.clips}
     if not document.boundary_reedit:
         for clip in review_document.clips:

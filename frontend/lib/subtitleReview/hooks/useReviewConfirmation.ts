@@ -1,8 +1,9 @@
 "use client";
 
-import { applySubtitleReviewClip, finalizeSubtitleReview, reopenClipPlanForBoundaryReedit } from "../../api";
+import { applySubtitleReviewClip, finalizeSubtitleReview, reopenClipPlanForBoundaryReedit, returnSubtitleReviewToClipPlan } from "../../api";
 import { postMetadataApplyPayload } from "../../youtubePosting";
-import { writeReviewDraft } from "../draftStorage";
+import { writeReviewDraft, clearJobReviewDrafts } from "../draftStorage";
+import { returnToClipPlanMessage } from "../returnToClipPlan";
 import { validateClipDuration, validateHookSceneDuration } from "../../durationRules";
 import { contentDraftForClip } from "../drafts";
 import type { SubtitleReviewContext } from "./context";
@@ -201,5 +202,35 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
       endReviewMutation();
     }
   }
-  return { confirmSelectedClip, startRendering, returnToBoundaryEditor };
+  async function returnToClipPlan() {
+    const { review, isEditable, hasReviewMutationInFlight, jobId, router, setError, beginReviewMutation,
+      endReviewMutation, setIsReturningToClipPlan, setReview, setDrafts, setDirtySegmentIds,
+      setClipContentDrafts, setShortFramingDrafts, dirtySegmentIds, hasDirtyClipContent, hasDirtyShortFraming } = context;
+    if (!review || !isEditable || hasReviewMutationInFlight) return;
+    if (review.returnToClipPlanAllowed === false) {
+      setError("手動ワークフローは切り抜き確認へ戻す対象外です。");
+      return;
+    }
+    if (!window.confirm(returnToClipPlanMessage(review, dirtySegmentIds.size > 0 || hasDirtyClipContent || hasDirtyShortFraming))) return;
+    beginReviewMutation();
+    setIsReturningToClipPlan(true);
+    setError(null);
+    try {
+      await returnSubtitleReviewToClipPlan(jobId);
+      // Stop persistence before clearing all clips, including drafts of removed clips.
+      setReview(null);
+      setDrafts({});
+      setDirtySegmentIds(new Set());
+      setClipContentDrafts({});
+      setShortFramingDrafts({});
+      clearJobReviewDrafts(jobId);
+      router.push(`/jobs/${jobId}/clips`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "切り抜き確認に戻れませんでした。");
+    } finally {
+      setIsReturningToClipPlan(false);
+      endReviewMutation();
+    }
+  }
+  return { confirmSelectedClip, startRendering, returnToBoundaryEditor, returnToClipPlan };
 }
