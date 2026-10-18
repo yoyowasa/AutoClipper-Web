@@ -240,7 +240,7 @@ def test_pipeline_repairs_once_before_postprocess_and_continues_on_failure(clien
             events.append("repair")
             if repair_failure:
                 raise RuntimeError("fake failure")
-            return [*baseline, segment(211, 220, "gaprepair", repaired=True,
+            return [*baseline, segment(211, 220, "gaprepair…", repaired=True,
                                       repairWindows=[{"start": 208, "end": 224}])], {"status": "completed"}
 
     original_postprocess = runner.postprocess_transcript_segments
@@ -275,7 +275,7 @@ def test_pipeline_repairs_once_before_postprocess_and_continues_on_failure(clien
     raw = json.loads((output / "raw_transcript_segments.json").read_text(encoding="utf-8"))
     saved = json.loads((output / "transcript_segments.json").read_text(encoding="utf-8"))
     if not repair_failure and not silence_failure:
-        assert raw[-1]["text"] == "gaprepair" and saved[-1]["text"] == "afterpostprocess"
+        assert raw[-1]["text"] == "gaprepair…" and saved[-1]["text"] == "afterpostprocess"
         assert raw[-1]["repaired"] and saved[-1]["repaired"]
     else:
         assert len(raw) == len(fake_transcript())
