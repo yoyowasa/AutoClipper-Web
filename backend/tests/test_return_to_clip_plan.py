@@ -180,8 +180,10 @@ def test_return_file_failure_rolls_back_without_losing_review(client, monkeypatc
     else:
         from sqlalchemy.orm import Session
         monkeypatch.setattr(Session, "commit", lambda *a: (_ for _ in ()).throw(OSError("synthetic")))
-    with pytest.raises(OSError, match="synthetic"):
-        client.post(data.endpoint)
+    response = client.post(data.endpoint)
+    assert response.status_code == 409
+    assert "切り抜き確認へ戻せませんでした" in response.json()["detail"]
+    assert "synthetic" not in response.text
     assert all((data.output / name).read_bytes() == content for name, content in before.items())
     assert not list(data.output.glob(".discarded-review-*"))
     with data.factory() as db:
