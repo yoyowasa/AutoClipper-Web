@@ -626,7 +626,7 @@ export default function ClipPlanReviewPage() {
     setError(null);
     setIsApproving(true);
     try {
-      const action = await approveClipPlan(jobId);
+      const action = await approveClipPlan(jobId, !isManualWorkflow && !plan?.boundaryReedit ? { keptClipIds } : undefined);
       if (isManualWorkflow) {
         setJob((current) =>
           current

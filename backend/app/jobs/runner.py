@@ -1568,6 +1568,7 @@ def _prepare_auto_render_after_preview(
     job: Job,
     video: Video,
     storage_paths: StoragePaths,
+    expected_review: SubtitleReviewDocument | None = None,
 ) -> int | None:
     job_dir = storage_paths.job_outputs(job.id)
     review_path = subtitle_review_output_path(job_dir)
@@ -1576,6 +1577,10 @@ def _prepare_auto_render_after_preview(
         if job.status != "awaiting_subtitle_review":
             return None
         document = load_subtitle_review(review_path)
+        if expected_review is not None and (
+            document.created_at != expected_review.created_at or document.preview_generation != expected_review.preview_generation
+        ):
+            return None
         if document.state != "awaiting_review":
             return None
         document, _queued, changed = refresh_subtitle_review_preview_states(
@@ -3212,6 +3217,21 @@ def run_autoclipper_job(
     return visited_statuses
 
 
+def _preview_review_was_discarded(db: Session, job: Job, review_path: Path, document: SubtitleReviewDocument) -> bool:
+    with subtitle_review_document_lock(review_path.parent):
+        db.refresh(job)
+        if job.status == "awaiting_clip_review" or not review_path.is_file():
+            return True
+        current = load_subtitle_review(review_path)
+        return current.created_at != document.created_at or current.preview_generation != document.preview_generation
+
+
+def _remove_discarded_preview(artifacts: Any, live_artifacts: Any, error_path: Path) -> None:
+    for path in (artifacts.video_path, artifacts.subtitle_path, artifacts.spec_path,
+                 live_artifacts.video_path, live_artifacts.spec_path, error_path):
+        path.unlink(missing_ok=True)
+
+
 def run_subtitle_review_preview(
     job_id: str,
     clip_id: str,
@@ -3234,10 +3254,14 @@ def run_subtitle_review_preview(
             raise ValueError(f"video not found for job: {job_id}")
         job_dir = storage_paths.job_outputs(job.id)
         review_path = subtitle_review_output_path(job_dir)
-        document = load_subtitle_review(review_path)
+        with subtitle_review_document_lock(job_dir):
+            db.refresh(job)
+            if job.status == "awaiting_clip_review" or not review_path.is_file():
+                return ["superseded"]
+            document = load_subtitle_review(review_path)
         clip = next((item for item in document.clips if item.id == clip_id), None)
         if clip is None:
-            raise ValueError(f"subtitle review clip not found: {clip_id}")
+            return ["superseded"]
         if clip.preview_spec_hash != spec_hash:
             return ["superseded"]
 
@@ -3283,6 +3307,10 @@ def run_subtitle_review_preview(
                     live_only=live_only,
                 )
             except Exception as exc:
+                if _preview_review_was_discarded(db, job, review_path, document):
+                    _remove_discarded_preview(artifacts, live_artifacts,
+                        exact_subtitle_review_preview_error_path(job_dir, clip_id, spec_hash))
+                    return ["superseded"]
                 write_subtitle_review_preview_error(
                     job_dir,
                     clip_id,
@@ -3302,11 +3330,16 @@ def run_subtitle_review_preview(
             except OSError:
                 pass
 
+        if _preview_review_was_discarded(db, job, review_path, document):
+            _remove_discarded_preview(artifacts, live_artifacts,
+                exact_subtitle_review_preview_error_path(job_dir, clip_id, spec_hash))
+            return ["superseded"]
         render_revision = _prepare_auto_render_after_preview(
             db=db,
             job=job,
             video=video,
             storage_paths=storage_paths,
+            expected_review=document,
         )
         if render_revision is None:
             return ["ready"]
@@ -3372,6 +3405,7 @@ def run_subtitle_review_hook_scene_update(
                     raise ValueError(f"selected clip not found: {clip_id}")
 
                 next_document = document.model_copy(deep=True)
+                next_document.has_saved_review_changes = True
                 next_document.short_max_duration = float((job.settings_json or {}).get("shortMaxDuration", 75.0))
                 update_review_hook_scene(
                     next_document,

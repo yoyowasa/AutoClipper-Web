@@ -290,6 +290,9 @@ class SubtitleReviewDocument(BaseModel):
     job_id: str = Field(alias="jobId")
     state: SubtitleReviewState = "awaiting_review"
     render_revision: int = Field(default=1, ge=1, alias="renderRevision")
+    preview_generation: str | None = Field(default=None, alias="previewGeneration")
+    has_saved_review_changes: bool | None = Field(default=None, alias="hasSavedReviewChanges")
+    return_to_clip_plan_allowed: bool = Field(default=True, alias="returnToClipPlanAllowed")
     reopened_at: str | None = Field(default=None, alias="reopenedAt")
     reedit_source_job_id: str | None = Field(default=None, alias="reeditSourceJobId")
     reedit_source_clip_id: str | None = Field(default=None, alias="reeditSourceClipId")
@@ -701,6 +704,7 @@ def build_subtitle_review(
             shortBottomBannerEnabled=short_bottom_banner_enabled,
             clips=clips,
             segments=segments,
+            hasSavedReviewChanges=False,
             createdAt=now,
             updatedAt=now,
         )

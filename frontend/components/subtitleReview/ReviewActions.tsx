@@ -130,3 +130,14 @@ export function ReviewBoundaryReeditButton({ context }: { context: SubtitleRevie
           </button>
   );
 }
+
+export function ReviewReturnToClipPlanButton({ context }: { context: SubtitleReviewViewContext }) {
+  return <div className="flex flex-col gap-1">
+    <button type="button" className="min-h-9 border border-amber-700 bg-white px-3 text-xs font-semibold text-amber-900 disabled:opacity-40"
+      disabled={!context.isEditable || context.review.returnToClipPlanAllowed === false}
+      onClick={() => void context.returnToClipPlan()}>
+      {context.isReturningToClipPlan ? "切り抜き確認へ戻しています" : "切り抜き確認に戻る"}
+    </button>
+    {context.review.returnToClipPlanAllowed === false ? <span className="text-xs text-neutral-600">手動ワークフローは対象外です。</span> : null}
+  </div>;
+}

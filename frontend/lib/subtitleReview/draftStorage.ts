@@ -11,10 +11,19 @@ export type StoredReviewDraft = {
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 export const reviewDraftKey = (jobId: string, clipId: string) => `subtitle-review-draft:v1:${jobId}:${clipId}`;
 
+export function clearJobReviewDrafts(jobId: string, storage: Storage | null = null): void {
+  try {
+    const target = storage ?? window.localStorage;
+    const prefix = reviewDraftKey(jobId, "");
+    const keys = Array.from({ length: target.length }, (_, index) => target.key(index));
+    for (const key of keys) if (key?.startsWith(prefix)) target.removeItem(key);
+  } catch { /* Disabled storage must not block returning to clip review. */ }
+}
+
 // Preview completion and polling timestamps must never invalidate text in progress.
 export function reviewDraftFingerprint(document: SubtitleReviewDocument, clip: SubtitleReviewClip): string {
   return JSON.stringify({
-    revision: document.renderRevision, start: clip.start, end: clip.end, confirmed: clip.confirmed,
+    revision: document.renderRevision, generation: document.previewGeneration, start: clip.start, end: clip.end, confirmed: clip.confirmed,
     content: contentDraftForClip(clip), framing: [clip.framingOffsetX, clip.framingOffsetY, clip.framingZoom, clip.shortLayout],
     segments: document.segments.filter(segment => clip.segmentIds.includes(segment.id))
       .map(segment => [segment.id, segment.start, segment.end, segment.text, segment.singleLine])

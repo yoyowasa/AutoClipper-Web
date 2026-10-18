@@ -147,6 +147,8 @@ def _defer_subtitle_review_previews_unlocked(
     document: SubtitleReviewDocument, clip_ids: set[str],
 ) -> SubtitleReviewDocument:
     """Invalidate exact previews without encoding anything during draft saves."""
+    if clip_ids:
+        document.has_saved_review_changes = True
     for clip in document.clips:
         if clip.id in clip_ids:
             clip.confirmed = False

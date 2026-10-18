@@ -1053,3 +1053,17 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 実行結果: Python 3.11.9、Ruff 0.16.10の`check . ../launcher ../scripts`成功。backend全件2012 passed・2 skipped（mainの1993件から19件追加）。最後のエラー文調整後の関連66件も成功。frontend lint/typecheck/全33テストファイル/build成功。Windows buildは既存.next生成物でTurbopack子プロセス接続エラーが出たが、生成物を作業用ディレクトリへ退避した後に成功。QAコンテナ内のLinux buildも成功。
 - 画面/実処理: task211-validation専用DB/Redis/ネットワークと18181・13181ポートでbackend healthy、worker/frontend起動を確認。120秒の合成動画を使い、自動選定・手動の両画面で74秒ショート→100秒通常→70秒ショートを1回ずつの保存で確認。自動経路の生成プレビューはffprobeで100秒/70秒、保存済み計画は両経路ともフック未設定。80秒では日本語理由付きで保存不可。検証用コンテナ/ネットワーク/ボリューム/イメージは片付け済み。
 - 未確認/運用: 実ジョブjob_6dbcc15b16994d18894b01e3f338a682での受入は未実施。稼働ジョブ・保存済みデータは変更せず、稼働環境のbuild/反映も行わない。launcher・尺定数は変更なし。PRのCIは別途確認し、ユーザー指示どおりマージしない。
+
+## 2026-10-18 task-212 字幕確認を破棄して切り抜き確認へ戻る
+
+- 目的: 間違えて字幕確認へ進んだ場合に、通常の切り抜き確認へ戻って再選定・種類/範囲変更・キープ等を行えるようにする。保存済み字幕を保持して尺だけ直す既存の「尺調整へ戻る」とは別のボタン/経路で、既存経路の制限・保持動作は変更しない。
+- API: `POST /api/jobs/{job_id}/subtitle-review/return-to-clip-plan`を追加。自動選定、jobがawaiting_subtitle_review、字幕確認がawaiting_review、切り抜き計画がapprovedのときだけ受付。手動ワークフロー・戻る計画なし・書き出し中・完了後等は日本語理由付き409。成功すると計画をawaiting_review/boundary_reedit=false、jobをawaiting_clip_reviewへ戻す。
+- 保存/破棄: `jobs/return_to_clip_plan.py`で計画のclip/範囲/タイトル/フックを保持し、承認時のジョブ設定へ戻す（旧計画はplan.settingsを利用）。字幕確認でフックを変えた旧経路の選定JSONも、計画側の値へ戻す。字幕確認JSON/要約/元字幕スナップショット/確認済み字幕、clip別の正式/簡易プレビュー用ディレクトリ、タイトル/フック案の状態/入力JSONを同一フォルダ内へ一時退避してから更新・commitする。失敗時はファイルとDBを戻し、成功時は退避を削除。復元自体が失敗した場合は退避を消さない。切り抜き確認用の平置きMP4、元の文字起こし、完成MP4等は対象外。
+- キープ: 従来は次へ押下時のチェックが送られていなかったため、既存approveに任意のkeptClipIdsを追加。通常の確認画面から次へ進むと計画/設定に保存し、戻った画面でも復元する。本文なしの既存リクエストは互換。手動とboundary reeditは従来の呼び出しのまま。
+- 古い仕事の保護: 戻すたびに計画へ字幕確認の世代IDを付け、再選定でも引き継ぐ。再承認した字幕確認のプレビューは世代を含むハッシュとなる。旧3引数のRQ仕事は変更せず、戻った後/同じclipを再承認後の仕事をsupersededで捨てる。描画中に戻った場合も、成功/例外の双方で旧成果物を除去し、新しい字幕確認の自動書き出しを開始しない。未使用の既存ジョブのハッシュは変えない。
+- 画面/下書き: 破棄確認を必須にし、新しく作る字幕確認では保存の有無を記録。未保存なら短い確認文、保存済みなら字幕・タイトル・フック・画角等の全破棄を明示する。保存履歴のない旧JSONでは未保存と断定せず破棄警告にする。成功時だけ、そのjobのlocalStorage下書きを削除（別jobの下書きは保持）。世代を下書きの照合にも含め、保存領域が使えない場合も安全に戻れるようtry/catchで保護する。
+- 変更ファイル: 上記に加えbackendのapi/clip_plan・api/jobs・api/_job_common、jobs/clip_plan・subtitle_review・subtitle_review_preview・pipeline_common・runner、schemas、API一覧テストと新規test_return_to_clip_plan。frontendのclips/page、ReviewActions/SubtitleReviewScreen、api/types、subtitleReviewの状態/確定フック・draftStorage・確認文ヘルパーと新規returnToClipPlanテスト。本記録。launcherは変更なし。
+- 問題への検証: 新規backend18ケースで戻る→通常の範囲worker/種類変更/再承認/再選定、キープ保存、JSON/プレビュー後片付け、非対象状態、キュー済み/描画中の旧仕事（成功/失敗・再承認前後）、DB/ファイル失敗の復元を確認。既存の字幕保持型boundary reeditテストも成功。API一覧の比較には新しい1窓口だけを明示追加し、既存APIの一致検査を維持する。
+- 全体検証: Ruff 0.16.10のcheck . ../launcher ../scripts成功。最終差分のbackend全件2030 passed・2 skipped（mainの2012件から18件追加）、関連24件と新規18件も成功。frontend lint/typecheck/全34テスト/build成功（Windows）。
+- 分離Compose/画面: task212-validation専用DB/Redis/ネットワーク・18182/13182でbackend healthy、health/upload 200、worker/frontend起動を確認。合成動画で、未保存の字幕を入力→確認文→切り抜き確認へ戻る→次へ→元の字幕で再作成、さらにキープをチェック→次へ→戻ってチェック保持をブラウザで確認。QAのRedisに残る旧プレビューを直接実行しsuperseded、計画はawaiting_review・boundary_reedit=falseを確認。Codex生成/実動画処理を避けるためQA workerは画面操作前に停止し、正式プレビューの描画は競合テストの偽rendererで検証。検証用コンテナ/ネットワーク/ボリューム/イメージは片付け済み。
+- 未確認/運用: 指定の実ジョブでの受入、本番の動画描画は未実施。現行の自動選定画面にclip削除操作はなく、削除APIは手動用。今回は承認前の既存操作へ戻す経路だけを追加し、自動候補の削除は新設しない。稼働環境のジョブ/DB/コンテナへ変更を適用しない。PRのCIは別途確認し、成功後もマージせずユーザーのレビュー待ちとする。

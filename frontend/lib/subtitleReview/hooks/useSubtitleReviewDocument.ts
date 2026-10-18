@@ -55,6 +55,7 @@ export function useSubtitleReviewDocument() {
     confirmingClipId,
     isFinalizing,
     isReopeningBoundaries,
+    isReturningToClipPlan,
     isPlaying,
     setIsBuffering,
     isPlayerReady,
@@ -125,7 +126,7 @@ export function useSubtitleReviewDocument() {
     isSavingShortBannerSettings ||
     savingShortFramingClipId !== null ||
     isFinalizing ||
-    isReopeningBoundaries;
+    isReopeningBoundaries || isReturningToClipPlan;
   const isEditable =
     review?.state === "awaiting_review" &&
     !hasReviewMutationInFlight;
@@ -538,6 +539,7 @@ export function useSubtitleReviewDocument() {
     get confirmSelectedClip() { return confirmSelectedClip; },
     get startRendering() { return startRendering; },
     get returnToBoundaryEditor() { return returnToBoundaryEditor; },
+    get returnToClipPlan() { return returnToClipPlan; },
   };
   const { beginReviewMutation, endReviewMutation, isCurrentReviewMutation, selectClip, selectClipType, updateDraft } = useReviewMutations(context);
   const {
@@ -568,6 +570,6 @@ export function useSubtitleReviewDocument() {
     saveHookScene
   } = useClipContentDraft(context);
   const { generateTitleHookSuggestions, applyTitleHookSuggestion, copyPostField, clearSelectedHook, previewTitleHookSuggestion } = useTitleHookSuggestions(context);
-  const { confirmSelectedClip, startRendering, returnToBoundaryEditor } = useReviewConfirmation(context);
+  const { confirmSelectedClip, startRendering, returnToBoundaryEditor, returnToClipPlan } = useReviewConfirmation(context);
   return context;
 }

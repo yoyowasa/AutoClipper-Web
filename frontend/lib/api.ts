@@ -425,9 +425,10 @@ export async function getClipPlanTranscriptSegments(
   return parseJsonResponse<ClipPlanTranscriptSegment[]>(response);
 }
 
-export async function approveClipPlan(jobId: string): Promise<ClipPlanActionResponse> {
+export async function approveClipPlan(jobId: string, request?: { keptClipIds: string[] }): Promise<ClipPlanActionResponse> {
   const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/clip-plan/approve`, {
-    method: "POST"
+    method: "POST",
+    ...(request ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) } : {})
   });
   return parseJsonResponse<ClipPlanActionResponse>(response);
 }
@@ -436,6 +437,11 @@ export async function reopenClipPlanForBoundaryReedit(jobId: string): Promise<Cl
   const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/reopen-clip-plan`, {
     method: "POST"
   });
+  return parseJsonResponse<ClipPlanActionResponse>(response);
+}
+
+export async function returnSubtitleReviewToClipPlan(jobId: string): Promise<ClipPlanActionResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/return-to-clip-plan`, { method: "POST" });
   return parseJsonResponse<ClipPlanActionResponse>(response);
 }
 
