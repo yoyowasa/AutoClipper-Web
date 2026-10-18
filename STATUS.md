@@ -1067,3 +1067,13 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 全体検証: Ruff 0.16.10のcheck . ../launcher ../scripts成功。backend全件2030 passed・2 skipped（mainの2012件から18件追加）、関連24件と新規18件も成功。計画JSONの更新日時を既存と同じUTCのオフセット付きISO形式へ揃えた後も、新規18件で確認。frontend lint/typecheck/全34テスト/build成功（Windows）。
 - 分離Compose/画面: task212-validation専用DB/Redis/ネットワーク・18182/13182でbackend healthy、health/upload 200、worker/frontend起動を確認。合成動画で、未保存の字幕を入力→確認文→切り抜き確認へ戻る→次へ→元の字幕で再作成、さらにキープをチェック→次へ→戻ってチェック保持をブラウザで確認。QAのRedisに残る旧プレビューを直接実行しsuperseded、計画はawaiting_review・boundary_reedit=falseを確認。Codex生成/実動画処理を避けるためQA workerは画面操作前に停止し、正式プレビューの描画は競合テストの偽rendererで検証。検証用コンテナ/ネットワーク/ボリューム/イメージは片付け済み。
 - 未確認/運用: 指定の実ジョブでの受入、本番の動画描画は未実施。現行の自動選定画面にclip削除操作はなく、削除APIは手動用。今回は承認前の既存操作へ戻す経路だけを追加し、自動候補の削除は新設しない。稼働環境のジョブ/DB/コンテナへ変更を適用しない。PRのCIは別途確認し、成功後もマージせずユーザーのレビュー待ちとする。
+
+## 2026-10-18 task-215 文字起こしの言いよどみ記号を統一
+
+- 目的/変更: `audio/transcript_postprocess.py`の句読点正規化に共通関数`strip_transcript_ellipsis`を追加。NFKCの後・全角化の前に「…」「‥」、2個以上連続する半角/全角ピリオド、3個以上の「・」を除去する。言い直しと文中は「、」、文頭・文末・記号だけの行は空とし、隣接する読点や句読点の重複を防ぐ。文字の補完・言い換え・AI判断は行わない。単独のピリオド、小数点、1〜2個の中黒と全角化の既存挙動は維持。句読点正規化または後処理全体がOFFなら除去しない。
+- 読み直し/空行: runnerの順序は既に「gap/runaway/stretch補修→raw保存→共通後処理→最終幅統一」だったため変更しない。補修のrepaired/repairWindows・時刻・語データは保持する。記号だけの行は空テキストにし、既存の字幕描画と空白判定に従う（IDや時刻は詰めない）。手で字幕確認に追加した記号を保存時に消す処理は追加しない。
+- 保守コマンド: `python -m app.maintenance strip-subtitle-ellipsis --job <id> [--dry-run|--execute]`。既定はdry-run。`jobs/subtitle_ellipsis.py`でstorage/reviewのロックを取り、job=awaiting_subtitle_reviewかつreview=awaiting_reviewだけ対象とする。textとoriginalTextが異なる行は保護し、未編集行の両フィールドを同じ補正値へ更新してユーザー編集扱いにしない。元のraw/transcript等は変更しない。件数・対象clip・先頭5例をJSONで報告する。
+- 保存/プレビュー: --execute時だけ原子的な既存writerで字幕確認を保存。変更した行を含むclipだけ未確定・previewDeferred=true・staleに戻し、正式プレビューのURL/エラーを消す。簡易プレビューの元映像は変えず、enqueueしない。要約の件数を更新し、既存APIの保存と同じくcontent/post_renderの品質判定を無効化する。SQLiteの条件付きno-op UPDATEで保存中の状態変更を防ぎ、DBのジョブ属性は変えない。
+- 実データdry-run: job_6dbcc15b16994d18894b01e3f338a682の稼働DBを読み取り専用接続のbackup()でコピー（integrity_check=ok、jobs=15/export_items=16で一致）し、字幕確認と無音JSONをコピーして実行。現在の479行はoriginalTextに記号がある行198、現在のtextでは7、text/originalTextが異なる行217。変更対象は未編集6行、対象外の編集済み1行、影響は2clipだった。例:「米自体は明．．．明治じゃない」→「米自体は明、明治じゃない」、「プリんプリン、プリん．．．」→「プリんプリン、プリん」。コピーDB/字幕JSONの内容・更新時刻はdry-runで不変。稼働DBのSHA256・サイズ・更新時刻と、元ジョブ91ファイルのSHA256も前後で不変。
+- 検証: backend全件2069 passed・2 skipped（mainから39ケース追加）。新規ケースで記号の形式・句読点・空行・設定OFF・編集済み保護・stale・再実行・書き込み失敗を確認。読み直し後の除去は実際のpipeline順序と暴走補修のテストでも確認。Ruff 0.16.10の`check . ../launcher ../scripts`、frontend全34テスト・lint・typecheck・build成功。稼働DBと元ジョブ91ファイルは全件テスト・隔離Compose検証の後にも不変。
+- 起動/未確認: 専用DB/Redis/18185ポートの隔離Composeでbackend healthy、/health・/api/healthが200、Linuxコンテナ内の同じdry-runも6行/対象外1行を確認。検証コンテナとネットワークは片付け済み。稼働DB/ジョブへの--execute、実動画の新規文字起こし、稼働環境への反映は行わない。launcher・frontendは変更なし。PRのCI成功後もマージせずレビュー待ちとする。

@@ -14,6 +14,8 @@ from app.audio.transcribe_faster_whisper import TranscriptSegment
 
 RAW_TRANSCRIPT_FILENAME = "raw_transcript_segments.json"
 TRANSCRIPT_POSTPROCESS_SUMMARY_FILENAME = "transcript_postprocess_summary.json"
+_ELLIPSIS_RUN = r"(?:[…‥]+|[.．]{2,}|・{3,})"
+_ELLIPSIS = re.compile(rf"[、,\t \u3000]*{_ELLIPSIS_RUN}(?:[、,\t \u3000]*{_ELLIPSIS_RUN})*[、,\t \u3000]*")
 
 KNOWN_TRANSCRIPT_ARTIFACT_REPAIRS: dict[str, str] = {
     "農من": "能面",
@@ -128,7 +130,24 @@ def finalize_transcript_width(
     return [segment.model_copy(update={"text": fullwidth_transcript_text(segment.text)}) for segment in segments]
 
 
+def strip_transcript_ellipsis(text: str) -> str:
+    """Remove hesitation marks; both restarts and ordinary internal pauses use a comma.
+
+    Accept pre/post-NFKC and fullwidth forms without normalizing other characters.
+    Consume adjacent commas too, so removing a mark cannot double punctuation.
+    """
+    def replace(match: re.Match[str]) -> str:
+        left = text[match.start() - 1] if match.start() else ""
+        right = text[match.end()] if match.end() < len(text) else ""
+        if left and right and all(unicodedata.category(char)[0] in "LMNS" for char in (left, right)):
+            return "、"
+        return ""
+
+    return _ELLIPSIS.sub(replace, text)
+
+
 def _normalize_punctuation(text: str) -> str:
+    text = strip_transcript_ellipsis(text)
     text = re.sub(r"([。！？!?])\1{1,}", r"\1", text)
     text = re.sub(r"([、,])\1{1,}", r"\1", text)
     text = re.sub(r"[^\S\r\n]+([。、！？!?])", r"\1", text)
