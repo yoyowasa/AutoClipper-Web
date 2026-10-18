@@ -13,10 +13,13 @@ from app.jobs.clip_plan import ClipPlanDocument, clip_plan_output_path, write_cl
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP
 from app.jobs.subtitle_review import (
     SubtitleReviewDocument, reviewed_transcript_output_path, subtitle_review_output_path,
-    subtitle_review_preview_path, subtitle_review_source_path, subtitle_review_summary_path,
+    subtitle_review_source_path, subtitle_review_summary_path,
 )
 from app.models import Job, utc_now
 from app.jobs.title_hook_suggestions import title_hook_suggestions_path, title_hook_suggestion_input_path
+from app.storage.discarded_review_previews import (
+    discarded_preview_cleanup_path, register_discarded_previews, cleanup_discarded_preview_files,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +38,11 @@ def discard_review_and_restore_plan(
             candidate.hook_scene_start = clip.hook_scene_start
             candidate.hook_scene_end = clip.hook_scene_end
     originals = {path: path.read_bytes() for path in (plan_path, selected_path)}
+    cleanup_path = discarded_preview_cleanup_path(output)
+    originals[cleanup_path] = cleanup_path.read_bytes() if cleanup_path.exists() else None
     discarded = [subtitle_review_output_path(output), subtitle_review_summary_path(output),
                  subtitle_review_source_path(output, review), reviewed_transcript_output_path(output)]
-    # The flat <clip digest>.mp4 files belong to clip-plan review. Keep those.
-    discarded.extend(subtitle_review_preview_path(output, clip.id).with_suffix("") for clip in review.clips)
+    # Never rename preview directories on a Windows bind mount: an open MP4 locks them.
     discarded.extend(path for clip in review.clips for path in (
         title_hook_suggestions_path(output, clip.id), title_hook_suggestion_input_path(output, clip.id)))
     staging = output / f".discarded-review-{uuid4().hex}"
@@ -51,6 +55,7 @@ def discard_review_and_restore_plan(
                 backup = staging / str(index)
                 path.replace(backup)
                 moved.append((path, backup))
+        register_discarded_previews(output, review)
         plan.state = "awaiting_review"
         plan.boundary_reedit = False
         plan.subtitle_review_generation = uuid4().hex
@@ -69,7 +74,10 @@ def discard_review_and_restore_plan(
         db.rollback()
         try:
             for path, payload in originals.items():
-                path.write_bytes(payload)
+                if payload is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(payload)
             for path, backup in reversed(moved):
                 backup.replace(path)
         except Exception:
@@ -82,4 +90,9 @@ def discard_review_and_restore_plan(
             if cleanup:
                 shutil.rmtree(staging)
         except OSError:
-            logger.warning("Could not remove discarded review backup for job %s", job.id)
+            logger.warning("%s", staging)
+    # Commit succeeded. Failure here is disposable-file cleanup, not a failed return.
+    try:
+        cleanup_discarded_preview_files(output)
+    except Exception:
+        logger.warning("%s", cleanup_path)

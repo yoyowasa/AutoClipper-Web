@@ -4,6 +4,7 @@ from app.clip_rejections import job_rejections, rejection_ranges
 from app.candidates.user_rejections import REJECTED_RANGES_SETTING
 from app.source_clip_history import source_key
 import json
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import Response, FileResponse
 from pydantic import ValidationError
@@ -930,21 +931,33 @@ def return_subtitle_review_to_clip_plan(
 ) -> ClipPlanActionResponse:
     from app.jobs.return_to_clip_plan import discard_review_and_restore_plan
 
-    job = _get_job_or_404(db, job_id)
-    output = paths.job_outputs(job_id)
-    with subtitle_review_document_lock(output):
-        db.refresh(job)
-        if is_manual_workflow(dict(job.settings_json or {})):
-            raise HTTPException(409, "手動ワークフローは切り抜き確認へ戻す対象外です。")
-        if job.status != "awaiting_subtitle_review":
-            raise HTTPException(409, "字幕確認中だけ戻れます。書き出し中・完了後は戻れません。")
-        if not clip_plan_output_path(output).is_file():
-            raise HTTPException(409, "この動画には戻れる切り抜き計画がありません。")
-        review = _get_subtitle_review_or_404(job_id, paths)
-        plan = _get_clip_plan_or_404(job_id, paths)
-        if review.state != "awaiting_review" or plan.state != "approved":
-            raise HTTPException(409, "字幕確認と承認済みの切り抜き計画が揃った状態でだけ戻れます。")
-        discard_review_and_restore_plan(db, job, plan, review, output)
+    output = paths.outputs / job_id
+    reason = "切り抜き確認へ戻せませんでした。保存状態を確認し、時間をおいて再試行してください。"
+    try:
+        job = _get_job_or_404(db, job_id)
+        output = paths.job_outputs(job_id)
+        with subtitle_review_document_lock(output):
+            db.refresh(job)
+            if is_manual_workflow(dict(job.settings_json or {})):
+                raise HTTPException(409, "手動ワークフローは切り抜き確認へ戻す対象外です。")
+            if job.status != "awaiting_subtitle_review":
+                raise HTTPException(409, "字幕確認中だけ戻れます。書き出し中・完了後は戻れません。")
+            if not clip_plan_output_path(output).is_file():
+                raise HTTPException(409, "この動画には戻れる切り抜き計画がありません。")
+            review = _get_subtitle_review_or_404(job_id, paths)
+            plan = _get_clip_plan_or_404(job_id, paths)
+            if review.state != "awaiting_review" or plan.state != "approved":
+                raise HTTPException(409, "字幕確認と承認済みの切り抜き計画が揃った状態でだけ戻れます。")
+            discard_review_and_restore_plan(db, job, plan, review, output)
+    except HTTPException as exc:
+        if exc.status_code < 500:
+            raise
+        db.rollback()
+        raise HTTPException(409, "保存データを読み込めません。状態を確認して再試行してください。") from None
+    except Exception:
+        db.rollback()
+        logging.getLogger(__name__).warning("%s", output)
+        raise HTTPException(409, reason) from None
     return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
 
