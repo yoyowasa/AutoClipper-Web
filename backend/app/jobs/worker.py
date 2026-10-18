@@ -10,6 +10,8 @@ from app.jobs.worker_failures import mark_rq_failure, reconcile_orphaned_jobs
 from app.config import get_settings
 from app.jobs.queue import get_redis_connection
 from app.db import SessionLocal
+from app.storage.discarded_review_previews import maintain_discarded_review_previews
+from app.storage.paths import get_storage_paths
 from app.intelligence.sync import record_rq_sync_failure
 from app.intelligence.analysis_runner import record_rq_analysis_failure
 
@@ -39,6 +41,10 @@ class CharacterAssetWorker(Worker):
                     logging.getLogger(__name__).warning("Marked orphaned application jobs failed: %s", ", ".join(failed))
         except Exception:
             logging.getLogger(__name__).warning("Orphan job reconciliation skipped: RQ or database state could not be checked")
+        try:
+            maintain_discarded_review_previews(get_storage_paths())
+        except Exception:
+            logging.getLogger(__name__).warning("%s", get_storage_paths().outputs)
 
 
 def main() -> None:

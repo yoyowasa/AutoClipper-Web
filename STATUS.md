@@ -1068,6 +1068,18 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 分離Compose/画面: task212-validation専用DB/Redis/ネットワーク・18182/13182でbackend healthy、health/upload 200、worker/frontend起動を確認。合成動画で、未保存の字幕を入力→確認文→切り抜き確認へ戻る→次へ→元の字幕で再作成、さらにキープをチェック→次へ→戻ってチェック保持をブラウザで確認。QAのRedisに残る旧プレビューを直接実行しsuperseded、計画はawaiting_review・boundary_reedit=falseを確認。Codex生成/実動画処理を避けるためQA workerは画面操作前に停止し、正式プレビューの描画は競合テストの偽rendererで検証。検証用コンテナ/ネットワーク/ボリューム/イメージは片付け済み。
 - 未確認/運用: 指定の実ジョブでの受入、本番の動画描画は未実施。現行の自動選定画面にclip削除操作はなく、削除APIは手動用。今回は承認前の既存操作へ戻す経路だけを追加し、自動候補の削除は新設しない。稼働環境のジョブ/DB/コンテナへ変更を適用しない。PRのCIは別途確認し、成功後もマージせずユーザーのレビュー待ちとする。
 
+## 2026-10-18 task-213 Windows共有フォルダで切り抜き確認へ戻れない不具合
+
+- 目的/原因: WindowsホストのstorageをDockerへbind mountした状態で、開いているMP4を含む字幕確認プレビューディレクトリをrenameするとPermissionErrorとなり、戻るAPIが500になった。コミット前の退避は字幕確認・要約・元字幕スナップショット・確認済み字幕・タイトル/フック案のJSONだけに限定する。
+- 変更: `jobs/return_to_clip_plan.py`は既存の世代ID更新とJSON/DBのロールバックを維持し、コミット後に旧プレビューファイルの削除を試みる。削除失敗はパスだけを警告し、戻る操作を失敗にしない。`storage/discarded_review_previews.py`に破棄対象のファイル名を原子的に保存し、`jobs/worker.py`の保守処理から再試行する。ディレクトリ全体を遅延削除せず、後から作られた新世代のファイル・切り抜き確認用の平置きMP4は残す。空ディレクトリは残す。
+- エラー: `api/clip_plan.py`の戻るAPIで想定外の例外・保存JSONの読み込み失敗を日本語理由付き409にする。例外の本文は応答・警告へ出さない。既存の対象外状態/手動ワークフローの拒否条件は維持する。
+- 変更ファイル: 上記4ファイル、新規`test_discarded_review_previews.py`、既存`test_return_to_clip_plan.py`と`test_intelligence_worker.py`、本記録。launcher・frontend・公開APIの形・既存の字幕保持型「境界の再編集」は変更しない。
+- Windows実機検証: 稼働DBを読み取り専用接続のbackup()でコピー（integrity_check=ok、jobs=15/export_items=16で一致）。指定job_6dbcc15b16994d18894b01e3f338a682の出力75ファイル/1,182,691,962 bytesも別領域へコピー。専用Redis/DB/18183ポートの隔離Composeで、このコピーをWindowsからbind mountした。コピー内MP4をWindowsの読み取りハンドルで開き、FILE_SHARE_DELETEを許可しない条件では、変更前の同じAPIがディレクトリrenameのPermissionErrorで500となることを再現。失敗後のJSONを含む全75ファイルは元と同一、コピーDBもawaiting_subtitle_reviewへロールバックされた。
+- 修正後の実機結果: 同じロックを保持したままAPIが200、コピーDBはawaiting_clip_review、字幕確認JSONは除去、計画の世代IDを更新。ロックされた旧MP4だけが保留され、警告はそのパスのみ。保守処理はロック中も失敗を外へ出さず、解除後に旧MP4と保留一覧を削除した。新世代名のファイルと平置きMP4全6本は保持し、clip-plan取得も200。稼働DBのSHA256・サイズ・更新時刻、元ジョブ全75ファイルのSHA256は検証前後で不変、元の状態はawaiting_subtitle_reviewのまま。
+- 検証: Ruff 0.16.10の`check . ../launcher ../scripts`成功。backend全件は2038 passed・2 skipped、その実行後に追加した2ケースを含む戻る/削除の関連28ケースも成功。新規10ケースではPermissionError、JSON/DB失敗の復元、旧世代だけの削除、パス逸脱拒否、コミット後例外・不正JSONの扱いを確認。保守処理がmedia workerだけで動く既存テストも更新し成功。frontend全34テスト・lint・typecheck・build成功（Windows）。専用backendイメージのbuildと、現行ソースを読み取り専用でマウントした隔離Composeの起動/health 200も確認。
+- 未確認/運用: 稼働ジョブの実際の戻る操作・本番の動画描画は未実施。稼働コンテナの再構築/再起動・DBの変更は行わない。PR/CIは別途確認し、成功後もマージせずレビュー待ちとする。
+- 検証環境の後片付け: 専用コンテナ/ネットワーク/Redisボリューム/イメージは削除済み。検証コピーのフォルダ削除は自動承認レビューでポリシー拒否されたため、Git対象外の`.codex_tmp/task213/qa-storage`へ約1.18GBを残す。稼働データとは別。
+
 ## 2026-10-18 task-215 文字起こしの言いよどみ記号を統一
 
 - 目的/変更: `audio/transcript_postprocess.py`の句読点正規化に共通関数`strip_transcript_ellipsis`を追加。NFKCの後・全角化の前に「…」「‥」、2個以上連続する半角/全角ピリオド、3個以上の「・」を除去する。言い直しと文中は「、」、文頭・文末・記号だけの行は空とし、隣接する読点や句読点の重複を防ぐ。文字の補完・言い換え・AI判断は行わない。単独のピリオド、小数点、1〜2個の中黒と全角化の既存挙動は維持。句読点正規化または後処理全体がOFFなら除去しない。

@@ -92,6 +92,8 @@ def test_application_maintenance_has_a_single_owner_per_domain(monkeypatch):
     monkeypatch.setattr(media_worker, "SessionLocal", lambda: nullcontext("db"))
     monkeypatch.setattr(intelligence_worker, "SessionLocal", lambda: nullcontext("db"))
     monkeypatch.setattr(media_worker, "reconcile_orphaned_jobs", lambda db, queues: calls.append(("media", queues)))
+    monkeypatch.setattr(media_worker, "get_storage_paths", lambda: "media-paths")
+    monkeypatch.setattr(media_worker, "maintain_discarded_review_previews", lambda paths: calls.append(("previews", paths)))
     monkeypatch.setattr(intelligence_worker, "get_settings", lambda: "config")
     monkeypatch.setattr(intelligence_worker, "get_storage_paths", lambda: "paths")
     monkeypatch.setattr(intelligence_worker, "maintain_youtube", lambda db, cfg, paths, queues: calls.append(("youtube", queues)))
@@ -100,7 +102,7 @@ def test_application_maintenance_has_a_single_owner_per_domain(monkeypatch):
     media.queues, intelligence.queues = ["media"], ["intelligence"]
     media.run_maintenance_tasks()
     intelligence.run_maintenance_tasks()
-    assert calls == [("rq", ["media"]), ("media", ["media"]),
+    assert calls == [("rq", ["media"]), ("media", ["media"]), ("previews", "media-paths"),
                      ("rq", ["intelligence"]), ("youtube", ["intelligence"])]
 
 
