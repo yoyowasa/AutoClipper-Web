@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.intelligence.common import now
-from app.intelligence.models import AnalysisRun, Channel, VideoDailyStat, YouTubeVideo
+from app.intelligence.models import AnalysisRun, Channel, ProductionAggregate, VideoDailyStat, YouTubeVideo
 
 POLICY_URL = "https://developers.google.com/youtube/terms/derived-metrics-policy"
 
@@ -21,6 +21,9 @@ def statistical_expiry(observed: datetime, config: Settings) -> datetime:
 def expire_youtube_data(db: Session, config: Settings, *, clock: datetime | None = None) -> None:
     stamp = clock or now()
     db.execute(delete(VideoDailyStat).where(VideoDailyStat.expires_at <= stamp))
+    db.execute(delete(ProductionAggregate).where(ProductionAggregate.expires_at <= stamp))
+    if not config.youtube_extended_storage:
+        db.execute(delete(ProductionAggregate).where(ProductionAggregate.generated_at <= stamp - timedelta(days=30)))
     if not config.youtube_extended_storage:
         db.execute(delete(VideoDailyStat).where(VideoDailyStat.observed_at <= stamp - timedelta(days=30)))
     # Retain opaque IDs and statistical records, never stale titles/names.

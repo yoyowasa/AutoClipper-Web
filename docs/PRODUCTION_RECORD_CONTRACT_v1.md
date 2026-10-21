@@ -37,6 +37,7 @@ Windows禁止文字の全角化、制御文字の除去、末尾の空白・ピ�
 | フィールド | 型・意味 |
 | --- | --- |
 | schemaVersion | 整数、常に1 |
+| performanceHints | 任意の配列。選定/タイトル・フック生成で参照した実績ヒント。旧記録にはなくてよい。未使用なら省略 |
 | recordId | 文字列、ExportItemのID |
 | revision | 1以上の整数、記録の更新回数 |
 | createdAt / updatedAt | 書き出し完了時刻 / 記録の更新時刻。backfillもcreatedAtはExportItem.created_at。updatedAtはcreatedAt以上 |
@@ -86,6 +87,15 @@ URLはHTTP(S)のみ。認証情報があるURLは出力せず、フラグメン�
 `source: "video_frame" | "character_asset" | "unknown"`、`mode`、`frameSeconds`（本編内秒）、
 `assetId`、`emotion`、`reason`、`emotionSelectionSource`。
 旧方式の動画コマもvideo_frameとして記録する。画像ファイルのパスや画像自体は含めない。
+
+### performanceHints（統合④、task-217）
+
+各項目は`analysisId`（分析ID）、`generatedAt`（分析の生成完了日時、UTC）、`expiresAt`（利用時の保持期限）、
+`target: selection | title_hook`、`text`（実際に入力したヒントの文）、`format: normal | short`。
+旧記録の項目欠落は空配列として扱う。未使用時は書き出さない。schemaVersionは1のまま。
+日時はUTCのISO 8601。選定サマリーと当該clipのタイトル/フック入力記録から、同形式の項目だけを投影する。
+選定側はジョブの初期選定・再選定で使用した参考情報の履歴であり、個別clipへの因果効果を示さない。
+YouTubeの生の統計・動画タイトル・絶対パスは含めない。記録は制作時点の参照履歴なので、後にヒントが期限切れになっても消さない。
 
 ## 含めない情報
 

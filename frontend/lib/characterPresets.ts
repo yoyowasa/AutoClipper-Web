@@ -4,7 +4,7 @@ import { applySubtitleStyle, captureSubtitleStyle, SUBTITLE_STYLE_KEYS, type Sub
 export const PLAIN_THUMBNAIL: NormalThumbnailStyle = {
   design: "plain", backgroundColor: "#20242B", titleColor: "#FFFFFF", secondTitleColor: "#FFD84A", outlineColor: "#111111"
 };
-export const CHARACTER_KEYS = ["channelName", "audienceFamiliarity", "youtubePostingProfile", "normalTitleSuffix", "normalThumbnailStyle",
+export const CHARACTER_KEYS = ["channelName", "audienceFamiliarity", "usePerformanceHints", "youtubePostingProfile", "normalTitleSuffix", "normalThumbnailStyle",
   "shortTopBannerAssetId", "shortBottomBannerAssetId", "shortTopBannerEnabled", "shortBottomBannerEnabled",
   "shortBannerPresetName", "normalClipCount", "shortCount"] as const satisfies readonly (keyof ClipSettings)[];
 export type CharacterSnapshot = Partial<Pick<ClipSettings, typeof CHARACTER_KEYS[number]>> & SubtitleStyleSnapshot;
@@ -27,7 +27,7 @@ export function newCharacter(settings: ClipSettings): ClipSettings {
   delete cleaned.autoHarvestCharacterAssets;
   delete cleaned.auto_harvest_character_assets;
   const cleared = applySubtitleStyle(cleaned, {});
-  return { ...cleared, audienceFamiliarity: "known", characterPresetName: "", characterPresetId: "", channelName: "", normalTitleSuffix: "",
+  return { ...cleared, audienceFamiliarity: "known", usePerformanceHints: true, characterPresetName: "", characterPresetId: "", channelName: "", normalTitleSuffix: "",
     normalThumbnailStyle: { ...PLAIN_THUMBNAIL }, normalClipCount: 0, shortCount: 3,
     normalClipTimeRanges: [], shortClipTimeRanges: [],
     youtubePostingProfile: { performerName: "", affiliation: "", baseHashtags: [], shortHashtags: ["#shortsfunny"], baseTags: [] },

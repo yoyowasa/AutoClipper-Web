@@ -50,6 +50,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   heatmapIntervalMode: false,
   initialSelectionProvider: "codex",
   audienceFamiliarity: "known",
+  usePerformanceHints: true,
   enableBoundaryRefinement: true,
   boundaryLeadingPaddingSeconds: 0.4,
   boundaryTrailingPaddingSeconds: 0.6,

@@ -15,6 +15,7 @@ from app.intelligence.analysis_reports import REPORT_DEFAULTS, native_report, re
 from app.intelligence.models import Channel, ChannelConnection, ProductionLink, SyncRun, VideoDailyStat, YouTubeVideo
 from app.intelligence.policy import statistical_expiry
 from app.intelligence.production_catalog import read_families
+from app.intelligence.production_aggregation import aggregate_analysis_input, build_production_aggregates
 from app.storage.paths import StoragePaths
 
 UNITS = {"estimatedMinutesWatched": "分", "averageViewDuration": "秒", "averageViewPercentage": "%",
@@ -28,6 +29,7 @@ class AnalysisContext:
     evidence: dict
     videos: dict
     expires_at: datetime
+    aggregates: dict | None = None
 
     @property
     def fingerprint(self) -> str:
@@ -38,6 +40,8 @@ def _production(record) -> dict:
     hook_length = (record.hookSceneEnd - record.hookSceneStart
                    if record.hookSceneStart is not None and record.hookSceneEnd is not None else None)
     return {"recordId": record.recordId, "bodyDurationSeconds": record.bodyDurationSeconds,
+        **({"performanceHints": [hint.model_dump(by_alias=True, mode="json") for hint in record.performanceHints]}
+           if record.performanceHints else {}),
         "completedDurationSeconds": record.completedDurationSeconds, "hookSceneDuration": hook_length,
         "hasHookScene": hook_length is not None, "hookText": record.hookText,
         "titleCandidates": record.titleCandidates.model_dump(), "postMetadataSource": record.postMetadataSource,
@@ -142,8 +146,14 @@ def build_analysis_input(db: Session, paths: StoragePaths, config: Settings, cha
         "production_record_issues": len(issues),
         "unavailable_reports": ["format_channel_aggregates", "traffic_sources", "retention", "impressions", "CTR", "swipe_rate"],
         "improvement_plans": []}
+    aggregates = build_production_aggregates(db, paths, config, channel_id, stamp)
+    expiry.append(datetime.fromisoformat(aggregates["expires_at"].replace("Z", "+00:00")).replace(tzinfo=None))
+    payload["production_aggregates"] = aggregate_analysis_input(aggregates)
     fit_analysis_budget(payload)
     evidence = _expand_evidence(payload, min(expiry))
+    for group in payload["production_aggregates"]["groups"]:
+        evidence[group["id"]] = {"id": group["id"], "video_id": None, "source": "independent_aggregation",
+                                 "value": group, "format": group["format"]}
     if not any(item["source"] == "youtube_analytics" for item in evidence.values()):
         raise ValueError("CODEX_EVIDENCE_UNAVAILABLE")
-    return AnalysisContext(payload, evidence, {video["id"]: video for video in payload["videos"]}, min(expiry))
+    return AnalysisContext(payload, evidence, {video["id"]: video for video in payload["videos"]}, min(expiry), aggregates)

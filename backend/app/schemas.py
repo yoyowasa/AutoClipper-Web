@@ -264,6 +264,7 @@ class YouTubePostingProfileDocument(BaseModel):
 
 class JobSettings(UploadTextStyles):
     audience_familiarity: Literal["known", "unknown"] = Field(default="known", alias="audienceFamiliarity")
+    use_performance_hints: bool = Field(default=True, alias="usePerformanceHints")
     character_preset_name: str = Field(default="", max_length=80, alias="characterPresetName")
     character_preset_id: str = Field(default="", pattern=r"^(character_[0-9a-f]{32})?$", alias="characterPresetId")
     channel_name: str = Field(default="", max_length=120, alias="channelName")

@@ -17,6 +17,7 @@ class ValidationIssueRead(BaseModel):
 
 
 class ValidationReportRead(BaseModel):
+    excludedHints: int = 0
     excludedFindings: int = 0
     excludedProposals: int = 0
     reasonCounts: dict[str, int] = Field(default_factory=dict)

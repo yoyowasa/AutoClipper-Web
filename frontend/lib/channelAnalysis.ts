@@ -1,4 +1,5 @@
 import { request } from "./intelligence";
+import type { PerformanceHint } from "./productionPerformance";
 
 export type SyncBeforeAnalysis = "auto" | "always" | "never";
 export type AnalysisFinding = {
@@ -19,11 +20,13 @@ export type AnalysisProposal = {
   result_check: string; rejection_condition: string; recommendation_link: RecommendationLink | null;
 };
 export type AnalysisReview = {
+  performance_hints?: PerformanceHint[];
   id: string; channel_id: number; batch_run_id: string; title: string; summary: string; goal_views: 1000000;
   recommendation_framework_version: string | null; reviewed_material: "statistics_and_titles";
   limitations: string[]; findings: AnalysisFinding[]; proposals: AnalysisProposal[];
 };
 export type AnalysisValidationReport = {
+  excludedHints?: number;
   excludedFindings: number; excludedProposals: number; reasonCounts: Record<string, number>;
   issues: Array<{ code: string; loc: Array<string | number> }>; fatal: boolean;
 };

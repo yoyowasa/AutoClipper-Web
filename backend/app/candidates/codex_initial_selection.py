@@ -389,6 +389,7 @@ class CodexTopicBlockInput(_StrictModel):
 
 
 class CodexTopicSelectionRequest(_StrictModel):
+    performance_hints: list[dict[str, Any]] = Field(default_factory=list, alias="performanceHints", exclude_if=lambda v: not v)
     version: Literal[1] = 1
     prompt_version: Literal[CODEX_INITIAL_SELECTION_PROMPT_VERSION] = Field(
         default=CODEX_INITIAL_SELECTION_PROMPT_VERSION,
@@ -424,7 +425,8 @@ class CodexTopicSelectionRequest(_StrictModel):
         return self
 
     def prompt_payload(self) -> dict[str, Any]:
-        return self.model_dump(by_alias=True, mode="json")
+        from app.intelligence.performance_hints import hint_payload
+        return {**self.model_dump(by_alias=True, mode="json"), **hint_payload(self.performance_hints)}
 
 
 class CodexTopicChoice(_StrictModel):
@@ -491,6 +493,7 @@ class CodexSelectedTopicInput(_StrictModel):
 
 
 class CodexInitialSelectionRequest(_StrictModel):
+    performance_hints: list[dict[str, Any]] = Field(default_factory=list, alias="performanceHints", exclude_if=lambda v: not v)
     version: Literal[1] = 1
     prompt_version: Literal[CODEX_INITIAL_SELECTION_PROMPT_VERSION] = Field(
         default=CODEX_INITIAL_SELECTION_PROMPT_VERSION,
@@ -535,7 +538,8 @@ class CodexInitialSelectionRequest(_StrictModel):
         return self
 
     def prompt_payload(self) -> dict[str, Any]:
-        return self.model_dump(by_alias=True, mode="json")
+        from app.intelligence.performance_hints import hint_payload
+        return {**self.model_dump(by_alias=True, mode="json"), **hint_payload(self.performance_hints)}
 
 
 class CodexClipProposal(_StrictModel):
@@ -714,6 +718,7 @@ CodexInitialSelectionSummaryStatus = Literal[
 
 
 class CodexInitialSelectionSummary(_StrictModel):
+    performance_hints: list[dict[str, Any]] = Field(default_factory=list, alias="performanceHints", exclude_if=lambda v: not v)
     parent_range_adjustments: list[ShortParentRangeAdjustment] = Field(default_factory=list, alias="parentRangeAdjustments")
     requested_total: int | None = Field(default=None, alias='requestedTotal')
     selected_total: int | None = Field(default=None, alias='selectedTotal')
@@ -879,6 +884,8 @@ def _compute_input_hash(request: BaseModel) -> str:
         mode="json",
         exclude={"input_hash"},
     )
+    from app.intelligence.performance_hints import hint_payload
+    payload.update(hint_payload(getattr(request, "performance_hints", [])))
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -1057,6 +1064,9 @@ def build_codex_initial_selection_request(
     video_duration: float,
     settings: dict[str, Any],
 ) -> CodexInitialSelectionRequest:
+    from app.intelligence.performance_hints import active_hint_uses
+    hints = (active_hint_uses(settings.get("_performanceHints"), target="selection")
+             if settings.get("usePerformanceHints", True) else [])
     clean_transcript = sorted(
         (segment for segment in unused_items(transcript_segments, settings) if segment.text.strip()),
         key=lambda item: (item.start, item.end),
@@ -1108,6 +1118,7 @@ def build_codex_initial_selection_request(
             }),
         })
     request = CodexInitialSelectionRequest(
+        performanceHints=hints,
         jobId=job_id,
         requestId=uuid4().hex,
         inputHash="0" * 64,
@@ -1274,6 +1285,7 @@ def build_codex_topic_selection_request(
     request: CodexInitialSelectionRequest,
 ) -> CodexTopicSelectionRequest:
     topic_request = CodexTopicSelectionRequest(
+        performanceHints=request.performance_hints,
         jobId=request.job_id,
         requestId=uuid4().hex,
         inputHash="0" * 64,
@@ -1545,6 +1557,7 @@ def build_codex_boundary_refinement_request(
         if any(_overlaps(start, end, item.start, item.end) for start, end in windows)
     ][:256]
     refinement_request = CodexInitialSelectionRequest(
+        performanceHints=source_request.performance_hints,
         jobId=source_request.job_id,
         requestId=uuid4().hex,
         inputHash="0" * 64,
@@ -2471,6 +2484,7 @@ def convert_codex_initial_selection_response(
         ],
     )
     summary_model = CodexInitialSelectionSummary(
+        performanceHints=request.performance_hints,
         status="completed",
         fallbackUsed=False,
         error=None,
@@ -2554,6 +2568,7 @@ def _empty_quality_result(
         requestedShortCount=source_request.constraints.short.requested_count,
     )
     summary = CodexInitialSelectionSummary(
+        performanceHints=source_request.performance_hints,
         status="completed",
         fallbackUsed=False,
         error=None,

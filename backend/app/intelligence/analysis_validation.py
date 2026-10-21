@@ -7,12 +7,17 @@ from pydantic import Field, ValidationError, create_model
 
 from app.intelligence.analysis_input import AnalysisContext
 from app.intelligence.analysis_schema import Finding, Proposal, Review
+from app.intelligence.performance_schema import PerformanceHint
+from app.intelligence.hint_validation import hint_issue
 from app.intelligence.recommendation_rules import FRAMEWORK_VERSION
 
 Envelope = create_model("ReviewEnvelope", __config__=Review.model_config,
-    **{name: (field.annotation, field) for name, field in Review.model_fields.items() if name not in {"findings", "proposals"}},
-    findings=(list[Any], Field(min_length=1, max_length=20)), proposals=(list[Any], Field(max_length=12)))
-SAFE_FIELDS = frozenset().union(*(model.model_fields for model in (Review, Finding, Proposal))) | {
+    **{name: (field.annotation, field) for name, field in Review.model_fields.items()
+       if name not in {"findings", "proposals", "performance_hints"}},
+    findings=(list[Any], Field(min_length=1, max_length=20)), proposals=(list[Any], Field(max_length=12)),
+    performance_hints=(list[Any], Field(default_factory=list, max_length=50)))
+SAFE_FIELDS = frozenset().union(*(model.model_fields for model in (Review, Finding, Proposal, PerformanceHint))) | {
+    "group_id", "count",
     "surface", "viewer_need", "stage", "signal_hypothesis", "evidence_gap", "rule_ids", "start", "end", "action"}
 
 
@@ -89,7 +94,9 @@ def validate_review(output, context: AnalysisContext, *, diagnostics: dict | Non
                         and context.evidence[id]["source"] in {"youtube_analytics", "youtube_public"} for id in item.evidence_ids):
                     issue("BASELINE_EVIDENCE_MISSING", (*prefix, "evidence_ids"))
             elif not unknown and item.format != "all" and any(
-                evidence["video_id"] and context.videos.get(evidence["video_id"], {}).get("format") != item.format
+                (evidence["video_id"] and context.videos.get(evidence["video_id"], {}).get("format") != item.format)
+                or (evidence["source"] == "independent_aggregation"
+                    and {"normal": "videoondemand", "short": "shorts"}.get(evidence["format"]) != item.format)
                 for evidence in (context.evidence[id] for id in item.evidence_ids)
             ):
                 issue("FINDING_FORMAT_MISMATCH", (*prefix, "format"))
@@ -101,8 +108,22 @@ def validate_review(output, context: AnalysisContext, *, diagnostics: dict | Non
     if not accepted["findings"]:
         issue("NO_VALID_FINDINGS", ["findings"])
         fail()
+    hints, counts = [], Counter()
+    groups = {group["id"]: group for group in payload.get("production_aggregates", {}).get("groups", [])}
+    for index, raw in enumerate(envelope.performance_hints):
+        try:
+            hint = PerformanceHint.model_validate(raw)
+        except ValidationError as error:
+            schema_errors(error, ("performance_hints", index))
+            continue
+        code = hint_issue(hint, groups, context.videos, counts)
+        if code:
+            issue(code, ("performance_hints", index))
+        else:
+            hints.append(hint)
+    report["excludedHints"] = len(envelope.performance_hints) - len(hints)
     try:
-        return Review.model_validate({**envelope.model_dump(), **accepted})
+        return Review.model_validate({**envelope.model_dump(), **accepted, "performance_hints": hints})
     except ValidationError as error:
         schema_errors(error)
         fail()

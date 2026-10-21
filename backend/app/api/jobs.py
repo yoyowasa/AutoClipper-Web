@@ -1,4 +1,5 @@
 import hashlib
+from app.intelligence.performance_hints import load_performance_hints
 import json
 import mimetypes
 from app.jobs.manual_workflow import is_manual_workflow
@@ -1993,6 +1994,7 @@ def create_title_hook_suggestions(
                 ],
                 model=str((job.settings_json or {}).get("titleHookModel") or "codex-default"),
                 audience_familiarity="unknown" if (job.settings_json or {}).get("audienceFamiliarity") == "unknown" else "known",
+                performance_hints=load_performance_hints(db, job.settings_json or {}, target="title_hook"),
             )
         except KeyError as exc:
             raise HTTPException(

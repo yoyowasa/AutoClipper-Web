@@ -96,6 +96,8 @@ export function CharacterPresetManager({ settings, disabled, onChange }: {
         <option value="unknown">知名度低（題材優先）</option>
       </select>
     </label>
+    <label className="flex items-center gap-2"><input type="checkbox" checked={settings.usePerformanceHints ?? true}
+      onChange={event => onChange({ ...latest.current.settings, usePerformanceHints: event.target.checked })} />実績ヒントを使う</label>
     <button className="min-h-10 bg-neutral-950 px-2 text-white disabled:opacity-40" type="button"
       disabled={!name.trim() || (!existing && document.presets.length >= 50)} onClick={() => void save()}>
       {existing ? "この名前のキャラ設定を上書き保存" : "現在の設定をキャラごと保存"}
