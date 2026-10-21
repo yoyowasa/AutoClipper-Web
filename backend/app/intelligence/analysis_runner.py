@@ -10,6 +10,7 @@ from app.config import get_settings
 from app.db import SessionLocal
 from app.intelligence.analysis_bridge import ANALYSIS_TIMEOUT_SECONDS, ChannelAnalysisGenerator, cleanup_analysis_files
 from app.intelligence.analysis_errors import AnalysisError, MESSAGES
+from app.intelligence.analysis_budget import compression_limitation
 from app.intelligence.analysis_input import build_analysis_input
 from app.intelligence.analysis_validation import ReviewValidationError, validate_review
 from app.intelligence.common import now
@@ -86,6 +87,14 @@ def run_channel_analysis(id: str, *, session_factory=SessionLocal, paths=None, c
                 raise AnalysisError("CODEX_STALE_EVIDENCE") from None
             if run.status != "running" or fresh.fingerprint != context.fingerprint or now() >= context.expires_at:
                 raise AnalysisError("CODEX_STALE_EVIDENCE")
+            # The saved result must disclose sampling/trimming even if Codex omits it.
+            limitation = compression_limitation(context.payload)
+            validated.limitations = ([limitation, *validated.limitations] if len(validated.limitations) < 10 else
+                                     [limitation + "\n" + validated.limitations[0], *validated.limitations[1:]])
+            diagnostics["inputCompression"] = {
+                "scope": context.payload["input_scope"], "budget": context.payload["budget_omissions"],
+                "deduplicatedReports": context.payload["deduplicated_reports"],
+            }
             run.review = validated.model_dump(mode="json")
             run.validation = AnalysisValidationDiagnostics(report=diagnostics)
             run.status, run.finished_at, run.active_channel_id = "success", now(), None
