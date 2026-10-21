@@ -3,11 +3,11 @@
 import json
 from app.intelligence.recommendation_rules import FRAMEWORK_VERSION, prompt_rules
 
-PROMPT_VERSION = "channel_self_analysis_v1"
+PROMPT_VERSION = "channel_self_analysis_v2"
 MAX_ANALYSIS_PROMPT_CHARS = 280_000
 
 
-def analysis_prompt(payload: dict) -> str:
+def render_analysis_prompt(payload: dict) -> str:
     body = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
     instructions = (
         "あなたはAutoClipperの自己分析担当。日本語のJSONのみ返す。ツールは使用しない。\n"
@@ -48,8 +48,16 @@ def analysis_prompt(payload: dict) -> str:
         "制作案は低再生の確定原因の修正と書かず、視聴者反応が確認された場合の条件付き実験として位置づける。"
         "形式未確定の動画を根拠に含むfindingのformatはallにする。"
         "分析は観測事実、原因候補、性質の違う代替説明2つ以上、反対証拠、次の検証、確度に分ける。"
-        "evidence_idsは入力中のIDをそのまま引用。数字は対応する公式値のみ。独自スコア・倍率・増減率を作らない。"
-        "evidenceの値は原値、groupがevidence_groupsの出所・期間・対象に対応。IDの末尾が指標名。単位はmetric_unitsを参照。"
+        "evidence_idsは入力中のIDをそのまま引用。数字は対応する公式値か明示されたperiod_totalの返却日合計のみ。"
+        "独自スコア・倍率・増減率を作らない。"
+        "根拠はchannel_reportsと各videosのreportsに一度だけ収録。各reportのvaluesは指標名と値の対応。"
+        "統計の根拠IDはreport.id + ':' + 指標名（例r:123:views、p:動画ID:views）。"
+        "productionはproduction.idをそのまま引用する。単位はmetric_unitsを参照。"
+        "source/definition_versionはreportに指定がなければreport_defaultsを継承。periodは開始日・終了日。"
+        "period_totalだけは返却された日次の加算可能な指標の合計。coverageに欠損日と返却日数を示す。"
+        "平均値・割合は合算も再平均もしていない。video_periodは公式の直近28日、first7は公式の初期7日、"
+        "peak_dayは返却日のうちviews最多の日。同値なら新しい日。欠損日を0としない。"
+        "input_scopeの対象条件と除外件数、budget_omissionsの省略をlimitationsに明記し、対象外へ一般化しない。"
         "ユーザー向け文章では「動画224」「g11」のような内部番号だけで動画や集計を指さず、動画タイトルと出所を使う。"
         "video_age_secondsを説明するときは日または時間へ丸めて示し、生の秒数を文章に出さない。"
         "同じ期間・形式・指標定義版の比較を優先。28日への寄与と公開翌日から7暦日の初期実績を混ぜない。"
@@ -72,6 +80,11 @@ def analysis_prompt(payload: dict) -> str:
         "入力に無い流入元・維持率も欠損として扱う。提案の採用や改善試験は実行しない。"
     )
     prompt = instructions + "\n<untrusted_channel_data>\n" + body + "\n</untrusted_channel_data>"
+    return prompt
+
+
+def analysis_prompt(payload: dict) -> str:
+    prompt = render_analysis_prompt(payload)
     if len(prompt) > MAX_ANALYSIS_PROMPT_CHARS:
         raise ValueError("CODEX_CONTEXT_TOO_LARGE")
     return prompt

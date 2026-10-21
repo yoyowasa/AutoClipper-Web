@@ -125,9 +125,11 @@ def execute(prepared, id, factory=FixedGenerator):
 def test_input_native_periods_missing_ids_and_production(prepared):
     ctx = build_analysis_input(prepared.db, prepared.paths, prepared.config, 1, "analysis_test", CLOCK)
     assert set(ctx.payload["format_videos"]["shorts"]) == {VIDEO_ID}
-    kinds = {group["kind"] for group in ctx.payload["evidence_groups"].values()}
-    assert {"daily", "current", "previous", "first7", "video_period", "video_format", "public"} <= kinds
-    assert any(item["reason"] == "UNAVAILABLE" for item in ctx.payload["missing_basic_reports"])
+    reports = [*ctx.payload["channel_reports"], *ctx.videos[VIDEO_ID]["reports"]]
+    kinds = {report["kind"] for report in reports}
+    assert {"daily", "current", "previous", "first7", "video_period", "public"} <= kinds
+    assert "video_format" not in kinds and ctx.payload["deduplicated_reports"] == 1
+    assert any("UNAVAILABLE" in report["missing"].values() for report in reports)
     assert all(item["value"] is not None for item in ctx.evidence.values())
     assert any(item["value"] == -1 for item in ctx.evidence.values())
     assert "production_evidence_id" not in ctx.videos[VIDEO_ID]
