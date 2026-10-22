@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { DEFAULT_SETTINGS, SettingsPanel, settingsForRuntimeProfile } from "../components/SettingsPanel";
+import { JobProgress } from "../components/JobProgress";
+import type { JobStatusResponse } from "../lib/types";
 
 import {
   automationGateDisplay,
@@ -9,6 +14,34 @@ import {
 assert.equal(isExceptionOnlyAutomationMode("guarded"), true);
 assert.equal(isExceptionOnlyAutomationMode("auto"), true);
 assert.equal(isExceptionOnlyAutomationMode("shadow"), false);
+
+for (const profile of ["cpu", "gpu", null]) {
+  const settings = settingsForRuntimeProfile(profile);
+  assert.equal(settings.automationMode, "auto");
+  assert.equal(settings.requireSubtitleReview, true);
+  assert.equal(settings.requireClipPlanReview, true);
+  assert.equal(settings.burnSubtitles, true);
+}
+const settingsHtml = renderToStaticMarkup(createElement(SettingsPanel, { settings: DEFAULT_SETTINGS, onChange: () => {} }));
+assert.ok(settingsHtml.includes("字幕確認で必ず止まります"));
+assert.ok(settingsHtml.includes("clipごとの確定時に正式プレビュー"));
+assert.ok(!settingsHtml.includes("完成まで自動"));
+const humanReview = automationGateDisplay({
+  automationEffectiveMode: "auto", humanSubtitleReviewRequired: true,
+  automationGateStage: "content", automationGateState: "needs_attention",
+  automationGateReasonCodes: ["human_subtitle_review_required", "preview_not_ready_or_unverifiable"]
+});
+assert.equal(humanReview.title, "字幕を確認・修正して確定してください");
+assert.deepEqual(humanReview.reasonLabels, ["字幕を確認・修正し、各clipを確定してください", "正式プレビューの完成待ち（clip確定後に作成）"]);
+const progress = renderToStaticMarkup(createElement(JobProgress, { job: {
+  id: "isolated", status: "awaiting_subtitle_review", progress: 80, currentStep: "字幕確認", error: null, details: {
+    humanSubtitleReviewRequired: true, automationEffectiveMode: "auto", automationGateStage: "content",
+    subtitleReviewConfirmedClips: 0, subtitleReviewTotalClips: 1
+  }
+} satisfies JobStatusResponse }));
+assert.ok(progress.includes("字幕を確認・修正し、各clipを確定してください"));
+assert.ok(!progress.includes("問題のあるタイトル・字幕だけ"));
+assert.ok(!progress.includes("自動通過"));
 
 const attention = automationGateDisplay({
   automationEffectiveMode: "auto",

@@ -27,7 +27,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   minNormalClipCount: 0,
   minShortCount: 0,
   workflowMode: "automatic",
-  automationMode: "manual",
+  automationMode: "auto",
   manualSubtitleMode: "auto",
   mode: "high_quality",
   profile: "auto",
@@ -150,7 +150,7 @@ export function SettingsPanel({
   const exceptionOnlyAutomation = isExceptionOnlyAutomationMode(settings.automationMode);
   const automationDescription =
     settings.automationMode === "auto"
-      ? "問題がなければ完成まで自動で進み、問題または判定不能の項目だけ人の確認へ戻します。"
+      ? "範囲・タイトル・フック・投稿文を自動で決め、字幕確認で必ず止まります。字幕を直して確定した後に書き出します。"
       : settings.automationMode === "guarded"
         ? "段階運用です。自動判定できない項目または問題がある項目だけ確認します。"
         : settings.automationMode === "shadow"
@@ -359,7 +359,7 @@ export function SettingsPanel({
                 <span>開始後の確認</span>
                 <span className="text-xs font-normal text-neutral-500">
                   {settings.automationMode === "auto"
-                    ? "問題・判定不能だけ人へ戻す"
+                    ? "自動で選び、字幕は人が確認"
                     : settings.automationMode === "guarded"
                       ? "自動判定できない項目または問題時のみ確認"
                     : !settings.burnSubtitles
@@ -401,7 +401,7 @@ export function SettingsPanel({
                   <option value="manual">手動確認（現行）</option>
                   <option value="shadow">Shadow（自動判断を保存し、全件確認）</option>
                   <option value="guarded">問題だけ確認（段階運用）</option>
-                  <option value="auto">自動（問題だけ人へ戻す）</option>
+                  <option value="auto">自動（字幕は人が確認）</option>
                 </select>
                 <span className="text-xs text-neutral-600">{automationDescription}</span>
               </label>
@@ -467,7 +467,9 @@ export function SettingsPanel({
                 <span>
                   <span className="block text-sm font-semibold text-neutral-900">字幕を確認</span>
                   <span className="mt-1 block text-xs text-neutral-600">
-                    {exceptionOnlyAutomation
+                    {settings.automationMode === "auto"
+                      ? "簡易プレビューで字幕を修正し、clipごとの確定時に正式プレビューを作ります。"
+                      : exceptionOnlyAutomation
                       ? "問題または判定不能のときだけ、字幕を確認します。"
                       : "書き出し前に字幕を確認します。"}
                   </span>

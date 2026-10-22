@@ -1163,3 +1163,14 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: Ruff 0.16.10の`check . ../launcher ../scripts`成功。Windows/Python 3.11のbackend最終全件は2137 passed・2 skipped（mainから10ケース追加）。frontendのlint/typecheck/全36テスト/build成功。隔離DB/storageのTestClientと既存pipeline/サムネ結合テストで、自動推薦→人の編集→根拠変更→完成物、種類/フックの手動変更、戻る操作での履歴保持、実際のdelete-jobsでの記録保持、再書き出し、サムネ編集後更新/記録保存失敗を検証。既存の障害注入テストは保存用引数を転送するよう直し、元の期待値を維持した。backfillの観測時刻の扱いを追加後、関連25件も成功。
 - 差分確認: git diff --check、変更文書のローカルリンク、frontend/launcher/依存lock/到達仕様§3/統合構想の不変を確認。Codexプロンプト/中継契約・尺/品質ゲートも変更なし。Python 3.11/3.12・frontend CIの結果はPRに記録する。
 - 未確認/停止点: 実動画/実Codex/ユーザー画面受入/成績効果は未確認。稼働DB/既存ジョブの更新・backfill・Docker再build/再起動は実施しない。1-B〜1-Eは未実装で、プリセット/既定値の詳細な由来と描画時の最終解決値は1-Dで接続する。1-Aだけで全自動選択/全記録の完成とはしない。実装PRはCI成功後も未マージでレビュー待ちにする。
+
+## 2026-10-23 task-222 残り作業1-B 自動決定から人の字幕確認へ
+
+- 目的/開始点: ユーザー指示に従い、PR #155のPython 3.11/3.12・frontend CI成功を確認し、merge commit `110413a`でマージ。そのmainから`codex/task-222-auto-to-subtitle-review`を作成し、承認済みの1-Bだけを実装した。
+- 変更ファイル: backendの`api/jobs.py`・`jobs/automation.py`・`runner.py`・`quality_gate.py`・`production_choice_capture.py`、新規`test_auto_human_review.py`と既存の自動化結合テスト。frontendの`SettingsPanel`・`JobProgress`・ジョブ進捗ページ・`automationQuality`・typesと同テスト。タスク案と本STATUSも更新した。
+- 新規/互換: 新規画面の既定を既存autoへ変更。新規作成時のauto（手動ワークフロー除外）だけに`_automationPolicyVersion=auto-human-subtitle-review-v1`をサーバー側で付け、既存manifestにも版と人の字幕確認を記録する。APIでモード未指定の従来既定は維持し、保存済みジョブへ版を後付けしない。旧auto・manual・shadow・guarded、旧設定の読込/retryは従来の動作を保つ。状態APIの人の確認用項目は新方針ジョブだけに返す。
+- 流れ: 既存の選定器・推薦生成/適用・投稿文を再利用し、正常時は候補確認の操作を省いて全clip未確認で字幕確認へ渡す。戻る操作に使う承認済みclip planも保存する。品質ゲートに人の確認条件を追加し、仮に判定がpassでもworker/API/プレビュー完了から自動書き出しに進まない。字幕確認に入る時点では簡易プレビューのみ、clipのapplyで正式プレビューを作り、完成後も明示的なfinalizeを待つ。尺・最終品質の検証は維持する。
+- 例外/再開: 本数不足・選定の判定不能・Codex選定の代替使用は切り抜き確認へ、文言生成失敗は理由付きで字幕確認へ戻す。人の字幕・文言・投稿文と適用済み推薦を保護し、既存の再開マーカー/生成キャッシュを使って中断後の二重生成を防ぐ。再配送、候補承認の二重呼出し、通常のretry、境界の再編集、字幕確認を明示的に破棄して戻る経路を確認する。成功と失敗の理由は1-AのchoiceHistoryへ版付きで残し、別台帳やキューを作らない。
+- 画面: 新規autoを「自動（字幕は人が確認）」と表示し、進捗/確認入口は全clipの人の確認と確認済み件数を案内する。旧autoの例外だけ確認する表示は維持する。字幕の一回確定・下書き保存・手動の再生成や戻る操作は再利用し、プロンプト、known/unknown、実績ヒント、サムネ/スタイルの決定処理は変えない。
+- 検証: Ruff 0.16.10の`check . ../launcher ../scripts`成功。Windows/Python 3.11の最終全件は2152 passed・2 skipped（新規15ケースを含む）。frontendの最終lint/typecheck/全36テスト/build成功。隔離DB/storageのTestClientで、通常/ショートの自動推薦→未確認停止→字幕修正/apply→正式プレビュー→明示的finalize→完成、生成失敗/不足/再開/旧ジョブ互換を検証した（Codex・映像処理・キューはモック。最終MP4品質ゲートは模擬媒体のため差し替え、既存の実媒体テストは全件検証に含む）。
+- 隔離画面/未確認: 専用DB/storageと18222/13222ポートでAPI/Next.jsを起動し、新規既定/説明、字幕確認への遷移、適用済み推薦、未確認/一回確定/戻る導線をブラウザで確認した。媒体はモックで、実動画再生・実Codex生成・ユーザー受入・成績効果は未確認。稼働DBのサイズ/更新時刻は検証前後で不変、検証用サーバーは停止済み。稼働環境の変更、Docker再build/再起動は行わず、launcher/契約は変更なしで中継再起動不要。CI成功後も実装PRは未マージで止める。1-C〜1-Eは未実装。

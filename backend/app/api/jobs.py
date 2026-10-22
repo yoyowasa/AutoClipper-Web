@@ -34,8 +34,11 @@ from app.downloads import (
 from app.storage.locking import storage_mutation_lock
 from app.ids import make_id
 from app.jobs.automation import (
+    AUTOMATION_POLICY_SETTING,
+    HUMAN_SUBTITLE_REVIEW_POLICY,
     automation_manifest_path,
     load_automation_manifest,
+    requires_human_subtitle_review,
 )
 from app.jobs.quality_gate import (
     QualityGateStage,
@@ -1000,6 +1003,7 @@ def _prepare_auto_review_render_unlocked(
     output_dir = paths.job_outputs(job.id)
     if (
         _job_quality_gate_mode(job, output_dir) != "auto"
+        or requires_human_subtitle_review(job.settings_json or {})
         or job.status != "awaiting_subtitle_review"
         or document.state != "awaiting_review"
     ):
@@ -1100,6 +1104,8 @@ def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
     details: dict[str, Any] = {}
     output_dir = paths.job_outputs(job.id)
     job_settings = job.settings_json if isinstance(job.settings_json, dict) else {}
+    if requires_human_subtitle_review(job_settings):
+        details["humanSubtitleReviewRequired"] = True
     initial_selection_provider = str(
         job_settings.get("initialSelectionProvider") or "legacy"
     ).strip()
@@ -1569,13 +1575,18 @@ def create_job(
                 },
             )
 
+    new_settings = request.settings.model_dump(by_alias=True, mode="json")
+    # This policy is assigned at creation, never inferred while loading/retrying old jobs.
+    new_settings.pop(AUTOMATION_POLICY_SETTING, None)
+    if settings.automation_mode == "auto" and settings.workflow_mode != "manual":
+        new_settings[AUTOMATION_POLICY_SETTING] = HUMAN_SUBTITLE_REVIEW_POLICY
     job = Job(
         id=make_id("job"),
         video_id=video.id,
         status="queued",
         progress=5,
         current_step="Queued",
-        settings_json=request.settings.model_dump(by_alias=True, mode="json"),
+        settings_json=new_settings,
     )
     db.add(job)
     db.commit()

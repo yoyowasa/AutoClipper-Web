@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -10,6 +11,17 @@ AutomationMode = Literal["manual", "shadow", "guarded", "auto"]
 EffectiveAutomationMode = Literal["manual", "shadow", "guarded", "auto"]
 AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING = "_autoResumeAfterClipReview"
 AUTOMATION_MANIFEST_FILENAME = "automation_manifest.json"
+HUMAN_SUBTITLE_REVIEW_POLICY = "auto-human-subtitle-review-v1"
+AUTOMATION_POLICY_SETTING = "_automationPolicyVersion"
+
+
+def requires_human_subtitle_review(settings: Mapping[str, Any]) -> bool:
+    """Only newly created auto jobs opt in; persisted legacy modes stay unchanged."""
+    return (
+        settings.get("automationMode") == "auto"
+        and settings.get("workflowMode", "automatic") != "manual"
+        and settings.get(AUTOMATION_POLICY_SETTING) == HUMAN_SUBTITLE_REVIEW_POLICY
+    )
 
 
 class AutomationRoleAssignments(BaseModel):
@@ -46,6 +58,7 @@ class AutomationManifest(BaseModel):
     requested_mode: AutomationMode = Field(alias="requestedMode")
     effective_mode: EffectiveAutomationMode = Field(alias="effectiveMode")
     fallback_reason: str | None = Field(default=None, alias="fallbackReason")
+    policy_version: str | None = Field(default=None, alias="policyVersion", exclude_if=lambda value: value is None)
     state: Literal["configured"] = "configured"
     roles: AutomationRoleAssignments
     limitations: list[str] = Field(default_factory=list)
@@ -118,6 +131,7 @@ def build_automation_manifest(
         requestedMode=requested_mode,
         effectiveMode=effective_mode,
         fallbackReason=fallback_reason,
+        policyVersion=HUMAN_SUBTITLE_REVIEW_POLICY if requires_human_subtitle_review(settings) else None,
         roles=AutomationRoleAssignments(
             initialSelection=(
                 "codex" if initial_selection == "codex" else "legacy"
@@ -131,7 +145,9 @@ def build_automation_manifest(
                 else "manual" if clip_review else "skipped"
             ),
             subtitleReview=(
-                "auto_evidence"
+                "manual"
+                if requires_human_subtitle_review(settings)
+                else "auto_evidence"
                 if effective_mode == "auto"
                 else "guarded"
                 if effective_mode == "guarded"

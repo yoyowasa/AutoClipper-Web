@@ -82,6 +82,7 @@ from app.jobs.clip_plan import (
 )
 from app.jobs.automation import (
     AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING,
+    requires_human_subtitle_review,
     automation_manifest_path,
     build_automation_manifest,
     write_automation_manifest,
@@ -1598,7 +1599,7 @@ def _prepare_auto_render_after_preview(
             )
 
         settings = dict(job.settings_json or {})
-        if _active_quality_gate_mode(job_dir, settings) != "auto":
+        if requires_human_subtitle_review(settings) or _active_quality_gate_mode(job_dir, settings) != "auto":
             return None
         invalidate_quality_gate_decisions(job_dir, ("content", "post_render"))
         try:
@@ -1668,7 +1669,20 @@ def _generate_auto_title_hook_evidence(
     artifacts: dict[str, TitleHookSuggestionsDocument] = {}
     failures: dict[str, str] = {}
     posting_settings = attach_performance_hints(db, dict(settings or {})) if db is not None else settings or {}
+    human_review = requires_human_subtitle_review(posting_settings)
+    from app.production_choice_capture import capture_auto_review_outcome
+    saved_artifacts = _load_title_hook_evidence(paths.job_outputs(document.job_id), document) if human_review else {}
     for clip in document.clips:
+        if human_review and (
+            clip.title_edited or clip.post_metadata_source or clip.confirmed or clip.edited_segment_count
+            or any(choice.clipId == clip.id and choice.source == "manual" and choice.kind in {"title_hook", "post_copy"}
+                   for choice in document.choice_history)
+        ):
+            # A resumed job/boundary edit must not regenerate over accepted or manually edited copy.
+            # Stale evidence remains visible in the existing quality gate and suggestion panel.
+            if clip.id in saved_artifacts:
+                artifacts[clip.id] = saved_artifacts[clip.id]
+            continue
         try:
             hints = (active_hint_uses(posting_settings.get("_performanceHints"), target="title_hook", format=clip.type)
                      if posting_settings.get("usePerformanceHints", True) else [])
@@ -1693,8 +1707,14 @@ def _generate_auto_title_hook_evidence(
                 youtube_posting_profile=posting_settings.get("youtubePostingProfile"),
             )
             artifacts[clip.id] = artifact
+            if human_review:
+                capture_auto_review_outcome(document, clip.id, input_revision=artifact.revision_hash)
         except Exception as exc:
             failures[clip.id] = exc.__class__.__name__
+            if human_review:
+                capture_auto_review_outcome(document, clip.id, error_type=type(exc).__name__)
+        if human_review:
+            write_subtitle_review(document, subtitle_review_output_path(paths.job_outputs(document.job_id)))
     refresh_review_overlay_title_expectations(
         document,
         render_mode=document.render_mode,
@@ -1786,6 +1806,7 @@ def _resume_auto_after_clip_review(
         return ["awaiting_subtitle_review"]
     input_path = storage_paths.resolve_stored_file(video.stored_path)
 
+    human_review = requires_human_subtitle_review(settings)
     title_hook_evidence, _generation_failures = _generate_auto_title_hook_evidence(
         db=db,
         dependencies=dependencies,
@@ -1804,6 +1825,10 @@ def _resume_auto_after_clip_review(
     )
     visited_statuses.append("preparing_subtitle_review")
     for preview_index, clip in enumerate(review_document.clips, start=1):
+        if human_review and clip.confirmed and clip.preview_state == "ready":
+            continue
+        if human_review:
+            clip.preview_deferred = True
         try:
             result = _render_exact_subtitle_review_preview_for_clip(
                 dependencies=dependencies,
@@ -1814,17 +1839,21 @@ def _resume_auto_after_clip_review(
                 document=review_document,
                 paths=storage_paths,
                 clip_id=clip.id,
+                live_only=human_review,
             )
         except Exception:
             # The content gate observes the missing current preview and returns
             # unknown. The review UI can retry only the unavailable preview.
-            pass
+            if human_review:
+                clip.preview_state = "failed"
+                clip.preview_error = "簡易プレビューを作成できませんでした。字幕確認画面で再試行してください。"
         else:
             _mark_subtitle_review_preview_ready(
                 review_document,
                 clip_id=clip.id,
                 spec_hash=result.spec_hash,
                 live_spec_hash=result.live_spec_hash,
+                live_only=human_review,
             )
         _set_subtitle_review_preview_progress(
             db,
@@ -1859,7 +1888,7 @@ def _resume_auto_after_clip_review(
         content_gate,
         quality_gate_decision_path(job_dir, "content"),
     )
-    if content_gate_path is None or content_gate.route != "continue":
+    if human_review or content_gate_path is None or content_gate.route != "continue":
         _set_status(db, job, "awaiting_subtitle_review")
         visited_statuses.append("awaiting_subtitle_review")
         return visited_statuses
@@ -1958,6 +1987,11 @@ def run_autoclipper_job(
         resume_after_clip_review = bool(
             settings.get(AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING, False)
         )
+        if requires_human_subtitle_review(settings) and not resume_after_clip_review and job.status in {
+            "awaiting_clip_review", "awaiting_subtitle_review", "completed",
+        }:
+            # A redelivered queue item must not repeat selection or overwrite human drafts.
+            return [job.status]
         if resume_after_clip_review:
             consume_resume_marker = True
             resume_settings = dict(settings)
@@ -2875,7 +2909,10 @@ def run_autoclipper_job(
             allocation_needs_review = bool(
                 is_ai_allocation(settings) and selection.shortfall_reasons and not manual_workflow
             )
-            if guarded_selection_needs_review or manual_clip_plan_review or allocation_needs_review:
+            selection_fallback_needs_review = (
+                requires_human_subtitle_review(settings) and codex_requested and codex_initial_selection_result is None
+            )
+            if guarded_selection_needs_review or manual_clip_plan_review or allocation_needs_review or selection_fallback_needs_review:
                 plan_path = _prepare_clip_plan_review(
                     db=db,
                     job=job,
@@ -2916,6 +2953,26 @@ def run_autoclipper_job(
                     source_width=video.width,
                     source_height=video.height,
                 )
+                if automation_mode == "auto" and requires_human_subtitle_review(settings):
+                    # Keep a plan even when its UI was skipped, so both existing return paths work.
+                    plan = build_clip_plan(job.id, selection, settings, source_duration=duration)
+                    plan.review_entry_settings = dict(job.settings_json or {})
+                    write_clip_plan(mark_clip_plan_approved(plan), clip_plan_output_path(job_dir), choice_source="automatic")
+                    write_subtitle_review(review_document, subtitle_review_output_path(job_dir))
+                    # Reuse the durable resume marker and worker path used after candidate approval.
+                    job.settings_json = {**dict(job.settings_json or {}), AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING: True}
+                    db.commit()
+                    write_summaries()
+                    statuses = _resume_auto_after_clip_review(
+                        db=db, job=job, video=video, settings=settings, session_factory=session_factory,
+                        storage_paths=storage_paths, dependencies=deps,
+                    )
+                    db.refresh(job)
+                    persisted_settings = dict(job.settings_json or {})
+                    persisted_settings.pop(AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING, None)
+                    job.settings_json = persisted_settings
+                    db.commit()
+                    return [*visited_statuses, *statuses]
                 if automation_mode == "auto":
                     title_hook_evidence, _title_hook_failures = (
                         _generate_auto_title_hook_evidence(

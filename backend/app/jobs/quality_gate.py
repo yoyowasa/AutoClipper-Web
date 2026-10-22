@@ -25,6 +25,7 @@ from app.candidates.short_diversity import (
     select_diverse_shorts,
 )
 from app.jobs.subtitle_review import SubtitleReviewDocument
+from app.jobs.automation import requires_human_subtitle_review
 from app.jobs.title_hook_suggestions import TitleHookSuggestionsDocument
 from app.overlay_text import fit_overlay_text
 from app.posting_metadata import (
@@ -1183,6 +1184,12 @@ def evaluate_content_quality_gate(
         else "unknown"
     )
     checks = [_content_structure_check(document), _preview_check(document)]
+    if requires_human_subtitle_review(settings):
+        checks.append(_check(
+            "content.human_subtitle_review", "pass" if all_clips_accepted else "unknown",
+            reason_code=None if all_clips_accepted else "human_subtitle_review_required",
+            evidence=all_clips_evidence,
+        ))
     if mode == "auto":
         checks.extend(
             [

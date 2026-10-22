@@ -93,7 +93,9 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
         ? "自動処理を止め、問題のある切り抜き予定だけ確認へ戻しました"
         : "切り抜き予定を確認してください"
       : job.status === "awaiting_subtitle_review"
-        ? exceptionOnlyAutomation
+        ? job.details.humanSubtitleReviewRequired
+          ? "字幕を確認・修正し、各clipを確定してください"
+          : exceptionOnlyAutomation
           ? "自動処理を止め、問題のあるタイトル・字幕だけ確認へ戻しました"
           : "字幕を確認してください"
         : job.currentStep;
@@ -161,7 +163,11 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
               {automationGate.title}
               {automationGate.stageLabel ? `: ${automationGate.stageLabel}` : ""}
             </p>
-            {automationGate.autoPassedClips !== null || automationGateAttentionCount !== null ? (
+            {job.details.humanSubtitleReviewRequired && automationGate.stage === "content" ? (
+              <p className="mt-1 tabular-nums">
+                確認済み {Number(job.details.subtitleReviewConfirmedClips ?? 0)} / {Number(job.details.subtitleReviewTotalClips ?? 0)}
+              </p>
+            ) : automationGate.autoPassedClips !== null || automationGateAttentionCount !== null ? (
               <p className="mt-1 tabular-nums">
                 自動通過 {automationGate.autoPassedClips ?? 0}件 ・ 要確認{" "}
                 {automationGateAttentionCount ?? 0}件
