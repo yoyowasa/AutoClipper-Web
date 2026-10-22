@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.candidates.short_parent_range import ShortParentRangeAdjustment
 from app.downloads import export_download_name
 from app.models import ExportItem, Job
+from app.intelligence.performance_schema import UsedPerformanceHint
+from app.production_hint_records import recorded_performance_hints
 from app.storage.json_io import write_json_atomic
 from app.storage.lifecycle import _resolve_stored_path
 from app.storage.locking import storage_mutation_lock
@@ -76,6 +78,7 @@ class RecordThumbnail(RecordModel):
 
 
 class ProductionRecord(RecordModel):
+    performanceHints: list[UsedPerformanceHint] = Field(default_factory=list, exclude_if=lambda v: not v)
     schemaVersion: Literal[1] = 1
     recordId: str
     revision: int = Field(ge=1)
@@ -157,6 +160,7 @@ def build_production_record(
         thumbnail_source = "asset" if data["thumbnail_source_time_basis"] == "character_asset" else "video"
     now = datetime.now(UTC)
     return ProductionRecord(
+        performanceHints=recorded_performance_hints(paths, job.id, export.candidate_id, export.type),
         recordId=export.id, revision=previous.revision + 1 if previous else 1,
         createdAt=created_at if created_at is not None else previous.createdAt if previous else now,
         updatedAt=max(now, created_at) if created_at is not None else now,

@@ -78,6 +78,7 @@ export type ClipSettings = {
   excludePreviousSelection?: boolean;
   characterPresetName?: string;
   audienceFamiliarity?: "known" | "unknown";
+  usePerformanceHints?: boolean;
   characterPresetId?: string;
   channelName?: string;
   normalTitleSuffix?: string | null;

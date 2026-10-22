@@ -3,7 +3,7 @@
 import json
 from app.intelligence.recommendation_rules import FRAMEWORK_VERSION, prompt_rules
 
-PROMPT_VERSION = "channel_self_analysis_v2"
+PROMPT_VERSION = "channel_self_analysis_v3"
 MAX_ANALYSIS_PROMPT_CHARS = 280_000
 
 
@@ -48,7 +48,8 @@ def render_analysis_prompt(payload: dict) -> str:
         "制作案は低再生の確定原因の修正と書かず、視聴者反応が確認された場合の条件付き実験として位置づける。"
         "形式未確定の動画を根拠に含むfindingのformatはallにする。"
         "分析は観測事実、原因候補、性質の違う代替説明2つ以上、反対証拠、次の検証、確度に分ける。"
-        "evidence_idsは入力中のIDをそのまま引用。数字は対応する公式値か明示されたperiod_totalの返却日合計のみ。"
+        "evidence_idsは入力中のIDをそのまま引用。数字は対応する公式値、明示されたperiod_totalの返却日合計、"
+        "production_aggregatesの独自中央値・相対値だけを出所を区別して引用する。"
         "独自スコア・倍率・増減率を作らない。"
         "根拠はchannel_reportsと各videosのreportsに一度だけ収録。各reportのvaluesは指標名と値の対応。"
         "統計の根拠IDはreport.id + ':' + 指標名（例r:123:views、p:動画ID:views）。"
@@ -73,6 +74,15 @@ def render_analysis_prompt(payload: dict) -> str:
         "reviewed_materialはstatistics_and_titles。id/channel_id/batch_run_idは入力と一致させる。\n"
     )
     instructions += (
+        "production_aggregatesはローカル計算の独自集計でYouTube公式値ではない。指標は動画ごとの公式初期7日値の中央値。"
+        "relative_to_channel_medianは同じチャンネル・形式の中央値に対する比で因果効果ではない。欠損・0除算はnull。"
+        "同じ動画が属性別の複数グループに属するため、グループ件数を足さない。"
+        "performance_hintsにキャラ×形式ごと最大5件の制作ヒントを返す。全体で最大50件。0件でもよい。"
+        "targetはselection/title_hook、textは日本語1〜2文。制作規則でなく観測に基づく参考・仮説と明記する。"
+        "evidence_groupsに集計group_idと実際のcount、video_idsに根拠動画IDを重複なく5〜20本、confidenceを返す。"
+        "sufficient=trueかつ5本以上の集計のみ根拠にする。根拠不足ならperformance_hints=[]。"
+        "グループ全体が5本以上でも、指標の観測countが5未満ならその指標をヒントの理由にしない。"
+        "キャラ名・形式は集計と一致させる。YouTube動画タイトルやURLをヒント本文に引用しない。"
         "制作情報はproductionの根拠IDを引用する。未結合動画には制作情報が無い。"
         "制作情報の数値は制作記録の値であり、YouTube公式統計と区別する。"
         "尺・フック・タイトル・openingScoreと成績の相関から因果や効果を断定しない。"

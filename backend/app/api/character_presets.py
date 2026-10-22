@@ -24,6 +24,7 @@ PRESETS_KEY = "character_presets"
 class CharacterSettings(SubtitleStyleSnapshot):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     audience_familiarity: Literal["known", "unknown"] = Field(default="known", alias="audienceFamiliarity")
+    use_performance_hints: bool = Field(default=True, alias="usePerformanceHints")
     channel_name: str = Field(default="", max_length=120, alias="channelName")
     youtube_posting_profile: YouTubePostingProfile = Field(default_factory=YouTubePostingProfile, alias="youtubePostingProfile")
     normal_title_suffix: str = Field(default="", max_length=80, alias="normalTitleSuffix")

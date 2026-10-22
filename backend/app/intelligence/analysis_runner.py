@@ -12,6 +12,7 @@ from app.intelligence.analysis_bridge import ANALYSIS_TIMEOUT_SECONDS, ChannelAn
 from app.intelligence.analysis_errors import AnalysisError, MESSAGES
 from app.intelligence.analysis_budget import compression_limitation
 from app.intelligence.analysis_input import build_analysis_input
+from app.intelligence.production_aggregation import save_production_aggregates
 from app.intelligence.analysis_validation import ReviewValidationError, validate_review
 from app.intelligence.common import now
 from app.intelligence.models import AnalysisRun, AnalysisValidationDiagnostics, Channel, SyncRun
@@ -67,6 +68,7 @@ def run_channel_analysis(id: str, *, session_factory=SessionLocal, paths=None, c
             db.expire_all()
             run = db.get(AnalysisRun, id)
             context = build_analysis_input(db, storage, settings, run.channel_id, id, now())
+            save_production_aggregates(db, run.channel_id, context.aggregates, now())
             run.sync_run_id = context.payload["batch"]["run_id"]
             run.input_snapshot, run.expires_at = context.payload, context.expires_at
             db.commit()

@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.intelligence.recommendation_rules import FRAMEWORK_VERSION, RULES
+from app.intelligence.performance_schema import PerformanceHint
 
 Format = Literal["all", "shorts", "videoondemand"]
 
@@ -83,6 +84,7 @@ class Proposal(Strict):
 
 
 class Review(Strict):
+    performance_hints: list[PerformanceHint] = Field(default_factory=list, max_length=50)
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{8,64}$")
     channel_id: int = Field(ge=1)
     batch_run_id: str = Field(min_length=8, max_length=64)

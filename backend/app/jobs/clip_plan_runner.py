@@ -948,6 +948,7 @@ def run_clip_plan_reselection(
                 job_dir / "heatmap_validation_summary.json",
                 heatmap_summary,
             )
+            from app.intelligence.performance_hints import attach_performance_hints
             settings = _settings_with_source_history(db, job, video, storage_paths)
             settings = with_reselection_exclusions(settings, previous_plan)
             full_reselection_settings = dict(settings)
@@ -997,7 +998,7 @@ def run_clip_plan_reselection(
                         transcript_segments=transcript_segments,
                         heatmap_segments=heatmap_reference_segments,
                         video_duration=float(video.duration or visual_quality.duration),
-                        settings=settings,
+                        settings=attach_performance_hints(db, settings),
                         heartbeat=codex_reselection_heartbeat,
                     )
                     write_codex_initial_selection_summary(

@@ -1,5 +1,6 @@
 from app.storage.completed_previews import prune_job_previews_after_completion
 from app.production_records import record_completed_productions
+from app.intelligence.performance_hints import attach_performance_hints, active_hint_uses
 from app.clip_allocation import is_ai_allocation, allocate_selection, allocation_summary, candidate_pool_counts
 import json
 from app.duration_rules import duration_search_settings
@@ -1662,13 +1663,17 @@ def _generate_auto_title_hook_evidence(
     paths: StoragePaths,
     model: str,
     settings: Mapping[str, Any] | None = None,
+    db: Session | None = None,
 ) -> tuple[dict[str, TitleHookSuggestionsDocument], dict[str, str]]:
     artifacts: dict[str, TitleHookSuggestionsDocument] = {}
     failures: dict[str, str] = {}
-    posting_settings = settings or {}
+    posting_settings = attach_performance_hints(db, dict(settings or {})) if db is not None else settings or {}
     for clip in document.clips:
         try:
+            hints = (active_hint_uses(posting_settings.get("_performanceHints"), target="title_hook", format=clip.type)
+                     if posting_settings.get("usePerformanceHints", True) else [])
             artifact = dependencies.auto_title_hook_generator(
+                **({"performance_hints": hints} if hints else {}),
                 document=document,
                 clip_id=clip.id,
                 source_path=input_path,
@@ -1782,6 +1787,7 @@ def _resume_auto_after_clip_review(
     input_path = storage_paths.resolve_stored_file(video.stored_path)
 
     title_hook_evidence, _generation_failures = _generate_auto_title_hook_evidence(
+        db=db,
         dependencies=dependencies,
         document=review_document,
         input_path=input_path,
@@ -2545,7 +2551,7 @@ def run_autoclipper_job(
                         transcript_segments=transcript_segments,
                         heatmap_segments=heatmap_reference_segments,
                         video_duration=duration,
-                        settings=settings,
+                        settings=attach_performance_hints(db, settings),
                         heartbeat=codex_selection_heartbeat,
                     )
                     metadata_files.append(
@@ -2913,6 +2919,7 @@ def run_autoclipper_job(
                 if automation_mode == "auto":
                     title_hook_evidence, _title_hook_failures = (
                         _generate_auto_title_hook_evidence(
+                            db=db,
                             dependencies=deps,
                             document=review_document,
                             input_path=input_path,

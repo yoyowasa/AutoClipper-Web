@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
+from app.intelligence.performance_hints import active_hint_uses, hint_payload
 from app.jobs.subtitle_review import (
     SubtitleReviewDocument,
     load_subtitle_review,
@@ -81,6 +82,7 @@ class TitleHookSuggestionInputSegment(BaseModel):
 
 
 class TitleHookSuggestionInput(BaseModel):
+    performance_hints: list[dict[str, Any]] = Field(default_factory=list, alias="performanceHints", exclude_if=lambda v: not v)
     audience_familiarity: Literal["known", "unknown"] = Field(default="known", alias="audienceFamiliarity")
     normal_title_suffix: str = Field(default=NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, max_length=80, alias="normalTitleSuffix")
     version: int = 1
@@ -115,6 +117,7 @@ class TitleHookSuggestionInput(BaseModel):
 
     def prompt_payload(self) -> dict[str, Any]:
         return {
+            **hint_payload(active_hint_uses(self.performance_hints, target="title_hook", format=self.clip_type)),
             "audienceFamiliarity": self.audience_familiarity,
             "clipType": self.clip_type,
             "normalTitleSuffix": self.normal_title_suffix,
@@ -231,6 +234,7 @@ def build_title_hook_suggestion_input(
     model: str,
     provider: Literal["codex"] = "codex",
     audience_familiarity: Literal["known", "unknown"] = "known",
+    performance_hints: list[dict] | None = None,
 ) -> TitleHookSuggestionInput:
     if provider != "codex":
         raise ValueError("new title/hook requests must use codex")
@@ -268,6 +272,7 @@ def build_title_hook_suggestion_input(
         )
 
     normalized_model = model.strip() or "gpt-5.5"
+    hints = active_hint_uses(performance_hints, target="title_hook", format=clip.type)
     revision_hash = build_post_metadata_revision_hash(
         clip_id=clip.id,
         clip_type=clip.type,
@@ -276,6 +281,7 @@ def build_title_hook_suggestion_input(
         segments=input_segments,
     )
     hash_payload = {
+        **hint_payload(hints),
         "audienceFamiliarity": audience_familiarity,
         "promptVersion": TITLE_HOOK_PROMPT_VERSION,
         "normalTitleSuffix": clip.normal_title_suffix,
@@ -304,6 +310,7 @@ def build_title_hook_suggestion_input(
         ).encode("utf-8")
     ).hexdigest()
     return TitleHookSuggestionInput(
+        performanceHints=hints,
         audienceFamiliarity=audience_familiarity,
         promptVersion=TITLE_HOOK_PROMPT_VERSION,
         jobId=document.job_id,
@@ -538,6 +545,7 @@ def generate_title_hook_suggestions_for_auto(
     generator: TitleHookSuggestionGeneratorProtocol | None = None,
     frame_extractor: FrameExtractor = extract_representative_frames,
     audience_familiarity: Literal["known", "unknown"] = "known",
+    performance_hints: list[dict] | None = None,
 ) -> TitleHookSuggestionsDocument:
     """Generate a current Codex proposal without requiring an active review stop.
 
@@ -563,6 +571,7 @@ def generate_title_hook_suggestions_for_auto(
         model=model,
         provider="codex",
         audience_familiarity=audience_familiarity,
+        performance_hints=performance_hints,
     )
     job_dir = paths.job_outputs(document.job_id)
     state_path = title_hook_suggestions_path(job_dir, clip_id)

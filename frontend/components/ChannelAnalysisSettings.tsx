@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { getChannelAnalysis, startChannelAnalysis, analysisStatus,
   type AnalysisHistory, type AnalysisReview, type AnalysisValidationReport, type SyncBeforeAnalysis } from "../lib/channelAnalysis";
 import { youtubeSyncTime } from "../lib/intelligence";
+import { PerformanceHintsList, ProductionPerformance } from "./ProductionPerformance";
 
 const formatLabel = { all: "全体", shorts: "ショート", videoondemand: "通常" };
 const surfaceLabel = { shorts_feed: "Shortsフィード", home: "ホーム", up_next: "次の動画", search: "検索", multi_surface: "複数の表示面" };
@@ -15,6 +16,10 @@ const validationReasons: Record<string, string> = {
   BASELINE_EVIDENCE_MISSING: "基準動画の根拠が不足", FINDING_FORMAT_MISMATCH: "所見と根拠動画の形式が不一致",
   RECOMMENDATION_LINK_REQUIRED: "推薦面との関係が未指定", DUPLICATE_ITEM: "項目IDが重複",
   NO_VALID_FINDINGS: "有効な所見がない", REVIEW_ID_MISMATCH: "分析IDが不一致",
+  HINT_GROUP_UNKNOWN: "ヒントの集計IDが存在しない", HINT_COUNT_MISMATCH: "ヒントの件数が不一致",
+  HINT_SCOPE_MISMATCH: "ヒントのキャラ・形式が不一致", HINT_VIDEO_UNKNOWN: "ヒントの根拠動画が不正",
+  HINT_INSUFFICIENT_DATA: "ヒントのデータ不足", HINT_LIMIT_EXCEEDED: "ヒントの件数上限超過",
+  HINT_METADATA_QUOTED: "ヒントに動画タイトル等が含まれる", HINT_TEXT_INVALID: "ヒントの文章形式が不正",
   CHANNEL_MISMATCH: "チャンネルが不一致", BATCH_MISMATCH: "同期IDが不一致", FRAMEWORK_MISMATCH: "分析基準が不一致",
 };
 
@@ -22,7 +27,7 @@ export function AnalysisValidationText({ validation }: { validation?: AnalysisVa
   if (!validation || validation.issues.length === 0) return null;
   return <div className="space-y-1 text-sm text-amber-900" aria-label="分析の検証結果">
     <p>{validation.fatal ? "分析全体を保存できませんでした。" : "有効な部分を保存しました。"}
-      除外: 所見{validation.excludedFindings}件・提案{validation.excludedProposals}件</p>
+      除外: 所見{validation.excludedFindings}件・提案{validation.excludedProposals}件・ヒント{validation.excludedHints ?? 0}件</p>
     <ul>{Object.entries(validation.reasonCounts).map(([code, count]) =>
       <li key={code}>{validationReasons[code] ?? code}（{code}）: {count}件</li>)}</ul>
     <details><summary>該当項目</summary><ul>{validation.issues.map((issue, index) =>
@@ -33,7 +38,7 @@ export function AnalysisValidationText({ validation }: { validation?: AnalysisVa
 export function AnalysisReviewText({ review }: { review: AnalysisReview }) {
   return <div className="space-y-3 text-sm">
     <h5 className="font-semibold">{review.title}</h5><p className="whitespace-pre-wrap">{review.summary}</p>
-    <p className="text-xs text-neutral-600">統計・タイトル・制作記録からの分析です。動画本編の視聴や改善効果の検証は行っていません。</p>
+    <p className="text-xs text-neutral-600">統計・タイトル・制作記録・独自集計からの分析です。動画本編の視聴や改善効果の検証は行っていません。</p>
     <ul className="list-inside list-disc text-amber-900">{review.limitations.map((value, index) => <li key={index}>{value}</li>)}</ul>
     <h5 className="font-semibold">所見・仮説</h5>
     {review.findings.map(finding => <details key={finding.id} className="border p-3">
@@ -65,6 +70,7 @@ export function AnalysisReviewText({ review }: { review: AnalysisReview }) {
       <p className="mt-2 text-xs">根拠: {proposal.evidence_ids.join(", ")}</p>
     </details>)}
     {review.proposals.length === 0 ? <p>提案できる根拠が不足しています。制約の記録を確認してください。</p> : null}
+    <PerformanceHintsList hints={review.performance_hints} />
   </div>;
 }
 
@@ -110,6 +116,7 @@ export function ChannelAnalysisSettings({ channelId, connected, syncActive }: {
     <p className="text-sm" aria-live="polite">{analysisStatus(data?.latestRun ?? null)}</p>
     {error || data?.latestRun?.errorMessage ? <p role="alert" className="text-sm text-red-700">{error ?? data?.latestRun?.errorMessage}</p> : null}
     <AnalysisValidationText validation={data?.latestRun?.validation} />
+    <ProductionPerformance channelId={channelId} revision={data?.latestRun?.finishedAt} />
     {data?.latestResult?.review ? <>
       <p className="text-xs">最新の保存済み分析: {youtubeSyncTime(data.latestResult.finishedAt)} ／
         保持期限: {youtubeSyncTime(data.latestResult.expiresAt)}</p>

@@ -67,6 +67,15 @@ class AnalysisValidationDiagnostics(Base):
     report: Mapped[dict[str, Any]] = mapped_column(JSON)
 
 
+class ProductionAggregate(Base):
+    """Derived statistics without YouTube titles; refreshed on successful analysis."""
+    __tablename__ = "production_aggregates"
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    generated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
 class SyncRun(Base):
     __tablename__ = "sync_runs"
     id: Mapped[str] = mapped_column(String(40), primary_key=True)

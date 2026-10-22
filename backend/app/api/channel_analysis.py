@@ -15,8 +15,27 @@ from app.intelligence.analysis_runner import mark_analysis_failed
 from app.intelligence.common import now
 from app.intelligence.models import AnalysisRun, Channel, ChannelConnection, SyncRun
 from app.intelligence.queue import get_enqueue_channel_analysis
+from app.intelligence.production_aggregation import build_production_aggregates
+from app.intelligence.models import ProductionAggregate
+from app.intelligence.aggregate_api_schemas import ProductionAggregatesRead
+from app.storage.paths import StoragePaths, get_storage_paths
 
 router = APIRouter(prefix="/api/intelligence/channels", tags=["intelligence"])
+
+
+@router.get("/{channel_id}/production-aggregates", response_model=ProductionAggregatesRead)
+def production_aggregates(channel_id: int, response: Response, db: Session = Depends(get_db),
+                          paths: StoragePaths = Depends(get_storage_paths), config: Settings = Depends(get_settings)):
+    response.headers.update(PRIVATE_HEADERS)
+    if db.get(Channel, channel_id) is None:
+        raise HTTPException(404, "チャンネルがありません。")
+    if not config.youtube_derived_allowed:
+        raise HTTPException(409, MESSAGES["DERIVED_NOT_ALLOWED"])
+    cached = db.get(ProductionAggregate, channel_id)
+    if cached and cached.expires_at > now():
+        return cached.payload
+    # Local DB/JSON calculation only. No HTTP/API/Codex calls here.
+    return build_production_aggregates(db, paths, config, channel_id, now())
 
 
 def read_analysis(run: AnalysisRun) -> AnalysisRunRead:
