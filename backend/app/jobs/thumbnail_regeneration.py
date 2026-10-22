@@ -23,6 +23,8 @@ from app.render.render_thumbnail import ThumbnailRenderResult, render_normal_thu
 from app.thumbnail_style import (
     ThumbnailSubjectPlacement, resolve_export_thumbnail_style, resolve_thumbnail_text_styles,
 )
+from app.production_choice_capture import thumbnail_choice
+from app.production_records import refresh_completed_production
 from app.storage.paths import StoragePaths, get_storage_paths
 
 
@@ -238,7 +240,7 @@ def run_export_thumbnail_regeneration(
                 temp_output.replace(output_path)
                 write_export_metadata(
                     metadata_path,
-                    {
+                    thumbnail_choice({
                         **latest,
                         "thumbnail_path": str(output_path),
                         "thumbnail_filename": output_path.name,
@@ -275,8 +277,10 @@ def run_export_thumbnail_regeneration(
                             "予備の表情素材を使用しました。" if selected_asset else "この動画から人物を切り出しました。" if chosen
                             else "半身にできる候補が無いため従来の動画のコマを使用しました。"
                         ),
-                    },
+                    }, clip_id=export.candidate_id, source="manual"),
                 )
+                # Still under the per-export lock: a newer request cannot replace this evidence mid-refresh.
+                refresh_completed_production(db, export, storage)
         except Exception as exc:
             if temp_output is not None:
                 temp_output.unlink(missing_ok=True)

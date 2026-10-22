@@ -15,6 +15,8 @@ from app.candidates.short_parent_range import ShortParentRangeAdjustment
 from app.downloads import export_download_name
 from app.models import ExportItem, Job
 from app.intelligence.performance_schema import UsedPerformanceHint
+from app.production_choices import ProductionChoice
+from app.production_choice_records import recorded_choices, record_publication
 from app.production_hint_records import recorded_performance_hints
 from app.storage.json_io import write_json_atomic
 from app.storage.lifecycle import _resolve_stored_path
@@ -78,6 +80,7 @@ class RecordThumbnail(RecordModel):
 
 
 class ProductionRecord(RecordModel):
+    choiceHistory: list[ProductionChoice] = Field(default_factory=list, exclude_if=lambda v: not v)
     performanceHints: list[UsedPerformanceHint] = Field(default_factory=list, exclude_if=lambda v: not v)
     schemaVersion: Literal[1] = 1
     recordId: str
@@ -159,11 +162,12 @@ def build_production_record(
     if thumbnail_source is None and data.get("thumbnail_source_time_basis"):
         thumbnail_source = "asset" if data["thumbnail_source_time_basis"] == "character_asset" else "video"
     now = datetime.now(UTC)
-    return ProductionRecord(
+    return record_publication(ProductionRecord(
+        choiceHistory=recorded_choices(paths, export, metadata, previous),
         performanceHints=recorded_performance_hints(paths, job.id, export.candidate_id, export.type),
         recordId=export.id, revision=previous.revision + 1 if previous else 1,
         createdAt=created_at if created_at is not None else previous.createdAt if previous else now,
-        updatedAt=max(now, created_at) if created_at is not None else now,
+        updatedAt=max(now, created_at or now, previous.createdAt if previous else now, previous.updatedAt if previous else now),
         previousRecordId=previous.recordId if previous and previous.recordId != export.id else (
             previous.previousRecordId if previous else None),
         jobId=job.id, type=export.type, publicationTitle=export_download_name(export).stem,
@@ -193,7 +197,20 @@ def build_production_record(
             assetId=data.get("thumbnail_character_asset_id"), emotion=data.get("thumbnail_emotion"),
             reason=data.get("thumbnail_subject_reason"), emotionSelectionSource=data.get("thumbnail_emotion_selection_source"),
         ),
-    )
+    ), observed=created_at is not None)
+
+
+def refresh_completed_production(db: Session, export: ExportItem, paths: StoragePaths) -> None:
+    """Refresh one successfully edited export; recording must never fail its media operation."""
+    try:
+        job = db.get(Job, export.job_id)
+        if job is None or job.status != "completed":
+            return
+        write_production_record(job, export, paths)
+        from app.intelligence.production_links import reconcile_safely
+        reconcile_safely(db, paths)
+    except Exception as exc:
+        logger.warning("Production record failed: export=%s errorType=%s", export.id, type(exc).__name__)
 
 
 def write_production_record(

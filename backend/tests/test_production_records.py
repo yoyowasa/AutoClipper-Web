@@ -172,6 +172,8 @@ def test_backfill_uses_export_time_including_force(example, export_time, force):
     assert report["errors"] == [] and report["written"] == 1
     payload = json.loads(paths.production_record(export.id).read_text(encoding="utf-8"))
     assert payload["createdAt"] == expected.isoformat().replace("+00:00", "Z")
+    assert payload["choiceHistory"][-1]["stage"] == "observed"
+    assert "appliedAt" not in payload["choiceHistory"][-1] or payload["choiceHistory"][-1]["appliedAt"] is None
     assert datetime.fromisoformat(payload["updatedAt"]) >= expected
     assert payload["revision"] == (previous["revision"] + 1 if force else 1)
 

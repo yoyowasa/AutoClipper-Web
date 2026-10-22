@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
+from app.production_choices import ProductionChoice
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.audio.silence_detect import SilenceSegment
@@ -34,6 +35,7 @@ class CandidateRejection(BaseModel):
 
 
 class CandidateSelection(BaseModel):
+    choice_history: list[ProductionChoice] = Field(default_factory=list, alias="choiceHistory", exclude_if=lambda v: not v)
     requested_total: int | None = Field(default=None, alias="requestedTotal")
     selected_total: int | None = Field(default=None, alias="selectedTotal")
     selected_by_type: dict[str, int] = Field(default_factory=dict, alias="selectedByType")
@@ -873,7 +875,9 @@ def convert_selected_clip_to_short(
 
 
 def write_selected_clips(selection: CandidateSelection, output_path: str | Path) -> Path:
+    from app.production_choice_capture import capture_selection
     path = Path(output_path)
+    capture_selection(selection, path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(selected_clips_to_jsonable(selection), ensure_ascii=False, indent=2) + "\n",

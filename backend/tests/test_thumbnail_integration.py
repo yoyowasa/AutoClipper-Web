@@ -654,9 +654,11 @@ def test_completed_normal_thumbnail_can_be_queued_without_rerendering_video(
 
 
 @pytest.mark.parametrize("custom_style", [False, True])
+@pytest.mark.parametrize("record_failure", [False, True])
 def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
     tmp_path: Path,
     custom_style: bool,
+    record_failure: bool, monkeypatch, caplog,
 ) -> None:
     engine = create_engine(
         f"sqlite:///{tmp_path / 'worker.db'}",
@@ -730,6 +732,13 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
         )
         db.add_all([video, job, export])
         db.commit()
+        from app.production_records import write_production_record
+        write_production_record(job, export, storage)
+    before_record = json.loads(storage.production_record("exp_worker").read_bytes())
+    if record_failure:
+        def fail_record(*args, **kwargs):
+            raise OSError("secret-do-not-log")
+        monkeypatch.setattr("app.production_records.write_json_atomic", fail_record)
 
     received: dict[str, object] = {}
     selected: dict[str, object] = {}
@@ -782,6 +791,14 @@ def test_thumbnail_regeneration_worker_promotes_only_the_requested_thumbnail(
     assert metadata["thumbnail_frame_seconds"] == pytest.approx(28.0)
     assert metadata["thumbnail_crop_mode"] == "close"
     assert metadata["thumbnail_advance_frame"] is False
+    record = json.loads(storage.production_record("exp_worker").read_bytes())
+    assert record["createdAt"] == before_record["createdAt"]
+    assert record["revision"] == (1 if record_failure else 2)
+    if record_failure:
+        assert "Production record failed" in caplog.text and "secret-do-not-log" not in caplog.text
+    else:
+        assert record["thumbnail"]["frameSeconds"] == 28
+        assert any(c["kind"] == "thumbnail" and c["source"] == "manual" for c in record["choiceHistory"])
     engine.dispose()
 
 

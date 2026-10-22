@@ -13,6 +13,7 @@ from app.models import ExportItem, Job, utc_now
 from sqlalchemy.orm import Session
 from app.storage.paths import StoragePaths
 from app.jobs.thumbnail_candidates import ensure_thumbnail_candidates, video_candidate_kwargs
+from app.production_choice_capture import thumbnail_choice
 from app.storage.json_io import write_json_atomic
 from app.render.render_thumbnail import (
     ThumbnailRenderResult,
@@ -260,13 +261,14 @@ def generate_export_thumbnails(
                 raise RuntimeError("thumbnail renderer returned an unpublished path")
             _write_metadata(
                 metadata_path,
-                _ready_metadata(
+                thumbnail_choice(_ready_metadata(
                     payload,
                     result=result,
                     output_path=output_path,
                     source_basis=source_basis,
                     character_style=character_style,
-                ),
+                ), clip_id=export.candidate_id,
+                    source="fallback" if payload.get("thumbnail_subject_source") in {"asset", "legacy"} else "automatic"),
             )
             generated_paths.append(output_path)
         except Exception as exc:

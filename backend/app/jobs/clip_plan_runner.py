@@ -685,7 +685,7 @@ def run_clip_plan_boundary_update(
             job.error_message = None
             job.updated_at = utc_now()
             document.state = "preparing"
-            write_clip_plan(document, plan_path)
+            write_clip_plan(document, plan_path, choice_source="manual")
             db.commit()
             db.refresh(job)
             visited_statuses.append("preparing_clip_review")
@@ -720,7 +720,7 @@ def run_clip_plan_boundary_update(
                 document,
                 preview_clip_ids=available_clip_ids,
             )
-            write_clip_plan(document, plan_path)
+            write_clip_plan(document, plan_path, choice_source="manual")
             invalidate_quality_gate_decisions(
                 job_dir,
                 ("selection", "content", "post_render"),
@@ -824,7 +824,7 @@ def run_clip_plan_hook_scene_update(
             job.error_message = None
             job.updated_at = utc_now()
             document.state = "preparing"
-            write_clip_plan(document, plan_path)
+            write_clip_plan(document, plan_path, choice_source="manual")
             db.commit()
             db.refresh(job)
             visited_statuses.append("preparing_clip_review")
@@ -850,7 +850,7 @@ def run_clip_plan_hook_scene_update(
                 document,
                 preview_clip_ids=available_clip_ids,
             )
-            write_clip_plan(document, plan_path)
+            write_clip_plan(document, plan_path, choice_source="manual")
             invalidate_quality_gate_decisions(
                 job_dir,
                 ("selection", "content", "post_render"),

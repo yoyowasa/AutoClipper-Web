@@ -906,13 +906,13 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
     write_attempt_count = 0
     attempted_clip_ids: set[str] = set()
 
-    def fail_final_clip_plan_write(document: Any, output_path: str | Path) -> Path:
+    def fail_final_clip_plan_write(document: Any, output_path: str | Path, **kwargs: Any) -> Path:
         nonlocal write_attempt_count
         write_attempt_count += 1
         if write_attempt_count == 2:
             attempted_clip_ids.update(clip.id for clip in document.clips)
             raise OSError("final clip plan write failed")
-        return original_write_clip_plan(document, output_path)
+        return original_write_clip_plan(document, output_path, **kwargs)
 
     monkeypatch.setattr(
         runner_module,
@@ -1835,6 +1835,10 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     assert updated_short["confirmed"] is False
     assert updated_short["previewState"] == "stale"
     assert updated_short["previewDeferred"] is True
+    hook_choices = [c for c in reopened_review["choiceHistory"]
+                    if c.get("clipId") == reopened_short["id"] and c["kind"] == "title_hook"]
+    assert hook_choices[-1]["source"] == "manual"
+    assert hook_choices[-1]["values"]["hookSceneStart"] == hook_start
 
     for clip in reopened_review["clips"]:
         response = apply_clip(clip)

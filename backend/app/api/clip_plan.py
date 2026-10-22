@@ -261,7 +261,7 @@ def create_manual_clip(
             detail=str(exc),
         ) from exc
     touch_manual_document(document)
-    write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+    write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)), choice_source="manual")
     return document
 
 @router.patch(
@@ -319,7 +319,7 @@ def update_manual_clip(
         ) from exc
     document.clips = proposed
     touch_manual_document(document)
-    write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+    write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)), choice_source="manual")
     return document
 
 @router.delete(
@@ -341,7 +341,7 @@ def delete_manual_clip(
             detail="clip plan item not found",
         )
     touch_manual_document(document)
-    write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+    write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)), choice_source="manual")
     return document
 
 @router.get(
@@ -508,6 +508,8 @@ def update_clip_plan_clip_type(
         current_step="切り抜きの種類を変更中",
     )
     try:
+        from app.production_choice_capture import capture_document
+        capture_document(document, plan_path, kind="plan", source="manual", clip_ids={clip_id})
         _write_json_payload(
             selected_path,
             converted_selection.model_dump(by_alias=True, mode="json"),
@@ -637,6 +639,7 @@ def update_clip_plan_clip_boundary(
         write_clip_plan(
             document,
             clip_plan_output_path(paths.job_outputs(job_id)),
+            choice_source="manual",
         )
         return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
@@ -650,7 +653,7 @@ def update_clip_plan_clip_boundary(
     document.state = "preparing"
     document.source_duration = source_duration
     try:
-        write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+        write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)), choice_source="manual")
     except Exception:
         job.status = "awaiting_clip_review"
         job.progress = PROGRESS_MAP["awaiting_clip_review"]
@@ -672,6 +675,7 @@ def update_clip_plan_clip_boundary(
         write_clip_plan(
             document,
             clip_plan_output_path(paths.job_outputs(job_id)),
+            choice_source="manual",
         )
         db.commit()
         raise HTTPException(
@@ -759,6 +763,7 @@ def update_clip_plan_hook_scene(
         write_clip_plan(
             document,
             clip_plan_output_path(paths.job_outputs(job_id)),
+            choice_source="manual",
         )
         return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
@@ -771,7 +776,7 @@ def update_clip_plan_hook_scene(
     )
     document.state = "preparing"
     try:
-        write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)))
+        write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)), choice_source="manual")
     except Exception:
         job.status = "awaiting_clip_review"
         job.progress = PROGRESS_MAP["awaiting_clip_review"]
@@ -795,6 +800,7 @@ def update_clip_plan_hook_scene(
         write_clip_plan(
             document,
             clip_plan_output_path(paths.job_outputs(job_id)),
+            choice_source="manual",
         )
         db.commit()
         raise HTTPException(

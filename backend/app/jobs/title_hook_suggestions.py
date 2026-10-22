@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal, Protocol
 
+from app.production_choices import ProductionChoice
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -138,6 +139,8 @@ class TitleHookSuggestionInput(BaseModel):
 
 
 class TitleHookSuggestionsDocument(BaseModel):
+    choice_history: list[ProductionChoice] = Field(default_factory=list, alias="choiceHistory", exclude_if=lambda v: not v)
+    prompt_version: str | None = Field(default=None, alias="promptVersion", exclude_if=lambda v: v is None)
     clip_id: str = Field(alias="clipId")
     state: TitleHookSuggestionState
     input_hash: str = Field(min_length=64, max_length=64, alias="inputHash")
@@ -202,10 +205,11 @@ def write_title_hook_suggestions(
     document: TitleHookSuggestionsDocument,
     path: str | Path,
 ) -> Path:
-    return write_json_atomic(
-        Path(path),
-        document.model_dump(by_alias=True, mode="json"),
-    )
+    from app.production_choice_capture import capture_proposals
+    payload = capture_proposals(document.model_dump(by_alias=True, mode="json"), Path(path),
+                                kind="title_hook", policy_version=document.prompt_version, clip_id=document.clip_id)
+    document.choice_history = [ProductionChoice.model_validate(item) for item in payload.get("choiceHistory", [])]
+    return write_json_atomic(Path(path), payload)
 
 
 def load_title_hook_suggestions(path: str | Path) -> TitleHookSuggestionsDocument:
@@ -628,6 +632,7 @@ def generate_title_hook_suggestions_for_auto(
     artifact = TitleHookSuggestionsDocument(
         clipId=clip_id,
         state="ready",
+        promptVersion=TITLE_HOOK_PROMPT_VERSION,
         inputHash=request.input_hash,
         draftHash=request.draft_hash,
         revisionHash=request.revision_hash,
@@ -730,6 +735,11 @@ def apply_recommended_title_hook_suggestions(
     )
     clip.post_metadata_source = "codex"
     clip.post_metadata_revision_hash = artifact.revision_hash
+    from app.production_choice_capture import capture_document
+    from app.production_choices import merge_history
+    document.choice_history = merge_history(document.choice_history, artifact.choice_history)
+    # No path is read here: automatic generation may precede the first review save.
+    capture_document(document, None, kind="review", source="automatic", clip_ids={clip.id}, kinds={"title_hook", "post_copy"})
     return document
 
 
@@ -851,6 +861,7 @@ def run_title_hook_suggestion_generation(
         next_state = TitleHookSuggestionsDocument(
             clipId=clip_id,
             state="ready",
+            promptVersion=TITLE_HOOK_PROMPT_VERSION,
             inputHash=input_hash,
             draftHash=request.draft_hash,
             revisionHash=request.revision_hash,

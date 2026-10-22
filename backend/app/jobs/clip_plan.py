@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
+from app.production_choices import ProductionChoice
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.transcript_postprocess import repair_known_transcript_artifact_text
@@ -86,6 +87,7 @@ class ClipPlanClip(BaseModel):
 
 
 class ClipPlanDocument(BaseModel):
+    choice_history: list[ProductionChoice] = Field(default_factory=list, alias="choiceHistory", exclude_if=lambda v: not v)
     requested_total: int | None = Field(default=None, alias="requestedTotal")
     selected_total: int | None = Field(default=None, alias="selectedTotal")
     selected_by_type: dict[str, int] = Field(default_factory=dict, alias="selectedByType")
@@ -315,7 +317,9 @@ def update_clip_plan_hook_scene(
     return document
 
 
-def write_clip_plan(document: ClipPlanDocument, output_path: str | Path) -> Path:
+def write_clip_plan(document: ClipPlanDocument, output_path: str | Path, *, choice_source="unrecorded") -> Path:
+    from app.production_choice_capture import capture_document
+    capture_document(document, Path(output_path), kind="plan", source=choice_source)
     if is_ai_allocation(document.settings):
         document.requested_total = int(document.settings['totalClipCount'])
         document.selected_total = len(document.clips)

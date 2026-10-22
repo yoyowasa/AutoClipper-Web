@@ -45,6 +45,8 @@ def read_copy_state(path: Path) -> dict:
 
 
 def write_copy_state(path: Path, state: dict) -> None:
+    from app.production_choice_capture import capture_proposals
+    state = capture_proposals(state, path, kind="thumbnail", policy_version=state.get("promptVersion"), clip_id=state.get("clipId"))
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_suffix(f".{uuid4().hex}.tmp")
     temp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -118,7 +120,8 @@ def queue_copy_generation(db, paths, export, enqueue, *, force: bool) -> Thumbna
         if previous.get("inputHash") == request["inputHash"]:
             if previous.get("state") in {"queued", "generating"} or (previous.get("state") == "ready" and not force):
                 return ThumbnailCopyState.model_validate(previous)
-        next_state = {**request, "requestId": uuid4().hex, "state": "queued", "suggestions": [], "recommendedId": None, "error": None}
+        next_state = {**request, "clipId": export.candidate_id, "requestId": uuid4().hex, "state": "queued",
+                      "suggestions": [], "recommendedId": None, "error": None}
         write_copy_state(path, next_state)
         try:
             enqueue(export.id, next_state["requestId"])
@@ -183,7 +186,8 @@ def run_thumbnail_copy_generation(export_id: str, request_id: str, *, session_fa
                 db.expire_all()
                 if build_copy_input(db, storage, export)["inputHash"] != request["inputHash"]:
                     raise ValueError("確定動画が更新されました。文言を再生成してください。")
-                write_copy_state(path, {**latest, **result.model_dump(by_alias=True), "state": "ready", "error": None})
+                write_copy_state(path, {**latest, **result.model_dump(by_alias=True), "state": "ready", "error": None,
+                                        "promptVersion": THUMBNAIL_COPY_PROMPT_VERSION})
         except Exception as exc:
             with subtitle_review_document_lock(job_dir):
                 latest = read_copy_state(path)
