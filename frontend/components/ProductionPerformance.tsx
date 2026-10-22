@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { getProductionAggregates, type PerformanceHint, type ProductionAggregates } from "../lib/productionPerformance";
+import { type PerformanceHint, type ProductionAggregates } from "../lib/productionPerformance";
 
 const dimensions: Record<string, string> = { all: "全体", duration: "本編の尺（秒/min=分）", hook_scene: "フック映像",
   hook_text: "フック文言", title_intent: "タイトルintent", post_metadata_source: "投稿文の出所", opening_score: "冒頭点の帯" };
@@ -22,7 +21,10 @@ export function ProductionAggregatesTable({ data }: { data: ProductionAggregates
       <td>{dimensions[group.dimension] ?? group.dimension}: {valueLabel(group.value)}</td>
       <td>{group.count}本 ／ {group.sufficient ? "観測あり" : "データ不足"}</td>
       {Object.keys(metrics).map(metric => { const value = group.metrics[metric]; return <td key={metric} className="p-2">
-        {number(value.median)} ／ {number(value.relative_to_channel_median)}（n={value.count}）</td>; })}
+        {value.median === null ? "未取得" : number(value.median)} ／ {number(value.relative_to_channel_median)}（n={value.count}）
+        {value.missing_reason ? <span className="block text-amber-900">{({ NO_OBSERVATIONS: "観測値なし",
+          BASELINE_UNAVAILABLE: "比較先が未取得", BASELINE_ZERO: "比較先が0のため比を算出できません" })[value.missing_reason]
+          ?? value.missing_reason}</span> : null}</td>; })}
     </tr>)}</tbody></table></div></>;
 }
 
@@ -37,24 +39,4 @@ export function PerformanceHintsList({ hints = [] }: { hints?: PerformanceHint[]
         <details className="text-xs"><summary>根拠動画ID</summary>{hint.video_ids.join("、")}</details>
       </div>)}
   </section>;
-}
-
-export function ProductionPerformance({ channelId, revision }: { channelId: number; revision?: string | null }) {
-  const [data, setData] = useState<ProductionAggregates | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let active = true;
-    getProductionAggregates(channelId).then(value => { if (active) { setData(value); setError(""); } })
-      .catch(() => { if (active) setError("独自集計を取得できませんでした。"); });
-    return () => { active = false; };
-  }, [channelId, revision]);
-  const current = data?.channel_id === channelId ? data : null;
-  return <details className="space-y-2 text-sm" aria-label="制作属性の独自集計">
-    <summary className="cursor-pointer font-semibold">独自集計（制作属性別・YouTube公式集計とは異なります）</summary>
-    <p>初期7日の動画ごとの観測値の中央値と、同じチャンネル・形式の中央値に対する比です。因果効果ではありません。
-      平均視聴率・時間の中央値は全視聴者を合算した平均ではありません。欠損・比較先が0の比は「—」。5本未満はデータ不足。
-      分析開始時に集計を更新・保存します。</p>
-    {error ? <p role="alert">{error}</p> : null}
-    {current ? <ProductionAggregatesTable data={current} /> : !error ? <p>集計を取得中…</p> : null}
-  </details>;
 }

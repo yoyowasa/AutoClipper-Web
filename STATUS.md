@@ -1119,3 +1119,15 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 実データ/実分析: 稼働DBを読み取り専用接続からbackup()でコピー（integrity_check=ok）。コピーでは結び付きは0件ではなく5件あり、全5件がFIRST7_UNAVAILABLEで対象外、十分なグループ0件だった。ホロの82本の最終入力は比較用IDで189,452文字（上限280,000）。検証専用フォルダの更新済みCodex中継で実分析が249.3秒でsuccess、所見6件・提案2件・ヒント0件。未知の根拠IDの所見1件だけを既存検証で除外した。稼働中継の再起動/稼働DBの同期や分析行の更新はせず、検証用中継は停止済み。
 - 検証: Windows/Python 3.11のbackend全件2112 passed・2 skipped、Ruff 0.16.10の`check . ../launcher ../scripts`成功。十分な/不足の合成データ、中央値・相対値・欠損、ヒント除外、OFF/期限切れ、タイトルAPIからの利用と入力記録、制作記録、元統計の期限、サイズ上限、旧プロンプト一致を確認。frontend lint/typecheck/全35テスト/build成功。専用DB/Redis/18187・13187ポートの隔離Composeで/health・/api/health・/settingsが200、集計APIも200で0結合/34グループ全部データ不足を確認。検証コンテナ/ネットワーク/専用frontendイメージを片付けた。全件テスト前後の稼働DBの更新時刻/SHA-256は不変。
 - 中継/未確認: launcherはchannel_self_analysisのスキーマ指紋だけを更新し、既存依頼種別の指紋/モデルを維持。**反映時にホスト側Codex中継の再起動が必要**。稼働環境への反映、実データ蓄積後のヒント生成/投稿成績への効果、ユーザーの画面受入は未確認。Python 3.11/3.12・frontend CIの結果はPRへ記録し、PRは未マージでレビュー待ちとする。
+
+## 2026-10-22 task-218 統合⑤ チャンネル分析画面と改善試験
+
+- 目的/開始点: task-217を含むmain `4b75fc8`から`codex/task-218-intelligence-dashboard-trials`を作成。ClipIntelligenceのself_dashboard/diagnose、save_trial/evaluate_trials、adopt_proposalと画面・仕様を参照のみで確認した。AGENTS.mdを適用し、workspace/親フォルダにCLAUDE.mdはなかった。
+- Backend: `intelligence/dashboard.py`・`dashboard_reports.py`・`dashboard_schemas.py`、`trials.py`・`trial_schemas.py`、`api/intelligence_dashboard.py`を追加。`models.py`にimprovement_trials、mainにルーターを追加。既存の同期・自己分析・制作記録の結び付け・ヒント生成は変更していない。
+- 集計/欠損: 全体の直近28日・前28日・日別は最新同期の公式値。現行同期には形式別のチャンネル集計がないため、形式別は保存済み動画×日別の加算可能指標による独自集計として区別した。公開前を除く未返却日を0にせず、未取得・理由・返却件数・返却分小計を表示。小計のグラフは橙の点線。動画の初期7日は公開翌日から7暦日（America/Los_Angeles）の公式レポートだけを使い、平均の再平均をしない。
+- 試験: 採用は分析ID/提案IDで一意。基準動画・変更1点・固定条件・主要指標・反証条件・確認方法を引き継ぐ。対象は制作記録と結び付いた同チャンネルの後発動画。形式/尺帯違い、初期7日未返却、主要指標未取得では比較不可の理由を出し、因果を断定しない。条件変更で登録日時を更新し、公開後の登録/編集を事後記録と表示。更新競合を409で検出。期限切れ後も試験メモの編集/終了/削除は可能。
+- 保持: 試験の意図・参照IDは自前データとして残す。YouTubeタイトル・観測値・比較結果は専用コピーを保存せず、既存データから表示時に読む。メタデータ30日/統計最大36か月の期限は読み取り時にも検査する。動画・制作記録・分析を削除せず、試験削除は試験の行のみ。
+- Frontend: `/intelligence`と`components/intelligence/`に期間比較、日別グラフ、動画詳細/制作記録/該当グループ、自己分析・履歴・根拠動画への導線、採用/編集/削除を追加。設定画面は分析開始・最新要約とリンクを残し、集計・ヒントの詳細を分析画面へ移した。`lib/intelligenceDashboard.ts`にAPI型と表示処理を集約。任意の動画作成画面への試験表示は含めていない。
+- コピー/画面検証: 稼働DBの読み取り専用backupと制作記録コピーで、専用Compose（backend/frontend/Redis、18188/13188）を起動。/health・/intelligence・/settingsが200。ホロ82本（shorts54/long24/unknown4）、そぴあ20本（12/5/3）の全体/形式別/日別/動画別を確認。ホロは最新分析・過去分析・除外理由・制作記録付き動画・採用と未返却の比較を確認。そぴあは分析履歴がなく「未分析」。両チャンネルの独自集計306グループはいずれも十分なグループ0・ヒント0。初期7日が揃う比較は、合成データの別チャンネルで採用→紐付け→比較→編集/終了→削除まで画面確認した。
+- 検証: Ruff 0.16.10でbackendから`check . ../launcher ../scripts`成功。Windows/Python 3.11のbackend全件2,127 passed・2 skipped（追加15件）、既存の同期/分析/集計/結び付けを含む関連102件も成功。frontend lint/typecheck/全36テスト/build成功。欠損/0・公式/独自集計・グラフの欠損・暦日/形式/尺帯・期限・冪等採用・Origin/更新競合・編集/削除を確認。稼働DBの更新時刻とSHA-256は開始時と全件検証/画面確認後で一致。仕様/測定条件は`docs/INTELLIGENCE_DASHBOARD_TRIALS.md`に記録。
+- 未確認/反映: 稼働環境への反映、ユーザーの画面受入、実運用での試験採用・未返却データの比較・改善効果は未確認。実Google同期/Codex分析は実行していない。launcher・プロンプト・中継契約は変更なし。検証コンテナ・ネットワーク・専用frontendイメージは片付け済み。Python 3.11/3.12・frontend CIの結果はPRに記録し、PRは未マージでレビュー待ちとする。

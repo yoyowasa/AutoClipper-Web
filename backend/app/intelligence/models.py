@@ -76,6 +76,29 @@ class ProductionAggregate(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
+class ImprovementTrial(Base):
+    """Adopted intent only. No cached YouTube titles, metrics or comparison verdicts."""
+    __tablename__ = "improvement_trials"
+    __table_args__ = (UniqueConstraint("analysis_id", "proposal_id"),)
+    id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    channel_id: Mapped[int] = mapped_column(ForeignKey("channels.id"), index=True)
+    analysis_id: Mapped[str] = mapped_column(String(48))
+    proposal_id: Mapped[str] = mapped_column(String(50))
+    # Opaque references survive expired/deleted video metadata and analysis results.
+    baseline_video_id: Mapped[str] = mapped_column(String(11))
+    target_video_id: Mapped[str | None] = mapped_column(String(11))
+    target_assigned_at: Mapped[datetime | None] = mapped_column(DateTime)
+    change_note: Mapped[str] = mapped_column(Text)
+    keep_fixed: Mapped[str] = mapped_column(Text)
+    primary_metric: Mapped[str] = mapped_column(String(32))
+    rejection_condition: Mapped[str] = mapped_column(Text)
+    result_check: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    registered_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 class SyncRun(Base):
     __tablename__ = "sync_runs"
     id: Mapped[str] = mapped_column(String(40), primary_key=True)

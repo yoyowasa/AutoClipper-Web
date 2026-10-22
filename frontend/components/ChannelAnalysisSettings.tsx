@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { getChannelAnalysis, startChannelAnalysis, analysisStatus,
-  type AnalysisHistory, type AnalysisReview, type AnalysisValidationReport, type SyncBeforeAnalysis } from "../lib/channelAnalysis";
+  type AnalysisHistory, type AnalysisReview, type AnalysisRun, type AnalysisValidationReport, type SyncBeforeAnalysis } from "../lib/channelAnalysis";
 import { youtubeSyncTime } from "../lib/intelligence";
-import { PerformanceHintsList, ProductionPerformance } from "./ProductionPerformance";
+import { PerformanceHintsList } from "./ProductionPerformance";
+import { getEvidenceVideos, type DashboardVideo, type ImprovementTrial } from "../lib/intelligenceDashboard";
 
 const formatLabel = { all: "全体", shorts: "ショート", videoondemand: "通常" };
 const surfaceLabel = { shorts_feed: "Shortsフィード", home: "ホーム", up_next: "次の動画", search: "検索", multi_surface: "複数の表示面" };
@@ -35,7 +37,10 @@ export function AnalysisValidationText({ validation }: { validation?: AnalysisVa
   </div>;
 }
 
-export function AnalysisReviewText({ review }: { review: AnalysisReview }) {
+export function AnalysisReviewText({ review, renderEvidence, onAdopt, adopted = [], busy = false }: {
+  review: AnalysisReview; renderEvidence?: (ids: string[], baseline?: string) => ReactNode;
+  onAdopt?: (proposalId: string) => void; adopted?: string[]; busy?: boolean;
+}) {
   return <div className="space-y-3 text-sm">
     <h5 className="font-semibold">{review.title}</h5><p className="whitespace-pre-wrap">{review.summary}</p>
     <p className="text-xs text-neutral-600">統計・タイトル・制作記録・独自集計からの分析です。動画本編の視聴や改善効果の検証は行っていません。</p>
@@ -50,8 +55,9 @@ export function AnalysisReviewText({ review }: { review: AnalysisReview }) {
         <dt className="font-semibold">反対証拠</dt><dd>{finding.counter_evidence}</dd>
         <dt className="font-semibold">次の確認</dt><dd>{finding.next_check}</dd>
       </dl><p className="mt-2 text-xs">確度: {finding.confidence === "low" ? "低" : "中"} ／ 根拠: {finding.evidence_ids.join(", ")}</p>
+      {renderEvidence?.(finding.evidence_ids)}
     </details>)}
-    <h5 className="font-semibold">次の動画案（未採用・効果未確認）</h5>
+    <h5 className="font-semibold">次の動画案（{onAdopt ? "効果未確認" : "未採用・効果未確認"}）</h5>
     {review.proposals.map(proposal => <details key={proposal.id} className="border p-3">
       <summary>{formatLabel[proposal.format]}：{proposal.title}</summary>
       <dl className="mt-2 space-y-1 whitespace-pre-wrap">
@@ -68,19 +74,52 @@ export function AnalysisReviewText({ review }: { review: AnalysisReview }) {
         {proposal.recommendation_link.viewer_need}<br />{proposal.recommendation_link.signal_hypothesis}<br />
         未取得の根拠: {proposal.recommendation_link.evidence_gap}</p> : null}
       <p className="mt-2 text-xs">根拠: {proposal.evidence_ids.join(", ")}</p>
+      {renderEvidence?.(proposal.evidence_ids, proposal.baseline_video_id)}
+      {onAdopt ? <button type="button" disabled={busy || adopted.includes(proposal.id)}
+        className="mt-3 rounded bg-sky-800 px-4 py-2 text-white disabled:opacity-40" onClick={() => onAdopt(proposal.id)}>
+        {adopted.includes(proposal.id) ? "採用済み（改善試験に記録）" : "この提案を採用して改善試験を作る"}</button> : null}
     </details>)}
     {review.proposals.length === 0 ? <p>提案できる根拠が不足しています。制約の記録を確認してください。</p> : null}
     <PerformanceHintsList hints={review.performance_hints} />
   </div>;
 }
 
-export function ChannelAnalysisSettings({ channelId, connected, syncActive }: {
-  channelId: number; connected: boolean; syncActive: boolean;
+function EvidenceReview({ run, videos, trials, onAdopt, onVideo, busy }: {
+  run: AnalysisRun; videos: DashboardVideo[]; trials: ImprovementTrial[]; busy: boolean;
+  onAdopt?: (analysisId: string, proposalId: string) => void; onVideo?: (id: string) => void;
+}) {
+  const [evidence, setEvidence] = useState<Record<string, string[]>>({});
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!run.review) return;
+    let active = true;
+    getEvidenceVideos(run.review.channel_id, run.id).then(value => { if (active) setEvidence(value.evidenceVideos); })
+      .catch(() => { if (active) setError("根拠の動画一覧を取得できませんでした。"); });
+    return () => { active = false; };
+  }, [run.id, run.review]);
+  if (!run.review) return null;
+  return <>{error ? <p role="alert">{error}</p> : null}<AnalysisReviewText review={run.review} busy={busy}
+    onAdopt={onAdopt ? id => onAdopt(run.id, id) : undefined}
+    adopted={trials.filter(trial => trial.analysisId === run.id).map(trial => trial.proposalId)}
+    renderEvidence={(ids, baseline) => {
+      const linked = Array.from(new Set([...(baseline ? [baseline] : []), ...ids.flatMap(id => evidence[id] ?? [])]));
+      return <ul className="mt-2 space-y-1 text-xs">{linked.map(id => <li key={id}>
+        <button type="button" className="text-left text-sky-800 underline" onClick={() => onVideo?.(id)}>
+          {id === baseline ? "基準動画: " : "根拠動画: "}{videos.find(video => video.id === id)?.title ?? id}</button></li>)}</ul>;
+    }} /></>;
+}
+
+export function ChannelAnalysisSettings({ channelId, connected, syncActive, full = false, videos = [], trials = [],
+  onAdopt, onVideo, adopting = false, onFinished }: {
+  channelId: number; connected: boolean; syncActive: boolean; full?: boolean;
+  videos?: DashboardVideo[]; trials?: ImprovementTrial[]; adopting?: boolean;
+  onAdopt?: (analysisId: string, proposalId: string) => void; onVideo?: (id: string) => void; onFinished?: () => void;
 }) {
   const [data, setData] = useState<AnalysisHistory | null>(null);
   const [mode, setMode] = useState<SyncBeforeAnalysis>("auto");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [openedHistory, setOpenedHistory] = useState<string[]>([]);
   const refresh = useCallback(async () => { setData(await getChannelAnalysis(channelId)); }, [channelId]);
   useEffect(() => {
     let active = true;
@@ -89,6 +128,7 @@ export function ChannelAnalysisSettings({ channelId, connected, syncActive }: {
     return () => { active = false; };
   }, [channelId]);
   const active = data?.latestRun?.status === "queued" || data?.latestRun?.status === "running";
+  useEffect(() => { if (data?.latestRun?.finishedAt) onFinished?.(); }, [data?.latestRun?.finishedAt, onFinished]);
   useEffect(() => {
     if (!active) return;
     const timer = window.setInterval(() => { void refresh().catch(() => setError("分析状態を取得できませんでした。")); }, 2000);
@@ -116,19 +156,25 @@ export function ChannelAnalysisSettings({ channelId, connected, syncActive }: {
     <p className="text-sm" aria-live="polite">{analysisStatus(data?.latestRun ?? null)}</p>
     {error || data?.latestRun?.errorMessage ? <p role="alert" className="text-sm text-red-700">{error ?? data?.latestRun?.errorMessage}</p> : null}
     <AnalysisValidationText validation={data?.latestRun?.validation} />
-    <ProductionPerformance channelId={channelId} revision={data?.latestRun?.finishedAt} />
+    {!full ? <Link className="block font-semibold text-sky-800 underline" href={`/intelligence?channel=${channelId}`}>
+      分析画面へ（統計・独自集計・制作ヒント・改善試験）</Link> : null}
     {data?.latestResult?.review ? <>
       <p className="text-xs">最新の保存済み分析: {youtubeSyncTime(data.latestResult.finishedAt)} ／
         保持期限: {youtubeSyncTime(data.latestResult.expiresAt)}</p>
       {data.latestResult.id !== data.latestRun?.id ? <AnalysisValidationText validation={data.latestResult.validation} /> : null}
-      <AnalysisReviewText review={data.latestResult.review} />
+      {full ? <EvidenceReview run={data.latestResult} videos={videos} trials={trials} onAdopt={onAdopt} onVideo={onVideo} busy={adopting} /> :
+        <p className="text-sm whitespace-pre-wrap">{data.latestResult.review.summary}</p>}
     </> : null}
-    {data && data.history.length > 0 ? <details className="text-sm"><summary>分析履歴（{data.history.length}件）</summary>
-      {data.history.map(run => <details key={run.id} className="mt-2 border p-2">
+    {full && data && data.history.length > 0 ? <details className="text-sm"><summary>分析履歴（{data.history.length}件）</summary>
+      {data.history.map(run => <details key={run.id} className="mt-2 border p-2" onToggle={event => {
+        const open = event.currentTarget.open;
+        setOpenedHistory(ids => open ? Array.from(new Set([...ids, run.id])) : ids.filter(id => id !== run.id));
+      }}>
         <summary>{youtubeSyncTime(run.queuedAt)}：{analysisStatus(run)}</summary>
         <p>{run.model} / {run.reasoning} ／ {run.errorMessage ?? ""}</p>
         <AnalysisValidationText validation={run.validation} />
-        {run.review ? <AnalysisReviewText review={run.review} /> : null}
+        {run.review && openedHistory.includes(run.id) ? <EvidenceReview run={run} videos={videos} trials={trials}
+          onAdopt={onAdopt} onVideo={onVideo} busy={adopting} /> : null}
       </details>)}
     </details> : null}
   </section>;
