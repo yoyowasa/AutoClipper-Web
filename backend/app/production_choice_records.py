@@ -21,9 +21,10 @@ def recorded_choices(paths, export, metadata, previous):
     return [choice for choice in history if choice.scope == "job" or choice.clipId == export.candidate_id]
 
 
-def record_publication(record):
+def record_publication(record, *, observed: bool = False):
     """Capture what was published, without pretending to know historical decisions."""
-    append_choice(record.choiceHistory, kind="publication", clipId=record.selection.candidateId, stage="published",
+    append_choice(record.choiceHistory, kind="publication", clipId=record.selection.candidateId,
+                  stage="observed" if observed else "published",
                   inputRevision=f"{record.recordId}:{record.revision}", policyVersion="production-record-v1",
                   values=choice_values(record.model_dump(mode="json")))
     return record
