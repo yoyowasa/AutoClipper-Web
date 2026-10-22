@@ -45,6 +45,8 @@ def discard_review_and_restore_plan(
     # Never rename preview directories on a Windows bind mount: an open MP4 locks them.
     discarded.extend(path for clip in review.clips for path in (
         title_hook_suggestions_path(output, clip.id), title_hook_suggestion_input_path(output, clip.id)))
+    from app.production_choice_capture import retain_discarded_review_history
+    retain_discarded_review_history(plan, review, output)
     staging = output / f".discarded-review-{uuid4().hex}"
     moved: list[tuple[Path, Path]] = []
     cleanup = True

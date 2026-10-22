@@ -288,6 +288,10 @@ def test_clip_plan_converts_only_selected_short_to_normal(client: TestClient) ->
     assert response_item["hookSceneEnd"] is None
     assert response_plan["settings"]["normalClipCount"] == 1
     assert response_plan["settings"]["shortCount"] == 1
+    choices = [c for c in response_plan["choiceHistory"] if c.get("clipId") == converted_short.id and c["kind"] == "range"]
+    assert choices[-1]["source"] == "manual"
+    assert choices[-1]["values"]["type"] == "normal"
+    assert choices[-1]["values"]["hookSceneStart"] is None
 
     stored_selection = json.loads((output_dir / "selected_clips.json").read_text(encoding="utf-8"))
     assert [clip["id"] for clip in stored_selection["normalClips"]] == [converted_short.id]

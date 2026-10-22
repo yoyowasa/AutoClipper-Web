@@ -3460,7 +3460,7 @@ def run_subtitle_review_hook_scene_update(
                     raise RuntimeError("subtitle review changed while hook preview was rendering")
                 try:
                     write_selected_clips(selection, selected_path)
-                    write_subtitle_review(next_document, review_path)
+                    write_subtitle_review(next_document, review_path, choice_source="manual")
                     write_subtitle_review_summary(next_document, summary_path)
                 except Exception:
                     for path, payload in stored_payloads.items():

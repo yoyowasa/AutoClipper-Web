@@ -2169,7 +2169,7 @@ def update_subtitle_review_settings(
         db.refresh(job)
         document = _defer_subtitle_review_previews_unlocked(document, {clip.id for clip in document.clips
                 if request.character_preset_name is not None or clip.type == "short"})
-        _write_subtitle_review_unlocked(document, paths)
+        _write_subtitle_review_unlocked(document, paths, choice_source="manual")
     return document
 
 
@@ -2632,7 +2632,7 @@ def update_subtitle_review_clip_framing(
                 detail=str(exc),
             ) from exc
         document = _defer_subtitle_review_previews_unlocked(document, {clip_id})
-        _write_subtitle_review_unlocked(document, paths)
+        _write_subtitle_review_unlocked(document, paths, choice_source="manual")
     return document
 
 
@@ -2973,6 +2973,8 @@ def apply_subtitle_review_clip(
                 detail=str(exc),
             ) from exc
 
+        from app.production_choice_capture import capture_document
+        capture_document(document, subtitle_review_output_path(output_dir), kind="review", source="manual", clip_ids={clip_id})
         document = _defer_subtitle_review_previews_unlocked(document, affected_clip_ids - {clip_id})
         document, queued_previews = _refresh_subtitle_review_previews_unlocked(
             job=job,
@@ -2984,7 +2986,7 @@ def apply_subtitle_review_clip(
         )
         document = confirm_review_clip(document, clip_id)
         document.has_saved_review_changes = True
-        _write_subtitle_review_unlocked(document, paths)
+        _write_subtitle_review_unlocked(document, paths, choice_source="manual")
         document, auto_render_queued = _prepare_auto_review_render_unlocked(
             db=db,
             job=job,

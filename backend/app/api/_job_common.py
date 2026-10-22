@@ -115,10 +115,11 @@ def _claim_job_status(
 def _write_subtitle_review_unlocked(
     document: SubtitleReviewDocument,
     paths: StoragePaths,
+    *, choice_source="unrecorded",
 ) -> None:
     output_dir = paths.job_outputs(document.job_id)
     invalidate_quality_gate_decisions(output_dir, ("content", "post_render"))
-    write_subtitle_review(document, subtitle_review_output_path(output_dir))
+    write_subtitle_review(document, subtitle_review_output_path(output_dir), choice_source=choice_source)
     write_subtitle_review_summary(document, subtitle_review_summary_path(output_dir))
 
 def _refresh_subtitle_review_previews_unlocked(

@@ -630,7 +630,7 @@ def _prepare_clip_plan_review(
         document,
         preview_clip_ids=available_clip_ids,
     )
-    write_clip_plan(document, output_path)
+    write_clip_plan(document, output_path, choice_source="automatic")
     _set_status(db, job, "awaiting_clip_review")
     preview_dir = subtitle_review_preview_path(job_dir, "placeholder").parent
     _cleanup_stale_clip_plan_previews(preview_dir, current_preview_paths)

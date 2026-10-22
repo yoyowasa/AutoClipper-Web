@@ -6,6 +6,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
+from app.production_choices import ProductionChoice
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.transcribe_faster_whisper import RepairWindow, TranscriptSegment, TranscriptWord
@@ -286,6 +287,7 @@ class SubtitleReviewClip(BaseModel):
 
 
 class SubtitleReviewDocument(BaseModel):
+    choice_history: list[ProductionChoice] = Field(default_factory=list, alias="choiceHistory", exclude_if=lambda v: not v)
     version: int = 1
     job_id: str = Field(alias="jobId")
     state: SubtitleReviewState = "awaiting_review"
@@ -780,7 +782,9 @@ def retain_review_after_boundary_reedit(
     return _refresh_counts(retained)
 
 
-def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | Path) -> Path:
+def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | Path, *, choice_source="unrecorded") -> Path:
+    from app.production_choice_capture import capture_document
+    capture_document(document, Path(output_path), kind="review", source=choice_source)
     refresh_review_gaps(document, Path(output_path).parent)
     return write_json_atomic(
         Path(output_path),
