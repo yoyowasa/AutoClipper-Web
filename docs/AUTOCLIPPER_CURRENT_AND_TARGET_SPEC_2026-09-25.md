@@ -1,49 +1,70 @@
 # AutoClipper 現行仕様と統合後の到達仕様
 
 作成日: 2026-09-25 JST
-状態: 現行実装の確認結果と、会話で合意した到達目標の整理。新たな実装決定や動作保証ではない。
+
+現行実装の確認日: 2026-10-22 JST（main `743f135`、task-218／PR #152まで）
+
+状態: 現行実装と合意済みの到達目標を区別し、[残り作業1〜7](#remaining-work)の順番を固定した基準文書。
 
 ## 読み方と根拠
 
-- **現行**は、この時点の `C:\BOT\AutoClipper Web` のコード・設定・READMEと、別workspace `C:\BOT\ClipIntelligence` のREADME・AGENTSを読み取り専用で確認した結果。実行中の全ジョブや本番投稿の受入試験を行ったという意味ではない。
-- **到達仕様**は[統合構想 v1](AUTOCLIPPER_CLIP_INTELLIGENCE_INTEGRATED_VISION_V1_2026-09-23.md)と、その後の会話で確定した対象・数値・運用方針を合わせたもの。実装済みとは扱わない。
-- 初期の[AutoClipper v1規則](../AGENTS.md)は投稿・手動レビューなどを対象外とする一方、現行コードには後から確認・再編集機能が加わっている。初期規則だけを現在の全機能とは見なさない。
-- 「合意済みの目標」「詳細未決定」「実装・実機検証未了」を分ける。添付されたHyperFramesの記事は提案資料であり、採用済み仕様ではない。
+- **現行**は上記mainのコードと、[STATUS](../STATUS.md)・各機能の仕様・マージ済みPRを照合した結果。稼働環境への反映、ユーザーの画面受入、投稿成績への効果は別の確認事項とする。
+- **到達仕様（§3）**と[統合構想 v1](AUTOCLIPPER_CLIP_INTELLIGENCE_INTEGRATED_VISION_V1_2026-09-23.md)は今回変更していない。実装済みとは扱わない。
+- **残り作業**は2026-10-22のユーザー合意に基づく優先順。以後のタスクは「残り作業1」等の番号で参照する。§3の全項目をこの7件だけで実現できるとはせず、実装時期未設定の2項目も明示する。
+- 初期の[AutoClipper v1規則](../AGENTS.md)の対象外事項と、その後に個別承認された確認・再編集・YouTube連携の実装を区別する。過去のSTATUSの「未マージ」「未反映」は、その記録時点の状態として読む。
+- 主要な現行記述にはコード・機能文書・PRを添える。既存のテスト・コピーDB検証の記録は参照証拠であり、今回再実行した結果ではない。
+
+### 当面の運用（§3の長期目標とは区別）
+
+現在の検証対象チャンネルは「ホロのひとコマ」「そぴあのひとコマ」。字幕の最終的な修正は人が行い、YouTubeへの投稿も当面手動とする。§3に残るチャンネル名・無人完走・自動投稿は長期目標の記述であり、この運用を変更する指示ではない。[統合⑤の検証範囲](INTELLIGENCE_DASHBOARD_TRIALS.md)
 
 ## 1. 現行仕様：AutoClipper Web
 
-### 1.1 入力・操作
+### 1.1 入力・本数・尺・確認操作
 
-- ブラウザから長尺の元動画をアップロードし、通常切り抜きと縦型ショートの本数・長さ・字幕・画角・品質等を設定してバックグラウンドジョブを作る。手動範囲指定の導線もある。[README](../README.md)、[設定スキーマ](../backend/app/schemas.py)
-- 設定上の既定値は通常2本・90～600秒、ショート3本・20～75秒。これは設定初期値であり、将来の投稿本数や尺の固定方針ではない。[設定スキーマ](../backend/app/schemas.py)
-- 自動ワークフローと手動ワークフローがあり、自動化モードは `manual`、`shadow`、`guarded`、`auto`。後者でも品質判定を通らない状態を無条件に完了扱いする仕様ではない。[設定スキーマ](../backend/app/schemas.py)、[品質ゲート](../backend/app/jobs/quality_gate.py)
-- ユーザーが候補・字幕・画角・タイトル等を確認・修正できる画面がある。したがって、現行の通常運用全体を「アップロード後、必ず人手ゼロ」とは表現しない。[ジョブAPI](../backend/app/api/jobs.py)、[字幕確認画面](../frontend/app/jobs/[jobId]/subtitles/page.tsx)
+- 元動画をアップロードし、自動選定または手動範囲指定で制作する。新規画面は合計本数（1〜36、既定5）と形式別の最低本数（既定0）を指定し、残りをAIが振り分ける。手動指定・キープも本数に含め、弱い候補で不足を埋めない。旧ジョブの形式別固定本数（`fixed`）は互換として残る。[画面の既定値](../frontend/components/SettingsPanel.tsx)、[設定スキーマ](../backend/app/schemas.py)、[PR #104](https://github.com/yoyowasa/AutoClipper-Web/pull/104)
+- 通常は90秒〜10分を基本とし、AIが内容上の理由を記録する場合は最長30分。人の範囲調整も90秒〜30分で、10分超に理由入力は求めない。探索設定の通常最小・最大は90〜600秒のまま。[尺ルール](../backend/app/duration_rules.py)、[PR #117](https://github.com/yoyowasa/AutoClipper-Web/pull/117)
+- ショートの本編上限は既定75秒、設定可能範囲1〜180秒。フック映像は別枠で0.5〜3秒、完成尺は最大で本編上限＋3秒になる。最低尺の設定は探索の目安で、通常と共通の固定最低尺は設けない。[尺ルール](../backend/app/duration_rules.py)、[PR #131](https://github.com/yoyowasa/AutoClipper-Web/pull/131)
+- 候補の再選定・キープ・不採用理由・範囲と種類の同時変更、字幕確認から切り抜き確認へ戻す導線がある。破棄して戻る操作と、保存済み編集を保って境界を再編集する操作は別。自動化モードは `manual / shadow / guarded / auto` を持つが、通常運用全体を人手ゼロとは扱わない。[切り抜きAPI](../backend/app/api/clip_plan.py)、[字幕確認API](../backend/app/api/jobs.py)、[PR #145](https://github.com/yoyowasa/AutoClipper-Web/pull/145)、[PR #146](https://github.com/yoyowasa/AutoClipper-Web/pull/146)
 
-### 1.2 解析・選定
+### 1.2 文字起こし・選定
 
-- `faster-whisper`による文字起こし、シーン・無音・音声等の特徴、任意のYouTube heatmap情報を扱い、通常／ショート別に候補を生成・採点・選定する。手動指定や、既に使った元動画区間の除外もある。[README](../README.md)、[候補データ](../backend/app/candidates/merge_boundaries.py)、[既存比較評価](AUTOCLIPPER_CLIP_INTELLIGENCE_PLAN_V0_1_EVALUATION_2026-09-21.md)
-- Codexを用いた初期選定の経路はあるが、既存評価時点では字幕＋heatmapを主に使用し、元動画の連続映像と原音を合わせた意味理解は未達。代表フレームを使うタイトル／フック案と、長尺全体の映像・音声理解は別物である。[既存比較評価](AUTOCLIPPER_CLIP_INTELLIGENCE_PLAN_V0_1_EVALUATION_2026-09-21.md)
-- 現行の候補・品質スコアは、将来目標の「投稿成績から学び続けるバズ確率モデル」と同一ではない。
+- ローカルのfaster-whisperで文字起こしし、後処理の前に音あり空白を読み直す方式Dを実行する。同一文字・単語の暴走や異常に長い語の区間も対象にし、補修履歴を残す。補修失敗時は元の文字起こしで続ける。後処理には言いよどみ記号の正規化も含む。これは全文の意味・固有名詞を保証する自動校閲ではない。[処理順](../backend/app/jobs/runner.py)、[空白補修](../backend/app/audio/transcript_gap_repair.py)、[暴走補修](../backend/app/audio/transcript_runaway_repair.py)、[後処理](../backend/app/audio/transcript_postprocess.py)、[PR #123](https://github.com/yoyowasa/AutoClipper-Web/pull/123)、[PR #130](https://github.com/yoyowasa/AutoClipper-Web/pull/130)、[PR #144](https://github.com/yoyowasa/AutoClipper-Web/pull/144)、[PR #148](https://github.com/yoyowasa/AutoClipper-Web/pull/148)
+- 字幕・任意のheatmap、音声・シーン等の特徴から候補を作る。Codex初期選定の入力は字幕等が中心で、元動画の連続映像・原音・画面内文字を合わせた意味理解は未達。代表フレームの利用や顔検出があることを、長尺全体の映像・音声理解と同一視しない。[選定入力と検証](../backend/app/candidates/codex_initial_selection.py)、[パイプライン](../backend/app/jobs/runner.py)
+- 過去の使用・提案区間、不採用理由、尺と内容の条件を使って候補を除外する。キャラ別の低知名度モードではショート冒頭評価と題材語の条件を使う。冒頭評価の最大15点とconfidence補正0.2は仮の重みで、実績から自動学習する値ではない。[ルール採点](../backend/app/scoring/rule_score.py)、[選定](../backend/app/candidates/codex_initial_selection.py)、[PR #103](https://github.com/yoyowasa/AutoClipper-Web/pull/103)、[PR #125](https://github.com/yoyowasa/AutoClipper-Web/pull/125)、[PR #126](https://github.com/yoyowasa/AutoClipper-Web/pull/126)
+- 有効な制作ヒントがあれば、選定とタイトル・フック生成へ参考情報として渡す。本数・尺・字幕根拠・既存の検証を優先し、ヒントなし／OFF／期限切れなら従来のプロンプトを保つ。自動で選定基準を改変する仕組みではない。[ヒント取得](../backend/app/intelligence/performance_hints.py)、[統合④](INTELLIGENCE_PRODUCTION_PERFORMANCE.md)
 
-### 1.3 編集・出力
+### 1.3 字幕確認・サムネイル・出力
 
-- 通常切り抜きと9:16ショートを別経路でFFmpegレンダリングする。ショートには画角選択・人物等を使う追従候補・上下帯、両形式に字幕・冒頭フック等の処理がある。[通常レンダラー](../backend/app/render/render_normal.py)、[ショートレンダラー](../backend/app/render/render_short.py)
-- 字幕・動画内タイトル・フックはASS等で描画し、フォント・色・サイズ・縁取り・位置を指定できる。字幕修正やプレビュー、再レンダリングも可能。[ASS字幕](../backend/app/render/subtitles_ass.py)、[字幕確認](../backend/app/jobs/subtitle_review.py)
-- YouTube公開用タイトル、説明、タグ等の投稿用情報やサムネイルを作成・編集できる。字幕入りMP4、個別ファイル、ZIPを出力する。ただしYouTubeへの自動送信そのものは現行AutoClipperの完成機能ではない。[通常サムネイル](../backend/app/render/render_thumbnail.py)、[README](../README.md)
-- FFmpegは単なる「前処理」ではなく、現在の**最終映像・音声合成エンジン**。レンダラー交換用の中立な `edit_plan.json` 契約やHyperFrames実装はない。[通常レンダラー](../backend/app/render/render_normal.py)、[ショートレンダラー](../backend/app/render/render_short.py)
+- 字幕・タイトル・フック文言／映像・画角・文字スタイル・投稿文をclipごとの下書きで編集し、簡易プレビューで確認する。「この動画／ショートを確定」でまとめて保存し、正式プレビューを作る。分割・結合は即時保存だが正式プレビューを毎回作らず、変更したclipを未確定・プレビューを古い状態にする。下書きはブラウザへ一時保存し、全clipの最終確定・書き出しは別に残る。[確定処理](../frontend/lib/subtitleReview/hooks/useReviewConfirmation.ts)、[下書き保存](../frontend/lib/subtitleReview/draftStorage.ts)、[API](../backend/app/api/jobs.py)、[PR #138](https://github.com/yoyowasa/AutoClipper-Web/pull/138)
+- 通常・9:16ショートをFFmpegで描画し、字幕・動画内タイトル等はASSで合成する。通常サムネはclip内の保存済み映像候補を優先し、抜き出せなければ登録済み予備素材、その両方がなければ従来方式を使う。素材の手動登録は残るが、元動画全体からの人物素材自動収集は削除済み。[通常レンダラー](../backend/app/render/render_normal.py)、[ショートレンダラー](../backend/app/render/render_short.py)、[サムネ候補](../backend/app/jobs/thumbnail_candidates.py)、[PR #111](https://github.com/yoyowasa/AutoClipper-Web/pull/111)、[PR #129](https://github.com/yoyowasa/AutoClipper-Web/pull/129)
+- 公開用タイトル・説明・タグ等を生成・編集し、投稿タイトルに合わせた名前でMP4・サムネ・投稿文を保存できる。投稿セットのフォルダ保存／ZIP保存、全体ZIPの要求時作成がある。YouTubeへの投稿は手動。[保存名・配布処理](../backend/app/downloads.py)、[PR #115](https://github.com/yoyowasa/AutoClipper-Web/pull/115)
+- FFmpegは現在の最終映像・音声合成エンジン。中立な `edit_plan.json` 契約やHyperFrames実装はなく、別レンダラーは未採用の比較候補である。[通常レンダラー](../backend/app/render/render_normal.py)、[ショートレンダラー](../backend/app/render/render_short.py)
 
-### 1.4 品質・記録・費用
+### 1.4 品質・制作記録・費用
 
-- 選定・内容・レンダリング後の品質ゲート、出力数・失敗・メディア属性等の検査がある。失敗・不明を人へ戻す経路もある。一方、完成MP4を独立に再視聴して発話との字幕一致、フックの妥当性、映像内の意味、音ズレ等を総合判定し、局所修復まで無人で繰り返す到達仕様にはまだ達していない。[品質ゲート](../backend/app/jobs/quality_gate.py)、[既存比較評価](AUTOCLIPPER_CLIP_INTELLIGENCE_PLAN_V0_1_EVALUATION_2026-09-21.md)
-- ジョブ、候補、字幕、出力等を保存するが、制作判断・版・投稿動画・実績を一つの不変な制作記録として次回制作へ自動反映する契約はない。
-- ローカル処理とCodexログイン経路に加え、別課金のOpenAI Platform APIを必要とする**任意の経路**が現行コードに残る。API採点は設定上既定OFF、字幕のAPI修正も既定OFFだが、将来の「有料API禁止」を全経路で満たした状態とはまだ言えない。[設定スキーマ](../backend/app/schemas.py)、[既存比較評価](AUTOCLIPPER_CLIP_INTELLIGENCE_PLAN_V0_1_EVALUATION_2026-09-21.md)
+- 選定・内容・レンダリング後の品質ゲートがあり、メディア属性・出力数・描画メタデータ等を検査する。完成MP4を独立に再解析し、発話と字幕の意味・同期・画角・演出を検査して局所修復する一連の処理は未実装。文字起こし段階の補修と完成物の自動修復は別である。[品質ゲート](../backend/app/jobs/quality_gate.py)
+- 完成動画ごとの制作記録を `storage/production_records/<export_id>.json` に保存する。投稿タイトル、候補と選択ID、フック、尺、選定理由、サムネの出どころ、利用ヒントなどを記録し、再書き出しはrevisionとpreviousRecordIdで追跡する。ジョブ削除後も残る。記録の保存失敗は警告として扱い、動画の完成は取り消さない。[実装](../backend/app/production_records.py)、[契約v1](PRODUCTION_RECORD_CONTRACT_v1.md)、[PR #132](https://github.com/yoyowasa/AutoClipper-Web/pull/132)、[PR #133](https://github.com/yoyowasa/AutoClipper-Web/pull/133)
+- 制作記録は「すべての選択・不採用理由・スタイル・軽い演出・選択方針の版」を網羅する契約にはまだなっていない。書き出しのrevisionも、選び方の版管理・巻き戻しとは別である。[記録モデル](../backend/app/production_records.py)
+- 有料OpenAI Platform APIの採点・字幕補正・文言生成経路と依存は削除済み。ローカル処理とChatGPTログインのCodex中継を使い、有料APIへ切り替える経路はない。旧データ互換や秘密値の伏せ字等に残るOpenAI表記は呼び出し経路ではない。[依存定義](../backend/pyproject.toml)、[PR #100](https://github.com/yoyowasa/AutoClipper-Web/pull/100)
 
-## 2. 現行仕様：Clip Intelligence（別アプリ）
+## 2. 現行仕様：AutoClipper内のClip Intelligence統合①〜⑤
 
-- 自チャンネルのYouTube公式統計を取得し、通常／Shorts別の成績、動画別寄与、流入元、視聴維持、次の仮説・検証案を表示・保存する。本人OAuthの参照権限を使う。[Clip Intelligence README](../../ClipIntelligence/README.md)
-- 「分析」の操作1回で統計取得からCodex分析・提案表示まで進むが、常時・定期取得は現行方針ではなく、映像本編の解析も未接続。[Clip Intelligence AGENTS](../../ClipIntelligence/AGENTS.md)、[Clip Intelligence README](../../ClipIntelligence/README.md)
-- 改善前後を初期7日で比較する機能はある。ただし、制作判断をAutoClipperから自動受信し、結果に応じて次の動画を自動編集する閉ループはない。[Clip Intelligence README](../../ClipIntelligence/README.md)
-- YouTubeデータの保持・派生利用には条件がある。統合しても取得できない指標を0とみなさず、取得権限・保持期限・欠損理由を引き継ぐ。[Clip Intelligence README](../../ClipIntelligence/README.md)
+統合①〜⑤の実装はmainに入っている。旧アプリの全機能・手入力データの移行や停止まで完了したという意味ではない。実装と保持・欠損の扱いは以下の機能文書を参照する。
+
+| 段階 | 現在できること | 根拠 |
+|---|---|---|
+| ① 接続・同期 | 自チャンネルのOAuth接続、公開動画・公開統計・Analytics日次／期間／初期7日の取得。未取得は0にせず理由を保存。 | [同期仕様](INTELLIGENCE_YOUTUBE_SYNC.md)、[取得処理](../backend/app/intelligence/collection.py)、[PR #139](https://github.com/yoyowasa/AutoClipper-Web/pull/139)、[PR #140](https://github.com/yoyowasa/AutoClipper-Web/pull/140) |
+| ② 制作記録との結び付け | 正規化した投稿タイトルと公開日時で1対1の一致だけを自動結合。手動結合・解除、再書き出しの最新記録への追従。 | [結び付け仕様](INTELLIGENCE_PRODUCTION_LINKS.md)、[照合処理](../backend/app/intelligence/production_links.py)、[PR #141](https://github.com/yoyowasa/AutoClipper-Web/pull/141) |
+| ③ Codex自己分析 | 保存統計・制作情報を根拠ID付きで渡し、所見・反証・次の動画案を検証して保存。不正な項目の除外理由、入力圧縮・省略条件も残す。 | [自己分析仕様](INTELLIGENCE_SELF_ANALYSIS.md)、[実行処理](../backend/app/intelligence/analysis_runner.py)、[PR #142](https://github.com/yoyowasa/AutoClipper-Web/pull/142)、[PR #143](https://github.com/yoyowasa/AutoClipper-Web/pull/143)、[PR #150](https://github.com/yoyowasa/AutoClipper-Web/pull/150) |
+| ④ 独自集計・制作ヒント | 結び付いた動画の初期7日をキャラ・形式・制作属性で集計。中央値・相対値・観測数を示し、5本未満等はデータ不足。有効なヒントを次の選定・タイトル／フックへ参考として渡す。 | [統合④仕様](INTELLIGENCE_PRODUCTION_PERFORMANCE.md)、[独自集計](../backend/app/intelligence/production_aggregation.py)、[ヒント](../backend/app/intelligence/performance_hints.py)、[PR #151](https://github.com/yoyowasa/AutoClipper-Web/pull/151) |
+| ⑤ 分析画面・改善試験 | `/intelligence`で期間・日別・動画別・制作情報・分析履歴・集計・ヒントを表示。提案採用→試験作成→対象動画の結び付け→初期7日比較→編集・削除が可能。 | [統合⑤仕様と検証](INTELLIGENCE_DASHBOARD_TRIALS.md)、[画面](../frontend/app/intelligence/page.tsx)、[試験処理](../backend/app/intelligence/trials.py)、[PR #152](https://github.com/yoyowasa/AutoClipper-Web/pull/152) |
+
+- 同期・分析は人の開始操作を基本とする。分析前に最終同期から24時間以上経過していれば同期する選択はあるが、定時同期・公開後24時間／72時間／30日等での自動評価は未実装。保守処理は期限切れ・取り残しの処理であり、自動分析のスケジューラではない。[分析前同期](../backend/app/intelligence/analysis_runner.py)、[保守処理](../backend/app/intelligence/maintenance.py)
+- 同期と分析は専用の `autoclipper-intelligence` キュー／CPU worker、Codex中継は通常・分析の別レーンを使う。切り抜きworkerで分析待ちをしない。[専用worker](../backend/app/intelligence/worker.py)、[中継と反映手順](INTELLIGENCE_SELF_ANALYSIS.md)
+- 全体の28日・日別は公式値、形式別の動画日次合計と制作属性別の中央値等は独自集計として区別する。平均を再平均せず、未返却・期限切れ・形式不明を明示する。現行同期には流入元・維持率曲線・CTR・Shortsのスワイプ率・収益の取得はない。[取得範囲](INTELLIGENCE_YOUTUBE_SYNC.md)、[表示の区別](INTELLIGENCE_DASHBOARD_TRIALS.md)、[取得権限](../backend/app/intelligence/credentials.py)
+- 現在の保持実装は、統計が最大36か月、更新されない動画メタデータが30日、分析本文は最大30日か根拠の最短期限まで。独自集計も元統計の期限を超えない。改善試験の意図は自前の記録として残し、YouTubeの値は表示時に期限内の元データから読む。[保持処理](../backend/app/intelligence/policy.py)、[自己分析の保持](INTELLIGENCE_SELF_ANALYSIS.md)、[改善試験の保持](INTELLIGENCE_DASHBOARD_TRIALS.md)
+- ヒントの生成・利用は実装済みだが、効果は未確認。直近のコピーDB検証では十分な集計グループがなく、ヒント0件だった。改善試験の採用は人の操作で、採用だけでは次の制作方針を自動変更しない。旧Clip Intelligenceの停止・残るデータ移行の完了は確認していない。[task-217／218の検証記録](../STATUS.md)、[統合⑤の確認範囲](INTELLIGENCE_DASHBOARD_TRIALS.md)
 
 ## 3. 今後の到達仕様：一つの自律型制作・成長ツール
 
@@ -80,25 +101,96 @@
 
 ## 4. 現行と到達仕様の差分
 
-| 領域 | 現行 | 到達仕様 |
+| 領域 | 現行（§1・§2の根拠を参照） | 到達仕様までの不足 |
 |---|---|---|
-| 素材投入 | ユーザーupload、設定、手動指定も可能 | ユーザーuploadを起点に正常系を無人完走 |
-| 場面選定 | 字幕・heatmap・音声／シーン等の特徴を使う候補選定 | 映像・元音声・前後文脈を含め、視聴数を狙う根拠と投稿可否を自動判断 |
-| 通常／ショート | 別候補・別設定・別FFmpegレンダラー | 形式別の構成・視聴行動・実績から毎回最適化 |
-| 字幕・画角・デザイン | 設定・手動確認・一部自動生成、ASS／FFmpeg | 動画ごとに自動修正・選択。印と可読性を保つ |
-| 完成検査 | 品質ゲートと成果物の技術・契約検査が中心 | 完成MP4を独立再解析し、意味・同期・画角・演出まで検査・自動修復 |
-| 投稿 | 投稿用ファイル・文言を作る。自動公開は未実装 | 初回許可範囲内で自動公開 |
-| 投稿後分析 | Clip Intelligenceで別途、利用者の「分析」操作により実行 | 同一制作履歴に結び、定時点で自動取得・評価 |
-| 次回への改善 | 人による改善記録・比較は一部可能。制作ルールの自動更新なし | 根拠付き、版管理付き、悪化時に巻き戻せる自動改善 |
-| 費用 | ローカル／Codexのほか、任意の有料Platform API経路が残る | 有料API禁止を全経路で強制 |
+| 素材投入・確認 | upload、自動／手動指定、候補と字幕の確認・編集 | 字幕修正を除く通常操作の全自動化。全面的な無人完走は長期目標 |
+| 場面選定 | 字幕等を中心に選定、尺・重複・不採用理由等で除外、本数不足を許容 | 元映像・原音・画面内文字を含む意味理解、弱い素材の投稿見送り判断 |
+| 通常／ショート | 合計本数の配分、理由付き長尺、ショート本編とフック別枠 | 形式別の成績に基づく選び方の自動更新 |
+| 字幕・画角・デザイン | 読み直し補修、下書き編集と1回確定、サムネ映像優先／予備素材 | 意味・固有名詞を含む字幕自動修正、スタイル・軽い演出までの自動選択 |
+| 完成検査 | 品質ゲートと成果物の技術・契約検査 | 完成MP4の独立した意味・同期・映像検査と自動修復 |
+| 投稿 | 投稿用ファイル・文言・投稿セットを保存 | 自動投稿は未実装、ユーザー判断で保留 |
+| 制作記録・分析 | 制作記録・動画結合・分析画面・初期7日比較が同じアプリ内に存在 | 全選択の記録、定時同期・分析、30日目標と選択ごとの評価 |
+| 次回への改善 | 実績ヒントを参考として自動参照、改善試験を人が採用・比較 | 根拠付きで選び方を自動更新し、版管理・悪化時の巻き戻し |
+| 費用 | 有料Platform API呼び出し経路は削除済み | 有料API禁止を今後の追加実装でも維持する |
+
+### 成績目標の既知の不一致
+
+§3.2の目標は**通常10万再生／ショート100万再生、30日区切り**。しかし現行の自己分析プロンプトには「動画1本で100万回、達成期限は指定されていない」とあり、返答も `goal_views: Literal[1000000]` に固定されている。独自集計・改善試験は初期7日を比較しており、これだけで30日目標への達否は評価できない。[プロンプト](../backend/app/intelligence/analysis_prompt.py)、[返答スキーマ](../backend/app/intelligence/analysis_schema.py)、[改善試験の比較](../backend/app/intelligence/trials.py)
+
+この不一致は**今回の文書更新では直していない**。[残り作業2](#remaining-2)で取得・評価期間と分析の目標表現を揃え、[残り作業3](#remaining-3)で同じ基準を改善判断に使う。7日比較は途中評価として残す。機能が動くことと、実投稿が目標を達成することは別に検証する。§3.2の月間収益目標も維持するが、現行同期に収益指標はなく、自動評価済みとはしない。
 
 ## 5. まだ詳細を固定していないもの
 
-- バズ候補の具体的な特徴量・重み・採用閾値はユーザーが手作業で決める前提にしない。ツールが実績から改善する対象であり、初期実装の仮基準と検証手順は別途設計する。
-- 動画ごとの生成本数・尺、投稿頻度と時間、投稿を見送る閾値、字幕・デザインの選択肢、初回の権利確認手順、無料API許可リスト、保存期間、実装段階と受入基準は詳細設計が必要。
-- YouTubeから実際に無料取得できる指標、利用条件、保持期限は詳細設計時の公式仕様で再確認する。取得不能な数値を取得済みと書かない。
-- HyperFrames等の採用、レンダリング速度・画質・日本語フォント・音声同期・連続運転の合否は、同一素材での実測後に決める。
+- 本数・尺は§1.1、現行の取得項目・保持期限は§2、次の作業順は§7で既に定義されている。これらを一括して未確定とは扱わない。
+- 成績から選び方を更新する具体的な特徴量・重み・採用条件、必要な観測数、評価期間が揃わない場合の保留、版の切替・巻き戻し条件は残り作業2・3の詳細設計事項。現在の冒頭評価の重み等を検証済みの最適値と扱わない。
+- 自動選択するスタイル・軽い演出の範囲、完成MP4の検査・修復方法と合否基準、投稿を見送る条件は残り作業1・4・5で具体化する。既存の品質・尺・権利の条件は維持する。
+- 自動投稿の頻度・時間・権利確認・初回許可の詳細は残り作業7で決める。将来追加する指標・API・収益評価の取得方法や利用条件は、その実装時に公式仕様で確認する。現在取得していない値を取得済みと書かない。
+- HyperFrames等の採用は未決定。採用する場合は同一素材で速度・画質・日本語フォント・音声同期・連続運転を比較する。
 
-## 6. この文書で行っていないこと
+## 6. 今回の確認範囲と未確認事項
 
-コード、設定、DB、実行環境、既存ジョブは変更していない。両アプリの現行機能を統合・起動・実動画で検証した資料ではない。到達仕様の達成可能性と、30日での再生数・月間収益の達成を保証しない。
+今回行ったのは、mainのコード・PR・STATUS・機能文書を照合した文書更新。§3と統合構想を維持し、現行記述・既知の不一致・残り作業を整理した。コード、設定、DB、既存ジョブ、稼働環境は変更していない。
+
+過去のコピーDB・画面・実分析・テストの結果は各機能文書とPRを参照し、今回新たに実動画制作・Google同期・Codex分析・改善試験・投稿成績の受入を行ったとは扱わない。mainへのマージ、稼働環境への反映、実運用での効果を区別する。到達仕様の達成や、30日再生数・月間収益の達成を保証しない。
+
+<a id="remaining-work"></a>
+
+## 7. 残り作業（順番固定）
+
+以下の1〜7を優先順として固定する。以後のタスクは「残り作業N」と対応する§3.3の段階を記載する。受入は機能の成立と実投稿の効果を分け、未取得・データ不足を成功や0に置き換えない。
+
+<a id="remaining-1"></a>
+
+### 残り作業1：字幕修正以外の選択を全自動化し、すべて記録する
+
+- **段階・現在**：§3.3-4（範囲は-2、記録は-8にも対応）。範囲・タイトル・フック・サムネ・スタイル・軽い演出・投稿文は自動生成と手動選択が混在し、制作記録も全選択を網羅していない。
+- **完了の判定**：字幕修正を人が行う当面の運用を保ち、列挙した選択を動画に応じて自動決定する。採用・不採用の選択肢、理由、使用した方針の版と完成物を追跡できる。
+
+<a id="remaining-2"></a>
+
+### 残り作業2：同期・分析を自動実行し、選択ごとの成績を自動評価する
+
+- **段階・現在**：§3.3-7・8。手動開始の同期・分析、初期7日集計と改善試験はあるが、定時実行と選択ごとの30日評価はない。分析の目標も§4のとおり不一致。
+- **完了の判定**：取得可能な時点で自動同期・分析し、制作上の選択と実績を結ぶ。分析・評価を**通常10万／ショート100万再生、30日区切り**に揃え、7日は途中評価、未返却は未判定として根拠と結果を保存する。
+
+<a id="remaining-3"></a>
+
+### 残り作業3：評価から選び方を自動更新し、次のジョブへ反映する
+
+- **段階・現在**：§3.3-8。最新の有効な制作ヒントを参考利用する経路はあるが、選び方の自動更新・版管理・巻き戻しはない。
+- **完了の判定**：**通常10万／ショート100万再生、30日区切り**の評価を基準に、検証済みの選択肢・選び方を根拠付きで更新する。次のジョブで使用版を記録し、悪化時に戻せる。データ不足では更新せず、任意のコード・プロンプトの自己改変は行わない。
+
+<a id="remaining-4"></a>
+
+### 残り作業4：完成MP4を自動検査し、自動修復する
+
+- **段階・現在**：§3.3-5。技術・契約の品質ゲートはあるが、完成物の意味・同期を独立に検査し、局所修復する一連の処理はない。
+- **完了の判定**：完成MP4の映像・音声・字幕・冒頭・タイトル整合を別工程で検査し、不備を修復・再検査する。直らない場合は未完成として止め、検査・修復結果を残す。
+
+<a id="remaining-5"></a>
+
+### 残り作業5：弱い素材の投稿見送りを判断する
+
+- **段階・現在**：§3.3-2。候補の除外・不足表示・0件時の失敗はあるが、投稿可否を判断して記録する仕組みとは別。
+- **完了の判定**：弱い候補で本数を埋めず、素材の投稿見送りを根拠・理由付きで判断・保存する。既存の候補除外と品質条件は、この段階までの間も維持する。
+
+<a id="remaining-6"></a>
+
+### 残り作業6：Clip Intelligenceを停止する
+
+- **段階・現在**：§3.1の単一製品化と§3.3-7・8の運用移行。統合①〜⑤はmainにあるが、旧アプリの残存データ・運用依存の整理と停止の完了は未確認。
+- **完了の判定**：残る手入力データ・必要機能・運用依存を棚卸しし、必要な移行と保存、AutoClipperだけでの運用確認を済ませ、ユーザーの許可範囲で旧アプリを停止する。
+
+<a id="remaining-7"></a>
+
+### 残り作業7：自動投稿（ユーザー判断で保留中）
+
+- **段階・現在**：§3.3-6。投稿セットの保存と手動投稿の運用で、自動投稿は未実装。
+- **完了の判定**：保留解除後、明示許可されたチャンネル・公開範囲・頻度・条件内で投稿し、失敗・再試行・重複投稿を管理できる。解除までは手動投稿を維持する。
+
+### 到達仕様に残るが、実装時期未設定の2項目
+
+この2項目は上の順番へ勝手に追加せず、到達仕様からも削除しない。別途実装時期を決める。
+
+- **§3.3-2：映像・元音声・画面内文字・前後文脈を合わせた場面選定。** 字幕中心の選定、代表フレームの利用、残り作業5の投稿見送りだけでは達成したことにならない。
+- **§3.3-3：固有名詞・意味・タイミングを含む字幕の全面的な自動修正。** 読み直し補修は存在するが、当面は人が修正する。残り作業1の「字幕修正以外」の自動化とは別に扱う。
