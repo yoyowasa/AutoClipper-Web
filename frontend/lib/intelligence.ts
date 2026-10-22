@@ -20,6 +20,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}/api/intelligence${path}`, {
     ...init, cache: "no-store", credentials: "include"
   });
+  if (response.status === 204) return undefined as T;
   const data = await response.json();
   if (!response.ok) throw new Error(typeof data.detail === "string" ? data.detail : "YouTube連携の処理に失敗しました。");
   return data as T;
