@@ -1187,3 +1187,14 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - frontend検証: test（全36ファイル）・lint・typecheck・build成功。画面コードは変更せず、既存の警告欄/生成失敗表示を利用。APIへの警告の受け渡しはTestClientで確認した。
 - 稼働データ: テスト前後で稼働DBは3,289,088 bytes・更新時刻2026-10-22 03:06:46 UTCのまま。コピー環境以外での操作確認や既存ジョブへの再適用はしていない。
 - 未確認/制限: 実Codex生成、実動画によるサムネの見た目とユーザー受入、成績改善は未確認。合成画像と模擬映像入力での描画・保存は検証したが、実運用の品質を保証しない。稼働DB/ジョブへの再適用、Docker再build/再起動は行わない。launcher/契約変更なしで中継再起動不要。実装PRはCI成功後も未マージで止める。1-D/1-Eは未実装。
+
+## 2026-10-23 task-224 既存の画角・文字収まりと演出なしの記録（残り作業1-D）
+
+- 目的/開始点: PR #157のPython 3.11/3.12・frontend CI成功を確認し、ユーザー指示どおりmerge commit `26939ad`でマージ。そのmainから`codex/task-224-framing-style-decisions`を作成した。新しい自動化モード・テンプレ・演出・キューを増やさず、既存の解決結果を1-Aの制作記録へ残す。
+- 現物確認: 画角は既存の`resolve_short_crop_plan`、文字は`resolve_clip_text_style`と`fit_overlay_text`を使っていた。字幕修正後もbrowserの`fitOverlayPreviewText`とASS生成が再計算し、applyは`preview_framing`を解除して最新の指定を正式プレビューへ渡す。この優先順・処理を変更せず再利用した。キャラ/ジョブのスタイルよりclipや字幕単位の明示指定を優先し、要求サイズ・色・位置を自動で書き換えない。
+- 変更ファイル: `render/decision_evidence.py`追加、`subtitles_ass.py`・`render_short.py`・`render_normal.py`・`production_choices.py`を接続。`test_render_decisions.py`とbackend/frontend共通fixture・frontendテスト、制作記録契約、残り作業1のタスク案、本STATUSを更新。API・画面本体・launcher・Codex入出力/指紋・依存は変更なし。
+- 記録: ASS生成で実際に使った役割別のフォント、要求/実効サイズ、色、縁取り、位置、許容幅、収まり結果、採用した設定層を`text_style`へ保存。同一結果は件数でまとめ、字幕全文を複製しない。`framing`には要求/解決後の画角、offset/zoom、crop座標、検出元/代替理由、出力サイズとバナーを除く映像領域を記録する。設定層は確認できる範囲で記録し、キャラ名だけから過去のプリセット/手動操作を推定しない。既存の手動変更履歴も残る。
+- 演出: `effects`に`additionalEffects: "none"`を明示する。既存のフック挿入・静的な画角調整とは別であり、到達仕様の動的演出の自動選択を実装済みとは扱わない。
+- 保存/互換: 描画後の既存export JSONへ`write_json_atomic`で追記し、既存の制作記録保存がchoiceHistoryを取り込む。新たな恒久台帳は作らない。書き出し/再書き出しでのみ記録し、旧記録・稼働ジョブを更新しない。記録失敗は種類だけを警告ログに出し、動画を失敗にしない。
+- 検証: Ruff 0.16.10の`check . ../launcher ../scripts`、追加14ケース、frontendのtest（37ファイル）・lint・typecheck・buildは成功。Windows/Python 3.11のbackend全件は2176 passed・2 skipped（7件は既存の非推奨警告）。全件開始後の通常画角の採用元/値の表記調整は追加14ケースを再実行して確認し、最終HEAD全体はPRのCIで再確認する。通常/ショート×らでん/宙科設定、手動上書き、字幕修正後の再計算、ASSと保存記録、browser共通fixture、正式/簡易/完成のFFmpeg画角フィルター、代替、記録失敗を隔離DB/storageと模擬映像入出力で確認した。文字が収まらないケースをfits=falseとして残し、最小文字サイズ/品質検証を緩めていない。
+- 未確認/制限: 実動画の見た目・人物/字幕の欠け・ユーザー受入・成績改善は未確認で、1-Eの残件。画角フィルターの生成とASSは検証したが、このタスクで実FFmpeg動画を目視した結果ではない。稼働DBは検証前後とも3,289,088 bytes・更新時刻2026-10-22 03:06:46 UTCで不変。Docker再build/再起動は行わず、中継再起動も不要。実装PRはCI成功後も未マージで止める。

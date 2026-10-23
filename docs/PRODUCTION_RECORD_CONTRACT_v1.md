@@ -109,7 +109,7 @@ YouTubeの生の統計・動画タイトル・絶対パスは含めない。記�
 | フィールド | 意味 |
 | --- | --- |
 | id | 履歴項目の識別子。候補IDとは別 |
-| kind | `range` / `title_hook` / `thumbnail` / `framing` / `text_style` / `post_copy` / `publication` |
+| kind | `range` / `title_hook` / `thumbnail` / `framing` / `text_style` / `effects` / `post_copy` / `publication` |
 | scope / clipId | `clip`は当該clip、`job`は選定全体など。対応を確認できない候補を個別clipの根拠と断定しない |
 | stage | `proposed`は生成案、`applied`は保存した選択、`removed`は計画から外した候補、`published`は公開した成果物、`observed`は選択元が不明な保存値の観測 |
 | source | `automatic` / `manual` / `preset` / `default` / `fallback` / `unrecorded`。確認できる呼び出し経路だけで記録する。手動操作からの生成要求と、生成された案の採用は別の履歴 |
@@ -129,6 +129,14 @@ YouTubeの生の統計・動画タイトル・絶対パスは含めない。記�
 
 投稿文には連絡先等が含まれ得るため、description・tags・hashtagsは比較用ハッシュと採用元を残し、本文を履歴に複製しない。
 スタイルは許可したフォント名・サイズ・色・位置等だけを残し、任意の辞書やファイルパスを丸ごと複製しない。
+
+描画時の記録（task-224、`existing-render-decisions-v1`）:
+
+- `framing`: 指定された`shortLayout`と実際の`resolvedLayout`、`framingOffsetX/Y/Zoom`、`cropX/Y`、検出元・代替理由・試した方式、`outputSize`とバナーを除く`contentViewport`を記録する。通常は元の画角（`source`）。`settingSource`はclip上書き／ジョブ設定／既定を区別する。キャラ名だけから「プリセット由来」「人が変更した」と推定しない。手動操作の履歴は従来の`applied`に残る。
+- `text_style`: `outputSize`と`renderedTextStyles`に、実際のASS生成で使った役割（title/hook/subtitle）、フォント・要求サイズ・縮小後の`effectiveFontSize`・色・縁取り・位置・許容幅・行数・収まり結果を保存する。同一の結果を`eventCount`でまとめ、字幕本文は複製しない。採用元の`source`は`segment_override` / `clip_override` / `job_settings` / `layout_settings`（従来の個別設定値と既定を解決したレイアウト）。履歴の`source=automatic`は既存の文字収まり計算を指し、手動のフォントや位置を自動で選び直した意味ではない。
+- `effects`: `additionalEffects: "none"`を明示する。既存フック挿入と静的画角調整は別項目であり、動的演出選択を実装したことにはしない。
+- 入力revisionはASS・区間・画角指定・出力サイズのハッシュ。旧記録への補完や既存ジョブの再適用は行わず、今後の書き出し／再書き出しに記録する。記録の失敗は警告に留め、動画の書き出しを失敗にしない。
+
 `publication`はその版の完成物の値を示す。過去分のbackfillではstageを`observed`とし、appliedAtを補わない。
 この観測を、当時の自動決定や適用時刻の証拠にはしない。
 

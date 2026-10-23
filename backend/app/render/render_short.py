@@ -30,6 +30,7 @@ from app.render.crop_strategy import (
     tracking_safe_margins,
 )
 from app.render.filters import ass_filter, loudnorm_filter
+from app.render.decision_evidence import record_render_decisions
 from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
 from app.render.title_policy import (
     normalize_short_overlay_title_mode,
@@ -1268,6 +1269,7 @@ def render_selected_short_candidates(
         output_path = output_dir / f"short_{index:02d}.mp4"
         metadata_path = output_dir / f"short_{index:02d}.json"
         subtitle_path: Path | None = None
+        text_fits: list[dict] = []
 
         try:
             title = _candidate_title(candidate, index)
@@ -1298,6 +1300,7 @@ def render_selected_short_candidates(
                     layout=SubtitleLayout.short(settings=subtitle_settings),
                     top_title=top_title,
                     subtitle_settings=subtitle_settings,
+                    text_fits=text_fits,
                 )
 
             render_kwargs: dict[str, Any] = {
@@ -1390,6 +1393,10 @@ def render_selected_short_candidates(
                 source_height=source_height,
             )
 
+            record_render_decisions(metadata_path, candidate=candidate, job=job, text_fits=text_fits,
+                                    requested_layout=candidate.short_layout or layout, subtitle_path=subtitle_path,
+                                    canvas_size=(SHORT_WIDTH, SHORT_HEIGHT), content_viewport=_content_viewport(
+                                        top_banner_enabled=short_top_banner_enabled, bottom_banner_enabled=short_bottom_banner_enabled))
             export = ExportItem(
                 id=export_id,
                 job_id=job.id,

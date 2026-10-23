@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Literal, Sequence
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.render.decision_evidence import capture_text_fit, text_style_source
 from app.render.subtitle_timing import round_milliseconds, speech_chunks, text_chunks, usable_words
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
@@ -1226,6 +1227,7 @@ def build_ass_document(
     transcript_segments: Sequence[TranscriptSegment],
     layout: SubtitleLayout | None = None,
     top_title: str | None = None,
+    text_fits: list[dict] | None = None,
 ) -> str:
     active_layout = layout or (
         SubtitleLayout.short() if candidate.type == "short" else SubtitleLayout.normal()
@@ -1302,6 +1304,8 @@ def build_ass_document(
                 alignment=resolved_title_style.alignment,
                 x_percent=resolved_title_style.x_percent,
             )
+            capture_text_fit(text_fits, role="title", style=resolved_title_style, fit=title_fit,
+                             source=text_style_source(candidate, active_layout, "title"))
             title_position = (
                 _position_tag(
                     resolved_title_style.x_percent,
@@ -1337,6 +1341,8 @@ def build_ass_document(
             alignment=resolved_hook_style.alignment,
             x_percent=resolved_hook_style.x_percent,
         )
+        capture_text_fit(text_fits, role="hook", style=resolved_hook_style, fit=hook_fit,
+                         source=text_style_source(candidate, active_layout, "hook"))
         hook_position = (
             _position_tag(
                 resolved_hook_style.x_percent,
@@ -1385,6 +1391,8 @@ def build_ass_document(
             x_percent=resolved_subtitle_style.x_percent,
             max_lines=1 if event.single_line else min(DEFAULT_SUBTITLE_MAX_LINES, active_layout.max_lines),
         )
+        capture_text_fit(text_fits, role="subtitle", style=resolved_subtitle_style, fit=subtitle_fit,
+                         source=text_style_source(candidate, active_layout, "subtitle", segment_override=event.style is not None))
         text = _escape_ass_text(subtitle_fit.ass_text)
         lines.extend(_outlined_dialogues(
             "Dialogue: "
@@ -1404,6 +1412,7 @@ def write_ass_for_candidate(
     layout: SubtitleLayout | None = None,
     top_title: str | None = None,
     subtitle_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
+    text_fits: list[dict] | None = None,
 ) -> Path:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1418,6 +1427,7 @@ def write_ass_for_candidate(
                 else SubtitleLayout.normal(settings=subtitle_settings)
             ),
             top_title=top_title,
+            text_fits=text_fits,
         ),
         encoding="utf-8",
     )
