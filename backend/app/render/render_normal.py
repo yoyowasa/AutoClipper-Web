@@ -14,6 +14,7 @@ from app.candidates.title_fallback import candidate_with_title, resolve_candidat
 from app.ids import make_id
 from app.models import ExportItem, Job
 from app.render.filters import ass_filter, loudnorm_filter
+from app.render.decision_evidence import record_render_decisions
 from app.render.subtitles_ass import SubtitleLayout, SubtitleRenderSettings, write_ass_for_candidate
 from app.storage.paths import StoragePaths, get_storage_paths
 
@@ -361,6 +362,7 @@ def render_selected_normal_candidates(
         output_path = output_dir / f"normal_{index:02d}.mp4"
         metadata_path = output_dir / f"normal_{index:02d}.json"
         subtitle_path: Path | None = None
+        text_fits: list[dict] = []
 
         try:
             title = _candidate_title(candidate, index)
@@ -392,6 +394,7 @@ def render_selected_normal_candidates(
                     ),
                     subtitle_settings=subtitle_settings,
                     top_title=overlay_title,
+                    text_fits=text_fits,
                 )
 
             render_kwargs: dict[str, Any] = {
@@ -417,6 +420,9 @@ def render_selected_normal_candidates(
                 hook_rendered=bool(burn_subtitles and candidate.hook_text),
             )
 
+            record_render_decisions(metadata_path, candidate=candidate, job=job, text_fits=text_fits,
+                                    requested_layout="source", subtitle_path=subtitle_path,
+                                    canvas_size=(normal_width, normal_height))
             export = ExportItem(
                 id=export_id,
                 job_id=job.id,

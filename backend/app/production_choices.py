@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 
 ChoiceSource = Literal["automatic", "manual", "preset", "default", "fallback", "unrecorded"]
-ChoiceKind = Literal["range", "title_hook", "thumbnail", "framing", "text_style", "post_copy", "publication"]
+ChoiceKind = Literal["range", "title_hook", "thumbnail", "framing", "text_style", "effects", "post_copy", "publication"]
 VALUE_KEYS = frozenset({
     "type", "start", "end", "title", "publicationTitle", "overlayTitle", "hookText", "hookDurationSeconds",
     "hookSceneStart", "hookSceneEnd", "thumbnailKicker", "thumbnailLine1", "thumbnailLine2", "thumbnailFrameSeconds",
@@ -23,11 +23,16 @@ VALUE_KEYS = frozenset({
     "assetId", "emotion", "cropMode", "templateVersion", "templateDesign", "subjectPlacement", "textStyles", "frameCandidateId",
     "second", "closeAvailable", "scale", "offsetX", "offsetY", "selectedTitleId", "recommendedTitleId",
     "bodyDurationSeconds", "completedDurationSeconds", "characterPresetName",
+    "resolvedLayout", "settingSource", "cropX", "cropY", "cropSignalSource", "cropFallbackReason",
+    "cropAttemptedStrategies", "renderedTextStyles", "additionalEffects",
+    "outputSize", "contentViewport",
 })
 NESTED_KEYS = frozenset({
     "fontPreset", "fontName", "fontSize", "primaryColor", "outlineColor", "outlineWidth", "outerOutlineColor",
     "outerOutlineWidth", "shadow", "bold", "alignment", "marginX", "marginV", "xPercent", "yPercent", "positionMode",
     "positionOverride", "scale", "offsetX", "offsetY", "offset_x", "offset_y", "heading", "upper", "lower",
+    "role", "source", "effectiveFontSize", "maxWidthPx", "fits", "overflowReason", "lineCount", "eventCount",
+    "width", "height", "y",
 })
 
 
