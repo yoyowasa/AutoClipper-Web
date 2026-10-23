@@ -220,6 +220,7 @@ export type JobError = {
 };
 
 export type JobStatusDetails = Record<string, unknown> & {
+  humanSubtitleReviewRequired?: boolean;
   automationMode?: AutomationMode;
   automationEffectiveMode?: AutomationMode;
   automationGateState?: AutomationGateState;

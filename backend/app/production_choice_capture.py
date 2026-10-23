@@ -111,6 +111,19 @@ def capture_document(document, path: Path | None, *, kind: str, source="unrecord
 
 
 @best_effort_capture
+def capture_auto_review_outcome(document, clip_id: str, *, error_type: str | None = None, input_revision=None) -> None:
+    from app.jobs.automation import HUMAN_SUBTITLE_REVIEW_POLICY
+    clip = next(item for item in document.clips if item.id == clip_id)
+    append_choice(
+        document.choice_history, kind="title_hook", clipId=clip_id, stage="observed", source="automatic",
+        policyVersion=HUMAN_SUBTITLE_REVIEW_POLICY, inputRevision=input_revision,
+        reason=f"automatic_copy_failed:{error_type}" if error_type else "human_subtitle_review_required",
+        selectedIds=[clip.selected_title_id] if not error_type and clip.selected_title_id else [],
+        values=choice_values(clip.model_dump(by_alias=True, mode="json")) if not error_type else {},
+    )
+
+
+@best_effort_capture
 def capture_proposals(payload: dict, path: Path, *, kind, policy_version, clip_id=None) -> dict:
     history = merge_history(read_history(path), payload.get("choiceHistory", []))
     if payload.get("state") == "ready":

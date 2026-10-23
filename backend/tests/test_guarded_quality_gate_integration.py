@@ -128,6 +128,7 @@ def _create_review_job(
     client: TestClient,
     *,
     automation_mode: str = "guarded",
+    legacy_auto: bool = True,
 ) -> str:
     upload = client.post(
         "/api/videos/upload",
@@ -157,6 +158,18 @@ def _create_review_job(
         },
     )
     assert created.status_code == 201
+    if automation_mode == "auto" and legacy_auto:
+        # Existing tests exercise persisted auto jobs from before the human-review policy.
+        sessions = app.dependency_overrides[get_db]()
+        try:
+            db = next(sessions)
+            job = db.get(Job, created.json()["jobId"])
+            settings = dict(job.settings_json)
+            settings.pop("_automationPolicyVersion", None)
+            job.settings_json = settings
+            db.commit()
+        finally:
+            sessions.close()
     return str(created.json()["jobId"])
 
 

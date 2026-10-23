@@ -188,12 +188,14 @@ export default function JobPage() {
             {job.status === "awaiting_subtitle_review" ? (
               <section className="border border-sky-300 bg-sky-50 px-5 py-5">
                 <p className="text-sm font-semibold text-sky-950">
-                  {exceptionOnlyAutomation
+                  {job.details.humanSubtitleReviewRequired
+                    ? "字幕確認の準備ができました。全clipの字幕を確認・修正してください。"
+                    : exceptionOnlyAutomation
                     ? "問題のあるタイトル・字幕だけ人の確認へ戻しました。"
                     : "clip選定が完了しました。次は字幕確認です。"}
                 </p>
                 <p className="mt-1 text-sm text-sky-800">
-                  {exceptionOnlyAutomation ? (
+                  {exceptionOnlyAutomation && !job.details.humanSubtitleReviewRequired ? (
                     automationGate.autoPassedClips !== null ||
                     automationGateAttentionCount !== null ? (
                       <>
@@ -214,7 +216,7 @@ export default function JobPage() {
                   className="mt-4 inline-flex min-h-11 items-center bg-sky-700 px-5 text-sm font-semibold text-white"
                   href={`/jobs/${job.id}/subtitles`}
                 >
-                  {exceptionOnlyAutomation ? "確認が必要な項目を開く" : "字幕確認へ進む"}
+                  {exceptionOnlyAutomation && !job.details.humanSubtitleReviewRequired ? "確認が必要な項目を開く" : "字幕確認へ進む"}
                 </Link>
               </section>
             ) : null}

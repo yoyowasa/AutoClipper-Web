@@ -13,6 +13,7 @@ const AUTOMATION_GATE_STAGE_LABELS: Record<AutomationGateStage, string> = {
 };
 
 const AUTOMATION_GATE_REASON_LABELS: Record<string, string> = {
+  human_subtitle_review_required: "字幕を確認・修正し、各clipを確定してください",
   invalid_clip_range_or_duration: "切り抜き範囲または長さに問題があります",
   missing_title: "タイトルがありません",
   missing_transcript_coverage: "文字起こしが不足しています",
@@ -121,7 +122,9 @@ export function automationGateDisplay(
   const passed = state === "passed" || (outcome === "pass" && !needsAttention);
   const evaluating = state === "evaluating";
   const tone = passed ? "passed" : needsAttention ? "attention" : "evaluating";
-  const title = passed
+  const title = details?.humanSubtitleReviewRequired && stage === "content"
+    ? "字幕を確認・修正して確定してください"
+    : passed
     ? "自動品質確認を通過"
     : state === "fallback_manual"
       ? "判定不能のため人の確認へ戻しました"
@@ -152,7 +155,11 @@ export function automationGateDisplay(
     attentionClips,
     attentionClipIds,
     reasonCodes,
-    reasonLabels: reasonCodes.map(automationGateReasonLabel),
+    reasonLabels: reasonCodes.map((code) =>
+      details?.humanSubtitleReviewRequired && code === "preview_not_ready_or_unverifiable"
+        ? "正式プレビューの完成待ち（clip確定後に作成）"
+        : automationGateReasonLabel(code)
+    ),
     tone,
     title
   };
