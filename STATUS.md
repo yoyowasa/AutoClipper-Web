@@ -1198,3 +1198,13 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 保存/互換: 描画後の既存export JSONへ`write_json_atomic`で追記し、既存の制作記録保存がchoiceHistoryを取り込む。新たな恒久台帳は作らない。書き出し/再書き出しでのみ記録し、旧記録・稼働ジョブを更新しない。記録失敗は種類だけを警告ログに出し、動画を失敗にしない。
 - 検証: Ruff 0.16.10の`check . ../launcher ../scripts`、追加14ケース、frontendのtest（37ファイル）・lint・typecheck・buildは成功。Windows/Python 3.11のbackend全件は2176 passed・2 skipped（7件は既存の非推奨警告）。全件開始後の通常画角の採用元/値の表記調整は追加14ケースを再実行して確認し、最終HEAD全体はPRのCIで再確認する。通常/ショート×らでん/宙科設定、手動上書き、字幕修正後の再計算、ASSと保存記録、browser共通fixture、正式/簡易/完成のFFmpeg画角フィルター、代替、記録失敗を隔離DB/storageと模擬映像入出力で確認した。文字が収まらないケースをfits=falseとして残し、最小文字サイズ/品質検証を緩めていない。
 - 未確認/制限: 実動画の見た目・人物/字幕の欠け・ユーザー受入・成績改善は未確認で、1-Eの残件。画角フィルターの生成とASSは検証したが、このタスクで実FFmpeg動画を目視した結果ではない。稼働DBは検証前後とも3,289,088 bytes・更新時刻2026-10-22 03:06:46 UTCで不変。Docker再build/再起動は行わず、中継再起動も不要。実装PRはCI成功後も未マージで止める。
+
+## 2026-10-23 task-225 残り作業1-E：一連の動作と制作記録の受入確認
+
+- 目的: PR #158（1-D）のCI成功を確認し、merge commit `29e4a67`でマージ。そのmainから`codex/task-225-auto-review-acceptance`を作り、既存の自動選択・人の字幕修正・確定・書き出し・投稿セットと記録のつながりを確認する。
+- 変更ファイル: `backend/tests/test_auto_review_acceptance.py`、`docs/REMAINING_WORK_1_ACCEPTANCE.md`、`docs/REMAINING_WORK_1_TASK_PLAN.md`、本記録。アプリ本体・frontend・launcher・契約・Docker構成は変更なし。
+- 追加検証: 通常／ショートの2ケース。自動推薦から人の字幕・タイトル・投稿文・書式・フック／画角の一回apply、正式プレビュー1回、準備前finalizeの409、明示的finalize、完成記録、個別3ファイルとZIPの内容一致・一時ファイルの後片付けを確認。API・ASS・PIL・記録・保存は実処理、モデル・FFmpeg・RQ・選定／実MP4の品質ゲートはテストダブル。内容／尺／プレビュー準備完了の検証は維持。
+- 画面: 専用DB/storage、backend 18225／frontend 13225でショートの字幕・タイトルを編集し、再読み込み後の下書き復元、apply 200が1回、finalize 202が1回、results 200と修正したタイトル・保存操作を確認。試験用メディアであり、実MP4の見た目の受入ではない。作成した確認用サーバーは停止した。
+- 検証結果: lock版Ruff 0.16.10（backend・launcher・scripts）成功。Python 3.11全件pytestは2178 passed／2 skipped／7 warnings。frontend test 37ファイル・lint・typecheck・build成功。稼働DBは前後とも3,289,088 bytes、mtime UTC `2026-10-22T03:06:46.5233849Z`で不変。CIはPRで確認する。
+- 未確認事項: Docker停止・ローカルFFmpeg未検出のため実エンコード、実動画の正式プレビュー／完成MP4の人による品質確認、実Codex、投稿成績は未確認。ブラウザのフォルダ選択ダイアログを操作環境で確認できず、実保存は未確認（フォルダ／ZIP分岐のコードテストとAPI照合は成功）。追加動的演出は「なし」のまま。1-Eは隔離・モック確認済み／実動画のユーザー受入待ちであり、残り作業1全体の完全完了とはしない。
+- 境界: 新PRはCI成功後も未マージで止める。稼働DB・既存ジョブ、Dockerの起動／build／反映、実Google／Codexの実行は行わない。到達仕様§3・統合構想は変更しない。
