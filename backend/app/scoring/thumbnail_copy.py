@@ -8,6 +8,7 @@ from app.scoring.codex_title_hook_suggestions import CodexTitleHookSuggestionGen
 
 
 THUMBNAIL_COPY_PROMPT_VERSION = "thumbnail_copy_v3"
+THUMBNAIL_COPY_MAX_ATTEMPTS = 2
 THUMBNAIL_COPY_PROMPT = f"""プロンプト版: {THUMBNAIL_COPY_PROMPT_VERSION}
 確定済みの通常動画に使う日本語サムネイル文言を3案作成する。
 

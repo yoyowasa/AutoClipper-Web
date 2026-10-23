@@ -72,3 +72,21 @@ def thumbnail_candidates_timeout(export_id: str) -> int:
         # 2 frames/sec: reserve up to one second per frame, plus video decoding
         # at realtime and ten minutes for the twelve full-resolution stills.
         return media_timeout(export.duration, minimum=600, factor=3)
+
+
+def automatic_thumbnail_copy_timeout(job_id: str) -> int:
+    """Additional bounded Codex waits only for the new human-review auto policy."""
+    from app.jobs.automation import requires_human_subtitle_review
+    from app.scoring.codex_title_hook_suggestions import DEFAULT_CODEX_RESPONSE_TIMEOUT_SECONDS
+    from app.scoring.thumbnail_copy import THUMBNAIL_COPY_MAX_ATTEMPTS
+    with SessionLocal() as db:
+        if not inspect(db.get_bind()).has_table("jobs"):
+            return 0
+        job = db.get(Job, job_id)
+        if job is None or not requires_human_subtitle_review(job.settings_json or {}):
+            return 0
+    path = get_storage_paths().job_outputs(job_id) / "subtitle_review.json"
+    if not path.is_file():
+        return 0
+    count = sum(clip["type"] == "normal" for clip in json.loads(path.read_text(encoding="utf-8"))["clips"])
+    return math.ceil(count * THUMBNAIL_COPY_MAX_ATTEMPTS * DEFAULT_CODEX_RESPONSE_TIMEOUT_SECONDS)

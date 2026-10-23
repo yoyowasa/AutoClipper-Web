@@ -11,6 +11,7 @@ from app.jobs.thumbnails import (
     read_export_metadata,
     thumbnail_output_path,
     write_export_metadata,
+    thumbnail_copy_warnings,
 )
 from app.jobs.subtitle_review_preview import subtitle_review_document_lock
 from app.jobs.thumbnail_candidates import (
@@ -238,6 +239,8 @@ def run_export_thumbnail_regeneration(
                     return
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 temp_output.replace(output_path)
+                from app.jobs.automatic_thumbnail_copy import record_manual_copy
+                latest = record_manual_copy(latest, db=db, paths=storage, export=export, revision=revision)
                 write_export_metadata(
                     metadata_path,
                     thumbnail_choice({
@@ -272,6 +275,8 @@ def run_export_thumbnail_regeneration(
                             "thumbnail_character_asset_upscale": asset_info.get("upscale"),
                             "thumbnail_character_asset_used_at": utc_now().isoformat(),
                         } if selected_asset else video_subject_metadata()),
+                        "thumbnail_warnings": thumbnail_copy_warnings(
+                            latest, selected_asset.warnings + asset_info.get("warnings", []) if selected_asset else []),
                         "thumbnail_subject_source": "asset" if selected_asset else "video" if chosen else "legacy",
                         "thumbnail_subject_reason": (
                             "予備の表情素材を使用しました。" if selected_asset else "この動画から人物を切り出しました。" if chosen

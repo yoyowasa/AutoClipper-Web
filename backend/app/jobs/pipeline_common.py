@@ -131,6 +131,7 @@ class AutoClipperPipelineDependencies:
     short_renderer: Callable[..., Any] = render_short_clip
     normal_thumbnail_renderer: Callable[..., ThumbnailRenderResult] = render_normal_thumbnail
     short_thumbnail_renderer: Callable[..., ThumbnailRenderResult] = render_short_thumbnail
+    thumbnail_copy_generator: Any = None
     manual_source_proxy_renderer: Callable[..., Path] = render_manual_source_proxy
     subtitle_review_preview_renderer: Callable[..., Path] = render_review_preview
     subtitle_review_exact_preview_renderer: Callable[..., ExactPreviewResult] = render_exact_subtitle_review_preview

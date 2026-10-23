@@ -26,6 +26,7 @@ from test_guarded_quality_gate_integration import (
     guarded_client as guarded_client, _create_review_job, _dependencies, _decision,
 )
 from test_title_hook_suggestions import _suggestion_result
+from app.scoring.thumbnail_copy import ThumbnailCopyResult
 
 
 def prepare(guarded_client, monkeypatch, tmp_path, *, short=False, selection="pass", failure=False):
@@ -57,7 +58,15 @@ def prepare(guarded_client, monkeypatch, tmp_path, *, short=False, selection="pa
             frame_extractor=lambda *args, **kw: [],
         )
 
-    deps = replace(_dependencies(tmp_path), auto_title_hook_generator=generate)
+    def thumbnail_copy(payload, images):
+        segment = payload["segments"][0]
+        return ThumbnailCopyResult.model_validate({"recommendedId": "copy_2", "suggestions": [
+            {"id": f"copy_{i}", "heading": "", "upper": segment["text"][:40], "lower": "",
+             "reason": "確定字幕から選択", "evidence": [{"segmentId": segment["segmentId"], "quote": segment["text"]}]}
+            for i in range(1, 4)
+        ]})
+    deps = replace(_dependencies(tmp_path), auto_title_hook_generator=generate,
+                   thumbnail_copy_generator=SimpleNamespace(generate=thumbnail_copy))
     monkeypatch.setattr(pipeline, "evaluate_selection_quality_gate", lambda **kw: _decision(
         kw["job_id"], stage="selection", outcome=selection, mode="auto"))
     previews, renders, resumes = [], [], []
@@ -103,6 +112,7 @@ def test_auto_recommendation_waits_for_human_apply_and_explicit_finalize(guarded
         kw["job"].id, stage="content", outcome="pass", mode="auto"))
     response = data.client.post(f"/api/jobs/{data.job_id}/subtitle-review/clips/{clip.id}/apply", json={
         "title": "人が修正したタイトル", "hookText": "確認手順の要点" if short else "",
+        "thumbnailKicker": clip.thumbnail_kicker, "thumbnailLine1": clip.thumbnail_line1, "thumbnailLine2": clip.thumbnail_line2,
         "segments": [{"segmentId": clip.segment_ids[0], "text": "人が確認して修正した字幕"}],
     })
     assert response.status_code == 200, response.text
@@ -130,6 +140,15 @@ def test_auto_recommendation_waits_for_human_apply_and_explicit_finalize(guarded
         session_factory=data.factory, paths=data.storage, dependencies=data.deps)
     assert statuses[-1] == "completed"
     assert len(data.calls) == 1
+    if not short:
+        from sqlalchemy import select
+        from app.models import ExportItem
+        from app.jobs.thumbnails import read_export_metadata
+        with data.factory() as db:
+            export = db.scalar(select(ExportItem).where(ExportItem.job_id == data.job_id))
+            metadata = read_export_metadata(export)
+        assert metadata["thumbnail_copy_selected_id"] == "copy_2"
+        assert metadata["thumbnail_line1"] == "人が確認して修正した字幕"
 
 
 def test_passed_quality_gate_still_stops_unconfirmed(guarded_client, monkeypatch, tmp_path):

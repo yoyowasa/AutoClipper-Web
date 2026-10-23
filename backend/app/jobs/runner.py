@@ -3857,6 +3857,7 @@ def run_subtitle_review_render(
                 short_renderer=deps.short_thumbnail_renderer,
                 character_style=settings.get("normalThumbnailStyle"),
                 db=db, job=job, paths=storage_paths,
+                review_document=review_document, copy_generator=deps.thumbnail_copy_generator,
             )
             if rerender_staging_paths is not None:
                 exports, _render_failures_path, rerender_promotion = _promote_subtitle_rerender(

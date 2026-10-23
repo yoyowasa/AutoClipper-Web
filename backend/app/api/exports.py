@@ -421,6 +421,9 @@ def _queue_thumbnail_regeneration(export, metadata_path, request, db, paths, enq
     if request.text is not None:
         pending.update({"thumbnail_kicker": request.text.heading.strip(),
                         "thumbnail_line1": request.text.upper.strip(), "thumbnail_line2": request.text.lower.strip()})
+        if any(pending[key] != previous.get(key, "") for key in ("thumbnail_kicker", "thumbnail_line1", "thumbnail_line2")):
+            pending.update(thumbnail_copy_source="manual", thumbnail_copy_error=None,
+                           thumbnail_copy_selected_id=None, thumbnail_copy_recommended_id=None)
     if request.text_styles is not None:
         pending["thumbnail_text_styles"] = request.text_styles.model_dump(mode="json", by_alias=True)
     write_export_metadata(metadata_path, pending)

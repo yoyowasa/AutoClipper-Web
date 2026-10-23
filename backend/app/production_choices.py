@@ -20,7 +20,7 @@ VALUE_KEYS = frozenset({
     "intent", "score", "openingScore", "topicKey", "longformReason", "framingOffsetX", "framingOffsetY", "framingZoom",
     "shortLayout", "titleStyle", "hookStyle", "subtitleStyle", "resolvedTitleStyle", "resolvedHookStyle",
     "resolvedSubtitleStyle", "postMetadataSource", "descriptionHash", "tagsHash", "hashtagsHash", "source",
-    "assetId", "emotion", "cropMode", "templateVersion", "subjectPlacement", "textStyles", "frameCandidateId",
+    "assetId", "emotion", "cropMode", "templateVersion", "templateDesign", "subjectPlacement", "textStyles", "frameCandidateId",
     "second", "closeAvailable", "scale", "offsetX", "offsetY", "selectedTitleId", "recommendedTitleId",
     "bodyDurationSeconds", "completedDurationSeconds", "characterPresetName",
 })

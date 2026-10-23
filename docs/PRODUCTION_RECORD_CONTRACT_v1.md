@@ -120,7 +120,7 @@ YouTubeの生の統計・動画タイトル・絶対パスは含めない。記�
 | reason | 記録された理由。nullまたは省略は「理由未記録」であり、成功・不採用理由を推測して補わない |
 | candidates | `{id, values, outcome, reason}`。outcomeは`proposed` / `selected` / `not_selected` / `rejected`。生成しただけの案を不採用扱いにしない |
 | selectedIds / recommendedId | 採用と推薦を別に記録する。字幕確認のtitle_hookのIDは公開タイトル候補のID。手書きや古い根拠に対応するIDを捏造しない |
-| values | 種類・範囲・文言・尺・score・openingScore・話題・画像候補時刻／ID・素材／表情・画角・スタイルなど、コードで許可した比較用の値だけ |
+| values | 種類・範囲・文言・尺・score・openingScore・話題・画像候補時刻／ID・素材／表情・画角・スタイル・サムネのtemplateDesignなど、コードで許可した比較用の値だけ。旧履歴にない値は未記録 |
 
 字幕や範囲の変更後は根拠ハッシュが変わる。古い案は過去の履歴として保持するが、現在の字幕根拠と一致しない
 タイトル候補は現在の選択履歴に結び付けない。状態／プレビュー更新だけでは同一の選択を繰り返し記録しない。
