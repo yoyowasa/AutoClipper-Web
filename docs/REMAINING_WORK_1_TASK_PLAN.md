@@ -4,7 +4,7 @@
 
 確認した実装: main `7c18a3c`（task-219／PR #153まで）
 
-**状態: 2026-10-22に3点の方針が承認済み。1-A（task-221／PR #155）は2026-10-23にmerge commit `110413a`でマージ。1-Bはそのmainからtask-222として実装し、CI成功後も未マージでレビューを待つ。1-C〜1-Eは未実装。Docker反映は行わない。**
+**状態: 2026-10-22に3点の方針が承認済み。1-A（task-221／PR #155）はmerge commit `110413a`、1-B（task-222／PR #156）は2026-10-23にmerge commit `4912c16`でマージ。1-Cはそのmainからtask-223として実装し、CI成功後も未マージでレビューを待つ。1-D・1-Eは未実装。Docker反映は行わない。**
 
 ## 1. 目的と境界
 
@@ -24,7 +24,7 @@
 | 自動化と確認停止 | [automation](../backend/app/jobs/automation.py)、[runner](../backend/app/jobs/runner.py)、[品質ゲート](../backend/app/jobs/quality_gate.py) | `auto`は条件が通ると字幕確認を通過し得る。単に既定をautoへ変えるだけでは「字幕は人が修正」を満たさない |
 | タイトル・フック・投稿文 | [generate_title_hook_suggestions_for_auto／apply_recommended_title_hook_suggestions](../backend/app/jobs/title_hook_suggestions.py)、[投稿文](../backend/app/posting_metadata.py) | 推薦の自動適用は既存。起動条件・字幕確認への接続・手動変更の保護を整える |
 | 通常サムネの画像 | [generate_export_thumbnails](../backend/app/jobs/thumbnails.py)、[保存済み候補](../backend/app/jobs/thumbnail_candidates.py)、[予備素材選択](../backend/app/jobs/thumbnail_character_assets.py) | 動画候補→予備素材→従来方式の順は維持。候補を探す別エンジンや全動画の素材収集は追加しない |
-| 通常サムネの文言 | タイトル・フック案内の文言と、[専用サムネ文言生成](../backend/app/jobs/thumbnail_copy.py)・[検証](../backend/app/scoring/thumbnail_copy.py) | 現在の専用生成は完成後の手動要求が入口。自動時の最終文言をどちらで決めるかを一本化する。1-Cに案を記す |
+| 通常サムネの文言 | タイトル・フック案内の文言と、[専用サムネ文言生成](../backend/app/jobs/thumbnail_copy.py)・[検証](../backend/app/scoring/thumbnail_copy.py) | 1-C/task-223で新規auto版の確定字幕から最終推薦を採用。完成後の手動要求と旧経路を維持する。実動画での受入は未確認 |
 | ショートのサムネ | [generate_export_thumbnails](../backend/app/jobs/thumbnails.py) | 完成動画のフック付近から生成する経路を維持。専用AI選択を追加しない |
 | 画角・文字スタイル | [render_short](../backend/app/render/render_short.py)、[crop_strategy](../backend/app/render/crop_strategy.py)、[resolve_clip_text_style](../backend/app/render/subtitles_ass.py)、[字幕確認](../backend/app/jobs/subtitle_review.py) | 自動画角・キャラ／ジョブ設定・文字収まりの処理はある。最終解決値と根拠の記録を補う。新しいスタイル集は作らない |
 | 軽い演出 | 現行には静的な拡大・位置調整やフック挿入がある | 調べた描画・設定コードには、場面別に選ぶ動的ズーム・効果音等の演出一覧はない。実装済み扱いにせず、1-Dの範囲判断を先に確認する |
@@ -35,7 +35,7 @@
 
 ## 3. タスク分割案（1タスク＝1PR）
 
-識別子は **1-A〜1-E**。1-Aは`task-221`／`codex/task-221-production-choice-history`、1-Bは`task-222`／`codex/task-222-auto-to-subtitle-review`。後続の正式なtask番号・ブランチは着手時に割り当てる。各PRは直前までの承認済み変更を含むmainから作り、mainを比較先とする。並行ブランチを積んで同じrunnerや記録契約を重複変更しない。
+識別子は **1-A〜1-E**。1-Aは`task-221`／`codex/task-221-production-choice-history`、1-Bは`task-222`／`codex/task-222-auto-to-subtitle-review`、1-Cは`task-223`／`codex/task-223-auto-thumbnail-decisions`。後続の正式なtask番号・ブランチは着手時に割り当てる。各PRは直前までの承認済み変更を含むmainから作り、mainを比較先とする。並行ブランチを積んで同じrunnerや記録契約を重複変更しない。
 
 | 順 | タスク | 目的 | 依存 |
 | --- | --- | --- | --- |
@@ -80,6 +80,8 @@
 **完了条件**: 正常系で切り抜き・文言の選択操作をせず字幕確認へ到達し、そこで必ず止まる。字幕修正→一回確定→正式プレビュー→最終書き出しが成立する。手動／旧ジョブ、不足・生成失敗、戻る／再試行を検証する。
 
 ### 1-C：通常サムネの最終決定
+
+**実装範囲（task-223）**: 1-Bの新規auto版だけで、確定字幕・公開タイトルを既存の専用文言生成器へ渡し、検証済み推薦を自動採用する。同じ確定入力は既存の提案保存先で再利用する。手動指定・旧モードを維持し、失敗時の初期文言使用は理由付きで表示・記録する。文言と画像の決定は既存choiceHistory／制作記録へ接続する。実Codex・実動画の受入は未確認で、PRは未マージのまま止める。
 
 **変更案**
 
@@ -139,4 +141,4 @@
 
 - AGENTS、CI、テストDB隔離、初期選定／自動推薦適用／サムネ生成／画角・文字スタイル／制作記録の現行コードを読み、上表の再利用先を確認した。
 - 着手前のmainでは、専用サムネ文言生成がcompletedを前提とし、autoが字幕確認を通過し得て、完成後サムネ編集も制作記録へ即時反映されない。サムネ編集後の記録更新は1-Aで接続し、前の2点は1-B／1-Cで扱う。
-- 新規ジョブは人の字幕確認で止まるauto版、通常サムネの最終文言は既存専用生成器、追加の動的演出は作らない、の3点は2026-10-22にユーザーが承認した。1-A／1-Bの実装・検証はtask-221／task-222のSTATUSを参照し、1-C〜1-Eは未実装。成績改善・実動画の受入結果を保証するものではない。
+- 新規ジョブは人の字幕確認で止まるauto版、通常サムネの最終文言は既存専用生成器、追加の動的演出は作らない、の3点は2026-10-22にユーザーが承認した。1-A〜1-Cの実装・検証はtask-221〜223のSTATUSを参照し、1-D・1-Eは未実装。成績改善・実動画の受入結果を保証するものではない。

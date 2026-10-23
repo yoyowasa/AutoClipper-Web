@@ -15,6 +15,7 @@ from app.jobs.thumbnails import read_export_metadata
 from app.models import ExportItem, Job
 from app.scoring.thumbnail_copy import (
     THUMBNAIL_COPY_PROMPT_VERSION,
+    THUMBNAIL_COPY_MAX_ATTEMPTS,
     CodexThumbnailCopyGenerator,
     ThumbnailCopyResult,
     ThumbnailCopySubjectError,
@@ -38,6 +39,11 @@ class ThumbnailCopyState(BaseModel):
 def copy_state_path(paths, export: ExportItem) -> Path:
     digest = sha256(export.id.encode()).hexdigest()[:24]
     return paths.job_outputs(export.job_id) / "thumbnail_copy_suggestions" / f"{digest}.json"
+
+
+def confirmed_copy_state_path(paths, job_id: str, clip_id: str, content_hash: str) -> Path:
+    digest = sha256(f"confirmed:{clip_id}:{content_hash}".encode()).hexdigest()[:24]
+    return paths.job_outputs(job_id) / "thumbnail_copy_suggestions" / f"{digest}.json"
 
 
 def read_copy_state(path: Path) -> dict:
@@ -82,6 +88,12 @@ def build_copy_input(db, paths, export: ExportItem) -> dict:
             raise ValueError("確定字幕が見つかりません。文言を手動で入力してください。")
         source = json.loads(transcript_path.read_text(encoding="utf-8"))
         source = [s for s in source if s.get("clip_id") in (None, export.candidate_id)]
+    payload = build_copy_payload(source, start=start, end=end, publication_title=export.title)
+    return copy_request(payload, start=start, end=end, video_stat=video_stat)
+
+
+def build_copy_payload(source: list[dict], *, start: float, end: float, publication_title: str) -> dict:
+    """Shared confirmed-subtitle input; callers enforce their own publication state."""
     segments = []
     for index, item in enumerate(source):
         if float(item["end"]) <= start or float(item["start"]) >= end or not str(item["text"]).strip():
@@ -96,7 +108,11 @@ def build_copy_input(db, paths, export: ExportItem) -> dict:
         )
     if not segments:
         raise ValueError("この完成動画の範囲に字幕がありません。文言を手動で入力してください。")
-    payload = {"publicationTitle": export.title, "clipDurationSeconds": end - start, "segments": segments}
+    payload = {"publicationTitle": publication_title, "clipDurationSeconds": end - start, "segments": segments}
+    return payload
+
+
+def copy_request(payload: dict, *, start: float, end: float, video_stat) -> dict:
     encoded = json.dumps(
         {
             "payload": payload,
@@ -155,30 +171,7 @@ def run_thumbnail_copy_generation(export_id: str, request_id: str, *, session_fa
                 clip_id=f"thumb_{export.id}",
                 model=os.environ.get("CODEX_TITLE_HOOK_MODEL", "codex-default"),
             )
-            payload = request["payload"]
-            for attempt in range(2):
-                result = ThumbnailCopyResult.model_validate(active.generate(payload, []).model_dump(by_alias=True))
-                try:
-                    if attempt and not result.subject_name:
-                        raise ThumbnailCopySubjectError("作り直した候補にも、話の中心の人物名がありません。")
-                    validate_copy_subject(result, payload["segments"], payload["publicationTitle"] or "")
-                except ThumbnailCopySubjectError as exc:
-                    if attempt:
-                        raise ThumbnailCopySubjectError(f"サムネ文言を1回作り直しましたが、{exc}") from exc
-                    payload = {
-                        **request["payload"],
-                        "correction": {
-                            "reason": str(exc),
-                            "previousResponse": result.model_dump(by_alias=True),
-                            "instruction": (
-                                "字幕・公開タイトルに実在する中心人物名をsubjectNameと全3案のupperかlowerに入れてください。"
-                                "headingだけでは不可。"
-                            ),
-                        },
-                    }
-                    continue
-                validate_copy_evidence(result, payload["segments"])
-                break
+            result = generate_validated_copy(active, request["payload"])
             with subtitle_review_document_lock(job_dir):
                 latest = read_copy_state(path)
                 if latest.get("requestId") != request_id:
@@ -198,3 +191,31 @@ def run_thumbnail_copy_generation(export_id: str, request_id: str, *, session_fa
                     else "サムネ文言を生成できませんでした。Codexの接続を確認して再生成してください。"
                 )
                 write_copy_state(path, {**latest, "state": "failed", "error": error, "suggestions": []})
+
+
+def generate_validated_copy(active, original_payload: dict) -> ThumbnailCopyResult:
+    payload = original_payload
+    for attempt in range(THUMBNAIL_COPY_MAX_ATTEMPTS):
+        result = ThumbnailCopyResult.model_validate(active.generate(payload, []).model_dump(by_alias=True))
+        try:
+            if attempt and not result.subject_name:
+                raise ThumbnailCopySubjectError("作り直した候補にも、話の中心の人物名がありません。")
+            validate_copy_subject(result, payload["segments"], payload["publicationTitle"] or "")
+        except ThumbnailCopySubjectError as exc:
+            if attempt:
+                raise ThumbnailCopySubjectError(f"サムネ文言を1回作り直しましたが、{exc}") from exc
+            payload = {
+                **original_payload,
+                "correction": {
+                    "reason": str(exc),
+                    "previousResponse": result.model_dump(by_alias=True),
+                    "instruction": (
+                        "字幕・公開タイトルに実在する中心人物名をsubjectNameと全3案のupperかlowerに入れてください。"
+                        "headingだけでは不可。"
+                    ),
+                },
+            }
+            continue
+        validate_copy_evidence(result, payload["segments"])
+        break
+    return result

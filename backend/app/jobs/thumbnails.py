@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from app.thumbnail_style import resolve_thumbnail_text_styles
+from app.thumbnail_style import NormalThumbnailStyle, resolve_thumbnail_text_styles
 from typing import Any
 
 from app.candidates.merge_boundaries import Candidate
@@ -140,6 +140,8 @@ def _ready_metadata(
             if result.kind == "normal" else "short_hook_frame_v1"
         ),
         "thumbnail_error_code": None,
+        **({"thumbnail_design": NormalThumbnailStyle.model_validate(character_style).design if character_style is not None else "raden"}
+           if result.kind == "normal" else {}),
         **({"thumbnail_text_styles": resolve_thumbnail_text_styles(character_style).model_dump(mode="json", by_alias=True)}
            if result.kind == "normal" else {}),
     }
@@ -160,6 +162,12 @@ def _failed_metadata(
     }
 
 
+def thumbnail_copy_warnings(payload: dict, warnings: list[str]) -> list[str]:
+    if payload.get("thumbnail_copy_error"):
+        return [*warnings, f"サムネ文言の自動決定に失敗したため初期文言を使用しています。{payload['thumbnail_copy_error']}"]
+    return warnings
+
+
 def generate_export_thumbnails(
     *,
     exports: Sequence[ExportItem],
@@ -174,6 +182,8 @@ def generate_export_thumbnails(
     job: Job | None = None,
     paths: StoragePaths | None = None,
     emotion_selector: Any = None,
+    review_document: Any = None,
+    copy_generator: Any = None,
 ) -> ThumbnailGenerationBatchResult:
     output_dir = Path(job_output_dir)
     resolved_output_dir = output_dir.resolve(strict=False)
@@ -197,16 +207,21 @@ def generate_export_thumbnails(
             output_path.resolve(strict=False).relative_to(resolved_output_dir)
             payload = read_export_metadata(export)
             if export.type == "normal":
+                from app.jobs.automation import requires_human_subtitle_review
+                from app.jobs.automatic_thumbnail_copy import decide_thumbnail_copy
                 from app.jobs.thumbnail_character_assets import choose_character_asset, video_subject_metadata
+                payload.update(thumbnail_kicker=candidate.thumbnail_kicker, thumbnail_line1=candidate.thumbnail_line1,
+                               thumbnail_line2=candidate.thumbnail_line2)
+                if job is not None and paths is not None and requires_human_subtitle_review(job.settings_json or {}):
+                    payload = decide_thumbnail_copy(review=review_document, export=export, paths=paths,
+                                                    metadata=payload, generator=copy_generator)
                 proposed = _normal_frame_seconds(candidate) - candidate.start
                 write_export_metadata(metadata_path, {**payload, "start": candidate.start, "end": candidate.end})
                 frames = ensure_thumbnail_candidates(export, input_path, output_dir)
                 payload = read_export_metadata(export)
                 selected_asset = choose_character_asset(
                     db, paths, job, export, {**payload,
-                        "start": candidate.start, "end": candidate.end, "thumbnail_frame_seconds": proposed,
-                        "thumbnail_kicker": candidate.thumbnail_kicker,
-                        "thumbnail_line1": candidate.thumbnail_line1, "thumbnail_line2": candidate.thumbnail_line2},
+                        "start": candidate.start, "end": candidate.end, "thumbnail_frame_seconds": proposed},
                     selector=emotion_selector, recent_asset_ids=recent_asset_ids,
                 ) if not frames and db is not None and job is not None and paths is not None else None
                 selected = frames[0]["second"] if frames else proposed
@@ -225,9 +240,9 @@ def generate_export_thumbnails(
                     output_path,
                     **({"character_style": character_style} if character_style is not None else {}),
                     frame_time=candidate.start + selected,
-                    eyebrow=candidate.thumbnail_kicker.strip(),
-                    title_first_line=candidate.thumbnail_line1.strip(),
-                    title_second_line=candidate.thumbnail_line2.strip(),
+                    eyebrow=payload["thumbnail_kicker"].strip(),
+                    title_first_line=payload["thumbnail_line1"].strip(),
+                    title_second_line=payload["thumbnail_line2"].strip(),
                     **asset_kwargs,
                 )
                 source_basis = "character_asset" if selected_asset else "source_video_absolute"
@@ -240,6 +255,7 @@ def generate_export_thumbnails(
                     recent_asset_ids.append(selected_asset.asset.id)
                 else:
                     payload.update(video_subject_metadata())
+                payload["thumbnail_warnings"] = thumbnail_copy_warnings(payload, payload["thumbnail_warnings"])
                 payload["thumbnail_subject_source"] = "asset" if selected_asset else "video" if frames else "legacy"
                 payload["thumbnail_subject_reason"] = (
                     "この動画から半身を切り出しました。" if frames else

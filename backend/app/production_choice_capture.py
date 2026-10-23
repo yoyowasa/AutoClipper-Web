@@ -64,6 +64,14 @@ def capture_document(document, path: Path | None, *, kind: str, source="unrecord
                     **{name: value_hash(clip.get(key)) for name, key in (
                         ("descriptionHash", "youtubeDescription"), ("tagsHash", "youtubeTags"), ("hashtagsHash", "youtubeHashtags"))},
                 }
+                if source == "manual" and path is not None and path.is_file():
+                    old_clip = next((c for c in json.loads(path.read_text(encoding="utf-8")).get("clips", [])
+                                     if c["id"] == clip["id"]), None)
+                    copy_keys = ("thumbnailKicker", "thumbnailLine1", "thumbnailLine2")
+                    if old_clip and any(old_clip.get(key, "") != clip.get(key, "") for key in copy_keys):
+                        append_choice(history, kind="thumbnail", clipId=clip["id"], stage="applied", source="manual",
+                                      values={key: clip.get(key, "") for key in copy_keys},
+                                      policyVersion="subtitle-review-v1", reason="manual_thumbnail_copy")
                 segment_ids = set(clip.get("segmentIds", []))
                 revision = build_post_metadata_revision_hash(
                     clip_id=clip["id"], clip_type=clip["type"], start=clip["start"], end=clip["end"],
@@ -169,6 +177,7 @@ def thumbnail_choice(payload: dict, *, clip_id: str, source="unrecorded") -> dic
     keys = {
         "source": "thumbnail_subject_source", "assetId": "thumbnail_character_asset_id", "emotion": "thumbnail_emotion",
         "cropMode": "thumbnail_crop_mode", "templateVersion": "thumbnail_template_version",
+        "templateDesign": "thumbnail_design",
         "subjectPlacement": "thumbnail_subject_placement", "textStyles": "thumbnail_text_styles",
         "thumbnailKicker": "thumbnail_kicker", "thumbnailLine1": "thumbnail_line1", "thumbnailLine2": "thumbnail_line2",
         "thumbnailFrameSeconds": "thumbnail_frame_seconds", "frameCandidateId": "thumbnail_frame_candidate_id",
