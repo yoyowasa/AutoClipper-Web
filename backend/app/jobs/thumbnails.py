@@ -12,7 +12,7 @@ from app.candidates.select_candidates import CandidateSelection
 from app.models import ExportItem, Job, utc_now
 from sqlalchemy.orm import Session
 from app.storage.paths import StoragePaths
-from app.jobs.thumbnail_candidates import ensure_thumbnail_candidates, video_candidate_kwargs
+from app.jobs.thumbnail_candidates import ensure_thumbnail_candidates, recommended_thumbnail_frame, video_candidate_kwargs
 from app.production_choice_capture import thumbnail_choice
 from app.storage.json_io import write_json_atomic
 from app.render.render_thumbnail import (
@@ -216,7 +216,8 @@ def generate_export_thumbnails(
                     payload = decide_thumbnail_copy(review=review_document, export=export, paths=paths,
                                                     metadata=payload, generator=copy_generator)
                 proposed = _normal_frame_seconds(candidate) - candidate.start
-                write_export_metadata(metadata_path, {**payload, "start": candidate.start, "end": candidate.end})
+                write_export_metadata(metadata_path, {**payload, "start": candidate.start, "end": candidate.end,
+                                                      "thumbnail_frame_seconds": proposed})
                 prepared_clip = next((c for c in review_document.clips if c.id == export.candidate_id), None) if review_document else None
                 if prepared_clip is not None and prepared_clip.automatic_thumbnail is not None:
                     from app.jobs.confirmed_thumbnail import reuse_confirmed_thumbnail
@@ -230,9 +231,14 @@ def generate_export_thumbnails(
                             "start": candidate.start, "end": candidate.end, "thumbnail_frame_seconds": proposed},
                         selector=emotion_selector, recent_asset_ids=recent_asset_ids,
                     ) if not frames and db is not None and job is not None and paths is not None else None
-                selected = frames[0]["second"] if frames else proposed
+                selected_candidate = recommended_thumbnail_frame(frames, proposed)
+                selected = selected_candidate["second"] if selected_candidate else proposed
                 payload.update(thumbnail_frame_seconds=round(selected, 3), thumbnail_crop_mode="standard",
-                               thumbnail_frame_candidate_id=frames[0]["id"] if frames else None)
+                               thumbnail_frame_candidate_id=selected_candidate["id"] if selected_candidate else None)
+                if frames:
+                    payload["thumbnail_frame_selection_source"] = (
+                        "content_proposal" if abs(selected - proposed) < .001 else "candidate_score"
+                    )
                 asset_info: dict[str, Any] = {}
                 asset_kwargs = {
                     "character_asset_path": paths.character_asset(
@@ -264,6 +270,8 @@ def generate_export_thumbnails(
                 payload["thumbnail_warnings"] = thumbnail_copy_warnings(payload, payload["thumbnail_warnings"])
                 payload["thumbnail_subject_source"] = "asset" if selected_asset else "video" if frames else "legacy"
                 payload["thumbnail_subject_reason"] = (
+                    "文言生成が推薦した場面を画質検証し、この動画から半身を切り出しました。"
+                    if frames and payload.get("thumbnail_frame_selection_source") == "content_proposal" else
                     "この動画から半身を切り出しました。" if frames else
                     "半身にできる場面が無いため予備素材を使用しました。" if selected_asset else
                     "半身にできる場面と予備素材が無いため従来の動画のコマを使用しました。"

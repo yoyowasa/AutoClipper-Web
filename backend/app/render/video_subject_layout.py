@@ -23,6 +23,13 @@ def video_subject_layout(size, face, frame, *, mode="standard", scale=1.0, offse
     cx, cy, _fw, fh = face
     # Bust: face center at 30%, lower edge two face heights below the chin.
     crop_height = fh * height / 0.45 if mode == "close" else fh * height * 2.5 / 0.7
+    if mode == "standard":
+        # A visible chest need not have extra waist pixels below the source.
+        # Fit the bust inside the image while keeping the face at 30%. Never
+        # turn it into a tighter crop than the existing close-up composition.
+        available = min(cy * height / .3, (1 - cy) * height / .7)
+        if available >= fh * height / .45:
+            crop_height = min(crop_height, available)
     crop_height /= scale
     crop_width = crop_height * frame["width"] / frame["height"]
     upscale = frame["height"] / crop_height

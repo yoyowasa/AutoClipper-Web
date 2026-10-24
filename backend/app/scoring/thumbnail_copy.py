@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.scoring.codex_title_hook_suggestions import CodexTitleHookSuggestionGenerator
 
 
-THUMBNAIL_COPY_PROMPT_VERSION = "thumbnail_copy_v3"
+THUMBNAIL_COPY_PROMPT_VERSION = "thumbnail_copy_v4"
 THUMBNAIL_COPY_MAX_ATTEMPTS = 2
 THUMBNAIL_COPY_PROMPT = f"""プロンプト版: {THUMBNAIL_COPY_PROMPT_VERSION}
 確定済みの通常動画に使う日本語サムネイル文言を3案作成する。
@@ -30,7 +30,7 @@ THUMBNAIL_COPY_PROMPT = f"""プロンプト版: {THUMBNAIL_COPY_PROMPT_VERSION}
 動画内の発言・出来事・疑問・反応・得られる理解から、
 視聴者が最も見たくなる部分を切り出す。
 
-答え・理由・対象・結末などを隠して、続きを見たくなる構成にしてよい。
+答え・理由・結末の一部を隠して、続きを見たくなる構成にしてよい。
 動画の内容を全部説明する必要はない。
 動画内にあるギャップ、意外な組み合わせ、強い言葉、
 印象的な発言やリアクションを積極的に使う。
@@ -40,6 +40,12 @@ THUMBNAIL_COPY_PROMPT = f"""プロンプト版: {THUMBNAIL_COPY_PROMPT_VERSION}
 情報を隠す場合は、視聴者に「何を知りたいと思わせるか」を明確にする。
 情報ギャップを作ること自体が目的ではない。
 短い強ワードだけで見たくなるなら、無理に疑問形や未完の形にしない。
+
+公開タイトルがある場合、3案ともその主題（対象と中心となる発見）に接続する。
+同じclipに含まれていても、別の逸話だけを売りにしてタイトルの中心をすり替えない。
+タイトルをそのまま繰り返すのではなく、その発見を補う具体的な技法・対比・意外な一言で見せる。
+字幕にある数と単位・対象、素材・技法、時代の対比そのものが引きになる場合は、隠すだけの疑問より優先する。
+数字があるだけで優先せず、字幕の「約」「以上」などの意味を保つ。理由・因果は創作しない。
 
 動画内の事実を脚色しない。
 字幕にない人物・出来事・数字・感情を足さず、
@@ -92,6 +98,7 @@ reasonには、その案を見た視聴者が
 
 recommendedIdには、動画内容と一致する案の中から、
 公開タイトルと組み合わせて最も動画を見たくなる1案を選ぶ。
+同じ主題の案を比べ、具体的な発見が伝わる案を、対象を隠した一般的な疑問より優先する。
 説明として整っていることや、穏当な言い回しを理由に選ばない。
 
 指定JSONのみ返す。"""

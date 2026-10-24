@@ -1,4 +1,3 @@
-from hashlib import sha256
 from types import SimpleNamespace
 
 import pytest
@@ -40,9 +39,7 @@ def result_for(*hooks, recommended="model-a"):
     return result
 
 
-def test_known_system_prompt_is_exactly_v10():
-    # SHA256 of main 7cd64a3's unchanged v10 prompt body (UTF-8).
-    assert sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest() == "b721ae51ad968678c89f03063f7256c91836de469b8c7aa18e53c760478f8818"
+def test_known_prompt_uses_v12_base_without_unknown_clause():
     assert title_hook_system_prompt() == SYSTEM_PROMPT
     assert title_hook_system_prompt(audience_familiarity="known") == SYSTEM_PROMPT
     assert title_hook_system_prompt(audience_familiarity="unknown", clip_type="normal") == SYSTEM_PROMPT

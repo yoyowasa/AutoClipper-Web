@@ -44,7 +44,7 @@ def requests(monkeypatch, hints=None, enabled=True):
 
 
 @pytest.mark.parametrize("mode", ["none", "off", "expired"])
-def test_empty_off_and_expired_prompts_are_byte_identical_to_main_before_task217(monkeypatch, mode):
+def test_empty_off_and_expired_hints_preserve_selection_and_current_title_prompt(monkeypatch, mode):
     hints = [] if mode == "none" else [hint(), hint("title_hook")]
     if mode == "expired":
         hints = [hint(expires=datetime(2020, 1, 1, tzinfo=UTC)), hint("title_hook", datetime(2020, 1, 1, tzinfo=UTC))]
@@ -54,7 +54,15 @@ def test_empty_off_and_expired_prompts_are_byte_identical_to_main_before_task217
                "title_hook": title_hook_system_prompt() + "\n\n入力JSON:\n" + json.dumps(title.prompt_payload(),
                    ensure_ascii=False, separators=(",", ":"), allow_nan=False)}
     expected = json.loads((Path(__file__).parent / "fixtures/performance_hint_prompts_before_task217.json").read_text())
-    assert {key: sha256(value.encode()).hexdigest() for key, value in prompts.items()} == expected
+    assert {key: sha256(prompts[key].encode()).hexdigest() for key in ("selection", "topic")} == {
+        key: expected[key] for key in ("selection", "topic")
+    }
+    # task-228 intentionally updates title generation criteria. Disabled/absent
+    # hints must still send exactly the same current title prompt and payload.
+    baseline_title = requests(monkeypatch)[2]
+    assert prompts["title_hook"] == title_hook_system_prompt() + "\n\n入力JSON:\n" + json.dumps(
+        baseline_title.prompt_payload(), ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+    )
     assert "performanceHints" not in request.prompt_payload() and "performanceHints" not in title.prompt_payload()
 
 
