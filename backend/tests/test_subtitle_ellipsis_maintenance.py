@@ -22,6 +22,7 @@ def prepare(api):
     review.segments[2].text = "手で追加した…余韻"
     review.segments[2].edited = True
     for clip in review.clips:
+        clip.confirmed = clip.id == "other"
         clip.live_preview_video_url = "/unchanged-live"
         clip.live_preview_spec_hash = "live-hash"
         clip.preview_video_url = "/old-exact"

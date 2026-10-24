@@ -1689,17 +1689,14 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
     updated_short = next(clip for clip in content_updated.json()["clips"] if clip["id"] == short_clip["id"])
     assert updated_short["titleEdited"] is True
     assert updated_short["hookText"] == "魚の耳には、本当に「石」が入ってるらしい"
-    edited_segment = next(
-        (segment for segment in review["segments"] if len(segment["affectedClipIds"]) > 1),
-        review["segments"][0],
-    )
-    updated = client.patch(
-        f"/api/jobs/{created['jobId']}/subtitle-review/segments",
-        json={"segments": [{
-            "segmentId": edited_segment["id"],
-            "before": edited_segment["text"],
-            "text": "ManualEdit",
-        }]},
+    edited_segment = next(segment for segment in review["segments"] if short_clip["id"] in segment["affectedClipIds"])
+    # Confirmed clips are edited explicitly; global bulk edits exclude them.
+    updated = client.post(
+        f"/api/jobs/{created['jobId']}/subtitle-review/clips/{short_clip['id']}/apply",
+        json={
+            "title": updated_short["title"], "hookText": updated_short["hookText"],
+            "segments": [{"segmentId": edited_segment["id"], "text": "ManualEdit"}],
+        },
     )
     assert updated.status_code == 200
     assert updated.json()["editedSegmentCount"] == 1

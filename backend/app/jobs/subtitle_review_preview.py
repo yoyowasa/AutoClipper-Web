@@ -339,7 +339,7 @@ def load_subtitle_review_preview_inputs(
     transcript_segments = [
         TranscriptSegment.model_validate(item) for item in transcript_payload
     ]
-    reviewed_segments = apply_reviewed_text(transcript_segments, document)
+    reviewed_segments = apply_reviewed_text(transcript_segments, document, clip_id=clip_id)
     source_path = paths.resolve_stored_file(video.stored_path)
     if not source_path.is_file():
         raise FileNotFoundError(source_path)

@@ -6,6 +6,21 @@ from app.schemas import SubtitleStructureRequest
 
 
 def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleStructureRequest) -> set[str]:
+    from app.jobs.subtitle_review_edits import editable_clip_ids, editable_document, commit_structure_edit
+
+    editable = editable_clip_ids(document, request.clip_id)
+    if request.clip_id is not None:
+        clip = next(clip for clip in document.clips if clip.id == request.clip_id)
+        if any(item.segment_id not in clip.segment_ids for item in request.segments):
+            raise ValueError("字幕が対象動画に含まれていません。")
+    working = editable_document(document, editable)
+    affected = _edit_subtitle_structure(working, request)
+    commit_structure_edit(document, working, editable)
+    _refresh_counts(document)
+    return affected
+
+
+def _edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleStructureRequest) -> set[str]:
     if request.action == "insert_at_time":
         if request.segments or not request.clip_id or request.start is None or request.end is None:
             raise ValueError("対象動画と字幕の開始・終了時刻を指定してください。")
@@ -110,12 +125,13 @@ def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleS
     first = selected[0]
     style_sources = list(selected)
     affected = set(first.affected_clip_ids)
+    neighboring_segments = [segment for segment in document.segments if affected.intersection(segment.affected_clip_ids)]
     if any(set(s.affected_clip_ids) != affected for s in selected):
         raise ValueError("別の動画と共有する範囲が異なるため、この２区間は結合できません。")
     texts = {item.segment_id: item.text for item in request.segments}
     propagate_first_style = True
     if request.action == "merge":
-        positions = [document.segments.index(s) for s in selected]
+        positions = [neighboring_segments.index(s) for s in selected]
         if len(selected) != 2 or positions[1] != positions[0] + 1:
             raise ValueError("隣り合う２区間を指定してください。")
         if selected[1].start < first.end - 0.001:
@@ -191,12 +207,12 @@ def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleS
     elif request.action == "delete":
         if len(selected) != 1:
             raise ValueError("削除する字幕を１行指定してください。")
-        position = document.segments.index(first)
+        position = neighboring_segments.index(first)
         candidates = [
-            document.segments[index]
+            neighboring_segments[index]
             for index in (position + 1, position - 1)
-            if 0 <= index < len(document.segments)
-            and set(document.segments[index].affected_clip_ids) == affected
+            if 0 <= index < len(neighboring_segments)
+            and set(neighboring_segments[index].affected_clip_ids) == affected
         ]
         if not candidates:
             raise ValueError("この字幕は対象動画内の最後の１行なので削除できません。")

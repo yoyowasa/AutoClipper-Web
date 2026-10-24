@@ -1,5 +1,6 @@
 "use client";
 
+import { segmentDraftKey } from "../sharedSegments";
 import type { ExportType, SubtitleReviewClip } from "../../types";
 import { isPreviewReady } from "../preview";
 import type { SubtitleReviewContext } from "./context";
@@ -80,13 +81,15 @@ export function useReviewMutations(context: SubtitleReviewContext) {
   }
 
   function updateDraft(segmentId: string, text: string) {
-    const { setShowSavedPreview, setDrafts, setDirtySegmentIds, review } = context;
+    const { setShowSavedPreview, setDrafts, setDirtySegmentIds, review, selectedClip } = context;
+    if (!selectedClip) return;
+    const key = segmentDraftKey(selectedClip, segmentId);
     setShowSavedPreview(false);
-    setDrafts((current) => ({ ...current, [segmentId]: text }));
+    setDrafts((current) => ({ ...current, [key]: text }));
     setDirtySegmentIds((current) => {
       const next = new Set(current);
-      if (review?.segments.find(segment => segment.id === segmentId)?.text === text) next.delete(segmentId);
-      else next.add(segmentId);
+      if (review?.segments.find(segment => segment.id === segmentId)?.text === text) next.delete(key);
+      else next.add(key);
       return next;
     });
   }

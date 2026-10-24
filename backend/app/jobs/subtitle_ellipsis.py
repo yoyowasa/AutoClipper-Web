@@ -2,6 +2,8 @@
 
 import re
 
+from app.jobs.subtitle_review_edits import editable_clip_ids, writable_segment
+
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
@@ -40,12 +42,16 @@ def strip_subtitle_ellipsis(db: Session, paths: StoragePaths, job_id: str, *, ex
             report["skipped_reason"] = "punctuation_normalization_disabled"
             return report
         changed = set()
-        for segment in document.segments:
+        editable = editable_clip_ids(document)
+        for segment in list(document.segments):
             cleaned = strip_transcript_ellipsis(segment.text)
             if cleaned == segment.text:
                 continue
             if segment.text != segment.original_text:
                 report["skipped_edited_segment_count"] += 1
+                continue
+            segment = writable_segment(document, segment, editable)
+            if segment is None:
                 continue
             if len(report["examples"]) < 5:
                 report["examples"].append({"segment_id": segment.id, "before": segment.text, "after": cleaned})

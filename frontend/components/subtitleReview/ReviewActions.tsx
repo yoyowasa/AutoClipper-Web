@@ -9,7 +9,7 @@ export function ReviewRenderControls({ context }: { context: SubtitleReviewViewC
     isEditable,
     allConfirmed,
     allPreviewsReady,
-    dirtySegmentIds,
+    rawDirtySegmentIds: dirtySegmentIds,
     hasDirtyClipContent,
     hasDirtyShortFraming,
     isSavingShortBannerSettings,

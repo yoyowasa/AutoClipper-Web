@@ -400,10 +400,8 @@ def test_legacy_review_render_contract_hydrates_without_touching_review_timestam
     assert changed_again is False
 
 
-def test_shared_segment_edit_invalidates_and_updates_both_clips() -> None:
+def test_unconfirmed_shared_segment_edit_updates_both_clips() -> None:
     transcript, review = _review_fixture()
-    review = confirm_review_clip(review, "normal_1")
-    review = confirm_review_clip(review, "short_1")
     shared = next(segment for segment in review.segments if len(segment.affected_clip_ids) == 2)
 
     review = update_review_segment(review, shared.id, "corrected shared text")

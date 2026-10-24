@@ -1208,3 +1208,14 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証結果: lock版Ruff 0.16.10（backend・launcher・scripts）成功。Python 3.11全件pytestは2178 passed／2 skipped／7 warnings。frontend test 37ファイル・lint・typecheck・build成功。稼働DBは前後とも3,289,088 bytes、mtime UTC `2026-10-22T03:06:46.5233849Z`で不変。CIはPRで確認する。
 - 未確認事項: Docker停止・ローカルFFmpeg未検出のため実エンコード、実動画の正式プレビュー／完成MP4の人による品質確認、実Codex、投稿成績は未確認。ブラウザのフォルダ選択ダイアログを操作環境で確認できず、実保存は未確認（フォルダ／ZIP分岐のコードテストとAPI照合は成功）。追加動的演出は「なし」のまま。1-Eは隔離・モック確認済み／実動画のユーザー受入待ちであり、残り作業1全体の完全完了とはしない。
 - 境界: 新PRはCI成功後も未マージで止める。稼働DB・既存ジョブ、Dockerの起動／build／反映、実Google／Codexの実行は行わない。到達仕様§3・統合構想は変更しない。
+
+## 2026-10-24 task-222 確定済みclipの共有字幕を保護
+
+- 目的: 他clipの修正や一括修正で、確定済みclipの字幕・確定状態・正式プレビューが変わらないようにする。main `56fb896` から `codex/task-222-protect-confirmed-subtitles` を作成。主フォルダの未コミット運用記録（STATUS/受入文書）は別worktreeで保護し、本PRには混ぜない。
+- 変更: `jobs/subtitle_review_edits.py` に共有行のcopy-on-writeを集約。apply、segments一括更新、構成変更（分割・結合・削除・追加・改行）、既存の省略記号一括整形で、未確定clipと明示的に開いて修正するclipだけを対象にする。確定済みclipだけが使う行は一括更新の対象外。未確定同士は共有を維持する。
+- 保存/書き出し: 分離した行は `clipScoped`（旧JSONではfalse）と既存の `affectedClipIds` で対象を保持する。字幕・タイトル案の根拠IDを付け替え、既存のTranscriptSegment.clip_idとASSのclip別フィルターを再利用。元文字起こしのスナップショットを保持し、再試行で分離後の配列位置を元のindexとして誤用しない。尺調整から戻っても分離を維持する。正式プレビューは対象clipの字幕だけで同じ識別値を生成する。
+- 画面: `subtitleReview/sharedSegments.ts` と既存hooksで、確定済みclipの明示編集の下書きを他clipから分離。localStorage復元・clip切替・構成変更で未確定へ戻った場合の未保存行も維持。一括修正には「確定済みのclipは対象外」、対象clip名・字幕/clip件数を表示。未確定同士の共有では、行の注記と保存前の確認に他clip名を出す。
+- 変更ファイル: backendの字幕確認API・字幕/構成/プレビュー/省略記号補助、frontendの字幕確認hooks・一覧/一括修正・型、対応テスト、本STATUS。公開APIの既存リクエスト形式、launcher、Codex契約、尺/品質の規則、制作記録の形式は変更しない。
+- 検証: lockのRuff 0.16.10をbackendから `ruff check . ../launcher ../scripts` で成功。Windows/Python 3.11の全件pytestは2193 passed・2 skipped（7件の既存非推奨警告）。全件開始後に追加した制作記録ケースを含む保護16ケースも別途再実行して成功。frontend test 38ファイル、lint、typecheck、build成功。追加の保護テスト16ケースで、各編集経路、明示編集、未確定共有、確定済みだけの無操作、正式プレビューhashとASS不変、再試行/尺調整、制作記録のclip別inputRevisionを確認。既存テストの共有編集条件は未確定clipへ変更し、旧データの読み込みも維持した。
+- 隔離画面: 専用DB/storage・backend 18222/frontend 13222で、未確定ショート2本の共有下書き、一括修正の対象表示、保存前の他clip確認、保存後の通常clipの元字幕と「確認済み」維持、共有先ショートへの反映を確認。動画・Codex/RQ実処理は試験用の代替で、実動画の焼き込み確認ではない。正式字幕の生成はAPI/ASSテストで検証した。
+- 未確認/境界: 実ジョブでの人による最終受入・実動画MP4の見た目は未確認。稼働DB/既存ジョブは変更せず、Docker反映もしない。PRのCI（Python 3.11/3.12・frontend）を確認し、未マージでレビュー待ちにする。中継再起動は不要。

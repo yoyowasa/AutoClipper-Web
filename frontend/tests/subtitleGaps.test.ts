@@ -43,9 +43,9 @@ const clip = {
 } as unknown as SubtitleReviewClip;
 const context = {
   selectedClip: clip, selectedClipId: clip.id, activeClipType: "normal", normalClips: [clip], shortClips: [], visibleClips: [clip],
-  review: { clips: [clip], state: "awaiting_review", renderRevision: 1, totalClipCount: 1, confirmedClipCount: 0, editedSegmentCount: 0 } as SubtitleReviewDocument,
+  review: { clips: [clip], segments, state: "awaiting_review", renderRevision: 1, totalClipCount: 1, confirmedClipCount: 0, editedSegmentCount: 0 } as SubtitleReviewDocument,
   clipContentDrafts: {}, selectedClipContentDraft: contentDraftForClip(clip), selectedSegments: [...segments].reverse(),
-  drafts: {}, dirtySegmentIds: new Set(), subtitleListRef: { current: null }, segmentRowRefs: { current: {} },
+  rawDrafts: {}, rawDirtySegmentIds: new Set(), drafts: {}, dirtySegmentIds: new Set(), subtitleListRef: { current: null }, segmentRowRefs: { current: {} },
   isEditable: true, allConfirmed: false, allPreviewsReady: true, bodyDuration: 100, clipDuration: 103,
   hookSceneDuration: 3, hookSuppressionEnd: 3, selectedHookDurationIsValid: true,
   // Supply the pre-change gap inputs so this fixture also detects the old rows/counts.

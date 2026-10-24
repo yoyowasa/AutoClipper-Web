@@ -374,6 +374,7 @@ export type JobResultsResponse = {
 };
 
 export type SubtitleReviewSegment = {
+  clipScoped?: boolean;
   words?: import("./subtitleTiming").SubtitleWord[] | null;
   repaired?: boolean;
   repairWindows?: { start: number; end: number }[];

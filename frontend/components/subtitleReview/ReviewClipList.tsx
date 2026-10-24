@@ -2,6 +2,7 @@
 
 import { formatTime, clipLabel } from "../../lib/subtitleReview/display";
 import { isPreviewReady } from "../../lib/subtitleReview/preview";
+import { segmentDraftKey } from "../../lib/subtitleReview/sharedSegments";
 import { isClipContentDirty } from "../../lib/subtitleReview/drafts";
 import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/context";
 import { ReviewRenderControls } from "./ReviewActions";
@@ -17,7 +18,7 @@ export function ReviewClipList({ context }: { context: SubtitleReviewViewContext
     openedFromReupload,
     visibleClips,
     clipContentDrafts,
-    dirtySegmentIds,
+    rawDirtySegmentIds: dirtySegmentIds,
     shortFramingDrafts,
     selectedClipId,
     isUpdatingHookScene,
@@ -96,7 +97,7 @@ export function ReviewClipList({ context }: { context: SubtitleReviewViewContext
               {visibleClips.map((clip) => {
                 const clipDraft = clipContentDrafts[clip.id];
                 const contentDirty = isClipContentDirty(clip, clipContentDrafts)
-                  || clip.segmentIds.some(id => dirtySegmentIds.has(id)) || Boolean(shortFramingDrafts?.[clip.id]);
+                  || clip.segmentIds.some(id => dirtySegmentIds.has(segmentDraftKey(clip, id))) || Boolean(shortFramingDrafts?.[clip.id]);
                 return (
                   <button
                     className={`block w-full border-b border-neutral-200 px-4 py-4 text-left disabled:cursor-wait disabled:opacity-60 ${

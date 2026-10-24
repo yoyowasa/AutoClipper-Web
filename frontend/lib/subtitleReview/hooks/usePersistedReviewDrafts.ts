@@ -1,5 +1,6 @@
 "use client";
 
+import { segmentDraftKey } from "../sharedSegments";
 import { useEffect, useRef } from "react";
 import { contentDraftForClip, isClipContentDirty } from "../drafts";
 import { readReviewDraft, reviewDraftFingerprint, writeReviewDraft } from "../draftStorage";
@@ -32,17 +33,21 @@ export function usePersistedReviewDrafts(state: SubtitleReviewState) {
         if (stored?.framing) next[clip.id] = stored.framing; else delete next[clip.id];
         return next;
       });
-      Object.assign(restoredSegments, stored?.segments ?? {});
-      for (const id of clip.segmentIds) resetIds.add(id);
+      for (const id of clip.segmentIds) {
+        const key = segmentDraftKey(clip, id);
+        resetIds.add(key);
+        restoredSegments[key] = stored?.segments[id] ?? review.segments.find(segment => segment.id === id)?.text ?? "";
+      }
 
     }
     if (resetIds.size > 0) {
-      setDrafts(current => ({ ...current, ...Object.fromEntries(review.segments
-        .filter(segment => resetIds.has(segment.id))
-        .map(segment => [segment.id, restoredSegments[segment.id] ?? segment.text])) }));
+      setDrafts(current => ({ ...current, ...restoredSegments }));
       setDirtySegmentIds(current => {
         const next = new Set(current);
-        for (const id of resetIds) { if (id in restoredSegments) next.add(id); else next.delete(id); }
+        for (const id of resetIds) {
+          const saved = review.segments.find(segment => id === segment.id || id.endsWith(`::${segment.id}`));
+          if (saved && restoredSegments[id] !== saved.text) next.add(id); else next.delete(id);
+        }
         return next;
       });
     }
@@ -52,8 +57,8 @@ export function usePersistedReviewDrafts(state: SubtitleReviewState) {
     if (!review || review.jobId !== jobId || review.state !== "awaiting_review") return;
     if (restoring.current) { restoring.current = false; return; }
     for (const clip of review.clips) {
-      const segments = Object.fromEntries(clip.segmentIds.filter(id => dirtySegmentIds.has(id))
-        .map(id => [id, drafts[id] ?? ""]));
+      const segments = Object.fromEntries(clip.segmentIds.filter(id => dirtySegmentIds.has(segmentDraftKey(clip, id)))
+        .map(id => [id, drafts[segmentDraftKey(clip, id)] ?? ""]));
       const content = clipContentDrafts[clip.id] ?? contentDraftForClip(clip);
       const framing = shortFramingDrafts[clip.id] ?? null;
       const dirty = isClipContentDirty(clip, clipContentDrafts) || Boolean(framing) || Object.keys(segments).length > 0;
