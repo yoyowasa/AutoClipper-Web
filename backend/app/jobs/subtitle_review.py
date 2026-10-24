@@ -9,7 +9,7 @@ from typing import Any, Literal, Sequence
 from app.production_choices import ProductionChoice
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.audio.transcribe_faster_whisper import RepairWindow, TranscriptSegment, TranscriptWord
+from app.audio.transcribe_faster_whisper import RepairWindow, TranscriptSegment, TranscriptWord, transcript_output_path
 from app.render.subtitle_timing import chunk_units, usable_words
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, SubtitleStyleOverride, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
@@ -62,6 +62,7 @@ class SubtitleReviewSegment(BaseModel):
     repair_windows: list[RepairWindow] = Field(default_factory=list, alias="repairWindows")
     edited: bool = False
     affected_clip_ids: list[str] = Field(default_factory=list, alias="affectedClipIds")
+    clip_scoped: bool = Field(default=False, alias="clipScoped")
     source_indices: list[int] = Field(default_factory=list, alias="sourceIndices")
     preserve_segmentation: bool = Field(default=False, alias="preserveSegmentation")
     single_line: bool = Field(default=False, alias="singleLine")
@@ -747,11 +748,14 @@ def retain_review_after_boundary_reedit(
         for segment in refreshed.segments
         if all(index not in source_coverage for index in (segment.source_indices or [segment.index]))
     )
+    from app.jobs.subtitle_review_edits import scoped_source_indices
+    scoped = scoped_source_indices(retained)
     retained.segments.sort(key=lambda segment: (segment.start, segment.end, segment.id))
     for segment in retained.segments:
         allowed = set(segment.affected_clip_ids)
         for index in segment.source_indices or [segment.index]:
-            allowed.update(fresh_allowed.get(index, set()))
+            if index not in scoped:
+                allowed.update(fresh_allowed.get(index, set()))
         segment.affected_clip_ids = [
             clip.id for clip in refreshed.clips
             if clip.id in allowed and segment.start < clip.end and segment.end > clip.start
@@ -784,6 +788,14 @@ def retain_review_after_boundary_reedit(
 
 def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | Path, *, choice_source="unrecorded") -> Path:
     from app.production_choice_capture import capture_document
+    from app.jobs.subtitle_review_edits import scoped_source_indices
+
+    output_dir = Path(output_path).parent
+    snapshot = subtitle_review_source_path(output_dir, document)
+    source = transcript_output_path(output_dir)
+    if scoped_source_indices(document) and not snapshot.exists() and source.is_file():
+        # A later render writes clip-specific rows; their indices are not the source index space.
+        write_json_atomic(snapshot, json.loads(source.read_text(encoding="utf-8")))
     capture_document(document, Path(output_path), kind="review", source=choice_source)
     refresh_review_gaps(document, Path(output_path).parent)
     return write_json_atomic(
@@ -803,13 +815,23 @@ def update_review_segment(
     document: SubtitleReviewDocument,
     segment_id: str,
     text: str,
+    *,
+    clip_id: str | None = None,
 ) -> SubtitleReviewDocument:
+    from app.jobs.subtitle_review_edits import editable_clip_ids, writable_segment
+
+    editable = editable_clip_ids(document, clip_id)
     segment = next((item for item in document.segments if item.id == segment_id), None)
     if segment is None:
         raise KeyError(segment_id)
     if segment.text == text:
         return _refresh_counts(document)
 
+    if clip_id is not None and clip_id not in segment.affected_clip_ids:
+        raise ValueError("字幕が対象動画に含まれていません。")
+    segment = writable_segment(document, segment, editable)
+    if segment is None:
+        return document
     segment.text = text
     segment.edited = text != segment.original_text
     affected = set(segment.affected_clip_ids)
@@ -1226,20 +1248,34 @@ def restore_review_after_render_failure(
 def apply_reviewed_text(
     transcript_segments: Sequence[TranscriptSegment],
     document: SubtitleReviewDocument,
+    *, clip_id: str | None = None,
 ) -> list[TranscriptSegment]:
-    if any(s.preserve_segmentation or s.source_indices or s.single_line for s in document.segments):
+    # A source index can now have different text/boundaries for different clips.
+    from app.jobs.subtitle_review_edits import scoped_source_indices
+    scoped = bool(scoped_source_indices(document))
+    if scoped and clip_id is not None:
+        # A preview needs only this clip's version. Keep legacy spec bytes stable.
+        document = document.model_copy(update={
+            "segments": [segment for segment in document.segments if clip_id in segment.affected_clip_ids],
+        })
+        scoped = False
+    if scoped or any(s.preserve_segmentation or s.source_indices or s.single_line for s in document.segments):
         replaced = {i for s in document.segments for i in (s.source_indices or [s.index])}
         output = [s for i, s in enumerate(transcript_segments) if i not in replaced]
         for segment in document.segments:
             source_index = (segment.source_indices or [segment.index])[0]
             source = transcript_segments[source_index]
-            output.append(source.model_copy(update={
+            updated = source.model_copy(update={
                 "start": segment.start, "end": segment.end, "text": segment.text,
                 "words": segment.words if usable_words(segment.text, segment.words) else None,
                 "preserve_segmentation": segment.preserve_segmentation,
                 "single_line": segment.single_line,
                 "repaired": segment.repaired, "repair_windows": segment.repair_windows,
-            }))
+            })
+            if scoped:
+                output.extend(updated.model_copy(update={"clip_id": clip_id}) for clip_id in segment.affected_clip_ids)
+            else:
+                output.append(updated)
         return sorted(output, key=lambda s: (s.start, s.end))
     reviewed = {segment.index: segment for segment in document.segments}
     return [

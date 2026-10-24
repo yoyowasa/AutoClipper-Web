@@ -19,6 +19,8 @@ import type { ResolvedClipTextStyle } from "../../types";
 import type { SubtitlePreviewEvent } from "../../subtitlePreview";
 
 export type SubtitleReviewContext = SubtitleReviewState & {
+  rawDrafts: Record<string, string>;
+  rawDirtySegmentIds: Set<string>;
   selectedClip: SubtitleReviewClip | null;
   normalClips: SubtitleReviewClip[];
   shortClips: SubtitleReviewClip[];

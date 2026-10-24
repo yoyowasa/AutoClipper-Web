@@ -121,6 +121,8 @@ def test_gap_confirmation_persists_without_changing_review_or_enqueuing_preview(
 def test_text_edit_recalculates_gap_and_resets_changed_interval_confirmation(client: TestClient) -> None:  # noqa: F811
     job_id, path, document = _seed_gaps(client)
     clip = document.clips[0]
+    clip.confirmed = False
+    write_subtitle_review(document, path)
     gap = clip.gaps[0]
     url = f"/api/jobs/{job_id}/subtitle-review/clips/{clip.id}/gaps/{gap.id}"
     assert client.patch(url, json={"acknowledged": True}).status_code == 200
@@ -215,7 +217,7 @@ def test_gap_can_add_subtitle_inside_blank_rows_preserving_shared_clips_and_styl
             segment.edited = True
             blank_ids.add(segment.id)
     for clip in review.clips:
-        clip.confirmed = True
+        clip.confirmed = clip.id == "other"
         clip.subtitle_styles = [
             SubtitleStyleOverride(start=segment.start, end=segment.end,
                                   style=ClipTextStyle(fontSize=40 + 10 * index))

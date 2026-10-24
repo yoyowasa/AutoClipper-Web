@@ -1,5 +1,6 @@
 "use client";
 
+import { segmentDraftKey } from "../sharedSegments";
 import { useEffect } from "react";
 import { getTitleHookSuggestions, requestTitleHookSuggestions } from "../../api";
 import type { SubtitleReviewSegment } from "../../types";
@@ -56,7 +57,7 @@ export function useAutomaticTitleSuggestions(context: Pick<SubtitleReviewContext
           .sort((left, right) => left.index - right.index)
           .map((segment) => ({
             segmentId: segment.id,
-            text: drafts[segment.id] ?? segment.text
+            text: drafts[segmentDraftKey(clip, segment.id)] ?? segment.text
           }));
         const inputSnapshot = JSON.stringify(segments);
         setAutoGeneratingSuggestionClipIds((current) =>

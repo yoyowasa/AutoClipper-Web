@@ -22,7 +22,7 @@ async function main() {
     hookText: "題材のフック", hookDurationSeconds: 3, hookSceneStart: null, hookSceneEnd: null,
     titleStyle: null, hookStyle: null, subtitleStyle: null, previewState: "queued"
   } as SubtitleReviewClip;
-  const segment = { id: "seg-01", text: "保存された字幕" } as SubtitleReviewSegment;
+  const segment = { id: "seg-01", text: "保存された字幕", affectedClipIds: [clip.id] } as SubtitleReviewSegment;
   const review = { jobId: "job-test", shortMaxDuration: 75, clips: [clip], segments: [segment] } as SubtitleReviewDocument;
   const error = state<string | null>(null);
   const drafts = state<Record<string, string>>({ "seg-01": "編集中の字幕", "other-clip": "残す字幕" });
@@ -36,7 +36,7 @@ async function main() {
     jobId: "job-test", review, selectedClip: clip, selectedClipContentDraft: { ...contentDraftForClip(clip), publicationTitle: "  投稿タイトル  " },
     selectedSegments: [segment], selectedShortFramingDirty: false, selectedHookDurationIsValid: true,
     hasDirtyShortFraming: false, hasDirtyClipContent: false, isSavingShortBannerSettings: false,
-    isEditable: true, allPreviewsReady: false, dirtySegmentIds: dirty.value, drafts: drafts.value,
+    isEditable: true, allPreviewsReady: false, rawDirtySegmentIds: dirty.value, dirtySegmentIds: dirty.value, drafts: drafts.value,
     reviewMutationCountRef: { current: 0 }, reviewRequestGenerationRef: { current: 0 }, videoRef: { current: null },
     setError: error.set, setDrafts: drafts.set, setDirtySegmentIds: dirty.set, setReview: savedReview.set,
     setClipContentDrafts: contentDrafts.set, setConfirmingClipId: () => {}, setIsFinalizing: () => {},
@@ -70,6 +70,7 @@ async function main() {
     await confirmation.returnToBoundaryEditor();
     assert.equal(calls.length, 1);
     assert.deepEqual(destinations, []);
+    context.rawDirtySegmentIds = new Set();
     context.dirtySegmentIds = new Set();
     await confirmation.startRendering();
     assert.match(error.value ?? "", /完成表示プレビュー/);

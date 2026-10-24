@@ -42,6 +42,9 @@ def seed_review(api_client: TestClient):
 
 def test_bulk_correction_saves_shared_segments_and_can_undo(client: TestClient) -> None:  # noqa: F811
     job_id, path, document = seed_review(client)
+    for clip in document.clips:
+        clip.confirmed = clip.id == "other"
+    write_subtitle_review(document, path)
     updates = [{"segmentId": s.id, "before": s.text, "text": s.text.replace("アカネ", "あかね")} for s in document.segments[:2]]
     response = client.patch(f"/api/jobs/{job_id}/subtitle-review/segments", json={"segments": updates})
     assert response.status_code == 200, response.text

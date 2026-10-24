@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { clipSegmentDrafts, clipDirtySegmentIds } from "../sharedSegments";
 import { subtitlePreviewEvents } from "../../subtitlePreview";
 import { subtitleInsertionConflict } from "../../subtitlePauseInsert";
 import type { SubtitleReviewSegment } from "../../types";
@@ -41,11 +42,11 @@ export function useSubtitleReviewDocument() {
     activeClipType,
     setActiveClipType,
     setLastSelectedClipIds,
-    drafts,
+    drafts: rawDrafts,
     setDrafts,
     clipContentDrafts,
     setClipContentDrafts,
-    dirtySegmentIds,
+    dirtySegmentIds: rawDirtySegmentIds,
     retryingPreviewClipId,
     isSavingShortBannerSettings,
     savingShortFramingClipId,
@@ -97,6 +98,8 @@ export function useSubtitleReviewDocument() {
     () => review?.clips.find((clip) => clip.id === selectedClipId) ?? null,
     [review, selectedClipId]
   );
+  const drafts = useMemo(() => clipSegmentDrafts(selectedClip, review?.segments ?? [], rawDrafts), [selectedClip, review, rawDrafts]);
+  const dirtySegmentIds = useMemo(() => clipDirtySegmentIds(selectedClip, rawDirtySegmentIds), [selectedClip, rawDirtySegmentIds]);
   const normalClips = useMemo(
     () => review?.clips.filter((clip) => clip.type === "normal") ?? [],
     [review]
@@ -171,7 +174,7 @@ export function useSubtitleReviewDocument() {
         selectedSuggestionRecord.inputSnapshot !== selectedSuggestionInputSnapshot)
   );
 
-  useAutomaticTitleSuggestions({ jobId, review, drafts, autoSuggestionAttemptedClipIdsRef, setAutoGeneratingSuggestionClipIds, suggestionRequestGenerationRef, setTitleHookSuggestionRecords });
+  useAutomaticTitleSuggestions({ jobId, review, drafts: rawDrafts, autoSuggestionAttemptedClipIdsRef, setAutoGeneratingSuggestionClipIds, suggestionRequestGenerationRef, setTitleHookSuggestionRecords });
 
   useSuggestionHydration({ jobId, selectedSuggestionClipId, selectedSuggestionRecord, selectedSuggestionInputSnapshot, suggestionRequestGenerationRef, selectedSuggestionSegments, setSuggestionHydrationRetryVersion, setTitleHookSuggestionRecords, suggestionHydrationRetryVersion });
 
@@ -436,6 +439,7 @@ export function useSubtitleReviewDocument() {
   usePersistedReviewDrafts(state);
   const context: SubtitleReviewContext = {
     ...state,
+    rawDrafts, rawDirtySegmentIds, drafts, dirtySegmentIds,
     selectedClip,
     normalClips,
     shortClips,

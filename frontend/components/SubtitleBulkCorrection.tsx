@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { matchingSubtitleCorrections, type CorrectionSelection, type SubtitleBatchUpdate } from "../lib/subtitleBulkCorrection";
-import type { SubtitleReviewSegment } from "../lib/types";
+import { subtitleTargetName } from "../lib/subtitleReview/sharedSegments";
+import type { SubtitleReviewClip, SubtitleReviewSegment } from "../lib/types";
 
-export function SubtitleBulkCorrection({ selection, onSelection, segments, drafts, disabled, onSave, draftOnly = false }: {
+export function SubtitleBulkCorrection({ selection, onSelection, segments, clips, drafts, disabled, onSave, draftOnly = false }: {
   selection: CorrectionSelection | null;
   onSelection: (value: CorrectionSelection | null) => void;
   segments: SubtitleReviewSegment[];
+  clips: SubtitleReviewClip[];
   drafts: Record<string, string>;
   disabled: boolean;
   draftOnly?: boolean;
@@ -49,7 +51,8 @@ export function SubtitleBulkCorrection({ selection, onSelection, segments, draft
           maxLength={200} value={selection.replacement} disabled={disabled || busy}
           onChange={(event) => onSelection({ ...selection, replacement: event.target.value })} />
       </label>
-      <p>対象：このジョブの全clip（通常・ショート）の字幕</p>
+      <p>確定済みのclipは対象外です。</p>
+      <p>対象clip：{clips.filter(clip => matches.some(match => match.clipIds.includes(clip.id))).map(subtitleTargetName).join("、") || "なし"}</p>
       {selection.replacement && <p role="status">{count}か所・{matches.length}字幕・{clipCount}本</p>}
       {matches.length > 0 && <details>
         <summary className="cursor-pointer">修正前後を確認</summary>

@@ -2703,6 +2703,8 @@ def apply_subtitle_review_clip(
                 detail="subtitle segment does not belong to the selected clip",
             )
 
+        from app.jobs.subtitle_review_edits import editable_clip_ids
+        editable = editable_clip_ids(document, clip_id)
         affected_clip_ids = {clip_id}
         segments_by_id = {segment.id: segment for segment in document.segments}
         for segment_id in requested_segment_ids:
@@ -2712,7 +2714,8 @@ def apply_subtitle_review_clip(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail="subtitle segment not found",
                 )
-            affected_clip_ids.update(segment.affected_clip_ids)
+            if any(item.segment_id == segment_id and item.text != segment.text for item in request.segments):
+                affected_clip_ids.update(editable.intersection(segment.affected_clip_ids))
 
         draft_text_by_id = {
             segment_update.segment_id: segment_update.text for segment_update in request.segments
@@ -2954,7 +2957,12 @@ def apply_subtitle_review_clip(
                     document,
                     segment_update.segment_id,
                     segment_update.text,
+                    clip_id=clip_id,
                 )
+            if clip.post_metadata_revision_hash == prospective_revision_hash:
+                # Copy-on-write changed IDs, not the draft used to generate this metadata.
+                segments_by_id = {segment.id: segment for segment in document.segments}
+                clip.post_metadata_revision_hash = revision_hash({})
             clip.preview_framing = None
             if request.framing is not None:
                 document = update_review_clip_framing(
@@ -3083,10 +3091,12 @@ def update_subtitle_review_segments(
                 raise HTTPException(404, "字幕が見つかりません。")
             if by_id[item.segment_id].text != item.before:
                 raise HTTPException(409, "字幕が別の操作で更新されています。画面を読み直してください。")
+        from app.jobs.subtitle_review_edits import editable_clip_ids
+        editable = editable_clip_ids(document)
         affected_clip_ids: set[str] = set()
         for item in request.segments:
             if item.text != item.before:
-                affected_clip_ids.update(by_id[item.segment_id].affected_clip_ids)
+                affected_clip_ids.update(editable.intersection(by_id[item.segment_id].affected_clip_ids))
                 document = update_review_segment(document, item.segment_id, item.text)
         if not affected_clip_ids:
             return document

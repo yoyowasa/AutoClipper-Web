@@ -5,6 +5,7 @@ import { postMetadataApplyPayload } from "../../youtubePosting";
 import { writeReviewDraft, clearJobReviewDrafts } from "../draftStorage";
 import { returnToClipPlanMessage } from "../returnToClipPlan";
 import { validateClipDuration, validateHookSceneDuration } from "../../durationRules";
+import { segmentDraftKey, sharedSubtitleNotice } from "../sharedSegments";
 import { contentDraftForClip } from "../drafts";
 import type { SubtitleReviewContext } from "./context";
 
@@ -63,6 +64,8 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
         segmentId: segment.id,
         text: drafts[segment.id] ?? segment.text
       }));
+    const notice = review && sharedSubtitleNotice(review, selectedSegments.filter(segment => dirtySegmentIds.has(segment.id)), selectedClip.id);
+    if (notice && !window.confirm(`${notice}\n確定済みの他のclipは変更しません。保存しますか？`)) return;
     const savedSegmentIds = new Set(segmentUpdates.map((segment) => segment.segmentId));
     const postMetadata = postMetadataApplyPayload(selectedClipContentDraft);
     const mutationGeneration = beginReviewMutation();
@@ -105,6 +108,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
           for (const segment of updated.segments) {
             if (savedSegmentIds.has(segment.id)) {
               next[segment.id] = segment.text;
+              delete next[segmentDraftKey(selectedClip, segment.id)];
             }
           }
           return next;
@@ -113,6 +117,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
           const next = new Set(current);
           for (const segmentId of savedSegmentIds) {
             next.delete(segmentId);
+            next.delete(segmentDraftKey(selectedClip, segmentId));
           }
           return next;
         });
@@ -132,7 +137,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
       setError,
       hasDirtyShortFraming,
       review,
-      dirtySegmentIds,
+      rawDirtySegmentIds,
       hasDirtyClipContent,
       allPreviewsReady,
       beginReviewMutation,
@@ -149,7 +154,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
       setError("未保存のショート画角があります。各clipの画角を保存してください。");
       return;
     }
-    if (!review || dirtySegmentIds.size > 0 || hasDirtyClipContent) {
+    if (!review || rawDirtySegmentIds.size > 0 || hasDirtyClipContent) {
       setError("未保存のタイトル、投稿情報、フック、または字幕があります。先に保存してください。");
       return;
     }
@@ -173,7 +178,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
 
   async function returnToBoundaryEditor() {
     const {
-      dirtySegmentIds,
+      rawDirtySegmentIds,
       hasDirtyClipContent,
       hasDirtyShortFraming,
       setError,
@@ -184,7 +189,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
       router,
       endReviewMutation
     } = context;
-    if (dirtySegmentIds.size > 0 || hasDirtyClipContent || hasDirtyShortFraming) {
+    if (rawDirtySegmentIds.size > 0 || hasDirtyClipContent || hasDirtyShortFraming) {
       setError("未保存の字幕・タイトル・画角があります。各clipの変更を保存してから尺調整へ戻ってください。");
       return;
     }
@@ -205,13 +210,13 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
   async function returnToClipPlan() {
     const { review, isEditable, hasReviewMutationInFlight, jobId, router, setError, beginReviewMutation,
       endReviewMutation, setIsReturningToClipPlan, setReview, setDrafts, setDirtySegmentIds,
-      setClipContentDrafts, setShortFramingDrafts, dirtySegmentIds, hasDirtyClipContent, hasDirtyShortFraming } = context;
+      setClipContentDrafts, setShortFramingDrafts, rawDirtySegmentIds, hasDirtyClipContent, hasDirtyShortFraming } = context;
     if (!review || !isEditable || hasReviewMutationInFlight) return;
     if (review.returnToClipPlanAllowed === false) {
       setError("手動ワークフローは切り抜き確認へ戻す対象外です。");
       return;
     }
-    if (!window.confirm(returnToClipPlanMessage(review, dirtySegmentIds.size > 0 || hasDirtyClipContent || hasDirtyShortFraming))) return;
+    if (!window.confirm(returnToClipPlanMessage(review, rawDirtySegmentIds.size > 0 || hasDirtyClipContent || hasDirtyShortFraming))) return;
     beginReviewMutation();
     setIsReturningToClipPlan(true);
     setError(null);

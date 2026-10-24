@@ -30,7 +30,7 @@ async function main() {
   const review = { jobId: "job", editedSegmentCount: 0, hasSavedReviewChanges: false, clips: [], segments: [] } as unknown as SubtitleReviewDocument;
   documentState = review;
   const context = { review, isEditable: true, hasReviewMutationInFlight: false, jobId: "job",
-    dirtySegmentIds: new Set(["dirty"]), hasDirtyClipContent: true, hasDirtyShortFraming: true,
+    rawDirtySegmentIds: new Set(["dirty"]), dirtySegmentIds: new Set(["dirty"]), hasDirtyClipContent: true, hasDirtyShortFraming: true,
     beginReviewMutation: () => { mutations++; }, endReviewMutation: () => { mutations--; },
     setIsReturningToClipPlan: () => {}, setError: (value: string | null) => { error = value; },
     setReview: (value: unknown) => { documentState = value; }, setDrafts: () => { draftCleared = true; },

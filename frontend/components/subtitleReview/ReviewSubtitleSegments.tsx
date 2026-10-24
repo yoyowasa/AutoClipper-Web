@@ -1,5 +1,7 @@
 "use client";
 
+import { bulkEditableSegments, sharedSubtitleNotice } from "../../lib/subtitleReview/sharedSegments";
+
 import { SubtitleSegmentActions } from "../SubtitleSegmentActions";
 import { SubtitleBulkCorrection } from "../SubtitleBulkCorrection";
 import { formatTime, clipLabel, clamp } from "../../lib/subtitleReview/display";
@@ -43,6 +45,10 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
     selectedClipContentDraft
   } = context;
   if (!selectedClip) return null;
+  const structureSegments = selectedSegments.map(segment => ({ ...segment,
+    affectedClipIds: segment.affectedClipIds.filter(id => review?.clips.some(clip =>
+      clip.id === id && (!clip.confirmed || clip.id === selectedClip.id)))
+  }));
   return (
     <div className="subtitle-review-captions flex min-h-[640px] min-w-0 flex-col bg-white lg:col-span-1 lg:col-start-3 lg:row-start-1 2xl:col-span-1 2xl:col-start-3 2xl:row-start-1 2xl:min-h-0">
                 <div className="border-b border-neutral-300 bg-white px-4 py-3">
@@ -122,7 +128,7 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
 
                 <SubtitleBulkCorrection draftOnly
                   selection={bulkCorrectionSelection} onSelection={setBulkCorrectionSelection}
-                  segments={review.segments} drafts={drafts} disabled={!isEditable}
+                  segments={bulkEditableSegments(review)} clips={review.clips} drafts={context.rawDrafts} disabled={!isEditable}
                   onSave={saveBulkCorrection}
                 />
                 <div
@@ -185,9 +191,9 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
                                   修正済み
                                 </span>
                               ) : null}
-                              {segment.affectedClipIds.length > 1 ? (
+                              {sharedSubtitleNotice(review, [segment], selectedClip.id) ? (
                                 <span className="bg-violet-100 px-2 py-1 font-medium text-violet-800">
-                                  {segment.affectedClipIds.length}本へ反映
+                                  {sharedSubtitleNotice(review, [segment], selectedClip.id)}
                                 </span>
                               ) : null}
                               {isDirty ? (
@@ -218,8 +224,8 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
                               }
                             }}
                           />
-                          <SubtitleSegmentActions segment={segment} previous={selectedSegments[segmentIndex - 1]}
-                            next={selectedSegments[segmentIndex + 1]}
+                          <SubtitleSegmentActions segment={structureSegments[segmentIndex]} previous={structureSegments[segmentIndex - 1]}
+                            next={structureSegments[segmentIndex + 1]}
                             text={drafts[segment.id] ?? segment.text}
                             nextText={selectedSegments[segmentIndex + 1] ? drafts[selectedSegments[segmentIndex + 1].id] ?? selectedSegments[segmentIndex + 1].text : ""}
                             cursor={segmentCursor?.id === segment.id ? segmentCursor.offset : null}

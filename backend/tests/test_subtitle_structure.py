@@ -35,7 +35,7 @@ def seed_structure(api):
     selection = CandidateSelection(normalClips=[normal, other], shorts=[short])
     document = build_subtitle_review(job_id, selection, original)
     for c in document.clips:
-        c.confirmed = True
+        c.confirmed = c.id == "other"
     write_subtitle_review(document, path)
     write_selected_clips(selection, path.parent / "selected_clips.json")
     write_transcript_segments(original, path.parent / "transcript_segments.json")
