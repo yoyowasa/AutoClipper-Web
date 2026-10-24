@@ -83,6 +83,7 @@ from app.jobs.clip_plan import (
 from app.jobs.automation import (
     AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING,
     requires_human_subtitle_review,
+    is_subtitle_only_auto,
     automation_manifest_path,
     build_automation_manifest,
     write_automation_manifest,
@@ -1599,7 +1600,13 @@ def _prepare_auto_render_after_preview(
             )
 
         settings = dict(job.settings_json or {})
-        if requires_human_subtitle_review(settings) or _active_quality_gate_mode(job_dir, settings) != "auto":
+        if (requires_human_subtitle_review(settings) and not is_subtitle_only_auto(settings)) or (
+            _active_quality_gate_mode(job_dir, settings) != "auto"
+        ):
+            return None
+        if is_subtitle_only_auto(settings) and not all(
+            c.confirmed and c.automatic_decision_state == "ready" for c in document.clips
+        ):
             return None
         invalidate_quality_gate_decisions(job_dir, ("content", "post_render"))
         try:
@@ -1807,15 +1814,18 @@ def _resume_auto_after_clip_review(
     input_path = storage_paths.resolve_stored_file(video.stored_path)
 
     human_review = requires_human_subtitle_review(settings)
-    title_hook_evidence, _generation_failures = _generate_auto_title_hook_evidence(
-        db=db,
-        dependencies=dependencies,
-        document=review_document,
-        input_path=input_path,
-        paths=storage_paths,
-        model=str(settings.get("titleHookModel") or "codex-default"),
-        settings=settings,
-    )
+    review_document.subtitle_only_auto = is_subtitle_only_auto(settings)
+    title_hook_evidence = {}
+    if not review_document.subtitle_only_auto:
+        title_hook_evidence, _generation_failures = _generate_auto_title_hook_evidence(
+            db=db,
+            dependencies=dependencies,
+            document=review_document,
+            input_path=input_path,
+            paths=storage_paths,
+            model=str(settings.get("titleHookModel") or "codex-default"),
+            settings=settings,
+        )
     preview_total = len(review_document.clips)
     _set_subtitle_review_preview_progress(
         db,
@@ -2912,7 +2922,9 @@ def run_autoclipper_job(
             selection_fallback_needs_review = (
                 requires_human_subtitle_review(settings) and codex_requested and codex_initial_selection_result is None
             )
-            if guarded_selection_needs_review or manual_clip_plan_review or allocation_needs_review or selection_fallback_needs_review:
+            pause_for_selection = is_subtitle_only_auto(settings) and settings.get("pauseAfterSelection", False)
+            if any((pause_for_selection, guarded_selection_needs_review, manual_clip_plan_review,
+                    allocation_needs_review, selection_fallback_needs_review)):
                 plan_path = _prepare_clip_plan_review(
                     db=db,
                     job=job,

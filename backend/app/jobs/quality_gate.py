@@ -25,7 +25,7 @@ from app.candidates.short_diversity import (
     select_diverse_shorts,
 )
 from app.jobs.subtitle_review import SubtitleReviewDocument
-from app.jobs.automation import requires_human_subtitle_review
+from app.jobs.automation import requires_human_subtitle_review, is_subtitle_only_auto
 from app.jobs.title_hook_suggestions import TitleHookSuggestionsDocument
 from app.overlay_text import fit_overlay_text
 from app.posting_metadata import (
@@ -770,21 +770,16 @@ def _automated_title_hook_check(
             if recommended.hook_scene_end is None
             else round(clip.start + recommended.hook_scene_end, 3)
         )
-        if (
-            clip.post_metadata_source != "codex"
-            or clip.recommended_title_id != recommended.id
-            or clip.selected_title_id != recommended.id
-            or clip.title != recommended.overlay_title
-            or clip.publication_title
-            != ensure_publication_title_suffix(
-                recommended.publication_title,
-                clip_type=clip.type,
-                suffix=clip.normal_title_suffix,
-            )
-            or clip.hook_text != recommended.hook_text
-            or clip.hook_scene_start != expected_scene_start
-            or clip.hook_scene_end != expected_scene_end
-        ):
+        expected_values = {
+            "post_metadata_source": "codex", "recommended_title_id": recommended.id, "selected_title_id": recommended.id,
+            "title": recommended.overlay_title,
+            "publication_title": ensure_publication_title_suffix(
+                recommended.publication_title, clip_type=clip.type, suffix=clip.normal_title_suffix,
+            ),
+            "hook_text": recommended.hook_text, "hook_scene_start": expected_scene_start, "hook_scene_end": expected_scene_end,
+        }
+        overrides = set(clip.manual_decision_fields) if document.subtitle_only_auto else set()
+        if any(getattr(clip, name) != value for name, value in expected_values.items() if name not in overrides):
             inconsistent.append(
                 {"clipId": clip.id, "reason": "applied_suggestion_mismatch"}
             )
@@ -1177,7 +1172,7 @@ def evaluate_content_quality_gate(
         scope="short_clips",
         applicable=bool(short_clips),
     )
-    framing_deferred = bool(short_clips and mode == "auto" and not all_shorts_accepted)
+    framing_deferred = bool(short_clips and mode == "auto" and (not all_shorts_accepted or is_subtitle_only_auto(settings)))
     framing_outcome: QualityGateOutcome = (
         "pass"
         if not short_clips or all_shorts_accepted or framing_deferred
@@ -1196,7 +1191,7 @@ def evaluate_content_quality_gate(
                 _automated_title_hook_check(
                     document,
                     title_hook_evidence,
-                    human_accepted_clip_ids=human_accepted_clip_ids,
+                    human_accepted_clip_ids=set() if is_subtitle_only_auto(settings) else human_accepted_clip_ids,
                     human_evidence=all_clips_evidence,
                 ),
                 _automated_subtitle_alignment_check(
@@ -1206,7 +1201,7 @@ def evaluate_content_quality_gate(
                 ),
                 _automated_overlay_layout_check(
                     document,
-                    human_accepted_clip_ids=human_accepted_clip_ids,
+                    human_accepted_clip_ids=set() if is_subtitle_only_auto(settings) else human_accepted_clip_ids,
                     human_evidence=all_clips_evidence,
                 ),
             ]
@@ -1922,7 +1917,7 @@ def _post_render_visual_check(
         scope="short_clips",
         applicable=bool(short_clips),
     )
-    human_accepted_ids = set(human_visual_evidence["acceptedReadyClipIds"])
+    human_accepted_ids = set() if document.subtitle_only_auto else set(human_visual_evidence["acceptedReadyClipIds"])
     failures: list[dict[str, Any]] = []
     unknown: list[dict[str, Any]] = []
     inspected: list[dict[str, Any]] = []

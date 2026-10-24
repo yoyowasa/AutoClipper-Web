@@ -1,15 +1,31 @@
 "use client";
 
-import { applySubtitleReviewClip, finalizeSubtitleReview, reopenClipPlanForBoundaryReedit, returnSubtitleReviewToClipPlan } from "../../api";
+import { unconfirmAutomaticReviewClip, applySubtitleReviewClip, finalizeSubtitleReview, reopenClipPlanForBoundaryReedit, returnSubtitleReviewToClipPlan } from "../../api";
 import { postMetadataApplyPayload } from "../../youtubePosting";
 import { writeReviewDraft, clearJobReviewDrafts } from "../draftStorage";
 import { returnToClipPlanMessage } from "../returnToClipPlan";
 import { validateClipDuration, validateHookSceneDuration } from "../../durationRules";
 import { segmentDraftKey, sharedSubtitleNotice } from "../sharedSegments";
 import { contentDraftForClip } from "../drafts";
+import { automaticApplyPayload } from "../automaticConfirmation";
 import type { SubtitleReviewContext } from "./context";
 
 export function useReviewConfirmation(context: SubtitleReviewContext) {
+  async function reopenConfirmedClip() {
+    if (!context.selectedClip || context.hasReviewMutationInFlight) return;
+    context.beginReviewMutation();
+    context.setConfirmingClipId(context.selectedClip.id);
+    try {
+      context.setReview(await unconfirmAutomaticReviewClip(context.jobId, context.selectedClip.id));
+      context.setError(null);
+    } catch (caught) {
+      context.setError(caught instanceof Error ? caught.message : "字幕の確定を解除できませんでした。");
+    } finally {
+      context.endReviewMutation();
+      context.setConfirmingClipId(null);
+    }
+  }
+
   async function confirmSelectedClip() {
     const {
       isSavingShortBannerSettings,
@@ -44,11 +60,11 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
     }
     const title = selectedClipContentDraft.title.trim();
     const publicationTitle = selectedClipContentDraft.publicationTitle.trim();
-    if (!publicationTitle) {
+    if (!review?.subtitleOnlyAuto && !publicationTitle) {
       setError("公開用タイトルを入力してください。");
       return;
     }
-    if (!selectedHookDurationIsValid) {
+    if (!review?.subtitleOnlyAuto && !selectedHookDurationIsValid) {
       setError("冒頭フックの表示秒数は1〜8秒で入力してください。");
       return;
     }
@@ -72,7 +88,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
     setConfirmingClipId(selectedClip.id);
     setError(null);
     try {
-      const updated = await applySubtitleReviewClip(jobId, selectedClip.id, {
+      const payload = {
         title,
         publicationTitle,
         ...postMetadata,
@@ -90,7 +106,9 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
         subtitleStyles: selectedClipContentDraft.subtitleStyles,
         ...(selectedShortFramingDirty && selectedShortFramingDraft ? { framing: selectedShortFramingDraft } : {}),
         segments: segmentUpdates
-      });
+      };
+      const updated = await applySubtitleReviewClip(jobId, selectedClip.id,
+        review?.subtitleOnlyAuto ? automaticApplyPayload(selectedClip, payload) : payload);
       if (isCurrentReviewMutation(mutationGeneration)) {
         locallyUpdatedReviewRef.current = updated;
         writeReviewDraft(jobId, selectedClip.id, null);
@@ -237,5 +255,5 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
       endReviewMutation();
     }
   }
-  return { confirmSelectedClip, startRendering, returnToBoundaryEditor, returnToClipPlan };
+  return { reopenConfirmedClip, confirmSelectedClip, startRendering, returnToBoundaryEditor, returnToClipPlan };
 }

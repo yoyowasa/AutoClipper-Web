@@ -179,19 +179,19 @@ export function useTitleHookSuggestions(context: SubtitleReviewContext) {
       hookSceneEnd: hasValidHookScene
         ? selectedClip.start + suggestedHookEnd
         : null,
-      thumbnailKicker:
+      thumbnailKicker: context.review?.subtitleOnlyAuto ? selectedClipContentDraft?.thumbnailKicker ?? "" :
         selectedClip.type === "normal"
           ? (suggestion.thumbnailKicker ?? "").trim().slice(0, 40)
           : "",
-      thumbnailLine1:
+      thumbnailLine1: context.review?.subtitleOnlyAuto ? selectedClipContentDraft?.thumbnailLine1 ?? "" :
         selectedClip.type === "normal"
           ? (suggestion.thumbnailLine1 ?? "").trim().slice(0, 60)
           : "",
-      thumbnailLine2:
+      thumbnailLine2: context.review?.subtitleOnlyAuto ? selectedClipContentDraft?.thumbnailLine2 ?? "" :
         selectedClip.type === "normal"
           ? (suggestion.thumbnailLine2 ?? "").trim().slice(0, 60)
           : "",
-      thumbnailFrameSeconds:
+      thumbnailFrameSeconds: context.review?.subtitleOnlyAuto ? selectedClipContentDraft?.thumbnailFrameSeconds ?? null :
         selectedClip.type === "normal" &&
         suggestion.thumbnailFrameSeconds !== null
           ? clamp(suggestion.thumbnailFrameSeconds, 0, bodyDuration)

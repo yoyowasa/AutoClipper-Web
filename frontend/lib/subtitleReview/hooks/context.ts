@@ -120,6 +120,7 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   retrySelectedPreview: () => Promise<void>;
   saveHookScene: (start: number | null, end: number | null) => Promise<void>;
   saveSubtitleStructure: (request: SubtitleStructureRequest) => Promise<boolean>;
+  reopenConfirmedClip: () => Promise<void>;
   confirmSelectedClip: () => Promise<void>;
   startRendering: () => Promise<void>;
   returnToBoundaryEditor: () => Promise<void>;

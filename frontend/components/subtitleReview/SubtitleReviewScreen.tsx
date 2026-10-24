@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import type { SubtitleReviewContext, SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/context";
 import { ReviewSubtitleSegments } from "./ReviewSubtitleSegments";
 import { ReviewTextStyles } from "./ReviewStyleFraming";
@@ -10,6 +11,7 @@ import { ReviewClipList } from "./ReviewClipList";
 import { ReviewBoundaryReeditButton, ReviewReturnToClipPlanButton } from "./ReviewActions";
 
 export function SubtitleReviewScreen({ model }: { model: SubtitleReviewContext }) {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const { review, error, jobId, workspaceTab, setWorkspaceTab, selectedClip, hasReviewMutationInFlight } = model;
   if (!review) {
     return (
@@ -47,8 +49,8 @@ export function SubtitleReviewScreen({ model }: { model: SubtitleReviewContext }
                 ? hasReviewMutationInFlight ? "保存中" : "字幕確認中"
                 : "書き出し中"}
           </span>
-          {review.state === "awaiting_review" && <ReviewBoundaryReeditButton context={context} />}
-          {review.state === "awaiting_review" && <ReviewReturnToClipPlanButton context={context} />}
+          {review.state === "awaiting_review" && (!review.subtitleOnlyAuto || detailsOpen) && <ReviewBoundaryReeditButton context={context} />}
+          {review.state === "awaiting_review" && (!review.subtitleOnlyAuto || detailsOpen) && <ReviewReturnToClipPlanButton context={context} />}
           <Link
             className="ml-auto inline-flex min-h-9 items-center border border-neutral-300 bg-white px-3 text-xs font-medium sm:text-sm"
             href={`/jobs/${jobId}`}
@@ -71,6 +73,16 @@ export function SubtitleReviewScreen({ model }: { model: SubtitleReviewContext }
           </div>
         ) : null}
 
+        {review.subtitleOnlyAuto && <div className="flex flex-wrap items-center gap-3 border border-sky-200 bg-sky-50 p-3 text-sm">
+          <p>字幕の文字を直してclipごとに確定してください。タイトル・フック・投稿文・サムネを自動で決め、全clipの準備が整うと書き出します。</p>
+          <button type="button" className="underline" onClick={() => setDetailsOpen(value => !value)}>
+            {detailsOpen ? "詳細編集を閉じる" : "詳細編集（任意）"}
+          </button>
+        </div>}
+        {review.automaticStopReasons?.map(reason => <p key={reason} role="alert" className="border border-red-300 bg-red-50 p-3 text-sm text-red-900">{reason}</p>)}
+        {review.clips.filter(clip => clip.automaticDecisionError).map(clip =>
+          <p key={clip.id} role="alert" className="border border-red-300 bg-red-50 p-3 text-sm text-red-900">{clip.automaticDecisionError}</p>)}
+
         <div data-clip-type={selectedClip?.type} className="subtitle-review-grid grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
           <ReviewClipList context={context} />
 
@@ -81,7 +93,7 @@ export function SubtitleReviewScreen({ model }: { model: SubtitleReviewContext }
           <section className="contents">
             {selectedClip ? (
               <div className="contents">
-                <div data-tab={workspaceTab} className="subtitle-review-editors grid min-w-0 bg-white lg:col-span-3 lg:row-start-2 2xl:col-span-3 2xl:col-start-1 2xl:row-start-2 2xl:h-full 2xl:min-h-0 2xl:grid-cols-4 2xl:overflow-hidden">
+                {(!review.subtitleOnlyAuto || detailsOpen) && <div data-tab={workspaceTab} className="subtitle-review-editors grid min-w-0 bg-white lg:col-span-3 lg:row-start-2 2xl:col-span-3 2xl:col-start-1 2xl:row-start-2 2xl:h-full 2xl:min-h-0 2xl:grid-cols-4 2xl:overflow-hidden">
                   <div role="tablist" aria-label="編集項目" className="subtitle-editor-tabs flex border-b bg-neutral-50">
                     <button type="button" role="tab" aria-selected={workspaceTab === "content"} onClick={() => setWorkspaceTab("content")} className="px-4 py-2 text-sm font-semibold aria-selected:bg-neutral-950 aria-selected:text-white">タイトル・フック</button>
                     <button type="button" role="tab" aria-selected={workspaceTab === "style"} onClick={() => setWorkspaceTab("style")} className="px-4 py-2 text-sm font-semibold aria-selected:bg-neutral-950 aria-selected:text-white">書式・位置・色</button>
@@ -89,8 +101,8 @@ export function SubtitleReviewScreen({ model }: { model: SubtitleReviewContext }
                   <ReviewContentEditor key={`content-${selectedClip.id}`} context={context} />
 
                   <ReviewTextStyles key={selectedClip.id} context={context} />
-                </div>
-                <ReviewSubtitleSegments context={context} />
+                </div>}
+                <ReviewSubtitleSegments context={context} showStyleControls={!review.subtitleOnlyAuto || detailsOpen} />
               </div>
             ) : null}
           </section>

@@ -429,3 +429,21 @@ def enqueue_thumbnail_candidates(export_id: str, request_id: str) -> None:
 
 def get_enqueue_thumbnail_candidates() -> Callable[[str, str], None]:
     return enqueue_thumbnail_candidates
+
+
+def enqueue_confirmed_clip_decisions(job_id: str, clip_id: str, revision: str) -> None:
+    from app.jobs.confirmed_clip_decisions import run_confirmed_clip_decisions
+    queue = get_queue()
+    rq_id = f"confirmed-clip-{job_id}-{revision}"
+    existing = queue.fetch_job(rq_id)
+    if existing is not None and existing.get_status(refresh=True) in ACTIVE_RETRY_RQ_STATUSES:
+        return
+    try:
+        queue.enqueue(run_confirmed_clip_decisions, job_id, clip_id, revision,
+                      job_timeout=job_media_timeout(job_id, clip_id=clip_id) + 1800, job_id=rq_id, unique=True)
+    except DuplicateJobError:
+        return
+
+
+def get_enqueue_confirmed_clip_decisions() -> SubtitleReviewPreviewEnqueue:
+    return enqueue_confirmed_clip_decisions

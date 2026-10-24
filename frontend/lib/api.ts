@@ -643,32 +643,37 @@ export async function updateSubtitleReviewShortBannerSettings(
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
+export async function unconfirmAutomaticReviewClip(jobId: string, clipId: string): Promise<SubtitleReviewDocument> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/unconfirm`, { method: "POST" });
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
 export async function applySubtitleReviewClip(
   jobId: string,
   clipId: string,
   content: {
-    title: string;
-    publicationTitle: string;
-    titleCandidates: PostTitleCandidate[];
-    recommendedTitleId: string | null;
-    selectedTitleId: string | null;
-    youtubeDescription: string;
-    youtubeHashtags: string[];
-    youtubeTags: string[];
-    descriptionEvidenceSegmentIds: string[];
-    postMetadataSource: string | null;
-    postMetadataRevisionHash: string | null;
-    hookText: string;
-    hookDurationSeconds: number;
-    hookSceneStart: number | null;
-    hookSceneEnd: number | null;
-    thumbnailKicker: string;
+    title?: string;
+    publicationTitle?: string;
+    titleCandidates?: PostTitleCandidate[];
+    recommendedTitleId?: string | null;
+    selectedTitleId?: string | null;
+    youtubeDescription?: string;
+    youtubeHashtags?: string[];
+    youtubeTags?: string[];
+    descriptionEvidenceSegmentIds?: string[];
+    postMetadataSource?: string | null;
+    postMetadataRevisionHash?: string | null;
+    hookText?: string;
+    hookDurationSeconds?: number;
+    hookSceneStart?: number | null;
+    hookSceneEnd?: number | null;
+    thumbnailKicker?: string;
     thumbnailLine1: string;
     thumbnailLine2: string;
-    thumbnailFrameSeconds: number | null;
-    titleStyle: ClipTextStyle | null;
-    hookStyle: ClipTextStyle | null;
-    subtitleStyle: ClipTextStyle | null;
+    thumbnailFrameSeconds?: number | null;
+    titleStyle?: ClipTextStyle | null;
+    hookStyle?: ClipTextStyle | null;
+    subtitleStyle?: ClipTextStyle | null;
     framing?: SubtitleReviewClipFramingUpdateRequest;
     segments: Array<{ segmentId: string; text: string }>;
     subtitleStyles?: import("./types").SubtitleStyleOverride[];

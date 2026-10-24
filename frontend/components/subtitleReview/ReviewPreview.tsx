@@ -101,6 +101,8 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                       </div>
 
                     </div>
+                    <details open={!review.subtitleOnlyAuto}>
+                      <summary className="cursor-pointer p-2 text-sm">画角の詳細編集（任意）</summary>
                     {selectedShortFramingDraft ? (
                       <div className="space-y-3 border-b border-neutral-300 bg-neutral-50 px-4 py-3">
                         <p className="text-sm font-semibold">このショートのみ微調整</p>
@@ -117,6 +119,7 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                         </p> : null}
                       </div>
                     ) : null}
+                    </details>
                   </div>
                 ) : null}
                 <div className="subtitle-video-area flex items-start justify-center bg-neutral-100 p-3 sm:p-4 2xl:h-full 2xl:min-h-0 2xl:flex-1 2xl:items-stretch 2xl:overflow-hidden">
@@ -255,7 +258,7 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                           {selectedClip.previewState === "failed" ? (
                             <button
                               className="min-h-10 border border-white bg-white px-4 text-sm font-semibold text-neutral-950 disabled:border-neutral-500 disabled:bg-neutral-700 disabled:text-neutral-300"
-                              disabled={!isEditable || retryingPreviewClipId !== null}
+                              disabled={(!isEditable && !review.subtitleOnlyAuto) || retryingPreviewClipId !== null}
                               type="button"
                               onClick={() => void retrySelectedPreview()}
                             >

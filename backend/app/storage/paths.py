@@ -121,6 +121,11 @@ class StoragePaths:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def confirmed_thumbnail_frames(self, job_id: str, clip_id: str, start: float, end: float) -> Path:
+        from hashlib import sha256
+        key = sha256(f"{clip_id}:{start}:{end}".encode()).hexdigest()[:16]
+        return self.job_outputs(job_id) / "thumbnails" / "frames" / f"c-{key}"
+
     def job_subtitles(self, job_id: str, clip_type: str) -> Path:
         folder_name = "shorts" if clip_type == "short" else "normal"
         path = self.job_outputs(job_id) / "subtitles" / folder_name

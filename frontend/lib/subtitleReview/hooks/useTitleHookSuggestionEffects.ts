@@ -28,6 +28,7 @@ export function useAutomaticTitleSuggestions(context: Pick<SubtitleReviewContext
     if (
       !jobId ||
       !review ||
+      review.subtitleOnlyAuto ||
       review.jobId !== jobId ||
       review.state !== "awaiting_review" ||
       review.clips.length === 0 ||

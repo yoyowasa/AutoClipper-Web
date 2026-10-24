@@ -324,6 +324,7 @@ class JobSettings(UploadTextStyles):
     candidate_chunk_seconds: float = Field(default=600.0, gt=0, alias="candidateChunkSeconds")
     candidate_chunk_overlap_seconds: float = Field(default=75.0, ge=0, alias="candidateChunkOverlapSeconds")
     burn_subtitles: bool = Field(default=True, alias="burnSubtitles")
+    pause_after_selection: bool = Field(default=False, alias="pauseAfterSelection")
     require_clip_plan_review: bool = Field(default=False, alias="requireClipPlanReview")
     require_subtitle_review: bool = Field(default=False, alias="requireSubtitleReview")
     max_chars_per_line_short: int = Field(default=16, ge=6, le=80, alias="maxCharsPerLineShort")
@@ -680,6 +681,7 @@ class SubtitleReviewClipSegmentUpdate(BaseModel):
 
 
 class SubtitleReviewClipApplyRequest(SubtitleReviewClipContentUpdateRequest):
+    title: str = Field(default="", max_length=80)
     framing: SubtitleReviewClipFramingUpdateRequest | None = None
     publication_title: str | None = Field(
         default=None,

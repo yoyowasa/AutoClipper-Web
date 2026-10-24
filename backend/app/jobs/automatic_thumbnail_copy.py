@@ -33,27 +33,19 @@ def manually_selected_copy(review, clip_id: str, values: dict) -> bool:
     return manual is not None and manual == values
 
 
-def decide_thumbnail_copy(*, review, export, paths, metadata: dict, generator=None) -> dict:
-    clip = next(c for c in review.clips if c.id == export.candidate_id)
-    values = {key: getattr(clip, attr) for key, attr in COPY_FIELDS.items()}
-    history = merge_history(metadata.get("choiceHistory", []))
-    if manually_selected_copy(review, clip.id, values):
-        append_choice(history, kind="thumbnail", clipId=clip.id, stage="applied", source="manual",
-                      values=values, policyVersion=THUMBNAIL_COPY_PROMPT_VERSION, reason="manual_thumbnail_copy_preserved")
-        return {**metadata, **{attr: values[key] for key, attr in COPY_FIELDS.items()},
-                "thumbnail_copy_source": "manual", "thumbnail_copy_error": None,
-                "thumbnail_copy_recommended_id": None, "thumbnail_copy_selected_id": None, "choiceHistory": dump_history(history)}
-    if clip.type != "normal" or not clip.confirmed or review.state not in {"render_queued", "rendering", "completed"}:
-        raise ValueError("確定した通常動画の字幕からサムネ文言を生成してください。")
+def confirmed_thumbnail_copy(review, clip, paths, generator=None, *, retry_failed=False, publication_title=None) -> tuple[dict, dict, str]:
     source = [s.model_dump() for s in review.segments if s.id in set(clip.segment_ids)]
-    payload = build_copy_payload(source, start=clip.start, end=clip.end, publication_title=export.title)
+    payload = build_copy_payload(
+        source, start=clip.start, end=clip.end,
+        publication_title=publication_title if publication_title is not None else clip.publication_title,
+    )
     content_hash = value_hash({"payload": payload, "start": clip.start, "end": clip.end, "version": THUMBNAIL_COPY_PROMPT_VERSION})
     # Keep retries/re-exports of the same confirmed input in the existing suggestion
     # directory. Export IDs can change after a failed publication.
-    path = confirmed_copy_state_path(paths, export.job_id, clip.id, content_hash)
-    with subtitle_review_document_lock(paths.job_outputs(export.job_id)):
+    path = confirmed_copy_state_path(paths, review.job_id, clip.id, content_hash)
+    with subtitle_review_document_lock(paths.job_outputs(review.job_id)):
         state = read_copy_state(path)
-        generate = state.get("contentHash") != content_hash
+        generate = state.get("contentHash") != content_hash or (retry_failed and state.get("state") != "ready")
         if generate:
             state = {"state": "generating", "contentHash": content_hash, "payload": payload, "clipId": clip.id,
                      "promptVersion": THUMBNAIL_COPY_PROMPT_VERSION, "suggestions": [], "recommendedId": None,
@@ -62,7 +54,7 @@ def decide_thumbnail_copy(*, review, export, paths, metadata: dict, generator=No
     if generate:
         try:
             active = generator or CodexThumbnailCopyGenerator(
-                storage_root=paths.root, job_id=export.job_id, clip_id=f"thumb_{clip.id}",
+                storage_root=paths.root, job_id=review.job_id, clip_id=f"thumb_{clip.id}",
                 model=os.environ.get("CODEX_TITLE_HOOK_MODEL", "codex-default"),
             )
             result = generate_validated_copy(active, payload)
@@ -76,6 +68,22 @@ def decide_thumbnail_copy(*, review, export, paths, metadata: dict, generator=No
         state = read_copy_state(path)
     if state["state"] != "ready":
         state.update(state="failed", error=state.get("error") or "サムネ文言の自動生成が中断されました。")
+    return state, payload, content_hash
+
+
+def decide_thumbnail_copy(*, review, export, paths, metadata: dict, generator=None) -> dict:
+    clip = next(c for c in review.clips if c.id == export.candidate_id)
+    values = {key: getattr(clip, attr) for key, attr in COPY_FIELDS.items()}
+    history = merge_history(metadata.get("choiceHistory", []))
+    if manually_selected_copy(review, clip.id, values):
+        append_choice(history, kind="thumbnail", clipId=clip.id, stage="applied", source="manual",
+                      values=values, policyVersion=THUMBNAIL_COPY_PROMPT_VERSION, reason="manual_thumbnail_copy_preserved")
+        return {**metadata, **{attr: values[key] for key, attr in COPY_FIELDS.items()},
+                "thumbnail_copy_source": "manual", "thumbnail_copy_error": None,
+                "thumbnail_copy_recommended_id": None, "thumbnail_copy_selected_id": None, "choiceHistory": dump_history(history)}
+    if clip.type != "normal" or not clip.confirmed or review.state not in {"render_queued", "rendering", "completed"}:
+        raise ValueError("確定した通常動画の字幕からサムネ文言を生成してください。")
+    state, payload, content_hash = confirmed_thumbnail_copy(review, clip, paths, generator, publication_title=export.title)
     selected = next((s for s in state["suggestions"] if s["id"] == state["recommendedId"]), None) if state["state"] == "ready" else None
     if selected:
         values = dict(zip(COPY_FIELDS, (selected["heading"], selected["upper"], selected["lower"]), strict=True))

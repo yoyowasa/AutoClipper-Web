@@ -106,6 +106,12 @@ class PreviewFraming(BaseModel):
 
 
 class SubtitleReviewClip(BaseModel):
+    automatic_thumbnail: dict[str, Any] | None = Field(default=None, alias="automaticThumbnail")
+    automatic_decision_revision: str | None = Field(default=None, alias="automaticDecisionRevision")
+    automatic_decision_state: Literal["idle", "queued", "generating", "ready", "failed"] = Field(
+        default="idle", alias="automaticDecisionState")
+    automatic_decision_error: str | None = Field(default=None, alias="automaticDecisionError")
+    manual_decision_fields: list[str] = Field(default_factory=list, alias="manualDecisionFields")
     preview_framing: PreviewFraming | None = Field(default=None, alias="previewFraming")
     normal_title_suffix: str = Field(default=NORMAL_CLIP_PUBLICATION_TITLE_SUFFIX, max_length=80, alias="normalTitleSuffix")
     id: str
@@ -288,6 +294,8 @@ class SubtitleReviewClip(BaseModel):
 
 
 class SubtitleReviewDocument(BaseModel):
+    automatic_stop_reasons: list[str] = Field(default_factory=list, alias="automaticStopReasons")
+    subtitle_only_auto: bool = Field(default=False, alias="subtitleOnlyAuto")
     choice_history: list[ProductionChoice] = Field(default_factory=list, alias="choiceHistory", exclude_if=lambda v: not v)
     version: int = 1
     job_id: str = Field(alias="jobId")

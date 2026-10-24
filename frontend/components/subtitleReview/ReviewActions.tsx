@@ -16,6 +16,15 @@ export function ReviewRenderControls({ context }: { context: SubtitleReviewViewC
     isFinalizing,
     startRendering
   } = context;
+  if (review.subtitleOnlyAuto) return <div className="border-t bg-sky-50 p-3 text-sm">
+    <p>字幕確定 {review.confirmedClipCount} / {review.totalClipCount}</p>
+    <p>{allConfirmed ? "自動決定・正式プレビュー・品質検証の完了後、自動で書き出します。" : "残りのclipの字幕を確認してください。"}</p>
+    {review.clips.filter(clip => clip.confirmed).map(clip => <p key={clip.id} className="mt-1 text-xs">
+      {clip.id}: {clip.automaticDecisionState === "failed" ? "自動処理で停止" : clip.automaticDecisionState !== "ready"
+        ? "文言を自動決定中" : clip.previewState === "failed" ? "正式プレビューの作成で停止"
+        : clip.previewState === "ready" ? "準備完了" : "正式プレビューを作成中"}
+    </p>)}
+  </div>;
   return (
     <div className="border-t border-neutral-300 bg-neutral-50 p-3">
               <div className="flex items-center justify-between gap-2 text-xs">
@@ -77,10 +86,16 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
       .filter(key => JSON.stringify(savedContent[key]) !== JSON.stringify(selectedClipContentDraft[key])).length : 0);
   return (
     <div className="border-t border-neutral-300 bg-neutral-50 p-4">
+                  {review.subtitleOnlyAuto && selectedClip.confirmed && <button type="button"
+                    className="mb-2 min-h-9 w-full border border-neutral-400 bg-white text-sm" disabled={hasReviewMutationInFlight}
+                    onClick={() => void context.reopenConfirmedClip()}>字幕を直し直す（このclipの自動処理を解除）</button>}
                   <p className="mb-2 text-xs font-semibold text-amber-800">未保存の変更 {pendingChanges}件</p>
                   <p className="mb-3 text-xs text-neutral-600">
                     {selectedClipHasDirtySegments || selectedClipHasDirtyContent || selectedShortFramingDirty
-                      ? "簡易プレビューで下書きを確認し、確定で字幕・画角・フック・投稿情報をまとめて保存します。"
+                      ? review.subtitleOnlyAuto ? "字幕を確定すると、このclipの自動決定を開始します。詳細編集の変更も保存します。"
+                        : "簡易プレビューで下書きを確認し、確定で字幕・画角・フック・投稿情報をまとめて保存します。"
+                      : review.subtitleOnlyAuto && selectedClip.automaticDecisionState === "failed" ? "字幕を確定して再試行"
+                      : review.subtitleOnlyAuto && !selectedClip.confirmed ? "このclipの字幕を確定"
                       : selectedClip.confirmed && !selectedPreviewReady
                         ? "確定済みです。正式プレビューをバックグラウンドで作成中です。他のclipも編集できます。"
                         : selectedClip.confirmed
@@ -90,12 +105,11 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
                   <button
                     className="min-h-11 w-full bg-sky-700 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
                     disabled={
-                      !isEditable ||
-                      (selectedClip.confirmed &&
+                      (!isEditable && !(review.subtitleOnlyAuto && selectedClip.automaticDecisionState === "failed" && !hasReviewMutationInFlight)) ||
+                      (selectedClip.confirmed && selectedClip.automaticDecisionState !== "failed" &&
                         !selectedClipHasDirtySegments &&
                         !selectedClipHasDirtyContent && !selectedShortFramingDirty) ||
-                      !selectedClipContentDraft?.publicationTitle.trim() ||
-                      !selectedHookDurationIsValid ||
+                      (!review.subtitleOnlyAuto && (!selectedClipContentDraft?.publicationTitle.trim() || !selectedHookDurationIsValid)) ||
                       isSavingShortBannerSettings ||
                       confirmingClipId === selectedClip.id
                     }
@@ -104,11 +118,14 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
                   >
                     {confirmingClipId === selectedClip.id
                       ? "確定中"
+                      : review.subtitleOnlyAuto && selectedClip.automaticDecisionState === "failed" ? "自動処理を再試行"
                       : selectedClip.confirmed &&
                           !selectedClipHasDirtySegments &&
                           !selectedClipHasDirtyContent && !selectedShortFramingDirty
                         ? "このclipは確定済み"
-                        : selectedClip.type === "short" ? "このショートを確定" : "この動画を確定"}
+                        : review.subtitleOnlyAuto
+                          ? selectedClip.type === "short" ? "このショートの字幕を確定" : "この動画の字幕を確定"
+                          : selectedClip.type === "short" ? "このショートを確定" : "この動画を確定"}
                   </button>
                   <button type="button" className="mt-2 min-h-9 w-full border border-neutral-400 bg-white text-sm disabled:opacity-40"
                     disabled={hasReviewMutationInFlight || review.clips.length < 2}

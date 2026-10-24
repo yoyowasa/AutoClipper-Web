@@ -57,6 +57,7 @@ export const DEFAULT_SETTINGS: ClipSettings = {
   maxBoundaryExpansionSeconds: 3,
   allowBoundaryExpansionBeyondMaxDuration: false,
   burnSubtitles: true,
+  pauseAfterSelection: false,
   requireClipPlanReview: true,
   requireSubtitleReview: true,
   maxCharsPerLineShort: 16,
@@ -150,7 +151,7 @@ export function SettingsPanel({
   const exceptionOnlyAutomation = isExceptionOnlyAutomationMode(settings.automationMode);
   const automationDescription =
     settings.automationMode === "auto"
-      ? "範囲・タイトル・フック・投稿文を自動で決め、字幕確認で必ず止まります。字幕を直して確定した後に書き出します。"
+      ? "範囲を自動選定し、字幕確認で止まります。clipごとの字幕確定後に文言・サムネを自動で決め、全clipの準備が整うと書き出します。"
       : settings.automationMode === "guarded"
         ? "段階運用です。自動判定できない項目または問題がある項目だけ確認します。"
         : settings.automationMode === "shadow"
@@ -405,6 +406,11 @@ export function SettingsPanel({
                 </select>
                 <span className="text-xs text-neutral-600">{automationDescription}</span>
               </label>
+              {settings.automationMode === "auto" && <label className="flex items-center gap-2 text-sm md:col-span-2">
+                <input type="checkbox" disabled={disabled} checked={settings.pauseAfterSelection ?? false}
+                  onChange={event => onChange({ ...settings, pauseAfterSelection: event.target.checked })} />
+                自動選定後、切り抜き確認で一度止める（通常は字幕確認へ進みます）
+              </label>}
               <label className="flex items-start gap-2">
                 <input
                   checked={
