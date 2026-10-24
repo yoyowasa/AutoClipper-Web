@@ -205,19 +205,20 @@ def _primary_face(image: Image.Image) -> tuple[float, float, float, float] | Non
 def _cached_anime_subject(
     frame_path: str, frame_mtime: int, frame_size: int,
     model_path: str, model_mtime: int, model_size: int,
+    video_face: Face | None = None,
 ) -> tuple[Face, Image.Image] | None:
     # The stat values are cache keys: a new frame or newly installed model is re-detected.
     del frame_mtime, frame_size, model_mtime, model_size
     with Image.open(frame_path) as source:
         image = source.convert("RGB")
-    face = detect_anime_face(image)
+    face = video_face if video_face is not None else detect_anime_face(image)
     if face is None:
         return None
     mask = anime_character_mask(image, face, model_path=Path(model_path))
     return (face, mask) if mask is not None else None
 
 
-def _anime_subject_for_frame(frame_path: Path) -> tuple[Face, Image.Image] | None:
+def _anime_subject_for_frame(frame_path: Path, *, video_face: Face | None = None) -> tuple[Face, Image.Image] | None:
     model = anime_matte_path()
     if not model.is_file():
         return None
@@ -226,6 +227,7 @@ def _anime_subject_for_frame(frame_path: Path) -> tuple[Face, Image.Image] | Non
     return _cached_anime_subject(
         str(frame_path.resolve()), frame_stat.st_mtime_ns, frame_stat.st_size,
         str(model.resolve()), model_stat.st_mtime_ns, model_stat.st_size,
+        video_face,
     )
 
 
@@ -795,7 +797,7 @@ def render_normal_thumbnail(
                 command_runner=command_runner,
             )
         anime_subject = (
-            _anime_subject_for_frame(frame_path)
+            _anime_subject_for_frame(frame_path, video_face=video_face)
             if character_asset_path is None and template.get("subject_mode") == "anime_cutout" else None
         )
         with Image.open(frame_path) as source_frame:

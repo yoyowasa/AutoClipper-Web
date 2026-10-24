@@ -197,6 +197,7 @@ def test_close_outside_upscale_limit_rejected_and_old_modes_read_without_write(c
 def test_video_has_priority_even_when_assets_registered(asset_thumbnail, monkeypatch, with_assets):  # noqa: F811
     storage = asset_thumbnail.storage
     seed_frames(storage, asset_thumbnail.metadata)
+    monkeypatch.setattr("app.jobs.thumbnails._normal_frame_seconds", lambda candidate: candidate.start + 8)
     def extract(source, **kwargs):
         # This stub exercises the export pipeline with saved originals, not video decoding.
         source_dir = candidates.candidate_directory(storage.job_outputs("job_thumbnail_style"), "exp_thumbnail_style")
@@ -213,6 +214,14 @@ def test_video_has_priority_even_when_assets_registered(asset_thumbnail, monkeyp
     _, calls, saved = generate_batch(asset_thumbnail, with_assets=False, monkeypatch=monkeypatch)
     assert all(data["thumbnail_subject_source"] == "video" and data["thumbnail_subject_reason"] for data in saved)
     assert all("video_face" in call and "character_asset_path" not in call for call in calls)
+    assert all(call["frame_time"] == 18 and call["source_frame_path"].name == "frame_01.jpg" for call in calls)
+    assert all(data["thumbnail_frame_candidate_id"] == "frame_01"
+               and data["thumbnail_frame_selection_source"] == "content_proposal" for data in saved)
+    for data in saved:
+        choice = data["choiceHistory"][-1]
+        assert choice["selectedIds"] == ["frame_01"]
+        assert choice["values"]["thumbnailFrameSeconds"] == 8
+        assert "文言生成が推薦した場面" in choice["reason"]
 
 
 def test_state_polling_does_not_wait_for_scan_lock(client, monkeypatch):  # noqa: F811

@@ -17,6 +17,7 @@ def prepare_confirmed_thumbnail(db, paths, job, video, document, clip, *, extrac
     else:
         frames = (extractor or extract_thumbnail_candidates)(
             paths.resolve_stored_file(video.stored_path), clip_start=clip.start, clip_end=clip.end, directory=directory,
+            preferred_second=clip.thumbnail_frame_seconds,
         )
         write_json_atomic(manifest, frames)
     metadata = {"thumbnail_frame_candidates": frames, "thumbnail_candidates_version": 1,

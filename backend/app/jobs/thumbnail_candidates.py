@@ -17,7 +17,7 @@ from app.db import SessionLocal
 from app.jobs.subtitle_review_preview import subtitle_review_document_lock
 from app.jobs.timeouts import media_timeout
 from app.models import ExportItem, Job, Video
-from app.render.anime_subject import detect_anime_face
+from app.render.thumbnail_face import detect_thumbnail_face
 from app.render.render_thumbnail import extract_thumbnail_frame
 from app.render.video_subject_layout import video_subject_layout
 from app.storage.json_io import write_json_atomic
@@ -102,7 +102,7 @@ def sequential_clip_frames(video: Path, start: float, end: float, size: tuple[in
                     process.wait()
 
 
-def evaluate_thumbnail_frame(image, second, original_size, *, detector=detect_anime_face):
+def evaluate_thumbnail_frame(image, second, original_size, *, detector=detect_thumbnail_face):
     face = detector(image)
     if face is None:
         return None
@@ -139,7 +139,7 @@ def thin_thumbnail_candidates(pool):
 
 
 def extract_thumbnail_candidates(source, *, clip_start, clip_end, directory, scanner=sequential_clip_frames,
-                                 extractor=extract_thumbnail_frame, detector=detect_anime_face):
+                                 extractor=extract_thumbnail_frame, detector=detect_thumbnail_face, preferred_second=None):
     metadata = probe_metadata(source)
     if not metadata.width or not metadata.height or clip_end <= clip_start:
         raise ValueError("サムネ候補の動画範囲・解像度を確認できません。")
@@ -150,8 +150,24 @@ def extract_thumbnail_candidates(source, *, clip_start, clip_end, directory, sca
         if candidate:
             pool.append(candidate)
     directory.mkdir(parents=True, exist_ok=True)
+    preferred = None
+    if preferred_second is not None and 0 <= preferred_second < clip_end - clip_start:
+        # The existing text selector already proposes a content-relevant time.
+        # Keep that exact still if it passes the same face/layout/sharpness gates;
+        # a half-second scan grid or twelve similar poses must not lose it.
+        probe_path = directory / f".preferred-{uuid4().hex}.jpg"
+        try:
+            extractor(source, probe_path, clip_start + preferred_second)
+            with Image.open(probe_path) as frame:
+                preferred = evaluate_thumbnail_frame(frame, preferred_second, size, detector=detector)
+        finally:
+            probe_path.unlink(missing_ok=True)
+    selected = thin_thumbnail_candidates(pool)
+    if preferred is not None:
+        selected = [c for c in selected if abs(c.second - preferred.second) > .001][:MAX_CANDIDATES - 1]
+        selected = sorted([*selected, preferred], key=lambda c: (-c.score, c.second))
     saved = []
-    for candidate in thin_thumbnail_candidates(pool):
+    for candidate in selected:
         candidate_id = f"frame_{len(saved):02d}"
         frame_path = directory / f"{candidate_id}.jpg"
         extractor(source, frame_path, clip_start + candidate.second)
@@ -181,7 +197,8 @@ def ensure_thumbnail_candidates(export, source, output_dir, *, extractor=None):
             return payload.get("thumbnail_frame_candidates", [])
         start = float(payload.get("start", 0))
         candidates = (extractor or extract_thumbnail_candidates)(
-            source, clip_start=start, clip_end=float(payload.get("end", start + export.duration)), directory=directory)
+            source, clip_start=start, clip_end=float(payload.get("end", start + export.duration)), directory=directory,
+            preferred_second=payload.get("thumbnail_frame_seconds"))
         with subtitle_review_document_lock(directory):
             latest = read_export_metadata(export)
             write_export_metadata(export.metadata_path, {**latest, "thumbnail_candidates_version": 1,
@@ -197,6 +214,13 @@ def selected_frame(payload, *, candidate_id=None):
         return next((c for c in candidates if c["id"] == requested), None)
     second = float(payload.get("thumbnail_frame_seconds", -1))
     return next((c for c in candidates if abs(c["second"] - second) < .001), None)
+
+
+def recommended_thumbnail_frame(candidates, proposed_second):
+    """Retain the content selector's time only after the visual gates passed."""
+    if not candidates:
+        return None
+    return next((c for c in candidates if abs(c["second"] - proposed_second) < .001), candidates[0])
 
 
 def video_candidate_kwargs(payload, output_dir, export_id, *, candidate_id=None, mode="standard"):

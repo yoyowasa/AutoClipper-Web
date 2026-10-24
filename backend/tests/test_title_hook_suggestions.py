@@ -131,7 +131,7 @@ def _suggestion_result() -> TitleHookSuggestionResult:
 
 
 def test_short_prompt_requires_scroll_stop_package_ranking() -> None:
-    assert TITLE_HOOK_PROMPT_VERSION == "title_hook_suggestions_v11"
+    assert TITLE_HOOK_PROMPT_VERSION == "title_hook_suggestions_v12"
     assert "【ショート専用のタイトル・フック基準】" in SYSTEM_PROMPT
     assert "最初の0.3〜1秒" in SYSTEM_PROMPT
     assert "少なくとも6つの異なる切り口" in SYSTEM_PROMPT
@@ -1681,3 +1681,12 @@ def test_title_hook_api_codex_default_does_not_require_platform_key(
     assert response.json()["state"] == "queued"
     assert response.json()["provider"] == "codex"
     assert title_hook_api["queued"]
+
+
+def test_factual_hook_is_not_penalized_for_revealing_the_interesting_fact():
+    assert "具体的な発見を伝える案を" in SYSTEM_PROMPT
+    assert "数と単位・対象" in SYSTEM_PROMPT
+    assert "数字があるだけで優先せず" in SYSTEM_PROMPT
+    assert "発言を生かしてよい" in SYSTEM_PROMPT
+    assert "clipの中心となる作品・説明の軸との一致" in SYSTEM_PROMPT
+    assert "答えを先に全部見せるタイトル、過剰な煽りは弱い案" not in SYSTEM_PROMPT
