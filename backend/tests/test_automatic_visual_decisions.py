@@ -205,6 +205,16 @@ def test_legacy_job_font_size_remains_the_cap_without_a_style_object():
     assert clip.title_style.font_size == clip.hook_style.font_size == 95
 
 
+@pytest.mark.parametrize("kind", ["short", "normal"])
+def test_one_line_title_keeps_configured_size_without_reserving_an_unused_second_line(kind):
+    doc, clip, _, _, settings, video = visual_example(kind)
+    settings[f"{kind}TitleStyle"] = {"fontSize": 140}
+    settings[f"{kind}HookStyle"] = {"fontSize": 140}
+    clip.title = clip.hook_text = "科学"
+    decide(doc, clip, settings, video)
+    assert clip.title_style.font_size == clip.hook_style.font_size == 140
+
+
 def test_manual_framing_is_recorded_on_confirmation_request():
     from app.jobs.confirmed_clip_decisions import queue_clip_decisions
     from app.schemas import SubtitleReviewClipApplyRequest

@@ -22,13 +22,15 @@ def fitted_style(base, texts, layout, *, role, safe_top, safe_bottom, cap):
     """Use the renderer's width fitting and the same vertical bounding formula."""
     padding = base.outline_width + base.outer_outline_width + layout.shadow
     sizes = []
+    line_counts = []
     for text, max_lines in texts:
         fit = fit_overlay_text(text, output_width=layout.width, font_name=base.font_name,
                                font_size=cap, margin_x=0, outline_width=base.outline_width + base.outer_outline_width,
                                shadow=layout.shadow, alignment=5, x_percent=base.x_percent, max_lines=max_lines)
         sizes.append(fit.effective_font_size)
+        line_counts.append(max(1, len(fit.lines)))
     size = min(sizes, default=cap)
-    max_lines = max((count for _, count in texts), default=2)
+    max_lines = max(line_counts, default=2)
     size = min(size, int((safe_bottom - safe_top - 2 * padding) / (1.2 * max_lines)))
     size = max(12, min(220, size))
     half_height = max_lines * size * 1.2 / 2 + padding
