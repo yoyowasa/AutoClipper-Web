@@ -55,10 +55,10 @@ def test_confirmation_selects_readable_styles_and_records_emphasis(tmp_path, kin
     before = [s.text for s in doc.segments]
     decide(doc, clip, settings, video)
     assert [s.text for s in doc.segments] == before
-    assert clip.subtitle_style.font_size < 220
-    assert len(clip.subtitle_styles) == 1
+    assert clip.subtitle_style.font_size == (220 if kind == "short" else 65)
+    assert clip.subtitle_styles
     assert clip.subtitle_styles[0].start == transcripts[0].start
-    assert clip.subtitle_styles[0].style.font_size > clip.subtitle_style.font_size
+    assert all(s.style.font_size <= clip.subtitle_style.font_size for s in clip.subtitle_styles)
     gate = _automated_overlay_layout_check(doc, human_accepted_clip_ids=set(), human_evidence={})
     assert gate.outcome == "pass", gate.model_dump()
     path = tmp_path / "review.json"
@@ -155,7 +155,54 @@ def test_emphasis_does_not_select_a_line_hidden_behind_hook():
     doc, clip, _, _, settings, video = visual_example()
     doc.segments[0].end = clip.start + 2
     decide(doc, clip, settings, video)
-    assert clip.subtitle_styles[0].start == doc.segments[2].start
+    assert next(c for c in doc.choice_history if c.kind == "effects").selectedIds == [doc.segments[2].id]
+
+
+@pytest.mark.parametrize("size", [48, 96, 140])
+@pytest.mark.parametrize("kind", ["short", "normal"])
+def test_configured_size_is_kept_and_only_overflowing_rows_shrink(kind, size):
+    from app.render.subtitles_ass import resolve_clip_text_style
+    doc, clip, selection, transcripts, settings, video = visual_example(kind)
+    settings[f"{kind}SubtitleStyle"] = {"fontSize": size}
+    settings[f"{kind}TitleStyle"] = {"fontSize": 96}
+    settings[f"{kind}HookStyle"] = {"fontSize": 32}
+    clip.title, clip.hook_text = "科学", "発見"
+    for index, segment in enumerate(doc.segments):
+        segment.text = "科学" if index == 0 else "はい"
+        transcripts[index].text = segment.text
+    # A single long row must not lower the base or the short rows.
+    doc.segments[-1].text = transcripts[-1].text = "長い字幕" * 60
+    doc.segments[-1].single_line = transcripts[-1].single_line = True
+    decide(doc, clip, settings, video)
+    assert clip.subtitle_style.font_size == size
+    assert clip.title_style.font_size == 96
+    assert clip.hook_style.font_size == 32
+    by_range = {(s.start, s.end): s.style for s in clip.subtitle_styles}
+    first, last = doc.segments[0], doc.segments[-1]
+    assert by_range[(first.start, first.end)].font_size == size  # emphasis never enlarges
+    assert (last.start, last.end) not in by_range  # renderer fits this row independently
+    for segment in doc.segments[1:-1]:
+        assert (segment.start, segment.end) not in by_range
+    candidate = (apply_reviewed_clip_content(selection, doc).shorts or
+                 apply_reviewed_clip_content(selection, doc).normal_clips)[0]
+    layout = SubtitleLayout.short(settings) if kind == "short" else SubtitleLayout.normal(settings=settings)
+    assert resolve_clip_text_style(candidate.subtitle_style, layout, role="subtitle").font_size == size
+    fits = []
+    build_ass_document(candidate, transcripts, layout, text_fits=fits)
+    sizes = [f["effectiveFontSize"] for f in fits if f["role"] == "subtitle"]
+    assert sizes[:-1] and all(value == size for value in sizes[:-1])
+    assert sum(f["eventCount"] for f in fits if f["role"] == "subtitle" and f["effectiveFontSize"] == size) == 3
+    assert sizes[-1] < size
+
+
+def test_legacy_job_font_size_remains_the_cap_without_a_style_object():
+    doc, clip, _, _, settings, video = visual_example()
+    settings.pop("shortSubtitleStyle")
+    settings.update(short_font_size=105, short_title_font_size=95)
+    clip.title = clip.hook_text = "科学"
+    decide(doc, clip, settings, video)
+    assert clip.subtitle_style.font_size == 105
+    assert clip.title_style.font_size == clip.hook_style.font_size == 95
 
 
 def test_manual_framing_is_recorded_on_confirmation_request():

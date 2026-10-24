@@ -8,7 +8,7 @@ from app.render.render_short import SHORT_BANNER_HEIGHT
 from app.render.subtitles_ass import SubtitleLayout
 
 
-VISUAL_DECISION_POLICY = "confirmed-subtitle-visuals-v1"
+VISUAL_DECISION_POLICY = "confirmed-subtitle-visuals-v2"
 
 
 def decide_visuals(document, clip, *, settings, video, source, crop_resolver=None):

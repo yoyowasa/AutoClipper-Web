@@ -1,7 +1,7 @@
 """Select readable sizes/positions and sparse, transcript-grounded line emphasis.
 
-Fonts and colours come from the existing character/job style. Sizes and anchors
-are resolved from confirmed text, not treated as human-approved preset values.
+Fonts, colours and maximum sizes come from the existing character/job style.
+Only overflowing text is reduced; one long row never shrinks other rows.
 """
 
 import math
@@ -13,7 +13,6 @@ from app.overlay_text import fit_overlay_text
 from app.render.subtitles_ass import resolve_clip_text_style, split_subtitle_lines
 
 
-EMPHASIS_SIZE_SCALE = 1.12
 EMPHASIS_MAX_FRACTION = .2
 EMPHASIS_MIN_SPACING_SECONDS = 8
 TOPIC_WORDS = re.compile(r"[一-龯々]{2,}|[ァ-ヶー]{2,}|[a-zA-Z0-9]{2,}")
@@ -28,9 +27,7 @@ def fitted_style(base, texts, layout, *, role, safe_top, safe_bottom, cap):
                                font_size=cap, margin_x=0, outline_width=base.outline_width + base.outer_outline_width,
                                shadow=layout.shadow, alignment=5, x_percent=base.x_percent, max_lines=max_lines)
         sizes.append(fit.effective_font_size)
-    # Outlier lines still use the renderer's per-event fitting, without shrinking
-    # every other subtitle to the size of the longest line in the clip.
-    size = sorted(sizes)[max(0, math.ceil(len(sizes) * .1) - 1)] if sizes else cap
+    size = min(sizes, default=cap)
     max_lines = max((count for _, count in texts), default=2)
     size = min(size, int((safe_bottom - safe_top - 2 * padding) / (1.2 * max_lines)))
     size = max(12, min(220, size))
@@ -47,13 +44,11 @@ def fitted_style(base, texts, layout, *, role, safe_top, safe_bottom, cap):
 
 def choose_text_styles(clip, layout, *, events, top, bottom):
     manual = set(clip.manual_decision_fields)
-    # Default layout sizes are only upper bounds; the actual text determines fit.
-    defaults = type(layout).short() if clip.type == "short" else type(layout).normal(layout.width, layout.height)
     texts = {
         "title": [(clip.title, 2)], "hook": [(clip.hook_text, 2)],
-        "subtitle": [(split_subtitle_lines(e.text, max_chars_per_line=layout.max_chars_per_line,
-                                           max_lines=1 if e.single_line else min(2, layout.max_lines)),
-                      1 if e.single_line else min(2, layout.max_lines)) for e in events],
+        # Keep the configured base size. Individual rows are fitted below and
+        # by the ASS renderer, including rows not selected for emphasis.
+        "subtitle": [],
     }
     for role in texts:
         if f"{role}_style" in manual:
@@ -62,9 +57,8 @@ def choose_text_styles(clip, layout, *, events, top, bottom):
         low, high = (top, bottom) if role == "subtitle" else (0, top or layout.height * .25)
         if role == "hook":
             high = top or layout.height * .25
-        cap = defaults.font_size if role == "subtitle" else defaults.title_font_size
         setattr(clip, f"{role}_style", fitted_style(base, texts[role], layout, role=role,
-                                                  safe_top=low + 12, safe_bottom=high - 12, cap=cap))
+                                                  safe_top=low + 12, safe_bottom=high - 12, cap=base.font_size))
 
 
 def choose_emphasis(clip, segments, layout, *, top, bottom):
@@ -100,7 +94,7 @@ def choose_emphasis(clip, segments, layout, *, top, bottom):
         max_lines = 1 if segment.single_line else min(2, layout.max_lines)
         text = split_subtitle_lines(segment.text, max_chars_per_line=layout.max_chars_per_line, max_lines=max_lines)
         style = fitted_style(base, [(text, max_lines)], layout, role="subtitle", safe_top=top + 12,
-                             safe_bottom=bottom - 12, cap=round(base.font_size * EMPHASIS_SIZE_SCALE))
+                             safe_bottom=bottom - 12, cap=base.font_size)
         # Keep character colours; white text gets the yellow
         # emphasis colour, with the preset outline left intact.
         if style.primary_color.upper() == "#FFFFFF":
