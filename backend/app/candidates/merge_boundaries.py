@@ -1,3 +1,4 @@
+from app.render.short_crop_decision import ShortCropDecision
 from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 import hashlib
 import json
@@ -170,6 +171,7 @@ class Candidate(BaseModel):
     hook_style: ClipTextStyle | None = None
     subtitle_style: ClipTextStyle | None = None
     subtitle_styles: list[SubtitleStyleOverride] = Field(default_factory=list, max_length=1000)
+    automatic_crop: ShortCropDecision | None = None
     framing_offset_x: float = Field(default=0.0, ge=-100, le=100)
     framing_offset_y: float = Field(default=0.0, ge=-100, le=100)
     framing_zoom: float = Field(default=1.0, ge=1.0, le=3.0)

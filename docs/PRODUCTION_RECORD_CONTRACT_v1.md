@@ -166,3 +166,12 @@ dry-runは読み取り・形式検証だけを行い、ディレクトリも記�
 結果は`eligible`（作成・更新の対象数）、`written`、`skipped`、`targets`（ExportItemのID）、`errors`をJSONで返す。
 一部が失敗しても残りを処理し、errorsがあれば終了コード1。エラーにはIDと例外の種類だけを含める。
 実際の書き込みはストレージの変更ロック内で行い、既存ファイルの有無を取り直してから原子的に保存する。
+
+
+### 字幕確定後の自動画角・文字・強調（task-227）
+
+- `policyVersion=confirmed-subtitle-visuals-v1` の `applied` は、新規auto（`auto-subtitle-only-v2`）で、確定した字幕・採用文言から実際に決めた値。従来の描画結果を記録する `existing-render-decisions-v1` の `published` と区別する。
+- `framing` は既存の人物・話者・主対象の検出による画角と代替理由を記録する。検出した画角は字幕確認データに保存し、正式プレビューと完成動画で共用する。通常動画は元映像の画角を保つ。通常サムネの候補・人物枠の配置は既存の自動決定を継続する。
+- `text_style` の `titleStyle` / `hookStyle` / `subtitleStyle` は、プリセットのフォント・色を基に、文字の収まりと帯を考慮して決めたサイズ・位置。詳細編集の明示指定を残したものは `source=manual`。
+- `effects` の任意項目 `subtitleStyles` は `{start, end, style}` の配列。時刻は `timeBasis=source`（元動画秒）、styleは既存のClipTextStyle形式。候補にはセグメントID、時間、点数、採否と理由コードを保存し、字幕本文を複製しない。空配列は強調なし。動的ズーム・効果音等は未実装で、`additionalEffects=none` を維持する。
+- 既存のschemaVersion=1とchoiceHistoryの形式を維持する。旧記録の項目不足を推定して補わない。
