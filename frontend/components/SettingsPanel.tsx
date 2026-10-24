@@ -151,7 +151,7 @@ export function SettingsPanel({
   const exceptionOnlyAutomation = isExceptionOnlyAutomationMode(settings.automationMode);
   const automationDescription =
     settings.automationMode === "auto"
-      ? "範囲を自動選定し、字幕確認で止まります。clipごとの字幕確定後に文言・サムネを自動で決め、全clipの準備が整うと書き出します。"
+      ? "範囲を自動選定し、字幕確認で必ず止まります。clipごとの字幕確定後に文言・サムネを自動で決め、全clipの準備が整うと書き出します。"
       : settings.automationMode === "guarded"
         ? "段階運用です。自動判定できない項目または問題がある項目だけ確認します。"
         : settings.automationMode === "shadow"

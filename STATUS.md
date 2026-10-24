@@ -1245,7 +1245,7 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 確定字幕から生成→正式プレビュー→実品質gate→自動render enqueue、待機中の他clip・再編集／確定解除、生成失敗・再試行・worker強制終了、空字幕、手動指定、既存v1、文言・画像の再利用を隔離DBと偽生成器で検証。
 - 専用Next.js（13326）とテスト文書用HTTP（18026）で通常画面を操作。タイトル未入力でも字幕修正1回のapplyがsegmentsだけを送り、自動処理待ちへ移ること、確定解除で再編集に戻ること、詳細編集の既存欄が開くことを確認。実動画やCodexを使う受入ではなく、動画配信はfixtureに含めていない。
 - ローカルPython 3.11: `ruff check . ../launcher ../scripts`（lockの0.16.10）成功、`python -m pytest -q` は2209 passed / 2 skipped。最終追加・修正した新auto関連は16 passedで再確認。
-- frontend: `npm --workspace frontend run lint`／`typecheck`／`test`（39本）／`build` 成功。API一覧契約には確定解除のPOSTを明記し、既存窓口の比較を維持。PRのCI（Python 3.11／3.12／frontend）は提出後に確認する。
+- frontend: `npm --workspace frontend run lint`／`typecheck`／`test`（39本）／`build` 成功。API一覧契約には確定解除のPOSTを明記し、既存窓口の比較を維持。初回CIで設定説明の「字幕確認で必ず止まる」を保持するテストが失敗したため文言を修正し、frontend 39本を再確認。PRのCI（Python 3.11／3.12／frontend）は最新commitで確認する。
 
 ### 未確認・次の範囲
 
