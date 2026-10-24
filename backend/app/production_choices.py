@@ -25,14 +25,14 @@ VALUE_KEYS = frozenset({
     "bodyDurationSeconds", "completedDurationSeconds", "characterPresetName",
     "resolvedLayout", "settingSource", "cropX", "cropY", "cropSignalSource", "cropFallbackReason",
     "cropAttemptedStrategies", "renderedTextStyles", "additionalEffects",
-    "outputSize", "contentViewport",
+    "outputSize", "contentViewport", "subtitleStyles",
 })
 NESTED_KEYS = frozenset({
     "fontPreset", "fontName", "fontSize", "primaryColor", "outlineColor", "outlineWidth", "outerOutlineColor",
     "outerOutlineWidth", "shadow", "bold", "alignment", "marginX", "marginV", "xPercent", "yPercent", "positionMode",
     "positionOverride", "scale", "offsetX", "offsetY", "offset_x", "offset_y", "heading", "upper", "lower",
     "role", "source", "effectiveFontSize", "maxWidthPx", "fits", "overflowReason", "lineCount", "eventCount",
-    "width", "height", "y",
+    "width", "height", "y", "start", "end", "style",
 })
 
 

@@ -34,6 +34,7 @@ from app.posting_metadata import (
 )
 from app.render.render_short import SHORT_BANNER_HEIGHT
 from app.render.subtitles_ass import (
+    resolve_clip_text_style,
     SubtitleEvent,
     SubtitleLayout,
     split_subtitle_lines,
@@ -984,6 +985,7 @@ def _subtitle_events_for_review_clip(
         hook_duration_seconds=clip.hook_duration_seconds,
         hook_scene_start=clip.hook_scene_start,
         hook_scene_end=clip.hook_scene_end,
+        subtitle_styles=clip.subtitle_styles,
     )
     transcript_segments = [
         TranscriptSegment(
@@ -1079,7 +1081,7 @@ def _automated_overlay_layout_check(
                         max_chars_per_line=subtitle_layout.max_chars_per_line,
                         max_lines=max_lines,
                     ),
-                    clip.resolved_subtitle_style,
+                    resolve_clip_text_style(event.style, subtitle_layout, role="subtitle") if event.style else clip.resolved_subtitle_style,
                     top_content,
                     bottom_content,
                 )
@@ -1097,7 +1099,7 @@ def _automated_overlay_layout_check(
                 font_name=style.font_name,
                 font_size=style.font_size,
                 margin_x=style.margin_x,
-                outline_width=style.outline_width,
+                outline_width=style.outline_width + style.outer_outline_width,
                 shadow=style.shadow,
                 alignment=style.alignment,
                 x_percent=style.x_percent,
@@ -1108,7 +1110,7 @@ def _automated_overlay_layout_check(
                 alignment=style.alignment,
                 line_count=len(fit.lines),
                 font_size=fit.effective_font_size,
-                outline_width=style.outline_width,
+                outline_width=style.outline_width + style.outer_outline_width,
                 shadow=style.shadow,
                 output_height=height,
             )

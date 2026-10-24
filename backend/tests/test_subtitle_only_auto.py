@@ -25,11 +25,6 @@ def setup_auto(guarded_client, monkeypatch, tmp_path, **kwargs):
 @pytest.mark.parametrize("short", [True, False])
 def test_confirmed_subtitles_drive_per_clip_decisions(guarded_client, monkeypatch, tmp_path, short):
     data = setup_auto(guarded_client, monkeypatch, tmp_path, short=short)
-    if short:
-        with data.factory() as db:
-            job = db.get(Job, data.job_id)
-            job.settings_json = {**job.settings_json, "shortBottomBannerEnabled": False}
-            db.commit()
     assert data.run()[-1] == "awaiting_subtitle_review"
     review = load_subtitle_review(data.review_path)
     assert review.subtitle_only_auto and not data.calls
@@ -177,7 +172,7 @@ def test_quality_stop_identifies_clip_time_and_reason(guarded_client, monkeypatc
     data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
     data.run()
     clip = load_subtitle_review(data.review_path).clips[0]
-    confirm(data, clip)
+    confirm(data, clip, subtitleStyle={"fontSize": 200, "yPercent": 95, "positionMode": "explicit"})
     assert decide(data) == "ready"
     from app.jobs.runner import run_subtitle_review_preview
     run_subtitle_review_preview(*data.previews[0], paths=data.storage, session_factory=data.factory, dependencies=data.deps)
