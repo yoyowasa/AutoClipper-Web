@@ -53,11 +53,13 @@ def guide_context(db, paths, job_id, clip_id, layout=None):
     key = sha256(json.dumps([
         str(source), stat.st_size, stat.st_mtime_ns, candidate.start, candidate.end,
         layout, content_height, top, [(w.start, w.end) for w in windows],
+        *([candidate.automatic_crop.model_dump(mode="json")] if candidate.automatic_crop else []),
     ]).encode()).hexdigest()
     return {
         "key": key, "source": source, "start": candidate.start, "end": candidate.end,
         "layout": layout, "width": video.width, "height": video.height,
         "contentHeight": content_height, "contentY": top, "windows": windows,
+        "automatic_crop": candidate.automatic_crop,
     }
 
 
@@ -122,10 +124,15 @@ def run_short_framing_guide(
             ctx = guide_context(db, storage, job_id, clip_id, layout)
             if ctx["key"] != state["key"]:
                 raise ValueError("context changed")
-            plan, faces = resolver(
-                ctx["source"], ctx["start"], ctx["end"], layout=ctx["layout"],
-                width=ctx["width"], height=ctx["height"], target_height=ctx["contentHeight"], dialogue_windows=ctx["windows"],
-            )
+            decision = ctx["automatic_crop"]
+            if decision and decision.matches(start=ctx["start"], end=ctx["end"], width=ctx["width"], height=ctx["height"],
+                                             target_height=ctx["contentHeight"], layout=ctx["layout"]):
+                plan, faces = decision.plan, decision.faces
+            else:
+                plan, faces = resolver(
+                    ctx["source"], ctx["start"], ctx["end"], layout=ctx["layout"],
+                    width=ctx["width"], height=ctx["height"], target_height=ctx["contentHeight"], dialogue_windows=ctx["windows"],
+                )
             strategy = plan.strategy_order[0]
             center = {
                 "face_tracking_crop": plan.face_center or best_face_center(faces),

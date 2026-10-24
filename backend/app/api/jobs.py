@@ -2608,6 +2608,8 @@ def update_subtitle_review_clip_framing(
             target_clip = next((item for item in document.clips if item.id == clip_id), None)
             if target_clip is None:
                 raise KeyError(clip_id)
+            if document.subtitle_only_auto:
+                target_clip.manual_decision_fields = sorted(set(target_clip.manual_decision_fields) | {"framing"})
             if target_clip.preview_framing is None:
                 target_clip.preview_framing = PreviewFraming(
                     framing_offset_x=target_clip.framing_offset_x,

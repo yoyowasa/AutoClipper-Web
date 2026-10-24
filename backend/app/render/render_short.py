@@ -1,4 +1,5 @@
 from __future__ import annotations
+from app.render.short_crop_decision import ShortCropDecision
 from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 
 import json
@@ -872,6 +873,7 @@ def render_short_clip(
     framing_offset_y: float = 0.0,
     framing_zoom: float = 1.0,
     live_output_path: str | Path | None = None,
+    automatic_crop: ShortCropDecision | None = None,
 ) -> ShortRenderResult:
     for label, banner_path in (
         ("top", top_banner_path),
@@ -890,12 +892,17 @@ def render_short_clip(
         top_banner_enabled=top_banner_path is not None,
         bottom_banner_enabled=bottom_banner_path is not None,
     )
-    crop_plan, detections = resolve_short_crop_plan(
-        input_path, start, end, layout=layout, width=width, height=height,
-        target_height=content_height, dialogue_windows=dialogue_windows,
-        face_detector=face_detector, speaker_detector=speaker_detector,
-        person_detector=person_detector, subject_detector=subject_detector,
-    )
+    if automatic_crop is not None and automatic_crop.matches(
+        start=start, end=end, width=width, height=height, target_height=content_height, layout=layout,
+    ):
+        crop_plan, detections = automatic_crop.plan, automatic_crop.faces
+    else:
+        crop_plan, detections = resolve_short_crop_plan(
+            input_path, start, end, layout=layout, width=width, height=height,
+            target_height=content_height, dialogue_windows=dialogue_windows,
+            face_detector=face_detector, speaker_detector=speaker_detector,
+            person_detector=person_detector, subject_detector=subject_detector,
+        )
     face_center = crop_plan.face_center or best_face_center(detections)
     speaker_center = crop_plan.speaker_center
     person_center = crop_plan.person_center
@@ -1321,6 +1328,8 @@ def render_selected_short_candidates(
                     transcript_segments,
                 ),
             }
+            if candidate.automatic_crop is not None:
+                render_kwargs["automatic_crop"] = candidate.automatic_crop
             if short_top_banner_enabled:
                 render_kwargs["top_banner_path"] = resolve_banner_path(
                     job.settings_json, "top", DEFAULT_SHORT_TOP_BANNER_PATH, banner_storage_paths

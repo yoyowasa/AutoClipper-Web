@@ -285,7 +285,9 @@ def build_subtitle_review_preview_spec(
                 "height": source_height,
             },
             "candidateIndex": candidate_index,
-            "clip": resolved_candidate.model_dump(mode="json", exclude={"short_layout"}),
+            "clip": resolved_candidate.model_dump(
+                mode="json", exclude={"short_layout", *({"automatic_crop"} if resolved_candidate.automatic_crop is None else set())},
+            ),
             "segments": relevant_segments,
             "settings": render_settings,
             "overlayTitleExpected": title_expected,
@@ -345,6 +347,7 @@ def build_live_subtitle_review_preview_spec(
                 "framingOffsetX": clip.get("framing_offset_x"),
                 "framingOffsetY": clip.get("framing_offset_y"),
                 "framingZoom": clip.get("framing_zoom"),
+                **({"automaticCrop": clip["automatic_crop"]} if clip.get("automatic_crop") else {}),
             },
             "segments": visual_segments,
             "settings": visual_settings,
@@ -592,6 +595,8 @@ def render_exact_subtitle_review_preview(
                     resolved_segments,
                 ),
             }
+            if resolved_candidate.automatic_crop is not None:
+                short_kwargs["automatic_crop"] = resolved_candidate.automatic_crop
             if top_banner_enabled:
                 short_kwargs["top_banner_path"] = resolve_banner_path(settings, "top", DEFAULT_SHORT_TOP_BANNER_PATH)
             if bottom_banner_enabled:
