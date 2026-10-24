@@ -32,6 +32,11 @@ from app.scoring.thumbnail_copy import ThumbnailCopyResult
 def prepare(guarded_client, monkeypatch, tmp_path, *, short=False, selection="pass", failure=False):
     client, storage, factory = guarded_client
     job_id = _create_review_job(client, automation_mode="auto", legacy_auto=False)
+    # Saved v1 jobs retain their original contract.
+    with factory() as db:
+        job = db.get(Job, job_id)
+        job.settings_json = {**job.settings_json, AUTOMATION_POLICY_SETTING: HUMAN_SUBTITLE_REVIEW_POLICY}
+        db.commit()
     if short:
         with factory() as db:
             job = db.get(Job, job_id)

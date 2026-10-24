@@ -119,6 +119,7 @@ export type ClipSettings = {
   maxBoundaryExpansionSeconds: number;
   allowBoundaryExpansionBeyondMaxDuration: boolean;
   burnSubtitles: boolean;
+  pauseAfterSelection?: boolean;
   requireClipPlanReview: boolean;
   requireSubtitleReview: boolean;
   maxCharsPerLineShort: number;
@@ -469,6 +470,9 @@ export type ResolvedClipTextStyle = {
 export type SubtitleStyleOverride = { start: number; end: number; style: ClipTextStyle };
 
 export type SubtitleReviewClip = {
+  automaticDecisionState?: "idle" | "queued" | "generating" | "ready" | "failed";
+  automaticDecisionError?: string | null;
+  automaticDecisionRevision?: string | null;
   subtitleStyles?: SubtitleStyleOverride[];
   id: string;
   type: ExportType;
@@ -536,6 +540,8 @@ export type SubtitleReviewClip = {
 };
 
 export type SubtitleReviewDocument = {
+  subtitleOnlyAuto?: boolean;
+  automaticStopReasons?: string[];
   previewGeneration?: string | null;
   hasSavedReviewChanges?: boolean | null;
   returnToClipPlanAllowed?: boolean;

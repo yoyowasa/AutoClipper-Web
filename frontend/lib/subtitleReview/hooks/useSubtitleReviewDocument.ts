@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { clipSegmentDrafts, clipDirtySegmentIds } from "../sharedSegments";
 import { subtitlePreviewEvents } from "../../subtitlePreview";
 import { subtitleInsertionConflict } from "../../subtitlePauseInsert";
@@ -109,9 +109,17 @@ export function useSubtitleReviewDocument() {
     [review]
   );
   const visibleClips = activeClipType === "normal" ? normalClips : shortClips;
+  useEffect(() => {
+    if (review?.subtitleOnlyAuto && review.state !== "awaiting_review") {
+      state.router.push(`/jobs/${jobId}`);
+    }
+  }, [review?.subtitleOnlyAuto, review?.state, state.router, jobId]);
+
   const hasPendingPreviews = Boolean(
+    (review?.subtitleOnlyAuto && review.state === "awaiting_review" && review.confirmedClipCount > 0) ||
     review?.clips.some(
       (clip) =>
+        clip.automaticDecisionState === "queued" || clip.automaticDecisionState === "generating" ||
         clip.previewState === "queued" ||
         clip.previewState === "rendering" ||
         (review.state === "awaiting_review" && !clip.livePreviewVideoUrl && clip.previewState !== "failed")
@@ -132,7 +140,7 @@ export function useSubtitleReviewDocument() {
     isReopeningBoundaries || isReturningToClipPlan;
   const isEditable =
     review?.state === "awaiting_review" &&
-    !hasReviewMutationInFlight;
+    !hasReviewMutationInFlight && !(review.subtitleOnlyAuto && selectedClip?.confirmed);
   const segmentsById = useMemo(
     () => new Map(review?.segments.map((segment) => [segment.id, segment]) ?? []),
     [review]
@@ -539,6 +547,7 @@ export function useSubtitleReviewDocument() {
     get retrySelectedPreview() { return retrySelectedPreview; },
     get saveHookScene() { return saveHookScene; },
     get saveSubtitleStructure() { return saveSubtitleStructure; },
+    get reopenConfirmedClip() { return reopenConfirmedClip; },
     get confirmSelectedClip() { return confirmSelectedClip; },
     get startRendering() { return startRendering; },
     get returnToBoundaryEditor() { return returnToBoundaryEditor; },
@@ -572,6 +581,6 @@ export function useSubtitleReviewDocument() {
     saveHookScene
   } = useClipContentDraft(context);
   const { generateTitleHookSuggestions, applyTitleHookSuggestion, copyPostField, clearSelectedHook, previewTitleHookSuggestion } = useTitleHookSuggestions(context);
-  const { confirmSelectedClip, startRendering, returnToBoundaryEditor, returnToClipPlan } = useReviewConfirmation(context);
+  const { reopenConfirmedClip, confirmSelectedClip, startRendering, returnToBoundaryEditor, returnToClipPlan } = useReviewConfirmation(context);
   return context;
 }

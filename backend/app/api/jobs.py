@@ -35,7 +35,8 @@ from app.storage.locking import storage_mutation_lock
 from app.ids import make_id
 from app.jobs.automation import (
     AUTOMATION_POLICY_SETTING,
-    HUMAN_SUBTITLE_REVIEW_POLICY,
+    SUBTITLE_ONLY_AUTO_POLICY,
+    is_subtitle_only_auto,
     automation_manifest_path,
     load_automation_manifest,
     requires_human_subtitle_review,
@@ -68,6 +69,7 @@ from app.jobs.queue import (
     get_enqueue_retry_job,
     get_enqueue_subtitle_review_hook_scene_update,
     get_enqueue_subtitle_review_preview,
+    get_enqueue_confirmed_clip_decisions,
     get_enqueue_title_hook_suggestions,
 )
 from app.jobs.status import CURRENT_STEP_MAP, PROGRESS_MAP
@@ -1579,7 +1581,7 @@ def create_job(
     # This policy is assigned at creation, never inferred while loading/retrying old jobs.
     new_settings.pop(AUTOMATION_POLICY_SETTING, None)
     if settings.automation_mode == "auto" and settings.workflow_mode != "manual":
-        new_settings[AUTOMATION_POLICY_SETTING] = HUMAN_SUBTITLE_REVIEW_POLICY
+        new_settings[AUTOMATION_POLICY_SETTING] = SUBTITLE_ONLY_AUTO_POLICY
     job = Job(
         id=make_id("job"),
         video_id=video.id,
@@ -1869,6 +1871,8 @@ def get_subtitle_review(
             document=document,
             output_dir=output_dir,
         )
+    from app.jobs.automatic_review_status import automatic_stop_reasons
+    document.automatic_stop_reasons = automatic_stop_reasons(document, output_dir)
     return document
 
 
@@ -2450,7 +2454,8 @@ def retry_subtitle_review_preview(
         clip.preview_spec_hash = current_hash
         clip.preview_video_url = None
         clip.preview_error = None
-        clip.confirmed = False
+        if not (document.subtitle_only_auto and clip.automatic_decision_state == "ready"):
+            clip.confirmed = False
         document.confirmed_clip_count = sum(1 for item in document.clips if item.confirmed)
         queued_previews = [(clip_id, current_hash)]
         _write_subtitle_review_unlocked(document, paths)
@@ -2647,6 +2652,29 @@ def update_subtitle_review_clip_framing(
     return document
 
 
+@router.post("/{job_id}/subtitle-review/clips/{clip_id}/unconfirm", response_model=SubtitleReviewDocument)
+def unconfirm_automatic_review_clip(
+    job_id: str, clip_id: str, db: Session = Depends(get_db), paths: StoragePaths = Depends(get_storage_paths),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    with subtitle_review_document_lock(paths.job_outputs(job_id)):
+        db.refresh(job)
+        if not is_subtitle_only_auto(job.settings_json or {}) or job.status != "awaiting_subtitle_review":
+            raise HTTPException(409, "字幕を編集できる状態ではありません。書き出し中は完了後に再編集してください。")
+        document = _get_subtitle_review_or_404(job_id, paths)
+        if document.state != "awaiting_review":
+            raise HTTPException(409, "書き出しが始まったため、字幕の確定を解除できません。")
+        clip = next((c for c in document.clips if c.id == clip_id), None)
+        if clip is None:
+            raise HTTPException(404, "対象のclipがありません。")
+        clip.automatic_decision_revision = None
+        clip.automatic_decision_state = "idle"
+        clip.automatic_decision_error = None
+        document = _defer_subtitle_review_previews_unlocked(document, {clip_id})
+        _write_subtitle_review_unlocked(document, paths)
+        return document
+
+
 @router.post(
     "/{job_id}/subtitle-review/clips/{clip_id}/apply",
     response_model=SubtitleReviewDocument,
@@ -2659,6 +2687,7 @@ def apply_subtitle_review_clip(
     paths: StoragePaths = Depends(get_storage_paths),
     enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
     enqueue_render: RenderEnqueue = Depends(get_enqueue_render_job),
+    enqueue_decisions: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_confirmed_clip_decisions),
 ) -> SubtitleReviewDocument:
     """Persist one clip's drafts and accept it without waiting for exact preview rendering."""
     job = _get_job_or_404(db, job_id)
@@ -2673,6 +2702,8 @@ def apply_subtitle_review_clip(
             status_code=status.HTTP_409_CONFLICT,
             detail="subtitle review is not editable",
         )
+    subtitle_only = is_subtitle_only_auto(job.settings_json or {})
+    decision_revision = None
     output_dir = paths.job_outputs(job_id)
     with subtitle_review_document_lock(output_dir):
         db.refresh(job)
@@ -2702,6 +2733,23 @@ def apply_subtitle_review_clip(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="subtitle segment does not belong to the selected clip",
             )
+
+        if subtitle_only and not clip.segment_ids:
+            raise HTTPException(422, f"{clip.id}・元動画{clip.start:.1f}秒の字幕がありません。字幕を追加してください。")
+        if subtitle_only:
+            updates = {row.segment_id: row.text for row in request.segments}
+            empty = next((row for row in document.segments if row.id in allowed_segment_ids
+                          and not updates.get(row.id, row.text).strip()), None)
+            if empty is not None:
+                raise HTTPException(422, f"{clip.id}・元動画{empty.start:.1f}秒の字幕が空です。文字を入力するか字幕行を削除してください。")
+            unchanged = request.model_fields_set <= {"segments"} and all(
+                updates.get(row.id, row.text) == row.text for row in document.segments if row.id in allowed_segment_ids
+            )
+            if unchanged and clip.confirmed and clip.automatic_decision_state in {"queued", "generating"}:
+                return document
+
+        if not subtitle_only and "title" not in request.model_fields_set:
+            raise HTTPException(422, "タイトルを指定してください。")
 
         from app.jobs.subtitle_review_edits import editable_clip_ids
         editable = editable_clip_ids(document, clip_id)
@@ -2930,16 +2978,21 @@ def apply_subtitle_review_clip(
                         "post_metadata_revision_hash": None,
                     }
                 )
+            def supplied_content(name):
+                if subtitle_only and name not in request.model_fields_set:
+                    return getattr(clip, name)
+                return getattr(request, name)
+
             document = update_review_clip_content(
                 document,
                 clip_id,
-                title=request.title,
-                hook_text=request.hook_text,
-                hook_duration_seconds=request.hook_duration_seconds,
-                thumbnail_kicker=request.thumbnail_kicker,
-                thumbnail_line1=request.thumbnail_line1,
-                thumbnail_line2=request.thumbnail_line2,
-                thumbnail_frame_seconds=request.thumbnail_frame_seconds,
+                title=supplied_content("title"),
+                hook_text=supplied_content("hook_text"),
+                hook_duration_seconds=supplied_content("hook_duration_seconds"),
+                thumbnail_kicker=supplied_content("thumbnail_kicker"),
+                thumbnail_line1=supplied_content("thumbnail_line1"),
+                thumbnail_line2=supplied_content("thumbnail_line2"),
+                thumbnail_frame_seconds=supplied_content("thumbnail_frame_seconds"),
                 **style_updates,
             )
             if {
@@ -2995,14 +3048,21 @@ def apply_subtitle_review_clip(
         from app.production_choice_capture import capture_document
         capture_document(document, subtitle_review_output_path(output_dir), kind="review", source="manual", clip_ids={clip_id})
         document = _defer_subtitle_review_previews_unlocked(document, affected_clip_ids - {clip_id})
-        document, queued_previews = _refresh_subtitle_review_previews_unlocked(
-            job=job,
-            video=video,
-            document=document,
-            paths=paths,
-            clip_ids={clip_id},
-            generate_exact=True,
-        )
+        if subtitle_only:
+            from app.jobs.confirmed_clip_decisions import queue_clip_decisions
+            decision_revision = queue_clip_decisions(document, clip, request)
+            document, queued_previews, _ = refresh_subtitle_review_preview_states(
+                job=job, video=video, document=document, paths=paths, clip_ids={clip_id},
+            )
+        else:
+            document, queued_previews = _refresh_subtitle_review_previews_unlocked(
+                job=job,
+                video=video,
+                document=document,
+                paths=paths,
+                clip_ids={clip_id},
+                generate_exact=True,
+            )
         document = confirm_review_clip(document, clip_id)
         document.has_saved_review_changes = True
         _write_subtitle_review_unlocked(document, paths, choice_source="manual")
@@ -3013,6 +3073,16 @@ def apply_subtitle_review_clip(
             paths=paths,
         )
 
+    if decision_revision:
+        try:
+            enqueue_decisions(job.id, clip_id, decision_revision)
+        except Exception:
+            from app.jobs.confirmed_clip_decisions import record_decision_failure
+            record_decision_failure(
+                paths, job.id, clip_id, decision_revision,
+                "自動決定をキューに登録できませんでした。再度確定してください。",
+            )
+            document = _get_subtitle_review_or_404(job.id, paths)
     document = _enqueue_subtitle_review_previews(
         job_id=job.id,
         document=document,
@@ -3143,6 +3213,10 @@ def finalize_subtitle_review(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="subtitle review is not awaiting finalization",
             )
+        if is_subtitle_only_auto(job.settings_json or {}) and not all(
+            c.confirmed and c.automatic_decision_state == "ready" for c in document.clips
+        ):
+            raise HTTPException(409, "字幕確定後の自動決定が完了していません。対象clipの停止理由を確認してください。")
         document, queued_previews = _refresh_subtitle_review_previews_unlocked(
             job=job,
             video=video,

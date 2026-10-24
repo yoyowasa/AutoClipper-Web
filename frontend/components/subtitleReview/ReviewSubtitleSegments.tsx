@@ -9,7 +9,7 @@ import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/c
 import { ReviewClipActions } from "./ReviewActions";
 import { longEditedSubtitleWarning } from "../../lib/subtitleTiming";
 
-export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewViewContext }) {
+export function ReviewSubtitleSegments({ context, showStyleControls = true }: { context: SubtitleReviewViewContext; showStyleControls?: boolean }) {
   const {
     selectedClip,
     review,
@@ -245,7 +245,7 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
                                 下の保存でまとめて反映
                               </span>
                             ) : null}
-                            <button type="button" disabled={!isEditable}
+                            {showStyleControls && <button type="button" disabled={!isEditable}
                               className="border border-sky-600 px-2 py-1 text-xs text-sky-800"
                               aria-pressed={styledSegmentId === segment.id}
                               onClick={() => {
@@ -256,7 +256,7 @@ export function ReviewSubtitleSegments({ context }: { context: SubtitleReviewVie
                               }}>
                               {selectedClipContentDraft?.subtitleStyles.some((s) => s.start === segment.start && s.end === segment.end)
                                 ? "個別書式を編集" : "この字幕の書式"}
-                            </button>
+                            </button>}
                           </div>
                         </div>
                       );

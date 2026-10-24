@@ -1219,3 +1219,36 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: lockのRuff 0.16.10をbackendから `ruff check . ../launcher ../scripts` で成功。Windows/Python 3.11の全件pytestは2193 passed・2 skipped（7件の既存非推奨警告）。全件開始後に追加した制作記録ケースを含む保護16ケースも別途再実行して成功。frontend test 38ファイル、lint、typecheck、build成功。追加の保護テスト16ケースで、各編集経路、明示編集、未確定共有、確定済みだけの無操作、正式プレビューhashとASS不変、再試行/尺調整、制作記録のclip別inputRevisionを確認。既存テストの共有編集条件は未確定clipへ変更し、旧データの読み込みも維持した。
 - 隔離画面: 専用DB/storage・backend 18222/frontend 13222で、未確定ショート2本の共有下書き、一括修正の対象表示、保存前の他clip確認、保存後の通常clipの元字幕と「確認済み」維持、共有先ショートへの反映を確認。動画・Codex/RQ実処理は試験用の代替で、実動画の焼き込み確認ではない。正式字幕の生成はAPI/ASSテストで検証した。
 - 未確認/境界: 実ジョブでの人による最終受入・実動画MP4の見た目は未確認。稼働DB/既存ジョブは変更せず、Docker反映もしない。PRのCI（Python 3.11/3.12・frontend）を確認し、未マージでレビュー待ちにする。中継再起動は不要。
+
+
+## 2026-10-24 task-226: 新規autoをclipごとの字幕確定から自動書き出しへつなぐ（PR1）
+
+### 目的・前提
+
+- 人が字幕以外の選択も行っていた従来の受入を、自動化成功とはしない。合意した2PRのうち、まず通常操作を字幕修正・確定だけにする流れを実装。
+- PR #160（確定済みclipのcopy-on-write保護）をCI 3.11／3.12／frontend成功確認後、merge commit a939be78f99a93d6b09a3564d2e268d0348386a8でmainへ取り込み、そこから本ブランチを作成。
+- 主フォルダの未コミットのtask-225受入記録2ファイルは保持。本作業は専用worktreeで行い、混ぜていない。
+
+### 変更
+
+- `automation.py`／`schemas.py`／`api/jobs.py`／`runner.py`: 新規autoのみ `auto-subtitle-only-v2` を記録。通常の選定結果はそのまま字幕確認へ。任意の `pauseAfterSelection` で切り抜き確認に停止可能。既存の品質不足・本数不足・選定失敗時の停止は維持。v1／旧データ／手動の流れは変更しない。
+- `confirmed_clip_decisions.py`／`queue.py`／`worker.py`: 字幕の確定ごとに既存の切り抜きRQへ投入し、確定字幕からタイトル・フック・投稿文を生成・推薦適用。通常サムネの文言と画像候補／予備素材もこの段階で準備し、正式プレビューを1回投入。Codex待ち中は文書ロックを保持せず、他clipの編集を妨げない。上限時間は既存のclip別media timeout + 1800秒。新しいキューは作らない。
+- `automatic_thumbnail_copy.py`／`confirmed_thumbnail.py`／`thumbnail_character_assets.py`／`thumbnails.py`／`storage/paths.py`: 既存の生成・検証・候補抽出・素材選択を再利用。確定入力の文言キャッシュと画像候補は書き出しで再利用し、ExportItemの仮作成は行わない。完成画像の合成は従来の書き出し処理で行う。
+- `subtitle_review.py`／`api/jobs.py`: clipごとの生成状態・世代・任意の手動指定を保存。確定前に空字幕を422で拒否（clipと元動画時刻を表示）。明示した詳細編集は残す。確定解除の入口で世代を無効化し、再編集後に古い生成結果を反映しない。正式プレビューだけの再試行では字幕の確定を維持する。
+- `runner.py`／`quality_gate.py`／`automatic_review_status.py`: 全clipの字幕確定と自動決定・正式プレビュー・品質検証が揃うと自動で書き出す。字幕確定を文言／文字の収まり／画角の確認済みとみなす旧autoの扱いを新v2では使わず、実際の生成結果を検証する。停止理由・対象clip・時刻を取得結果と画面に表示。
+- frontendのSettingsPanel、subtitleReviewの画面・hooks・API型: 新autoの通常画面は字幕編集と確定に絞る。タイトル・フック・投稿文・文字書式等は任意の詳細編集へ。全体のレンダリングボタンは新autoでは不要。確定済みclipの変更は先に確定解除し、自動書き出しとの競合を避ける。旧モードの編集画面を維持。
+- `production_choice_capture.py`: 確定字幕から決めたこととv2の版を既存の選択履歴へ記録。選択・記録の仕組みや有料APIを新設しない。
+- `docs/REMAINING_WORK_1_TASK_PLAN.md`: 合意した進め直しと2PR、受入条件を追記。到達仕様§3と統合構想は変更しない。
+
+### 検証
+
+- 確定字幕から生成→正式プレビュー→実品質gate→自動render enqueue、待機中の他clip・再編集／確定解除、生成失敗・再試行・worker強制終了、空字幕、手動指定、既存v1、文言・画像の再利用を隔離DBと偽生成器で検証。
+- 専用Next.js（13326）とテスト文書用HTTP（18026）で通常画面を操作。タイトル未入力でも字幕修正1回のapplyがsegmentsだけを送り、自動処理待ちへ移ること、確定解除で再編集に戻ること、詳細編集の既存欄が開くことを確認。実動画やCodexを使う受入ではなく、動画配信はfixtureに含めていない。
+- ローカルPython 3.11: `ruff check . ../launcher ../scripts`（lockの0.16.10）成功、`python -m pytest -q` は2209 passed / 2 skipped。最終追加・修正した新auto関連は16 passedで再確認。
+- frontend: `npm --workspace frontend run lint`／`typecheck`／`test`（39本）／`build` 成功。API一覧契約には確定解除のPOSTを明記し、既存窓口の比較を維持。初回CIで設定説明の「字幕確認で必ず止まる」を保持するテストが失敗したため文言を修正し、frontend 39本を再確認。PRのCI（Python 3.11／3.12／frontend）は最新commitで確認する。
+
+### 未確認・次の範囲
+
+- 実Codex・実動画の新規auto、実際の生成品質、操作回数の受入は未実行。モック成功を実動画の受入成功とは扱わない。
+- 画角・文字サイズ・行ごとの強調の自動判断はPR2で行う。動的ズーム・効果音は未実装。現状の設定で文字がはみ出す場合は品質検証で停止し、黙って通さない。
+- launcher・Codexプロンプト／契約は変更なし、中継再起動は不要。新RQ関数のため反映時にはbackend／worker／frontendを揃える必要があるが、今回Dockerの再build・再起動・稼働データ変更は行っていない。実装PRはCI成功後、未マージでレビュー待ち。

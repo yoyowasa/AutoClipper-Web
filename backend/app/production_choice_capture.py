@@ -120,12 +120,21 @@ def capture_document(document, path: Path | None, *, kind: str, source="unrecord
 
 @best_effort_capture
 def capture_auto_review_outcome(document, clip_id: str, *, error_type: str | None = None, input_revision=None) -> None:
-    from app.jobs.automation import HUMAN_SUBTITLE_REVIEW_POLICY
+    from app.jobs.automation import HUMAN_SUBTITLE_REVIEW_POLICY, SUBTITLE_ONLY_AUTO_POLICY
     clip = next(item for item in document.clips if item.id == clip_id)
+    manual_override = document.subtitle_only_auto and bool(set(clip.manual_decision_fields) & {
+        "title", "publication_title", "hook_text", "hook_scene_start", "hook_scene_end",
+        "youtube_description", "youtube_tags", "youtube_hashtags", "selected_title_id", "post_metadata_source",
+    })
     append_choice(
-        document.choice_history, kind="title_hook", clipId=clip_id, stage="observed", source="automatic",
-        policyVersion=HUMAN_SUBTITLE_REVIEW_POLICY, inputRevision=input_revision,
-        reason=f"automatic_copy_failed:{error_type}" if error_type else "human_subtitle_review_required",
+        document.choice_history, kind="title_hook", clipId=clip_id, stage="observed",
+        source="manual" if manual_override else "automatic",
+        policyVersion=SUBTITLE_ONLY_AUTO_POLICY if document.subtitle_only_auto else HUMAN_SUBTITLE_REVIEW_POLICY,
+        inputRevision=input_revision,
+        reason=f"automatic_copy_failed:{error_type}" if error_type else (
+            "explicit_manual_override_preserved" if manual_override else
+            "confirmed_subtitles_used_for_automatic_decision" if document.subtitle_only_auto else "human_subtitle_review_required"
+        ),
         selectedIds=[clip.selected_title_id] if not error_type and clip.selected_title_id else [],
         values=choice_values(clip.model_dump(by_alias=True, mode="json")) if not error_type else {},
     )

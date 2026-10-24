@@ -91,6 +91,17 @@ def choose_character_asset(
     *, selector: Any = None, emotion: str | None = None, asset_id: str | None = None,
     recent_asset_ids: list[str] | None = None,
 ) -> SelectedCharacterAsset | None:
+    return choose_character_asset_for_clip(
+        db, paths, job, clip_id=export.id, title=export.title,
+        subtitles=nearby_thumbnail_subtitles(paths, export, metadata), metadata=metadata,
+        selector=selector, emotion=emotion, asset_id=asset_id, recent_asset_ids=recent_asset_ids,
+    )
+
+
+def choose_character_asset_for_clip(
+    db: Session, paths: StoragePaths, job: Job, *, clip_id: str, title: str, subtitles: list[str], metadata: dict[str, Any],
+    selector: Any = None, emotion: str | None = None, asset_id: str | None = None, recent_asset_ids: list[str] | None = None,
+) -> SelectedCharacterAsset | None:
     assets = available_character_assets(db, paths, job.settings_json or {})
     if not assets:
         return None
@@ -103,12 +114,12 @@ def choose_character_asset(
         emotion, reason, source = available[0], "登録済みの表情は1種類です。", "single_emotion"
     else:
         try:
-            active = selector or CodexThumbnailEmotionSelector(storage_root=paths.root, job_id=job.id, clip_id=f"emotion_{export.id}")
+            active = selector or CodexThumbnailEmotionSelector(storage_root=paths.root, job_id=job.id, clip_id=f"emotion_{clip_id}")
             result = ThumbnailEmotion.model_validate(active.generate({
                 "thumbnailText": {key: str(metadata.get(field) or "") for key, field in (
                     ("heading", "thumbnail_kicker"), ("upper", "thumbnail_line1"), ("lower", "thumbnail_line2"),
                 )},
-                "videoTitle": export.title, "nearbySubtitles": nearby_thumbnail_subtitles(paths, export, metadata),
+                "videoTitle": title, "nearbySubtitles": subtitles,
                 "availableEmotions": available,
             }, []))
             if result.emotion not in available:

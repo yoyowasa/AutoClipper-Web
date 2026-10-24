@@ -27,6 +27,10 @@ class CharacterAssetWorker(Worker):
             if job.get_status(refresh=True) in {JobStatus.FAILED, JobStatus.STOPPED}:
                 with SessionLocal() as db:
                     mark_rq_failure(db, job, exc_string)
+                    if job.func_name == "app.jobs.confirmed_clip_decisions.run_confirmed_clip_decisions":
+                        from app.jobs.confirmed_clip_decisions import record_decision_failure
+                        record_decision_failure(get_storage_paths(), *job.args[:3],
+                                                "自動決定が時間切れまたはworkerの終了で中断しました。再度確定してください。")
                     record_rq_sync_failure(db, job)
                     record_rq_analysis_failure(db, job)
         except Exception:

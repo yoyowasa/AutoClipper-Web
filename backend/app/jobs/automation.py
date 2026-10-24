@@ -12,6 +12,7 @@ EffectiveAutomationMode = Literal["manual", "shadow", "guarded", "auto"]
 AUTO_RESUME_AFTER_CLIP_REVIEW_SETTING = "_autoResumeAfterClipReview"
 AUTOMATION_MANIFEST_FILENAME = "automation_manifest.json"
 HUMAN_SUBTITLE_REVIEW_POLICY = "auto-human-subtitle-review-v1"
+SUBTITLE_ONLY_AUTO_POLICY = "auto-subtitle-only-v2"
 AUTOMATION_POLICY_SETTING = "_automationPolicyVersion"
 
 
@@ -20,8 +21,12 @@ def requires_human_subtitle_review(settings: Mapping[str, Any]) -> bool:
     return (
         settings.get("automationMode") == "auto"
         and settings.get("workflowMode", "automatic") != "manual"
-        and settings.get(AUTOMATION_POLICY_SETTING) == HUMAN_SUBTITLE_REVIEW_POLICY
+        and settings.get(AUTOMATION_POLICY_SETTING) in {HUMAN_SUBTITLE_REVIEW_POLICY, SUBTITLE_ONLY_AUTO_POLICY}
     )
+
+
+def is_subtitle_only_auto(settings: Mapping[str, Any]) -> bool:
+    return requires_human_subtitle_review(settings) and settings.get(AUTOMATION_POLICY_SETTING) == SUBTITLE_ONLY_AUTO_POLICY
 
 
 class AutomationRoleAssignments(BaseModel):
@@ -131,7 +136,7 @@ def build_automation_manifest(
         requestedMode=requested_mode,
         effectiveMode=effective_mode,
         fallbackReason=fallback_reason,
-        policyVersion=HUMAN_SUBTITLE_REVIEW_POLICY if requires_human_subtitle_review(settings) else None,
+        policyVersion=settings.get(AUTOMATION_POLICY_SETTING) if requires_human_subtitle_review(settings) else None,
         roles=AutomationRoleAssignments(
             initialSelection=(
                 "codex" if initial_selection == "codex" else "legacy"

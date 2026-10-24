@@ -217,13 +217,19 @@ def generate_export_thumbnails(
                                                     metadata=payload, generator=copy_generator)
                 proposed = _normal_frame_seconds(candidate) - candidate.start
                 write_export_metadata(metadata_path, {**payload, "start": candidate.start, "end": candidate.end})
-                frames = ensure_thumbnail_candidates(export, input_path, output_dir)
-                payload = read_export_metadata(export)
-                selected_asset = choose_character_asset(
-                    db, paths, job, export, {**payload,
-                        "start": candidate.start, "end": candidate.end, "thumbnail_frame_seconds": proposed},
-                    selector=emotion_selector, recent_asset_ids=recent_asset_ids,
-                ) if not frames and db is not None and job is not None and paths is not None else None
+                prepared_clip = next((c for c in review_document.clips if c.id == export.candidate_id), None) if review_document else None
+                if prepared_clip is not None and prepared_clip.automatic_thumbnail is not None:
+                    from app.jobs.confirmed_thumbnail import reuse_confirmed_thumbnail
+                    prepared, frames, selected_asset = reuse_confirmed_thumbnail(db, paths, job.id, prepared_clip, export, output_dir)
+                    payload.update(prepared)
+                else:
+                    frames = ensure_thumbnail_candidates(export, input_path, output_dir)
+                    payload = read_export_metadata(export)
+                    selected_asset = choose_character_asset(
+                        db, paths, job, export, {**payload,
+                            "start": candidate.start, "end": candidate.end, "thumbnail_frame_seconds": proposed},
+                        selector=emotion_selector, recent_asset_ids=recent_asset_ids,
+                    ) if not frames and db is not None and job is not None and paths is not None else None
                 selected = frames[0]["second"] if frames else proposed
                 payload.update(thumbnail_frame_seconds=round(selected, 3), thumbnail_crop_mode="standard",
                                thumbnail_frame_candidate_id=frames[0]["id"] if frames else None)
