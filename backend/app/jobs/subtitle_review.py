@@ -1,3 +1,4 @@
+from app.render.short_crop_decision import ShortCropDecision
 from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 import json
 from app.duration_rules import clip_body_duration, effective_short_max, validate_clip_duration
@@ -161,6 +162,7 @@ class SubtitleReviewClip(BaseModel):
     hook_style: ClipTextStyle | None = Field(default=None, alias="hookStyle")
     subtitle_style: ClipTextStyle | None = Field(default=None, alias="subtitleStyle")
     subtitle_styles: list[SubtitleStyleOverride] = Field(default_factory=list, alias="subtitleStyles")
+    automatic_crop: ShortCropDecision | None = None
     framing_offset_x: float = Field(default=0.0, ge=-100, le=100, alias="framingOffsetX")
     framing_offset_y: float = Field(default=0.0, ge=-100, le=100, alias="framingOffsetY")
     framing_zoom: float = Field(default=1.0, ge=1.0, le=3.0, alias="framingZoom")
@@ -1173,6 +1175,7 @@ def update_review_clip_framing(
     ):
         return _refresh_counts(document)
 
+    clip.automatic_crop = None
     clip.framing_offset_x = next_x
     clip.framing_offset_y = next_y
     clip.framing_zoom = next_zoom
@@ -1356,6 +1359,7 @@ def apply_reviewed_clip_content(
         updates["framing_offset_y"] = clip.framing_offset_y
         updates["framing_zoom"] = clip.framing_zoom
         updates["short_layout"] = clip.short_layout
+        updates["automatic_crop"] = clip.automatic_crop
         return candidate.model_copy(update=updates)
 
     return selection.model_copy(

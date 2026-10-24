@@ -85,7 +85,12 @@ def record_render_decisions(metadata_path, *, candidate, job, text_fits, request
     append_choice(history, kind="framing", source=source, reason=fallback or "existing_render_layout", values=framing, **common)
     append_choice(history, kind="text_style", source="automatic", reason="existing_text_fit_preserving_overrides",
                   values={"outputSize": output_size, "renderedTextStyles": text_fits}, **common)
-    append_choice(history, kind="effects", source="default", reason="additional_effects_disabled_by_policy",
-                  values={"additionalEffects": "none"}, **common)
+    applied_effects = next((c for c in reversed(history) if c.kind == "effects" and c.clipId == candidate.id
+                            and c.stage == "applied"), None)
+    append_choice(history, kind="effects", source=applied_effects.source if applied_effects else "unrecorded"
+                  if candidate.subtitle_styles else "default",
+                  reason="subtitle_line_styles_rendered_dynamic_effects_disabled", timeBasis="source",
+                  values={"additionalEffects": "none", **({"subtitleStyles": [s.model_dump(by_alias=True)
+                          for s in candidate.subtitle_styles]} if candidate.subtitle_styles else {})}, **common)
     payload["choiceHistory"] = dump_history(history)
     write_json_atomic(Path(metadata_path), payload)

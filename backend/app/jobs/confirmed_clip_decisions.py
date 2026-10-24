@@ -19,7 +19,7 @@ from app.storage.paths import get_storage_paths
 
 def queue_clip_decisions(document, clip, request) -> str:
     """Called under the document lock, after subtitle edits have been saved."""
-    fields = request.model_fields_set - {"segments", "framing", "post_metadata_revision_hash"}
+    fields = request.model_fields_set - {"segments", "post_metadata_revision_hash"}
     clip.manual_decision_fields = sorted(set(clip.manual_decision_fields) | fields)
     clip.automatic_decision_revision = uuid4().hex
     clip.automatic_decision_state = "queued"
@@ -47,7 +47,7 @@ def record_decision_failure(paths, job_id, clip_id, revision, message):
 
 def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=SessionLocal, paths=None,
                                  generator=generate_title_hook_suggestions_for_auto, thumbnail_generator=None,
-                                 enqueue_preview=None, candidate_extractor=None, emotion_selector=None):
+                                 enqueue_preview=None, candidate_extractor=None, emotion_selector=None, crop_resolver=None):
     paths = paths or get_storage_paths()
     directory = paths.job_outputs(job_id)
     path = subtitle_review_output_path(directory)
@@ -113,6 +113,10 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 from app.jobs.confirmed_thumbnail import prepare_confirmed_thumbnail
                 prepare_confirmed_thumbnail(db, paths, job, video, document, clip,
                                             extractor=candidate_extractor, selector=emotion_selector)
+            stage = "画角・文字サイズ・字幕強調の自動決定"
+            from app.jobs.automatic_visual_decisions import decide_visuals
+            decide_visuals(document, clip, settings=settings, video=video,
+                           source=paths.resolve_stored_file(video.stored_path), crop_resolver=crop_resolver)
             stage = "正式プレビューの準備"
             with subtitle_review_document_lock(directory):
                 latest = current()
