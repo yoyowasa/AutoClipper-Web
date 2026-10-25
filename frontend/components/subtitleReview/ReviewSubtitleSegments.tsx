@@ -2,6 +2,7 @@
 
 import { bulkEditableSegments, sharedSubtitleNotice } from "../../lib/subtitleReview/sharedSegments";
 
+import { SelectionWarnings } from "./SelectionWarnings";
 import { SubtitleSegmentActions } from "../SubtitleSegmentActions";
 import { SubtitleBulkCorrection } from "../SubtitleBulkCorrection";
 import { formatTime, clipLabel, clamp } from "../../lib/subtitleReview/display";
@@ -66,6 +67,8 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                     </p>
                   </div>
                 </div>
+
+                <SelectionWarnings clip={selectedClip} seek={seekToSubtitle} />
 
                 {pausedSubtitleDraft?.clipId === selectedClip.id ? (
                   <div className="border-b border-sky-300 bg-sky-50 px-3 py-3 text-sm">

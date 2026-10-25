@@ -989,6 +989,14 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
     # Keep the short candidate while replacing only the normal candidate.
     kept_clip = next(clip for clip in revised_plan["clips"] if clip["type"] == "short")
     kept_preview = client.get(kept_clip["previewVideoUrl"]).content
+    # A persisted old Codex short may have no check. Reselection must recheck kept ranges too.
+    selected_path = storage.job_outputs(created["jobId"]) / "selected_clips.json"
+    previous_selection = json.loads(selected_path.read_text(encoding="utf-8"))
+    for candidate in previous_selection["shorts"]:
+        if candidate["id"] == kept_clip["id"]:
+            candidate["hard_gate_passed"] = None
+            candidate["hard_gate_evidence"] = {}
+    selected_path.write_text(json.dumps(previous_selection, ensure_ascii=False), encoding="utf-8")
     for ids in [["missing"], [clip["id"] for clip in revised_plan["clips"]]]:
         invalid = client.post(f"/api/jobs/{created['jobId']}/clip-plan/reselect",
                               json={**reselection_payload(False), "keptClipIds": ids})
@@ -1004,6 +1012,10 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
     assert client.get(kept_clip["previewVideoUrl"]).content == kept_preview
     assert len(kept_plan["clips"]) == len(revised_plan["clips"])
     assert kept_plan["settings"]["keptClipIds"] == [kept_clip["id"]]
+    checked_selection = json.loads(selected_path.read_text(encoding="utf-8"))
+    checked_kept = next(c for c in checked_selection["shorts"] if c["id"] == kept_clip["id"])
+    assert checked_kept["hard_gate_passed"] is True
+    assert checked_kept["hard_gate_evidence"]["passed"] is True
 
     # A missing requested slot must remain selectable even when all visible clips are kept.
     with next(app.dependency_overrides[get_db]()) as db:

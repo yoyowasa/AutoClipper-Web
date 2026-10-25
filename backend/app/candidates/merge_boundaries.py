@@ -186,6 +186,7 @@ class Candidate(BaseModel):
     heatmap_segment_ids: list[str] | None = Field(default=None, max_length=16)
     reject_reason: str | None = None
     hard_gate_passed: bool | None = None
+    hard_gate_evidence: dict[str, Any] = Field(default_factory=dict)
     below_quality_threshold: bool | None = None
     quality_warning: str | None = None
     selection_reason: str | None = None

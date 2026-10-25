@@ -162,6 +162,30 @@ def partition_candidates_by_duration(
     return valid, rejected
 
 
+def record_candidate_hard_gates(
+    candidates: Sequence[Candidate], *, settings: dict[str, Any],
+    silence_segments: Sequence[SilenceSegment],
+) -> tuple[list[Candidate], list[CandidateRejection]]:
+    """Check the final ranges before diversity/allocation; retain evidence for rejects too."""
+    gate_settings = parse_selection_settings(settings).quality_gate
+    checked: list[Candidate] = []
+    rejected: list[CandidateRejection] = []
+    for candidate in candidates:
+        try:
+            gate = evaluate_hard_gate(candidate, settings=gate_settings, silence_segments=silence_segments)
+            evidence = gate.model_dump()
+        except Exception as exc:
+            evidence = {"candidate_id": candidate.id, "passed": False,
+                        "reasons": ["hard_gate_evaluation_failed"], "errorType": type(exc).__name__}
+        checked.append(candidate.model_copy(update={
+            "hard_gate_passed": evidence["passed"], "hard_gate_evidence": evidence,
+        }))
+        if not evidence["passed"]:
+            rejected.append(CandidateRejection(candidateId=candidate.id, type=candidate.type,
+                                               reasons=evidence["reasons"], details=evidence))
+    return checked, rejected
+
+
 def _rank_key(candidate: Candidate) -> tuple[float, float, int, float, float, int, float]:
     return (
         candidate.heatmap_direct_score if candidate.heatmap_direct_score is not None else -1.0,
