@@ -357,7 +357,7 @@ def test_revoked_extended_storage_shortens_retention(client, environment):
 
 def test_maintenance_does_not_fail_queued_sync_and_expires_state(client, environment):
     run_id = enqueue(client, environment)
-    future = CLOCK + timedelta(days=10)
+    future = environment.db.get(SyncRun, run_id).queued_at + timedelta(days=10)
     active_queue = SimpleNamespace(fetch_job=lambda _: SimpleNamespace(get_status=lambda **kwargs: JobStatus.QUEUED))
     maintain_youtube(environment.db, environment.config, environment.paths, [active_queue], clock=future)
     assert environment.db.get(SyncRun, run_id).status == "queued"

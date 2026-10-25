@@ -192,25 +192,11 @@ def _tracking_evidence_for_render(
             }
             for detection in detections
         ]
-    elif strategy == "speaker_tracking_crop" and crop_plan.speaker_region_box is not None:
+    else:
         samples = [
-            {
-                "start": start,
-                "end": end,
-                "box": list(crop_plan.speaker_region_box),
-                "confidence": crop_plan.speaker_region_confidence,
-                "source": crop_plan.signal_source,
-            }
-        ]
-    elif strategy == "person_tracking_crop" and crop_plan.person_box is not None:
-        samples = [
-            {
-                "start": start,
-                "end": end,
-                "box": list(crop_plan.person_box),
-                "confidence": crop_plan.person_detection_confidence,
-                "source": crop_plan.signal_source,
-            }
+            {"start": sample.start, "end": sample.end, "box": list(sample.box),
+             "confidence": sample.confidence, "source": sample.source}
+            for sample in crop_plan.tracking_samples
         ]
 
     return {
@@ -1241,6 +1227,7 @@ def render_selected_short_candidates(
     short_top_banner_enabled: bool = False,
     short_bottom_banner_enabled: bool = False,
     banner_paths: StoragePaths | None = None,
+    output_indices: dict[str, int] | None = None,
 ) -> ShortRenderBatchResult:
     storage_paths = paths or get_storage_paths()
     banner_storage_paths = banner_paths or storage_paths
@@ -1258,6 +1245,7 @@ def render_selected_short_candidates(
 
     short_candidates = [candidate for candidate in selected_candidates if candidate.type == "short"]
     for index, candidate in enumerate(short_candidates, start=1):
+        index = (output_indices or {}).get(candidate.id, index)
         candidate = candidate_with_title(candidate, index=index, transcript_segments=transcript_segments)
         hook_scene_duration = _candidate_hook_scene_duration(candidate)
         output_duration = candidate.duration + hook_scene_duration

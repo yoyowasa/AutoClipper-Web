@@ -7,6 +7,7 @@ from app.video.face_detect import FaceDetection, best_face_center
 from app.video.person_detect import PersonDetection
 from app.video.speaker_detect import SpeakerDetection
 from app.video.subject_detect import SubjectDetection
+from app.video.tracking_sample import TrackingSample
 
 
 SHORT_WIDTH = 1080
@@ -46,6 +47,7 @@ class CropPlan:
     speaker_window_count: int = 0
     speaker_region_confidence: float | None = None
     speaker_region_box: tuple[float, float, float, float] | None = None
+    tracking_samples: tuple[TrackingSample, ...] = ()
 
 
 FACE_SAFE_MARGIN_X = 72
@@ -286,7 +288,7 @@ def tracking_safe_margins(
             SPEAKER_SAFE_MARGIN_X,
             SPEAKER_SAFE_MARGIN_BOTTOM,
         )
-    if strategy == "person_tracking_crop":
+    if strategy in {"person_tracking_crop", "subject_tracking_crop"}:
         return (
             PERSON_SAFE_MARGIN_X,
             PERSON_SAFE_MARGIN_TOP,
@@ -477,6 +479,7 @@ def _plan_subject_tracking_crop(
         sampled_frame_count=subject_signal.sampled_frames,
         subject_x=center_x,
         stability_score=subject_signal.stability_score,
+        tracking_samples=subject_signal.samples,
     )
 
 
@@ -552,6 +555,7 @@ def _plan_speaker_tracking_crop(
         speaker_window_count=speaker_signal.window_count,
         speaker_region_confidence=speaker_signal.confidence,
         speaker_region_box=speaker_signal.box,
+        tracking_samples=speaker_signal.samples,
     )
 
 
@@ -632,6 +636,7 @@ def _plan_person_tracking_crop(
         person_detection_count=person_signal.detection_count,
         person_detection_confidence=person_signal.confidence,
         person_box=person_signal.box,
+        tracking_samples=person_signal.samples,
     )
 
 

@@ -178,7 +178,8 @@ def test_quality_stop_identifies_clip_time_and_reason(guarded_client, monkeypatc
     run_subtitle_review_preview(*data.previews[0], paths=data.storage, session_factory=data.factory, dependencies=data.deps)
     response = data.client.get(f"/api/jobs/{data.job_id}/subtitle-review")
     reasons = response.json()["automaticStopReasons"]
-    assert any(clip.id in reason and "秒" in reason and "安全な表示範囲" in reason for reason in reasons)
+    assert any("ショート1" in reason and "秒" in reason and "安全な表示範囲" in reason for reason in reasons)
+    assert all(clip.id not in reason for reason in reasons)
     assert not data.renders
 
 

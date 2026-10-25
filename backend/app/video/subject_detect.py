@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Sequence
+
+from app.video.tracking_sample import TrackingSample
 
 
 @dataclass(frozen=True)
@@ -12,6 +14,7 @@ class SubjectDetection:
     stability_score: float
     sampled_frames: int
     source: str = "motion_edge_saliency"
+    samples: tuple[TrackingSample, ...] = ()
 
 
 def _clamp_ratio(value: float) -> float:
@@ -66,12 +69,15 @@ def _smooth(values: Any, np: Any, window: int) -> Any:
     return np.convolve(values, kernel, mode="same")
 
 
-def _energy_center(gray_frames: Sequence[Any], cv2: Any, np: Any) -> tuple[float, float, float] | None:
+def _energy_center(
+    gray_frames: Sequence[Any], cv2: Any, np: Any, *,
+    sample_times: Sequence[float] | None = None, samples: list[TrackingSample] | None = None,
+) -> tuple[float, float, float] | None:
     energies: list[Any] = []
     centers: list[float] = []
     previous: Any | None = None
 
-    for gray in gray_frames:
+    for index, gray in enumerate(gray_frames):
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(blurred, 48, 144).astype("float32") / 255.0
         if previous is None:
@@ -91,6 +97,20 @@ def _energy_center(gray_frames: Sequence[Any], cv2: Any, np: Any) -> tuple[float
         column_energy = energy.sum(axis=0)
         if float(column_energy.sum()) <= 1e-6:
             continue
+        if sample_times is not None and samples is not None:
+            # Include every detected edge/motion pixel. Background activity can
+            # make this conservative envelope too wide; the full-frame fallback
+            # then preserves it. This is activity evidence, not face identity.
+            bounds = []
+            for marginal in (column_energy, energy.sum(axis=1)):
+                occupied = np.flatnonzero(marginal > 0)
+                size = len(marginal)
+                bounds.append((int(occupied[0]) / size, (int(occupied[-1]) + 1) / size))
+            samples.append(TrackingSample(
+                start=sample_times[index], end=sample_times[index],
+                box=(bounds[0][0], bounds[1][0], bounds[0][1], bounds[1][1]),
+                confidence=1.0, source="motion_edge_saliency_extent",
+            ))
         smoothed = _smooth(column_energy, np, max(3, width // 28))
         total = float(smoothed.sum())
         xs = np.arange(width, dtype="float32")
@@ -125,21 +145,24 @@ def estimate_subject_from_frames(
     frames: Sequence[Any],
     *,
     max_width: int = 320,
+    sample_times: Sequence[float] | None = None,
 ) -> SubjectDetection | None:
     cv2 = _load_cv2()
     np = _load_numpy()
     if cv2 is None or np is None:
         return None
 
-    gray_frames = [
-        gray
-        for frame in frames
+    valid = [
+        (index, gray) for index, frame in enumerate(frames)
         if (gray := _gray_frame(frame, cv2=cv2, np=np, max_width=max_width)) is not None
     ]
+    gray_frames = [gray for _, gray in valid]
+    times = [sample_times[index] for index, _ in valid] if sample_times is not None else None
     if len(gray_frames) < 2:
         return None
 
-    estimated = _energy_center(gray_frames, cv2=cv2, np=np)
+    samples: list[TrackingSample] = []
+    estimated = _energy_center(gray_frames, cv2=cv2, np=np, sample_times=times, samples=samples)
     if estimated is None:
         return None
     center_x, confidence, stability_score = estimated
@@ -148,6 +171,7 @@ def estimate_subject_from_frames(
         confidence=confidence,
         stability_score=stability_score,
         sampled_frames=len(gray_frames),
+        samples=tuple(replace(sample, confidence=confidence) for sample in samples),
     )
 
 
@@ -167,13 +191,15 @@ def detect_subject_for_clip(
         return None
 
     frames: list[Any] = []
+    sample_times: list[float] = []
     try:
         for time_seconds in _sample_times(start, end, sample_count):
             capture.set(cv2.CAP_PROP_POS_MSEC, time_seconds * 1000)
             ok, frame = capture.read()
             if ok and frame is not None:
                 frames.append(frame)
+                sample_times.append(time_seconds)
     finally:
         capture.release()
 
-    return estimate_subject_from_frames(frames, max_width=max_width)
+    return estimate_subject_from_frames(frames, max_width=max_width, sample_times=sample_times)

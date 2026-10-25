@@ -33,6 +33,7 @@ from app.posting_metadata import (
     ensure_publication_title_suffix,
 )
 from app.render.render_short import SHORT_BANNER_HEIGHT
+from app.render.crop_strategy import SUBJECT_MIN_CONFIDENCE, SUBJECT_MIN_STABILITY
 from app.render.subtitles_ass import (
     resolve_clip_text_style,
     SubtitleEvent,
@@ -57,6 +58,10 @@ QualityGateRoute = Literal[
 QUALITY_GATE_SCHEMA_VERSION = 1
 QUALITY_GATE_PRODUCER_VERSION = "guarded_quality_gate_v1"
 QUALITY_GATE_DIRNAME = "quality_gate"
+# Three distinct observations, as already required for face tracking. An aggregate
+# box or repeated copies of one frame cannot establish temporal containment.
+TRACKING_MIN_DISTINCT_SAMPLES = 3
+TRACKING_GEOMETRY_TOLERANCE_PIXELS = 2.0
 
 
 class QualityGateCheck(BaseModel):
@@ -1751,7 +1756,7 @@ def _tracking_crop_containment(
     ):
         return None, {**summary, "reason": "tracking_geometry_non_positive"}
 
-    tolerance = 2.0
+    tolerance = TRACKING_GEOMETRY_TOLERANCE_PIXELS
     crop_right = crop["x"] + crop["width"]
     crop_bottom = crop["y"] + crop["height"]
     safe_right = safe_area["x"] + safe_area["width"]
@@ -1851,13 +1856,12 @@ def _tracking_crop_containment(
             "safeArea": safe_area,
         }
     )
+    if len(sample_timestamps) < TRACKING_MIN_DISTINCT_SAMPLES:
+        return None, {**summary, "reason": "tracking_time_coverage_insufficient"}
     if outside_sample_indexes:
         return False, {**summary, "reason": "tracking_subject_outside_safe_area"}
 
-    if strategy == "face_tracking_crop":
-        if len(sample_timestamps) < 3:
-            return None, {**summary, "reason": "face_tracking_time_coverage_insufficient"}
-    elif strategy == "speaker_tracking_crop":
+    if strategy == "speaker_tracking_crop":
         speaker_confidence = _finite_float(metadata.get("speaker_region_confidence"))
         stability = _finite_float(metadata.get("crop_stability_score"))
         window_count = _finite_float(metadata.get("speaker_window_count"))
@@ -1899,6 +1903,11 @@ def _tracking_crop_containment(
             or sampled_frames < 2
         ):
             return None, {**summary, "reason": "person_tracking_signal_below_threshold"}
+    elif strategy == "subject_tracking_crop":
+        confidence = _finite_float(metadata.get("crop_confidence"))
+        stability = _finite_float(metadata.get("crop_stability_score"))
+        if confidence is None or confidence < SUBJECT_MIN_CONFIDENCE or stability is None or stability < SUBJECT_MIN_STABILITY:
+            return None, {**summary, "reason": "subject_tracking_signal_below_threshold"}
     return True, summary
 
 

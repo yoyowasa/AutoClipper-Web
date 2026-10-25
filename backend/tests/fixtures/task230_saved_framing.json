@@ -1,0 +1,402 @@
+{
+  "sourceJobId": "job_dc1a7b8ff4bb4d4fa8421c0fc4676dc1",
+  "clips": [
+    {
+      "id": "cand_short_898480_960180_a222bb0ce0",
+      "start": 898.48,
+      "end": 960.18,
+      "duration": 61.7,
+      "automatic_crop": {
+        "start": 898.48,
+        "end": 960.18,
+        "width": 1920,
+        "height": 1080,
+        "target_height": 1200,
+        "layout": "auto",
+        "plan": {
+          "strategy_order": [
+            "subject_tracking_crop",
+            "blur_background",
+            "center_crop"
+          ],
+          "face_center": null,
+          "speaker_center": null,
+          "person_center": null,
+          "subject_center": [
+            0.4875761837787154,
+            0.5
+          ],
+          "signal_source": "motion_edge_saliency",
+          "confidence": 1.0,
+          "fallback_reason": "wide_face_group_subject_signal",
+          "crop_x": 500,
+          "crop_y": 0,
+          "detection_count": 0,
+          "sampled_frame_count": 5,
+          "subject_x": 0.48756760358810425,
+          "stability_score": 0.9239589436911047,
+          "person_detection_count": 0,
+          "person_detection_confidence": null,
+          "person_box": null,
+          "face_box": null,
+          "speaker_window_count": 0,
+          "speaker_region_confidence": null,
+          "speaker_region_box": null
+        },
+        "faces": []
+      }
+    },
+    {
+      "id": "cand_short_1483240_1531240_06e581112a",
+      "start": 1483.24,
+      "end": 1531.24,
+      "duration": 48.0,
+      "automatic_crop": {
+        "start": 1483.24,
+        "end": 1531.24,
+        "width": 1920,
+        "height": 1080,
+        "target_height": 1200,
+        "layout": "auto",
+        "plan": {
+          "strategy_order": [
+            "speaker_tracking_crop",
+            "blur_background",
+            "center_crop"
+          ],
+          "face_center": null,
+          "speaker_center": [
+            0.7468354430379747,
+            0.5
+          ],
+          "person_center": null,
+          "subject_center": null,
+          "signal_source": "dialogue_face_person",
+          "confidence": 0.8417578124999999,
+          "fallback_reason": "wide_face_group_speaker_signal",
+          "crop_x": 1053,
+          "crop_y": 0,
+          "detection_count": 4,
+          "sampled_frame_count": 5,
+          "subject_x": null,
+          "stability_score": 0.9271050347222223,
+          "person_detection_count": 0,
+          "person_detection_confidence": null,
+          "person_box": null,
+          "face_box": null,
+          "speaker_window_count": 5,
+          "speaker_region_confidence": 0.8417578124999999,
+          "speaker_region_box": [
+            0.8572916666666666,
+            0.32037037037037036,
+            0.9846354166666667,
+            0.5467592592592593
+          ]
+        },
+        "faces": []
+      }
+    },
+    {
+      "id": "cand_short_4812320_4853840_6e46464fc0",
+      "start": 4812.32,
+      "end": 4853.84,
+      "duration": 41.52,
+      "automatic_crop": {
+        "start": 4812.32,
+        "end": 4853.84,
+        "width": 1920,
+        "height": 1080,
+        "target_height": 1200,
+        "layout": "auto",
+        "plan": {
+          "strategy_order": [
+            "blur_background",
+            "center_crop"
+          ],
+          "face_center": null,
+          "speaker_center": null,
+          "person_center": null,
+          "subject_center": null,
+          "signal_source": "full_frame_fallback",
+          "confidence": 0.47501080771918824,
+          "fallback_reason": "ambiguous_speaker_signal",
+          "crop_x": null,
+          "crop_y": null,
+          "detection_count": 7,
+          "sampled_frame_count": 5,
+          "subject_x": null,
+          "stability_score": 0.09169668810885606,
+          "person_detection_count": 0,
+          "person_detection_confidence": null,
+          "person_box": null,
+          "face_box": null,
+          "speaker_window_count": 5,
+          "speaker_region_confidence": 0.47501080771918824,
+          "speaker_region_box": [
+            0.22152777777777777,
+            0.337962962962963,
+            0.38541666666666663,
+            0.629320987654321
+          ]
+        },
+        "faces": []
+      }
+    },
+    {
+      "id": "cand_short_1579480_1604100_0135b91a90",
+      "start": 1579.48,
+      "end": 1604.1,
+      "duration": 24.62,
+      "automatic_crop": {
+        "start": 1579.48,
+        "end": 1604.1,
+        "width": 1920,
+        "height": 1080,
+        "target_height": 1200,
+        "layout": "auto",
+        "plan": {
+          "strategy_order": [
+            "blur_background",
+            "center_crop"
+          ],
+          "face_center": null,
+          "speaker_center": null,
+          "person_center": null,
+          "subject_center": null,
+          "signal_source": "full_frame_fallback",
+          "confidence": 0.6974322916666666,
+          "fallback_reason": "ambiguous_speaker_signal",
+          "crop_x": null,
+          "crop_y": null,
+          "detection_count": 14,
+          "sampled_frame_count": 5,
+          "subject_x": null,
+          "stability_score": 0.8317563657407407,
+          "person_detection_count": 0,
+          "person_detection_confidence": null,
+          "person_box": null,
+          "face_box": null,
+          "speaker_window_count": 5,
+          "speaker_region_confidence": 0.6974322916666666,
+          "speaker_region_box": [
+            0.8825520833333333,
+            0.35509259259259257,
+            0.9846354166666667,
+            0.5365740740740741
+          ]
+        },
+        "faces": []
+      }
+    },
+    {
+      "id": "cand_short_524440_561840_1087a3decc",
+      "start": 524.04,
+      "end": 561.84,
+      "duration": 37.8,
+      "automatic_crop": {
+        "start": 524.04,
+        "end": 561.84,
+        "width": 1920,
+        "height": 1080,
+        "target_height": 1200,
+        "layout": "auto",
+        "plan": {
+          "strategy_order": [
+            "subject_tracking_crop",
+            "blur_background",
+            "center_crop"
+          ],
+          "face_center": null,
+          "speaker_center": null,
+          "person_center": null,
+          "subject_center": [
+            0.4857008907641819,
+            0.5
+          ],
+          "signal_source": "motion_edge_saliency",
+          "confidence": 1.0,
+          "fallback_reason": "wide_face_group_subject_signal",
+          "crop_x": 496,
+          "crop_y": 0,
+          "detection_count": 0,
+          "sampled_frame_count": 5,
+          "subject_x": 0.4855669438838959,
+          "stability_score": 0.9208360794000328,
+          "person_detection_count": 0,
+          "person_detection_confidence": null,
+          "person_box": null,
+          "face_box": null,
+          "speaker_window_count": 0,
+          "speaker_region_confidence": null,
+          "speaker_region_box": null
+        },
+        "faces": []
+      }
+    }
+  ],
+  "visualBefore": {
+    "code": "post_render.visual_framing_layout",
+    "version": 1,
+    "hard": true,
+    "outcome": "fail",
+    "reasonCode": "post_render_visual_contract_failed",
+    "evidence": {
+      "provider": "render_metadata_geometry_v1",
+      "inspected": [
+        {
+          "clipId": "cand_short_898480_960180_a222bb0ce0",
+          "strategy": "subject_tracking_crop",
+          "cropConfidence": 1.0,
+          "cropFallbackReason": "wide_face_group_subject_signal",
+          "trackingContainment": null,
+          "trackingEvidence": {
+            "provider": "render_tracking_geometry_v1",
+            "strategy": "subject_tracking_crop",
+            "reason": "tracking_evidence_missing"
+          },
+          "topBannerExpected": true,
+          "bottomBannerExpected": true,
+          "humanPreviewAccepted": false
+        },
+        {
+          "clipId": "cand_short_1483240_1531240_06e581112a",
+          "strategy": "speaker_tracking_crop",
+          "cropConfidence": 0.8417578124999999,
+          "cropFallbackReason": "wide_face_group_speaker_signal",
+          "trackingContainment": false,
+          "trackingEvidence": {
+            "provider": "render_tracking_geometry_v1",
+            "strategy": "speaker_tracking_crop",
+            "sampleCount": 1,
+            "distinctSampleTimestamps": 1,
+            "outsideSampleIndexes": [
+              0
+            ],
+            "crop": {
+              "x": 1053.0,
+              "y": 0.0,
+              "width": 1080.0,
+              "height": 1200.0
+            },
+            "safeArea": {
+              "x": 1149.0,
+              "y": 120.0,
+              "width": 888.0,
+              "height": 740.0
+            },
+            "reason": "tracking_subject_outside_safe_area"
+          },
+          "topBannerExpected": true,
+          "bottomBannerExpected": true,
+          "humanPreviewAccepted": false
+        },
+        {
+          "clipId": "cand_short_4812320_4853840_6e46464fc0",
+          "strategy": "blur_background",
+          "cropConfidence": 0.47501080771918824,
+          "cropFallbackReason": "ambiguous_speaker_signal",
+          "trackingContainment": null,
+          "trackingEvidence": null,
+          "topBannerExpected": true,
+          "bottomBannerExpected": true,
+          "humanPreviewAccepted": false
+        },
+        {
+          "clipId": "cand_short_1579480_1604100_0135b91a90",
+          "strategy": "blur_background",
+          "cropConfidence": 0.6974322916666666,
+          "cropFallbackReason": "ambiguous_speaker_signal",
+          "trackingContainment": null,
+          "trackingEvidence": null,
+          "topBannerExpected": true,
+          "bottomBannerExpected": true,
+          "humanPreviewAccepted": false
+        },
+        {
+          "clipId": "cand_short_524440_561840_1087a3decc",
+          "strategy": "subject_tracking_crop",
+          "cropConfidence": 1.0,
+          "cropFallbackReason": "wide_face_group_subject_signal",
+          "trackingContainment": null,
+          "trackingEvidence": {
+            "provider": "render_tracking_geometry_v1",
+            "strategy": "subject_tracking_crop",
+            "reason": "tracking_evidence_missing"
+          },
+          "topBannerExpected": true,
+          "bottomBannerExpected": true,
+          "humanPreviewAccepted": false
+        }
+      ],
+      "failures": [
+        {
+          "clipId": "cand_short_1483240_1531240_06e581112a",
+          "strategy": "speaker_tracking_crop",
+          "cropConfidence": 0.8417578124999999,
+          "cropFallbackReason": "wide_face_group_speaker_signal",
+          "trackingContainment": false,
+          "trackingEvidence": {
+            "provider": "render_tracking_geometry_v1",
+            "strategy": "speaker_tracking_crop",
+            "sampleCount": 1,
+            "distinctSampleTimestamps": 1,
+            "outsideSampleIndexes": [
+              0
+            ],
+            "crop": {
+              "x": 1053.0,
+              "y": 0.0,
+              "width": 1080.0,
+              "height": 1200.0
+            },
+            "safeArea": {
+              "x": 1149.0,
+              "y": 120.0,
+              "width": 888.0,
+              "height": 740.0
+            },
+            "reason": "tracking_subject_outside_safe_area"
+          },
+          "topBannerExpected": true,
+          "bottomBannerExpected": true,
+          "humanPreviewAccepted": false,
+          "reason": "tracking_subject_outside_safe_area"
+        }
+      ],
+      "unknown": [
+        {
+          "clipId": "cand_short_898480_960180_a222bb0ce0",
+          "strategy": "subject_tracking_crop",
+          "cropConfidence": 1.0,
+          "cropFallbackReason": "wide_face_group_subject_signal",
+          "trackingContainment": null,
+          "trackingEvidence": {
+            "provider": "render_tracking_geometry_v1",
+            "strategy": "subject_tracking_crop",
+            "reason": "tracking_evidence_missing"
+          },
+          "topBannerExpected": true,
+          "bottomBannerExpected": true,
+          "humanPreviewAccepted": false,
+          "reason": "tracking_evidence_missing"
+        },
+        {
+          "clipId": "cand_short_524440_561840_1087a3decc",
+          "strategy": "subject_tracking_crop",
+          "cropConfidence": 1.0,
+          "cropFallbackReason": "wide_face_group_subject_signal",
+          "trackingContainment": null,
+          "trackingEvidence": {
+            "provider": "render_tracking_geometry_v1",
+            "strategy": "subject_tracking_crop",
+            "reason": "tracking_evidence_missing"
+          },
+          "topBannerExpected": true,
+          "bottomBannerExpected": true,
+          "humanPreviewAccepted": false,
+          "reason": "tracking_evidence_missing"
+        }
+      ]
+    }
+  }
+}
