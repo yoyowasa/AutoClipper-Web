@@ -1,0 +1,21 @@
+import assert from "node:assert/strict";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { SelectionWarnings } from "../components/subtitleReview/SelectionWarnings";
+import type { SubtitleReviewClip } from "../lib/types";
+Object.assign(globalThis, { React });
+const clip = { start: 100, end: 200, hookSceneStart: null, hookSceneEnd: null } as SubtitleReviewClip;
+const render = (value: SubtitleReviewClip) => renderToStaticMarkup(React.createElement(SelectionWarnings, { clip: value, seek: () => {} }));
+assert.equal(render(clip), "");
+const flagged = { ...clip, selectionWarnings: [{ code: "proper_noun_caption_review", message: "固有名詞を音声と確認してください。",
+  scope: "clip" as const, start: 100, end: 200 }] };
+const html = render(flagged);
+assert.ok(html.includes("固有名詞を音声と確認してください。"));
+assert.ok(html.includes("0:00.0〜1:40.0"));
+assert.ok(html.includes("字幕行を特定していません"));
+assert.ok(!html.includes("確定できません"));
+assert.ok(render({ ...flagged, hookSceneStart: 110, hookSceneEnd: 113 }).includes("0:03.0〜1:43.0"));
+const tree = SelectionWarnings({ clip: flagged, seek: time => assert.equal(time, 100) });
+const rows = tree!.props.children[2];
+rows[0].props.children[0].props.onClick();
+console.log("selection warning display and seek passed");

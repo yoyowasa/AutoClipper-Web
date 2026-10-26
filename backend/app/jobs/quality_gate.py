@@ -25,7 +25,8 @@ from app.candidates.short_diversity import (
     select_diverse_shorts,
 )
 from app.jobs.subtitle_review import SubtitleReviewDocument
-from app.jobs.automation import requires_human_subtitle_review, is_subtitle_only_auto
+from app.jobs.automation import requires_human_subtitle_review, is_subtitle_only_auto, SUBTITLE_ONLY_AUTO_POLICY
+from app.jobs.selection_warnings import SUBTITLE_REVIEW_RISKS
 from app.jobs.title_hook_suggestions import TitleHookSuggestionsDocument
 from app.overlay_text import fit_overlay_text
 from app.posting_metadata import (
@@ -110,6 +111,7 @@ class QualityGateDecision(BaseModel):
     outcome: QualityGateOutcome
     route: QualityGateRoute
     checks: list[QualityGateCheck] = Field(min_length=1)
+    review_policy: Literal["auto-subtitle-only-v2"] | None = Field(default=None, alias="reviewPolicy", exclude_if=lambda v: v is None)
     created_at: datetime = Field(alias="createdAt")
 
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
@@ -123,7 +125,7 @@ class QualityGateDecision(BaseModel):
         )
         if self.outcome != expected_outcome:
             raise ValueError("outcome must match the hard-check aggregate")
-        expected_route = quality_gate_route(self.stage, self.outcome, mode=self.mode)
+        expected_route = _decision_route(self.stage, self.outcome, mode=self.mode, checks=self.checks, review_policy=self.review_policy)
         if self.route != expected_route:
             raise ValueError("route must match stage and outcome")
         return self
@@ -156,6 +158,23 @@ def quality_gate_route(
     if stage == "content" or (stage == "post_render" and mode == "auto"):
         return "subtitle_review"
     return "failed"
+
+
+def _decision_route(
+    stage: QualityGateStage, outcome: QualityGateOutcome, *, mode: QualityGateMode,
+    checks: Sequence[QualityGateCheck], review_policy: str | None = None,
+) -> QualityGateRoute:
+    if stage == "selection" and mode == "auto" and review_policy == SUBTITLE_ONLY_AUTO_POLICY:
+        nonpassing = [check for check in checks if check.outcome != "pass"]
+        if any(check.code in {"selection.candidate_hard_gate", "selection.evaluation_available"}
+               and check.outcome == "unknown" for check in nonpassing):
+            return "failed"  # Missing checks are a processing failure, not a human decision.
+        if outcome == "unknown" and len(nonpassing) == 1 and nonpassing[0].code == "selection.risk_flags":
+            flags_by_clip = nonpassing[0].evidence.get("flagsByClipId", {})
+            flags = [flag for values in flags_by_clip.values() for flag in values]
+            if flags and all(flag in SUBTITLE_REVIEW_RISKS for flag in flags):
+                return "subtitle_review"
+    return quality_gate_route(stage, outcome, mode=mode)
 
 
 def _canonical_value(value: Any) -> Any:
@@ -276,6 +295,7 @@ def _decision(
     payload: Any,
     checks: Sequence[QualityGateCheck],
     mode: QualityGateMode = "guarded",
+    review_policy: Literal["auto-subtitle-only-v2"] | None = None,
 ) -> QualityGateDecision:
     outcomes = [check.outcome for check in checks]
     outcome = aggregate_quality_gate_outcomes(outcomes)
@@ -286,7 +306,8 @@ def _decision(
         stage=stage,
         inputHash=quality_gate_input_hash(stage, payload),
         outcome=outcome,
-        route=quality_gate_route(stage, outcome, mode=mode),
+        route=_decision_route(stage, outcome, mode=mode, checks=checks, review_policy=review_policy),
+        reviewPolicy=review_policy,
         checks=list(checks),
         createdAt=datetime.now(UTC),
     )
@@ -299,6 +320,7 @@ def unknown_quality_gate_decision(
     reason_code: str,
     evidence: Mapping[str, Any] | None = None,
     mode: QualityGateMode = "guarded",
+    review_policy: Literal["auto-subtitle-only-v2"] | None = None,
 ) -> QualityGateDecision:
     """Record an evaluator failure without allowing guarded automation to continue."""
     return _decision(
@@ -317,6 +339,7 @@ def unknown_quality_gate_decision(
             )
         ],
         mode=mode,
+        review_policy=review_policy,
     )
 
 
@@ -382,6 +405,9 @@ def evaluate_selection_quality_gate(
             "shortMinDuration",
             "shortMaxDuration",
             "heatmapIntervalMode",
+            "automationMode",
+            "workflowMode",
+            "_automationPolicyVersion",
         )
     }
     payload = {
@@ -511,6 +537,7 @@ def evaluate_selection_quality_gate(
             evidence={
                 "failedClipIds": rejected_hard_gate,
                 "unknownClipIds": unknown_hard_gate,
+                "checksByClipId": {candidate.id: candidate.hard_gate_evidence for candidate in clips if candidate.hard_gate_evidence},
             },
         )
     )
@@ -557,6 +584,7 @@ def evaluate_selection_quality_gate(
         payload=payload,
         checks=checks,
         mode=mode,
+        review_policy=SUBTITLE_ONLY_AUTO_POLICY if is_subtitle_only_auto(settings) else None,
     )
 
 

@@ -349,6 +349,8 @@ def _evaluate_selection_quality_gate_for_mode(
     source_duration: float,
     mode: QualityGateMode,
 ) -> tuple[QualityGateDecision, Path | None]:
+    from app.jobs.automation import SUBTITLE_ONLY_AUTO_POLICY, is_subtitle_only_auto
+
     invalidate_quality_gate_decisions(
         job_dir,
         ("selection", "content", "post_render"),
@@ -367,6 +369,7 @@ def _evaluate_selection_quality_gate_for_mode(
             job_id=job_id,
             stage="selection",
             reason_code="selection_gate_evaluation_failed",
+            review_policy=SUBTITLE_ONLY_AUTO_POLICY if is_subtitle_only_auto(settings) else None,
             evidence={"errorType": exc.__class__.__name__},
             mode=mode,
         )
@@ -379,6 +382,7 @@ def _evaluate_selection_quality_gate_for_mode(
             job_id=job_id,
             stage="selection",
             reason_code="selection_gate_record_unavailable",
+            review_policy=SUBTITLE_ONLY_AUTO_POLICY if is_subtitle_only_auto(settings) else None,
             mode=mode,
         )
     return decision, decision_path
