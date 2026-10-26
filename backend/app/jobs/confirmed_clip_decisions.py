@@ -17,10 +17,9 @@ from app.production_choice_capture import capture_auto_review_outcome
 from app.storage.paths import get_storage_paths
 
 
-def queue_clip_decisions(document, clip, request) -> str:
+def queue_clip_decisions(document, clip, *, manual_fields: set[str]) -> str:
     """Called under the document lock, after subtitle edits have been saved."""
-    fields = request.model_fields_set - {"segments", "post_metadata_revision_hash"}
-    clip.manual_decision_fields = sorted(set(clip.manual_decision_fields) | fields)
+    clip.manual_decision_fields = sorted(set(clip.manual_decision_fields) | manual_fields)
     clip.automatic_decision_revision = uuid4().hex
     clip.automatic_decision_state = "queued"
     clip.automatic_decision_error = None
