@@ -5,8 +5,27 @@ from tempfile import TemporaryDirectory
 
 from app.production_choices import value_hash
 from app.render.render_thumbnail import extract_thumbnail_frame
+from app.scoring.codex_title_hook_suggestions import CodexTitleHookSuggestionError
 from app.scoring.short_framing import CodexShortFramingSelector, SHORT_FRAMING_VERSION, ShortFramingChoice
 from app.storage.json_io import write_json_atomic
+
+
+def content_framing_fallback_reason(error: Exception) -> str:
+    """Describe the failed optional decision without copying model/exception text."""
+    code = error.code if isinstance(error, CodexTitleHookSuggestionError) else None
+    if isinstance(error, TimeoutError) or code in {"codex_title_hook_timeout", "codex_title_hook_codex_timeout"}:
+        reason = "Codexの応答が時間切れ"
+    elif isinstance(error, ValueError) or code in {
+        "codex_title_hook_output_invalid", "codex_title_hook_response_invalid", "codex_title_hook_request_mismatch",
+    }:
+        reason = "返答または根拠の検証失敗"
+    elif isinstance(error, CodexTitleHookSuggestionError):
+        reason = "Codex中継のエラー"
+    elif isinstance(error, OSError):
+        reason = "代表コマ・判断記録の読み書きエラー"
+    else:
+        reason = "内容判断の処理エラー"
+    return f"内容による画角判断ができなかった（{reason}）。既存の映像条件で画角を選択しました。"
 
 
 def framing_input(document, clip) -> dict:

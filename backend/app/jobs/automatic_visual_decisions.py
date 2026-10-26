@@ -12,7 +12,8 @@ from app.scoring.short_framing import SHORT_FRAMING_VERSION
 VISUAL_DECISION_POLICY = "confirmed-subtitle-visuals-v2"
 
 
-def decide_visuals(document, clip, *, settings, video, source, crop_resolver=None, content_choice=None, framing_revision=None):
+def decide_visuals(document, clip, *, settings, video, source, crop_resolver=None, content_choice=None, framing_revision=None,
+                   content_fallback_reason=None):
     """Combine content intent with existing geometric detection and ASS fitting."""
     layout = (SubtitleLayout.short(settings) if clip.type == "short" else
               SubtitleLayout.normal(video.width or 1920, video.height or 1080, settings))
@@ -49,9 +50,12 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
     content_values = ({"contentPreferredLayout": content_choice.strategy, "highlightType": content_choice.highlight_type,
                        "framingEvidenceIds": content_choice.evidence_ids, "framingDecisionRevision": framing_revision,
                        "framingReason": content_choice.reason} if content_choice and not manual_framing else {})
-    framing_common = {**common, **({"policyVersion": SHORT_FRAMING_VERSION} if content_values else {})}
-    append_choice(document.choice_history, kind="framing", source="manual" if manual_framing else "automatic",
+    fallback_reason = content_fallback_reason if clip.type == "short" and not manual_framing else None
+    framing_common = {**common, **({"policyVersion": SHORT_FRAMING_VERSION} if content_values or fallback_reason else {})}
+    append_choice(document.choice_history, kind="framing",
+                  source="manual" if manual_framing else "fallback" if fallback_reason else "automatic",
                   reason="explicit_manual_override_preserved" if manual_framing else
+                  fallback_reason if fallback_reason else
                   content_choice.reason if content_choice else
                   crop.plan.fallback_reason or "existing_scene_crop_signals" if crop else "normal_source_frame_preserved",
                   values=choice_values({"shortLayout": clip.short_layout, "framingOffsetX": clip.framing_offset_x,

@@ -92,6 +92,26 @@ def test_manual_detail_values_survive_and_still_face_quality_gate():
     assert next(c for c in doc.choice_history if c.kind == "effects").source == "manual"
 
 
+def test_content_fallback_reason_survives_review_and_permanent_record(example):
+    from app.jobs.content_framing import content_framing_fallback_reason
+    from app.production_records import ProductionRecord, write_production_record
+    from app.scoring.short_framing import SHORT_FRAMING_VERSION
+
+    db, job, export, paths = example
+    doc, clip, _, _, settings, video = visual_example()
+    doc.job_id = job.id
+    export.candidate_id = clip.id
+    db.commit()
+    reason = content_framing_fallback_reason(TimeoutError("private error detail"))
+    decide(doc, clip, settings, video, content_fallback_reason=reason)
+    write_subtitle_review(doc, paths.job_outputs(job.id) / "subtitle_review.json")
+    record = ProductionRecord.model_validate_json(write_production_record(job, export, paths).read_bytes())
+    framing = next(c for c in record.choiceHistory if c.kind == "framing" and c.policyVersion == SHORT_FRAMING_VERSION)
+    assert framing.source == "fallback" and framing.stage == "applied" and framing.reason == reason
+    assert framing.values["resolvedLayout"] == "face_tracking_crop"
+    assert "private error detail" not in record.model_dump_json()
+
+
 def test_line_override_is_checked_not_only_base_style():
     doc, clip, _, _, settings, video = visual_example()
     decide(doc, clip, settings, video)
