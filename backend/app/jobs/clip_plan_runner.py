@@ -43,6 +43,7 @@ from app.candidates.select_candidates import (
     CandidateRejection,
     CandidateSelection,
     parse_selection_settings,
+    record_candidate_hard_gates,
     select_candidates,
     write_selected_clips,
     convert_selected_clip_to_normal,
@@ -233,6 +234,21 @@ def _codex_selection_with_diverse_refined_shorts(
         heatmap_segments=heatmap_segments,
     )
 
+    checked, hard_gate_rejections = record_candidate_hard_gates(
+        [*refined_pool_selection.normal_clips, *refined_pool_selection.shorts],
+        settings=settings, silence_segments=silence_segments,
+    )
+    checked_by_id = {candidate.id: candidate for candidate in checked}
+    refined_candidates = [checked_by_id.get(candidate.id, candidate) for candidate in refined_candidates]
+    refined_pool_selection = refined_pool_selection.model_copy(update={
+        "normal_clips": [candidate for candidate in checked if candidate.type == "normal" and candidate.hard_gate_passed],
+        "shorts": [candidate for candidate in checked if candidate.type == "short" and candidate.hard_gate_passed],
+        "rejected_candidates": [*refined_pool_selection.rejected_candidates, *hard_gate_rejections],
+        "hard_gate_passed_count": sum(candidate.hard_gate_passed is True for candidate in checked),
+        "hard_gate_rejected_count": len(hard_gate_rejections),
+        "normal_hard_gate_passed_count": sum(candidate.type == "normal" and candidate.hard_gate_passed is True for candidate in checked),
+        "short_hard_gate_passed_count": sum(candidate.type == "short" and candidate.hard_gate_passed is True for candidate in checked),
+    })
     cross_type_rejections: list[CandidateRejection] = []
     eligible_shorts: list[Candidate] = []
     parsed_settings = parse_selection_settings(settings)
@@ -1177,6 +1193,15 @@ def run_clip_plan_reselection(
                 scored_candidates,
                 transcript_segments,
             )
+            if kept_candidates:
+                # Old plans can carry an unrecorded check, or a manually changed range.
+                # Keep the user's picks, but do not keep stale/missing quality evidence.
+                kept_candidates, kept_gate_rejections = record_candidate_hard_gates(
+                    kept_candidates, settings=full_reselection_settings, silence_segments=silence_segments,
+                )
+                selection = selection.model_copy(update={
+                    "rejected_candidates": [*selection.rejected_candidates, *kept_gate_rejections],
+                })
             if is_ai_allocation(full_reselection_settings):
                 selection = allocate_selection(selection, full_reselection_settings, confirmed=kept_candidates)
                 scored_candidates = list({c.id: c for c in [*scored_candidates, *kept_candidates]}.values())

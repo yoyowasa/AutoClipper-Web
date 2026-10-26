@@ -2905,10 +2905,16 @@ def run_autoclipper_job(
                     manual_plan_path,
                 )
 
+            if selection_gate is not None and selection_gate.route == "failed":
+                raise PipelineExpectedError(
+                    "selection_gate_evaluation_failed",
+                    "選定の必須条件検査を完了できませんでした。品質チェックの記録を確認してください。",
+                )
+
             guarded_selection_needs_review = bool(
                 automation_mode in {"guarded", "auto"}
                 and selection_gate is not None
-                and selection_gate.route != "continue"
+                and selection_gate.route not in {"continue", "subtitle_review"}
             )
             manual_clip_plan_review = bool(
                 automation_mode not in {"guarded", "auto"}

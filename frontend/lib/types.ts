@@ -469,7 +469,10 @@ export type ResolvedClipTextStyle = {
 
 export type SubtitleStyleOverride = { start: number; end: number; style: ClipTextStyle };
 
+export type SelectionReviewWarning = { code: string; message: string; scope: "clip"; start: number; end: number };
+
 export type SubtitleReviewClip = {
+  selectionWarnings?: SelectionReviewWarning[];
   automaticDecisionState?: "idle" | "queued" | "generating" | "ready" | "failed";
   automaticDecisionError?: string | null;
   automaticDecisionRevision?: string | null;

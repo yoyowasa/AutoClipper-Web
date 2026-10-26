@@ -14,6 +14,8 @@ from app.audio.transcribe_faster_whisper import RepairWindow, TranscriptSegment,
 from app.render.subtitle_timing import chunk_units, usable_words
 from app.candidates.merge_boundaries import Candidate, ClipTextStyle, SubtitleStyleOverride, TextFontPreset
 from app.candidates.select_candidates import CandidateSelection
+from app.jobs.selection_warnings import SelectionReviewWarning, subtitle_review_warnings
+from app.jobs.automation import is_subtitle_only_auto
 from app.jobs.subtitle_gaps import SubtitleGap, refresh_review_gaps
 from app.overlay_text import normalize_overlay_text
 from app.posting_metadata import (
@@ -107,6 +109,7 @@ class PreviewFraming(BaseModel):
 
 
 class SubtitleReviewClip(BaseModel):
+    selection_warnings: list[SelectionReviewWarning] = Field(default_factory=list, alias="selectionWarnings")
     automatic_thumbnail: dict[str, Any] | None = Field(default=None, alias="automaticThumbnail")
     automatic_decision_revision: str | None = Field(default=None, alias="automaticDecisionRevision")
     automatic_decision_state: Literal["idle", "queued", "generating", "ready", "failed"] = Field(
@@ -664,6 +667,8 @@ def build_subtitle_review(
         clips.append(
             SubtitleReviewClip(
                 id=candidate.id,
+                selectionWarnings=(subtitle_review_warnings(candidate.risk_flags, candidate.start, candidate.end)
+                                   if is_subtitle_only_auto(render_settings or {}) else []),
                 type=candidate.type,
                 title=_candidate_title(candidate, type_indices[candidate.type]),
                 publicationTitle=_candidate_publication_title(candidate, normal_title_suffix),
