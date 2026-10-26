@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { getJobStatus, getSubtitleReview } from "../../api";
 import { livePreviewReference } from "../livePlaybackSource";
 import { contentDraftForClip } from "../drafts";
+import { loadReviewWithRenderStatus } from "../automaticStatus";
 import type { SubtitleReviewContext } from "./context";
 
 export function useReviewDocumentLoad(context: Pick<SubtitleReviewContext,
@@ -40,7 +41,7 @@ export function useReviewDocumentLoad(context: Pick<SubtitleReviewContext,
     let active = true;
     const requestGeneration = reviewRequestGenerationRef.current;
     const search = new URLSearchParams(window.location.search);
-    void getSubtitleReview(jobId)
+    void loadReviewWithRenderStatus(jobId)
       .then((document) => {
         if (
           !active ||
@@ -259,7 +260,7 @@ export function usePendingPreviewPoll(context: Pick<SubtitleReviewContext, "jobI
         return;
       }
       const requestGeneration = reviewRequestGenerationRef.current;
-      void getSubtitleReview(jobId)
+      void loadReviewWithRenderStatus(jobId)
         .then((document) => {
           if (
             active &&

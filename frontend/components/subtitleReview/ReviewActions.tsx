@@ -16,15 +16,7 @@ export function ReviewRenderControls({ context }: { context: SubtitleReviewViewC
     isFinalizing,
     startRendering
   } = context;
-  if (review.subtitleOnlyAuto) return <div className="border-t bg-sky-50 p-3 text-sm">
-    <p>字幕確定 {review.confirmedClipCount} / {review.totalClipCount}</p>
-    <p>{allConfirmed ? "自動決定・正式プレビュー・品質検証の完了後、自動で書き出します。" : "残りのclipの字幕を確認してください。"}</p>
-    {review.clips.filter(clip => clip.confirmed).map(clip => <p key={clip.id} className="mt-1 text-xs">
-      {clip.id}: {clip.automaticDecisionState === "failed" ? "自動処理で停止" : clip.automaticDecisionState !== "ready"
-        ? "文言を自動決定中" : clip.previewState === "failed" ? "正式プレビューの作成で停止"
-        : clip.previewState === "ready" ? "準備完了" : "正式プレビューを作成中"}
-    </p>)}
-  </div>;
+  if (review.subtitleOnlyAuto) return null;
   return (
     <div className="border-t border-neutral-300 bg-neutral-50 p-3">
               <div className="flex items-center justify-between gap-2 text-xs">
