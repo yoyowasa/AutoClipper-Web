@@ -126,6 +126,11 @@ class StoragePaths:
         key = sha256(f"{clip_id}:{start}:{end}".encode()).hexdigest()[:16]
         return self.job_outputs(job_id) / "thumbnails" / "frames" / f"c-{key}"
 
+    def short_framing_decision(self, job_id: str, clip_id: str, revision: str) -> Path:
+        from hashlib import sha256
+        key = sha256(f"{clip_id}:{revision}".encode()).hexdigest()[:24]
+        return self.job_outputs(job_id) / "framing" / f"{key}.json"
+
     def job_subtitles(self, job_id: str, clip_type: str) -> Path:
         folder_name = "shorts" if clip_type == "short" else "normal"
         path = self.job_outputs(job_id) / "subtitles" / folder_name

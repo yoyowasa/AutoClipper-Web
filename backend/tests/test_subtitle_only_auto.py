@@ -1,8 +1,10 @@
 """New auto policy: only subtitle confirmation is required from the operator."""
 import pytest
+from types import SimpleNamespace
 
 from app.jobs.automation import AUTOMATION_POLICY_SETTING, SUBTITLE_ONLY_AUTO_POLICY
 from app.jobs.confirmed_clip_decisions import run_confirmed_clip_decisions
+from app.jobs.content_framing import choose_content_framing
 from app.jobs.queue import get_enqueue_confirmed_clip_decisions
 from app.jobs.subtitle_review import load_subtitle_review
 from app.main import app
@@ -12,6 +14,11 @@ from test_guarded_quality_gate_integration import guarded_client as guarded_clie
 
 
 def setup_auto(guarded_client, monkeypatch, tmp_path, **kwargs):
+    from app.scoring.short_framing import ShortFramingChoice
+    def framing(document, clip, **kw):
+        return ShortFramingChoice(strategy="blur_background", highlightType="screen_content", reason="全体を見せる",
+                                  evidenceIds=[clip.segment_ids[0], "frame-0"]), "test-framing-input"
+    monkeypatch.setattr("app.jobs.content_framing.choose_content_framing", framing)
     data = prepare(guarded_client, monkeypatch, tmp_path, **kwargs)
     with data.factory() as db:
         job = db.get(Job, data.job_id)
@@ -113,6 +120,97 @@ def test_pause_after_selection_is_optional(guarded_client, monkeypatch, tmp_path
     assert data.client.post(f"/api/jobs/{data.job_id}/clip-plan/approve").status_code == 200
     assert data.run()[-1] == "awaiting_subtitle_review"
     assert data.calls == []
+
+
+def test_manual_framing_does_not_request_a_content_override(guarded_client, monkeypatch, tmp_path):
+    data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
+    data.run()
+    clip = load_subtitle_review(data.review_path).clips[0]
+    confirm(data, clip, framing={"framingOffsetX": 10, "framingOffsetY": 0, "framingZoom": 1})
+    monkeypatch.setattr("app.jobs.content_framing.choose_content_framing", lambda *a, **kw: pytest.fail("manual framing"))
+    assert decide(data) == "ready"
+    assert load_subtitle_review(data.review_path).clips[0].framing_offset_x == 10
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("timeout", "時間切れ"),
+    ("host_timeout", "時間切れ"),
+    ("bridge_error", "Codex中継のエラー"),
+    ("wrapped_schema", "検証失敗"),
+    ("schema", "検証失敗"),
+    ("evidence", "検証失敗"),
+    ("timeout_builtin", "時間切れ"),
+    ("io_error", "読み書きエラー"),
+    ("unexpected", "内容判断の処理エラー"),
+])
+def test_content_framing_failure_continues_with_visual_selection(guarded_client, monkeypatch, tmp_path, failure, reason):
+    from app.scoring.codex_title_hook_suggestions import CodexTitleHookSuggestionError
+    from app.scoring.short_framing import ShortFramingChoice
+    from test_automatic_visual_decisions import resolver
+
+    data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
+    data.run()
+    clip = load_subtitle_review(data.review_path).clips[0]
+    confirm(data, clip)
+    private = "untrusted model body must not appear"
+    calls = []
+    def generate(payload, images):
+        calls.append(payload)
+        if failure in {"timeout", "host_timeout", "bridge_error", "wrapped_schema"}:
+            code = {"timeout": "timeout", "host_timeout": "codex_timeout", "bridge_error": "codex_failed",
+                    "wrapped_schema": "output_invalid"}[failure]
+            raise CodexTitleHookSuggestionError(f"codex_title_hook_{code}", private)
+        if failure == "timeout_builtin":
+            raise TimeoutError(private)
+        if failure == "io_error":
+            raise OSError(private)
+        if failure == "unexpected":
+            raise RuntimeError(private)
+        return ShortFramingChoice(strategy=private if failure == "schema" else "face_tracking_crop",
+            highlightType="expression_reaction", reason=private, evidenceIds=["unknown", "frame-0"])
+    def extract(source, path, second):
+        path.write_bytes(b"frame")
+        return path
+    monkeypatch.setattr("app.jobs.content_framing.choose_content_framing",
+        lambda *args, **kwargs: choose_content_framing(*args, **kwargs, extractor=extract))
+    resolved = []
+    def visual(*args, **kwargs):
+        assert kwargs["layout"] == "auto" and "preferred_strategy" not in kwargs
+        result = resolver(*args, **kwargs)
+        resolved.append(result)
+        return result
+    assert decide(data, framing_selector=SimpleNamespace(generate=generate), crop_resolver=visual) == "ready"
+    updated = load_subtitle_review(data.review_path)
+    current = updated.clips[0]
+    assert current.confirmed and current.automatic_decision_state == "ready" and current.automatic_decision_error is None
+    assert len(calls) == len(resolved) == len(data.previews) == 1
+    assert current.automatic_crop.plan == resolved[0][0]  # use the legacy resolver's choice, not forced blur
+    # Saving also appends observed snapshots; inspect the applied framing decision.
+    framing = [c for c in updated.choice_history if c.kind == "framing" and c.clipId == clip.id and c.stage == "applied"][-1]
+    assert framing.source == "fallback" and framing.values["resolvedLayout"] == "face_tracking_crop"
+    assert "内容による画角判断ができなかった" in framing.reason and reason in framing.reason
+    assert "contentPreferredLayout" not in framing.values and "framingEvidenceIds" not in framing.values
+    assert private not in data.review_path.read_text(encoding="utf-8")
+    # The regular preview/quality gate path still queues final rendering.
+    import app.jobs.queue as queue
+    from app.jobs.runner import run_subtitle_review_preview
+    monkeypatch.setattr(queue, "enqueue_subtitle_review_render", lambda *args: data.renders.append(args))
+    run_subtitle_review_preview(*data.previews[0], paths=data.storage, session_factory=data.factory, dependencies=data.deps)
+    assert len(data.renders) == 1
+
+
+def test_visual_selection_error_is_not_hidden_by_content_fallback(guarded_client, monkeypatch, tmp_path):
+    data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
+    data.run()
+    clip = load_subtitle_review(data.review_path).clips[0]
+    confirm(data, clip)
+    def unavailable(*args, **kwargs):
+        raise TimeoutError("private details")
+    monkeypatch.setattr("app.jobs.content_framing.choose_content_framing", unavailable)
+    assert decide(data, crop_resolver=unavailable) == "failed"
+    current = load_subtitle_review(data.review_path).clips[0]
+    assert current.automatic_decision_state == "failed" and "画角" in current.automatic_decision_error
+    assert not data.previews
 
 
 def test_failure_is_visible_and_retry_does_not_need_title_input(guarded_client, monkeypatch, tmp_path):

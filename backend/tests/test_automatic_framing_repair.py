@@ -80,6 +80,13 @@ def test_saved_five_shorts_complete_without_human_or_stop_after_one_repair(
     guarded_client, monkeypatch, tmp_path, repair_failure, rerender,
 ):
     data, original = prepare_saved_job(guarded_client, monkeypatch, tmp_path)
+    from app.production_choices import append_choice
+    for clip in original.clips:
+        append_choice(original.choice_history, kind="framing", clipId=clip.id, stage="applied", source="automatic",
+                      reason="表情のリアクションを見せる", values={"contentPreferredLayout": clip.automatic_crop.plan.strategy_order[0],
+                      "highlightType": "expression_reaction", "framingEvidenceIds": [clip.segment_ids[0], "frame-0"],
+                      "framingDecisionRevision": "test-input", "framingReason": "表情のリアクションを見せる"})
+    write_subtitle_review(original, data.review_path)
     previous_ids = set()
     previous_files = {}
     if rerender:
@@ -168,7 +175,10 @@ def test_saved_five_shorts_complete_without_human_or_stop_after_one_repair(
                 history = [c for c in record["choiceHistory"] if c.get("policyVersion") == "safe_full_frame_v1"]
                 assert bool(history) == (export.candidate_id in repair["attemptedClipIds"])
                 if history:
-                    assert history[0]["reason"].startswith("automatic_framing_repair:")
+                    assert "完成検査のため" in history[0]["reason"] and "automatic_framing_repair:" in history[0]["reason"]
+                    assert history[0]["values"]["highlightType"] == "expression_reaction"
+                    assert history[0]["values"]["framingEvidenceIds"]
+                    assert history[0]["values"]["contentPreferredLayout"].endswith("tracking_crop")
     assert all(c.confirmed for c in updated.clips)
 
 

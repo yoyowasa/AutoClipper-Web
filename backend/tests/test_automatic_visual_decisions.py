@@ -92,6 +92,26 @@ def test_manual_detail_values_survive_and_still_face_quality_gate():
     assert next(c for c in doc.choice_history if c.kind == "effects").source == "manual"
 
 
+def test_content_fallback_reason_survives_review_and_permanent_record(example):
+    from app.jobs.content_framing import content_framing_fallback_reason
+    from app.production_records import ProductionRecord, write_production_record
+    from app.scoring.short_framing import SHORT_FRAMING_VERSION
+
+    db, job, export, paths = example
+    doc, clip, _, _, settings, video = visual_example()
+    doc.job_id = job.id
+    export.candidate_id = clip.id
+    db.commit()
+    reason = content_framing_fallback_reason(TimeoutError("private error detail"))
+    decide(doc, clip, settings, video, content_fallback_reason=reason)
+    write_subtitle_review(doc, paths.job_outputs(job.id) / "subtitle_review.json")
+    record = ProductionRecord.model_validate_json(write_production_record(job, export, paths).read_bytes())
+    framing = next(c for c in record.choiceHistory if c.kind == "framing" and c.policyVersion == SHORT_FRAMING_VERSION)
+    assert framing.source == "fallback" and framing.stage == "applied" and framing.reason == reason
+    assert framing.values["resolvedLayout"] == "face_tracking_crop"
+    assert "private error detail" not in record.model_dump_json()
+
+
 def test_line_override_is_checked_not_only_base_style():
     doc, clip, _, _, settings, video = visual_example()
     decide(doc, clip, settings, video)
@@ -230,12 +250,15 @@ def test_auto_styles_preview_final_ass_and_permanent_record_match(tmp_path, desi
     from app.production_records import ProductionRecord, write_production_record
     from app.render.render_exact_review_preview import render_exact_subtitle_review_preview
     from app.render.render_short import render_selected_short_candidates, ShortRenderResult
+    from app.scoring.short_framing import ShortFramingChoice
 
     doc, clip, selection, transcripts, settings, dimensions = visual_example()
     settings["normalThumbnailStyle"] = {"design": design}
     if design == "sopia":
         settings["shortBottomBannerEnabled"] = doc.short_bottom_banner_enabled = False
-    decide(doc, clip, settings, dimensions)
+    content = ShortFramingChoice(strategy="face_tracking_crop", highlightType="expression_reaction",
+                                 reason="発見に驚いた表情を見せる", evidenceIds=[clip.segment_ids[0], "frame-0"])
+    decide(doc, clip, settings, dimensions, content_choice=content, framing_revision="confirmed-framing-input")
     db, job, _old_export, paths = example
     job.settings_json = settings
     doc.job_id = job.id
@@ -260,6 +283,9 @@ def test_auto_styles_preview_final_ass_and_permanent_record_match(tmp_path, desi
     assert preview.subtitle_path.read_bytes() == Path(export.subtitle_path).read_bytes()
     assert all(call["automatic_crop"] == clip.automatic_crop for call in calls)
     record = ProductionRecord.model_validate_json(write_production_record(job, export, paths).read_bytes())
+    framing = next(c for c in record.choiceHistory if c.kind == "framing" and c.values.get("contentPreferredLayout"))
+    assert framing.values["framingReason"] == content.reason
+    assert framing.values["framingEvidenceIds"] == content.evidence_ids
     effects = [c for c in record.choiceHistory if c.kind == "effects" and c.policyVersion == VISUAL_DECISION_POLICY]
     assert effects[0].source == "automatic"
     assert effects[0].values["subtitleStyles"] == [s.model_dump(by_alias=True) for s in candidate.subtitle_styles]
