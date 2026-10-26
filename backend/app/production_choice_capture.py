@@ -33,6 +33,17 @@ CONTENT_GROUPS = {
 }
 
 
+def review_choice_values(clip: dict) -> dict:
+    groups = {key: {name: clip.get(name) for name in names} for key, names in CONTENT_GROUPS.items()}
+    groups["post_copy"] = {
+        "postMetadataSource": clip.get("postMetadataSource"),
+        # Descriptions can contain contact details; retain hashes only.
+        **{name: value_hash(clip.get(key)) for name, key in (
+            ("descriptionHash", "youtubeDescription"), ("tagsHash", "youtubeTags"), ("hashtagsHash", "youtubeHashtags"))},
+    }
+    return groups
+
+
 def read_history(path: Path | None) -> list:
     if path is None or not path.is_file():
         return []
@@ -47,6 +58,9 @@ def capture_document(document, path: Path | None, *, kind: str, source="unrecord
         if kind == "plan" and document.state not in {"awaiting_review", "approved", "manual_editing"}:
             document.choice_history = history
             return
+        saved_clips = {}
+        if kind == "review" and source == "manual" and path is not None and path.is_file():
+            saved_clips = {c["id"]: c for c in json.loads(path.read_text(encoding="utf-8")).get("clips", [])}
         for clip in payload["clips"]:
             if clip_ids is not None and clip["id"] not in clip_ids:
                 continue
@@ -57,20 +71,18 @@ def capture_document(document, path: Path | None, *, kind: str, source="unrecord
                 revision = f"clip-plan:{document.created_at}:{document.revision}"
             else:
                 from app.posting_metadata import build_post_metadata_revision_hash
-                groups = {key: {name: clip.get(name) for name in names} for key, names in CONTENT_GROUPS.items()}
-                groups["post_copy"] = {
-                    "postMetadataSource": clip.get("postMetadataSource"),
-                    # Posting descriptions can contain contact details. Keep comparison hashes, not their body.
-                    **{name: value_hash(clip.get(key)) for name, key in (
-                        ("descriptionHash", "youtubeDescription"), ("tagsHash", "youtubeTags"), ("hashtagsHash", "youtubeHashtags"))},
-                }
-                if source == "manual" and path is not None and path.is_file():
-                    old_clip = next((c for c in json.loads(path.read_text(encoding="utf-8")).get("clips", [])
-                                     if c["id"] == clip["id"]), None)
-                    copy_keys = ("thumbnailKicker", "thumbnailLine1", "thumbnailLine2")
-                    if old_clip and any(old_clip.get(key, "") != clip.get(key, "") for key in copy_keys):
+                groups = review_choice_values(clip)
+                old_clip = saved_clips.get(clip["id"])
+                old_groups = review_choice_values(old_clip) if old_clip else {}
+                if kinds is not None and "effects" in kinds:
+                    groups["effects"] = {"subtitleStyles": clip.get("subtitleStyles", [])}
+                    if old_clip:
+                        old_groups["effects"] = {"subtitleStyles": old_clip.get("subtitleStyles", [])}
+                if source == "manual" and (kinds is None or "thumbnail" in kinds):
+                    copy_keys = ("thumbnailKicker", "thumbnailLine1", "thumbnailLine2", "thumbnailFrameSeconds")
+                    if old_clip and any(old_clip.get(key) != clip.get(key) for key in copy_keys):
                         append_choice(history, kind="thumbnail", clipId=clip["id"], stage="applied", source="manual",
-                                      values={key: clip.get(key, "") for key in copy_keys},
+                                      values={key: clip.get(key) for key in copy_keys},
                                       policyVersion="subtitle-review-v1", reason="manual_thumbnail_copy")
                 segment_ids = set(clip.get("segmentIds", []))
                 revision = build_post_metadata_revision_hash(
@@ -84,8 +96,19 @@ def capture_document(document, path: Path | None, *, kind: str, source="unrecord
                     continue
                 # Compare actual values, independently of preview state and save timestamps.
                 previous = next((c for c in reversed(history) if c.kind == choice_kind and c.clipId == clip["id"]), None)
+                group_source = source
+                if kind == "review" and source == "manual" and old_groups.get(choice_kind) == values:
+                    # Retain revision evidence, not a new human decision. An earlier
+                    # real manual choice already has its own immutable history entry.
+                    if previous and previous.source == "manual":
+                        continue
+                    group_source = previous.source if previous and previous.values == values else "unrecorded"
                 if previous and previous.values == values and previous.inputRevision == revision:
                     continue
+                if kind == "review" and source == "unrecorded" and previous and previous.values == values:
+                    if previous.source == "manual":
+                        continue
+                    group_source = previous.source
                 candidates = []
                 selected_id = None
                 if choice_kind == "title_hook" and clip.get("postMetadataRevisionHash") == revision:
@@ -94,7 +117,7 @@ def capture_document(document, path: Path | None, *, kind: str, source="unrecord
                     candidates = [ChoiceCandidate(id=c["id"], values=choice_values(c), reason=c.get("reason"),
                                   outcome="selected" if c["id"] == selected_id else "not_selected")
                                   for c in clip.get("titleCandidates", [])]
-                resolved_source = source
+                resolved_source = group_source
                 if kind == "plan" and (clip["id"] in document.settings.get("keptClipIds", []) or
                                        clip.get("selectionReason") == MANUAL_SELECTION_REASON):
                     resolved_source = "manual"
@@ -123,8 +146,8 @@ def capture_auto_review_outcome(document, clip_id: str, *, error_type: str | Non
     from app.jobs.automation import HUMAN_SUBTITLE_REVIEW_POLICY, SUBTITLE_ONLY_AUTO_POLICY
     clip = next(item for item in document.clips if item.id == clip_id)
     manual_override = document.subtitle_only_auto and bool(set(clip.manual_decision_fields) & {
-        "title", "publication_title", "hook_text", "hook_scene_start", "hook_scene_end",
-        "youtube_description", "youtube_tags", "youtube_hashtags", "selected_title_id", "post_metadata_source",
+        "title", "publication_title", "hook_text", "hook_duration_seconds", "hook_scene_start", "hook_scene_end",
+        "selected_title_id", "thumbnail_kicker", "thumbnail_line1", "thumbnail_line2",
     })
     append_choice(
         document.choice_history, kind="title_hook", clipId=clip_id, stage="observed",

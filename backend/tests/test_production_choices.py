@@ -61,6 +61,7 @@ def test_choices_survive_recommendation_manual_edit_regeneration_and_output_dele
     review.clips[0].publication_title = "人が修正したタイトル"
     review.clips[0].selected_title_id = None
     write_subtitle_review(review, root / "subtitle_review.json", choice_source="manual")
+    manual_ids = [c.id for c in review.choice_history if c.source == "manual"]
     # Re-generation retains the old alternatives; stale evidence must not be selected.
     review.segments[0].text = "更新後のPRIVATE TRANSCRIPT"
     new_proposal = artifact(review)
@@ -76,7 +77,9 @@ def test_choices_survive_recommendation_manual_edit_regeneration_and_output_dele
     assert proposals[0].candidates[0].values["publicationTitle"] == "公開案a"
     applied = [c for c in record.choiceHistory if c.kind == "title_hook" and c.stage == "applied"]
     assert any(c.source == "automatic" and c.selectedIds == ["a"] and c.recommendedId == "a" for c in applied)
-    assert applied[-1].source == "manual" and applied[-1].selectedIds == [] and applied[-1].candidates == []
+    assert applied[-1].source == "manual" and applied[-1].selectedIds == []
+    assert all(c.outcome != "selected" for c in applied[-1].candidates)
+    assert [c.id for c in record.choiceHistory if c.source == "manual"] == manual_ids
     assert applied[-1].values["publicationTitle"] == export.title
     assert any(c.scope == "job" and any(p.id == "rejected" and p.outcome == "rejected" for p in c.candidates)
                for c in record.choiceHistory)
