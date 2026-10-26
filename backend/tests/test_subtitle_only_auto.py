@@ -12,6 +12,11 @@ from test_guarded_quality_gate_integration import guarded_client as guarded_clie
 
 
 def setup_auto(guarded_client, monkeypatch, tmp_path, **kwargs):
+    from app.scoring.short_framing import ShortFramingChoice
+    def framing(document, clip, **kw):
+        return ShortFramingChoice(strategy="blur_background", highlightType="screen_content", reason="全体を見せる",
+                                  evidenceIds=[clip.segment_ids[0], "frame-0"]), "test-framing-input"
+    monkeypatch.setattr("app.jobs.content_framing.choose_content_framing", framing)
     data = prepare(guarded_client, monkeypatch, tmp_path, **kwargs)
     with data.factory() as db:
         job = db.get(Job, data.job_id)
@@ -113,6 +118,30 @@ def test_pause_after_selection_is_optional(guarded_client, monkeypatch, tmp_path
     assert data.client.post(f"/api/jobs/{data.job_id}/clip-plan/approve").status_code == 200
     assert data.run()[-1] == "awaiting_subtitle_review"
     assert data.calls == []
+
+
+def test_manual_framing_does_not_request_a_content_override(guarded_client, monkeypatch, tmp_path):
+    data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
+    data.run()
+    clip = load_subtitle_review(data.review_path).clips[0]
+    confirm(data, clip, framing={"framingOffsetX": 10, "framingOffsetY": 0, "framingZoom": 1})
+    monkeypatch.setattr("app.jobs.content_framing.choose_content_framing", lambda *a, **kw: pytest.fail("manual framing"))
+    assert decide(data) == "ready"
+    assert load_subtitle_review(data.review_path).clips[0].framing_offset_x == 10
+
+
+def test_content_framing_failure_keeps_confirmation_actionable(guarded_client, monkeypatch, tmp_path):
+    data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
+    data.run()
+    clip = load_subtitle_review(data.review_path).clips[0]
+    confirm(data, clip)
+    def fail(*a, **kw):
+        raise ValueError("untrusted model body must not appear")
+    monkeypatch.setattr("app.jobs.content_framing.choose_content_framing", fail)
+    assert decide(data) == "failed"
+    updated = load_subtitle_review(data.review_path).clips[0]
+    assert "画角" in updated.automatic_decision_error and "untrusted" not in updated.automatic_decision_error
+    assert not data.previews
 
 
 def test_failure_is_visible_and_retry_does_not_need_title_input(guarded_client, monkeypatch, tmp_path):

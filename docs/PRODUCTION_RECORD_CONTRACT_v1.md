@@ -175,3 +175,10 @@ dry-runは読み取り・形式検証だけを行い、ディレクトリも記�
 - `text_style` の `titleStyle` / `hookStyle` / `subtitleStyle` は、プリセットのフォント・色を基に、文字の収まりと帯を考慮して決めたサイズ・位置。詳細編集の明示指定を残したものは `source=manual`。
 - `effects` の任意項目 `subtitleStyles` は `{start, end, style}` の配列。時刻は `timeBasis=source`（元動画秒）、styleは既存のClipTextStyle形式。候補にはセグメントID、時間、点数、採否と理由コードを保存し、字幕本文を複製しない。空配列は強調なし。動的ズーム・効果音等は未実装で、`additionalEffects=none` を維持する。
 - 既存のschemaVersion=1とchoiceHistoryの形式を維持する。旧記録の項目不足を推定して補わない。
+
+### 内容によるショート画角の選択（task-232）
+
+- 字幕確定後の`framing`に、`contentPreferredLayout`（内容から選んだ既存方式）、`highlightType`（表情・反応／画面内容／動き／会話／その他）、`framingReason`、`framingEvidenceIds`（確定字幕と代表コマのID）、`framingDecisionRevision`（入力記録のハッシュ）を任意で追加する。
+- 判断は既存のホストCodex中継の`short_framing_select`で行う。入力の確定字幕と代表コマのIDを照合し、架空の根拠は採用しない。入力・返答はジョブの`framing/`へ保存する。制作記録には字幕全文・画像・絶対パスを入れない。
+- `resolvedLayout`は検出・幾何条件を満たして実際に選ばれた方式。成立しない場合の`fallback`にも元の内容判断と根拠を保持する。完成検査による置換にはその旨と既存の理由コードを記録し、内容上の選択と区別する。
+- 手動指定は優先する。旧記録の欠落項目は未記録のままとし、新しい判断を推定して補わない。

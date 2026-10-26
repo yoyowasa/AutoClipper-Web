@@ -56,6 +56,11 @@ def repair_automatic_short_framing(
     for candidate in targets:
         clip = eligible[candidate.id]
         previous = rejected[clip.id]
+        content = next((item.values for item in reversed(document.choice_history)
+                        if item.clipId == clip.id and item.kind == "framing" and item.values.get("contentPreferredLayout")), {})
+        content = {key: content[key] for key in (
+            "contentPreferredLayout", "highlightType", "framingEvidenceIds", "framingDecisionRevision", "framingReason",
+        ) if key in content}
         for key, value in updates.items():
             setattr(clip, key, value)
         # The old preview is no longer a representation of the repaired framing.
@@ -66,13 +71,14 @@ def repair_automatic_short_framing(
         append_choice(
             document.choice_history, kind="framing", clipId=clip.id, stage="applied", source="fallback",
             policyVersion=FRAMING_REPAIR_POLICY, inputRevision=str(document.render_revision),
-            reason=f"automatic_framing_repair:{previous.get('reason', 'tracking_crop_containment_unverified')}",
+            reason=("内容に基づく画角を選びましたが、完成検査のため全体表示に置換しました。 " if content else "")
+            + f"automatic_framing_repair:{previous.get('reason', 'tracking_crop_containment_unverified')}",
             candidates=[ChoiceCandidate(
                 id="original_crop", values={"resolvedLayout": previous.get("strategy")},
                 outcome="rejected", reason=previous.get("reason"),
             )],
             values={"shortLayout": "blur_background", "resolvedLayout": "blur_background",
-                    "framingOffsetX": 0, "framingOffsetY": 0, "framingZoom": 1},
+                    "framingOffsetX": 0, "framingOffsetY": 0, "framingZoom": 1, **content},
         )
     target_ids = {candidate.id for candidate in targets}
     selection.shorts = [

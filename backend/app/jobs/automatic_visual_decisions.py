@@ -6,13 +6,14 @@ from app.production_choices import ChoiceCandidate, append_choice, choice_values
 from app.render.short_crop_decision import ShortCropDecision
 from app.render.render_short import SHORT_BANNER_HEIGHT
 from app.render.subtitles_ass import SubtitleLayout
+from app.scoring.short_framing import SHORT_FRAMING_VERSION
 
 
 VISUAL_DECISION_POLICY = "confirmed-subtitle-visuals-v2"
 
 
-def decide_visuals(document, clip, *, settings, video, source, crop_resolver=None):
-    """Use existing scene detection/ASS fitting, without another model or queue."""
+def decide_visuals(document, clip, *, settings, video, source, crop_resolver=None, content_choice=None, framing_revision=None):
+    """Combine content intent with existing geometric detection and ASS fitting."""
     layout = (SubtitleLayout.short(settings) if clip.type == "short" else
               SubtitleLayout.normal(video.width or 1920, video.height or 1080, settings))
     top = SHORT_BANNER_HEIGHT if clip.type == "short" and document.short_top_banner_enabled else 0
@@ -36,6 +37,7 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
             target_height=bottom - top, dialogue_windows=dialogue_windows_for_clip(
                 clip.start, clip.end, [TranscriptSegment(start=s.start, end=s.end, text=s.text) for s in segments],
             ),
+            **({"preferred_strategy": content_choice.strategy} if content_choice and not manual_framing else {}),
         )
         clip.automatic_crop = ShortCropDecision(start=clip.start, end=clip.end, width=video.width, height=video.height,
                                                target_height=bottom - top, layout=requested, plan=plan, faces=list(faces))
@@ -44,14 +46,24 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
                            "styles": [clip.title_style, clip.hook_style, clip.subtitle_style, clip.subtitle_styles]})
     common = dict(clipId=clip.id, stage="applied", policyVersion=VISUAL_DECISION_POLICY, inputRevision=revision)
     crop = clip.automatic_crop
+    content_values = ({"contentPreferredLayout": content_choice.strategy, "highlightType": content_choice.highlight_type,
+                       "framingEvidenceIds": content_choice.evidence_ids, "framingDecisionRevision": framing_revision,
+                       "framingReason": content_choice.reason} if content_choice and not manual_framing else {})
+    framing_common = {**common, **({"policyVersion": SHORT_FRAMING_VERSION} if content_values else {})}
     append_choice(document.choice_history, kind="framing", source="manual" if manual_framing else "automatic",
                   reason="explicit_manual_override_preserved" if manual_framing else
+                  content_choice.reason if content_choice else
                   crop.plan.fallback_reason or "existing_scene_crop_signals" if crop else "normal_source_frame_preserved",
                   values=choice_values({"shortLayout": clip.short_layout, "framingOffsetX": clip.framing_offset_x,
                       "framingOffsetY": clip.framing_offset_y, "framingZoom": clip.framing_zoom,
                       "resolvedLayout": crop.plan.strategy_order[0] if crop else "source",
                       "cropSignalSource": crop.plan.signal_source if crop else "source_video",
-                      "cropFallbackReason": crop.plan.fallback_reason if crop else None}), **common)
+                      "cropFallbackReason": crop.plan.fallback_reason if crop else None, **content_values}), **framing_common)
+    if content_values and crop and crop.plan.strategy_order[0] != content_choice.strategy:
+        append_choice(document.choice_history, kind="framing", source="fallback",
+                      reason="内容に基づく画角を選びましたが、検出・幾何条件を満たせないため全体表示に置換しました。",
+                      values=choice_values({**content_values, "resolvedLayout": crop.plan.strategy_order[0],
+                                            "cropFallbackReason": crop.plan.fallback_reason}), **framing_common)
     for role in ("title", "hook", "subtitle"):
         manual = f"{role}_style" in clip.manual_decision_fields
         append_choice(document.choice_history, kind="text_style", source="manual" if manual else "automatic",

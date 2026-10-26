@@ -777,8 +777,19 @@ def resolve_short_crop_plan(
     speaker_detector: SpeakerDetector = detect_speaker_for_clip,
     person_detector: PersonDetector = detect_person_for_clip,
     subject_detector: SubjectDetector = detect_subject_for_clip,
+    preferred_strategy: CropStrategy | None = None,
 ) -> tuple[CropPlan, Sequence[FaceDetection]]:
     """Resolve the same composition for rendering and the interactive crop guide."""
+    if preferred_strategy is not None:
+        from app.render.content_crop import resolve_content_crop
+        if face_detector is detect_faces_for_clip:
+            from app.video.content_face_detect import detect_content_faces_for_clip
+            face_detector = detect_content_faces_for_clip
+        return resolve_content_crop(
+            input_path, start, end, strategy=preferred_strategy, width=width, height=height,
+            target_height=target_height, dialogue_windows=dialogue_windows, face_detector=face_detector,
+            speaker_detector=speaker_detector, person_detector=person_detector, subject_detector=subject_detector,
+        )
     detections = _detect_faces_for_layout(
         layout,
         input_path=input_path,

@@ -45,6 +45,7 @@ class _BridgeEnvelope(BaseModel):
     task: Literal[
         "title_hook_suggestions", "thumbnail_copy_suggestions", "thumbnail_frame_rank",
         "thumbnail_emotion_select",
+        "short_framing_select",
         "channel_self_analysis",
     ] = "title_hook_suggestions"
     request_id: str = Field(pattern=r"^[0-9a-f]{32}$", alias="requestId")

@@ -26,6 +26,7 @@ VALUE_KEYS = frozenset({
     "resolvedLayout", "settingSource", "cropX", "cropY", "cropSignalSource", "cropFallbackReason",
     "cropAttemptedStrategies", "renderedTextStyles", "additionalEffects",
     "outputSize", "contentViewport", "subtitleStyles",
+    "contentPreferredLayout", "highlightType", "framingEvidenceIds", "framingDecisionRevision", "framingReason",
 })
 NESTED_KEYS = frozenset({
     "fontPreset", "fontName", "fontSize", "primaryColor", "outlineColor", "outlineWidth", "outerOutlineColor",

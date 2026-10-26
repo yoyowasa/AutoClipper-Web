@@ -47,7 +47,8 @@ def record_decision_failure(paths, job_id, clip_id, revision, message):
 
 def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=SessionLocal, paths=None,
                                  generator=generate_title_hook_suggestions_for_auto, thumbnail_generator=None,
-                                 enqueue_preview=None, candidate_extractor=None, emotion_selector=None, crop_resolver=None):
+                                 enqueue_preview=None, candidate_extractor=None, emotion_selector=None, crop_resolver=None,
+                                 framing_selector=None):
     paths = paths or get_storage_paths()
     directory = paths.job_outputs(job_id)
     path = subtitle_review_output_path(directory)
@@ -114,9 +115,16 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 prepare_confirmed_thumbnail(db, paths, job, video, document, clip,
                                             extractor=candidate_extractor, selector=emotion_selector)
             stage = "画角・文字サイズ・字幕強調の自動決定"
+            content_choice, framing_revision = None, None
+            if clip.type == "short" and "framing" not in clip.manual_decision_fields:
+                from app.jobs.content_framing import choose_content_framing
+                content_choice, framing_revision = choose_content_framing(
+                    document, clip, paths=paths, source=paths.resolve_stored_file(video.stored_path), selector=framing_selector,
+                )
             from app.jobs.automatic_visual_decisions import decide_visuals
             decide_visuals(document, clip, settings=settings, video=video,
-                           source=paths.resolve_stored_file(video.stored_path), crop_resolver=crop_resolver)
+                           source=paths.resolve_stored_file(video.stored_path), crop_resolver=crop_resolver,
+                           content_choice=content_choice, framing_revision=framing_revision)
             stage = "正式プレビューの準備"
             with subtitle_review_document_lock(directory):
                 latest = current()
