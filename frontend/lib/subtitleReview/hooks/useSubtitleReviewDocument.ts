@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { clipSegmentDrafts, clipDirtySegmentIds } from "../sharedSegments";
 import { subtitlePreviewEvents } from "../../subtitlePreview";
 import { subtitleInsertionConflict } from "../../subtitlePauseInsert";
@@ -9,6 +9,7 @@ import { isPreviewReady, shortTitleOutputExpected } from "../preview";
 import { normalizeReviewTitle } from "../text";
 import { contentDraftForClip, isClipContentDirty } from "../drafts";
 import { shortFramingEquals } from "../framing";
+import { reviewNeedsPolling } from "../automaticStatus";
 import { usePersistedReviewDrafts } from "./usePersistedReviewDrafts";
 import { useSubtitleReviewState } from "./useSubtitleReviewState";
 import type { SubtitleReviewContext } from "./context";
@@ -109,22 +110,7 @@ export function useSubtitleReviewDocument() {
     [review]
   );
   const visibleClips = activeClipType === "normal" ? normalClips : shortClips;
-  useEffect(() => {
-    if (review?.subtitleOnlyAuto && review.state !== "awaiting_review") {
-      state.router.push(`/jobs/${jobId}`);
-    }
-  }, [review?.subtitleOnlyAuto, review?.state, state.router, jobId]);
-
-  const hasPendingPreviews = Boolean(
-    (review?.subtitleOnlyAuto && review.state === "awaiting_review" && review.confirmedClipCount > 0) ||
-    review?.clips.some(
-      (clip) =>
-        clip.automaticDecisionState === "queued" || clip.automaticDecisionState === "generating" ||
-        clip.previewState === "queued" ||
-        clip.previewState === "rendering" ||
-        (review.state === "awaiting_review" && !clip.livePreviewVideoUrl && clip.previewState !== "failed")
-    )
-  );
+  const hasPendingPreviews = reviewNeedsPolling(review);
 
   usePendingPreviewPoll({ jobId, hasPendingPreviews, isUpdatingHookScene, reviewMutationCountRef, reviewRequestGenerationRef, setReview });
 
