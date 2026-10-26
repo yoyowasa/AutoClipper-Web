@@ -6,6 +6,7 @@ from pathlib import Path
 from statistics import fmean, pstdev
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
+from app.video.tracking_sample import TrackingSample, region_sample
 from app.video.face_detect import FaceDetection, detect_faces_for_clip
 from app.video.person_detect import PersonDetection, detect_person_for_clip
 
@@ -40,6 +41,7 @@ class SpeakerDetection:
     box: tuple[float, float, float, float]
     ambiguous: bool = False
     source: str = "dialogue_face_person"
+    samples: tuple[TrackingSample, ...] = ()
 
 
 FaceDetector = Callable[[str | Path, float, float], list[FaceDetection]]
@@ -141,6 +143,7 @@ def aggregate_speaker_regions(
     detection_count: int,
     ambiguous_windows: int = 0,
     min_detection_windows: int = 2,
+    samples: Sequence[TrackingSample] = (),
 ) -> SpeakerDetection | None:
     if len(regions) < min_detection_windows or window_count <= 0:
         return None
@@ -175,6 +178,7 @@ def aggregate_speaker_regions(
         detection_count=detection_count,
         box=(left, top, right, bottom),
         ambiguous=ambiguous_windows > 0,
+        samples=tuple(samples),
     )
 
 
@@ -192,6 +196,7 @@ def detect_speaker_for_clip(
         return None
 
     regions: list[SpeakerRegion] = []
+    samples: list[TrackingSample] = []
     ambiguous_windows = 0
     detection_count = 0
     for window in windows:
@@ -208,6 +213,10 @@ def detect_speaker_for_clip(
             continue
         if face_region is not None:
             regions.append(face_region)
+            # Keep each actual frame detection, not copies of the averaged window box.
+            for face in faces:
+                if _face_area(face) >= MIN_FACE_AREA and face.height >= MIN_REGION_HEIGHT:
+                    samples.append(region_sample(face, start=face.start, end=face.end, source="dialogue_face"))
             continue
 
         person_signal = person_detector(video_path, window_start, window_end)
@@ -218,10 +227,12 @@ def detect_speaker_for_clip(
             continue
         if person is not None:
             regions.append(person)
+            samples.extend(person_signal.samples)
 
     return aggregate_speaker_regions(
         regions,
         window_count=len(windows),
         detection_count=detection_count,
         ambiguous_windows=ambiguous_windows,
+        samples=samples,
     )

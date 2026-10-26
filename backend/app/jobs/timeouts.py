@@ -35,7 +35,14 @@ def job_media_timeout(
                       if clip["type"] == "short" else 0)
                      for clip in clips if clip_id is None or clip["id"] == clip_id]
         if durations:
-            return media_timeout(sum(durations))
+            repair_duration = 0.0
+            if name == "subtitle_review.json" and payload.get("subtitleOnlyAuto") and clip_id is None:
+                from app.jobs.automatic_framing_repair import FRAMING_REPAIR_MAX_ATTEMPTS
+                repair_duration = FRAMING_REPAIR_MAX_ATTEMPTS * sum(
+                    duration for clip, duration in zip(clips, durations, strict=True)
+                    if clip["type"] == "short" and "framing" not in clip.get("manualDecisionFields", [])
+                )
+            return media_timeout(sum(durations) + repair_duration)
     # Initial selection has no clip plan yet: reserve enough time for the
     # requested clips, including content-based longform candidates.
     with SessionLocal() as db:

@@ -1,3 +1,5 @@
+from functools import partial
+from app.jobs.automatic_framing_repair import repair_automatic_short_framing, record_framing_recheck
 from app.storage.completed_previews import prune_job_previews_after_completion
 from app.production_records import record_completed_productions
 from app.intelligence.performance_hints import attach_performance_hints, active_hint_uses
@@ -959,6 +961,33 @@ def _zip_type_dir(export_type: str) -> str:
     return "shorts" if export_type == "short" else "normal"
 
 
+def _render_short_outputs(
+    *, db, job, video, input_path, selected_candidates, transcript_segments,
+    settings, storage_paths, asset_storage_paths, dependencies, output_indices=None,
+):
+    return render_selected_short_candidates(
+        db=db,
+        job=job,
+        input_path=input_path,
+        selected_candidates=selected_candidates,
+        transcript_segments=transcript_segments,
+        burn_subtitles=bool(settings.get("burnSubtitles", True)),
+        normalize_audio=bool(settings.get("normalizeAudio", False)),
+        layout=settings.get("shortLayout", settings.get("layout", "auto")),
+        paths=storage_paths,
+        renderer=dependencies.short_renderer,
+        source_width=video.width,
+        source_height=video.height,
+        subtitle_settings=settings,
+        mode=settings.get("mode"),
+        short_overlay_title_mode=settings.get("shortOverlayTitleMode"),
+        short_top_banner_enabled=bool(settings.get("shortTopBannerEnabled", False)),
+        short_bottom_banner_enabled=bool(settings.get("shortBottomBannerEnabled", False)),
+        banner_paths=asset_storage_paths,
+        output_indices=output_indices,
+    )
+
+
 def _render_selected_outputs(
     *,
     db: Session,
@@ -992,25 +1021,10 @@ def _render_selected_outputs(
 
     _set_status(db, job, "rendering_shorts")
     visited_statuses.append("rendering_shorts")
-    short_result = render_selected_short_candidates(
-        db=db,
-        job=job,
-        input_path=input_path,
-        selected_candidates=selection.shorts,
-        transcript_segments=transcript_segments,
-        burn_subtitles=bool(settings.get("burnSubtitles", True)),
-        normalize_audio=bool(settings.get("normalizeAudio", False)),
-        layout=settings.get("shortLayout", settings.get("layout", "auto")),
-        paths=storage_paths,
-        renderer=dependencies.short_renderer,
-        source_width=video.width,
-        source_height=video.height,
-        subtitle_settings=settings,
-        mode=settings.get("mode"),
-        short_overlay_title_mode=settings.get("shortOverlayTitleMode"),
-        short_top_banner_enabled=bool(settings.get("shortTopBannerEnabled", False)),
-        short_bottom_banner_enabled=bool(settings.get("shortBottomBannerEnabled", False)),
-        banner_paths=asset_storage_paths,
+    short_result = _render_short_outputs(
+        db=db, job=job, video=video, input_path=input_path, selected_candidates=selection.shorts,
+        transcript_segments=transcript_segments, settings=settings, storage_paths=storage_paths,
+        asset_storage_paths=asset_storage_paths, dependencies=dependencies,
     )
 
     render_failures_path = _write_json(
@@ -3601,6 +3615,8 @@ def run_subtitle_review_render(
         rerender_publication_lease: Any | None = None
         rerender_attempt_id: str | None = None
         rerender_publication_marker_created = False
+        framing_repair: dict | None = None
+        post_render_gate: QualityGateDecision | None = None
 
         try:
             review_document = load_subtitle_review(review_path)
@@ -3776,37 +3792,54 @@ def run_subtitle_review_render(
                 dependencies=deps,
                 visited_statuses=visited_statuses,
             )
-            post_render_gate: QualityGateDecision | None = None
             if effective_automation_mode is not None:
-                gate_exports: Sequence[Any] = exports
-                if rerender_staging_paths is not None:
-                    gate_exports = _project_staged_exports_for_quality_gate(
-                        exports,
-                        staging_job_dir=rerender_staging_paths.job_outputs(job.id),
-                        canonical_job_dir=storage_paths.job_outputs(job.id),
-                    )
-                try:
-                    post_render_gate = evaluate_post_render_quality_gate(
-                        job_id=job.id,
-                        expected_export_count=(
-                            len(selection.normal_clips) + len(selection.shorts)
-                        ),
-                        exports=gate_exports,
-                        render_failures=[
-                            *normal_result.failures,
-                            *short_result.failures,
-                        ],
-                        mode=effective_automation_mode,
-                        document=review_document,
-                    )
-                except Exception as exc:
-                    post_render_gate = unknown_quality_gate_decision(
-                        job_id=job.id,
-                        stage="post_render",
-                        reason_code="post_render_gate_evaluation_failed",
-                        evidence={"errorType": exc.__class__.__name__},
-                        mode=effective_automation_mode,
-                    )
+                def inspect_outputs():
+                    gate_exports: Sequence[Any] = exports
+                    if rerender_staging_paths is not None:
+                        gate_exports = _project_staged_exports_for_quality_gate(
+                            exports,
+                            staging_job_dir=rerender_staging_paths.job_outputs(job.id),
+                            canonical_job_dir=storage_paths.job_outputs(job.id),
+                        )
+                    try:
+                        return evaluate_post_render_quality_gate(
+                            job_id=job.id,
+                            expected_export_count=(
+                                len(selection.normal_clips) + len(selection.shorts)
+                            ),
+                            exports=gate_exports,
+                            render_failures=[
+                                *normal_result.failures,
+                                *short_result.failures,
+                            ],
+                            mode=effective_automation_mode,
+                            document=review_document,
+                        )
+                    except Exception as exc:
+                        return unknown_quality_gate_decision(
+                            job_id=job.id,
+                            stage="post_render",
+                            reason_code="post_render_gate_evaluation_failed",
+                            evidence={"errorType": exc.__class__.__name__},
+                            mode=effective_automation_mode,
+                        )
+                post_render_gate = inspect_outputs()
+                short_result, framing_repair = repair_automatic_short_framing(
+                    db=db, document=review_document, selection=selection,
+                    decision=post_render_gate, result=short_result,
+                    render_shorts=partial(
+                        _render_short_outputs, db=db, job=job, video=video, input_path=input_path,
+                        transcript_segments=transcript_segments, settings=settings, storage_paths=render_paths,
+                        asset_storage_paths=storage_paths, dependencies=deps,
+                    ),
+                )
+                if framing_repair is not None:
+                    exports = [*normal_result.exports, *short_result.exports]
+                    write_subtitle_review(review_document, review_path)
+                    write_selected_clips(selection, job_dir / "selected_clips.json")
+                    _write_json(_render_failures_path, _render_failures_to_jsonable(normal_result, short_result))
+                    post_render_gate = inspect_outputs()
+                    record_framing_recheck(post_render_gate, framing_repair)
                 post_render_gate_path = _try_write_quality_gate_decision(
                     post_render_gate,
                     quality_gate_decision_path(job_dir, "post_render"),
@@ -3993,6 +4026,10 @@ def run_subtitle_review_render(
                         expected_attempt_id=rerender_attempt_id,
                     )
                 invalidate_quality_gate_decisions(job_dir, ("post_render",))
+                if framing_repair is not None and post_render_gate is not None and post_render_gate.outcome != "pass":
+                    # Keep the failed attempt's explanation after restoring prior
+                    # published files. A subsequent attempt invalidates it on entry.
+                    _try_write_quality_gate_decision(post_render_gate, quality_gate_decision_path(job_dir, "post_render"))
                 _restore_subtitle_rerender_for_retry(
                     db=db,
                     job=job,
@@ -4038,6 +4075,10 @@ def run_subtitle_review_render(
                         expected_attempt_id=rerender_attempt_id,
                     )
                 invalidate_quality_gate_decisions(job_dir, ("post_render",))
+                if framing_repair is not None and post_render_gate is not None and post_render_gate.outcome != "pass":
+                    # Keep the failed attempt's explanation after restoring prior
+                    # published files. A subsequent attempt invalidates it on entry.
+                    _try_write_quality_gate_decision(post_render_gate, quality_gate_decision_path(job_dir, "post_render"))
                 _restore_subtitle_rerender_for_retry(
                     db=db,
                     job=job,

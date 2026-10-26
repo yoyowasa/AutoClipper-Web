@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from app.video.tracking_sample import TrackingSample, region_sample
+
 
 @dataclass(frozen=True)
 class PersonBox:
@@ -27,6 +29,7 @@ class PersonDetection:
     box: tuple[float, float, float, float]
     ambiguous: bool = False
     source: str = "person_detection"
+    samples: tuple[TrackingSample, ...] = ()
 
 
 def _clamp_ratio(value: float) -> float:
@@ -74,15 +77,17 @@ def aggregate_person_detections(
     boxes_by_frame: Sequence[Sequence[PersonBox]],
     *,
     min_detection_frames: int = 2,
+    sample_times: Sequence[float] | None = None,
 ) -> PersonDetection | None:
     np = _load_numpy()
     if np is None:
         return None
 
     selected: list[PersonBox] = []
+    samples: list[TrackingSample] = []
     ambiguous_frames = 0
     detection_count = 0
-    for frame_boxes in boxes_by_frame:
+    for index, frame_boxes in enumerate(boxes_by_frame):
         candidates = [box for box in frame_boxes if _box_area(box) >= 0.015 and box.height >= 0.18]
         detection_count += len(candidates)
         if not candidates:
@@ -97,6 +102,8 @@ def aggregate_person_detections(
         if competing:
             ambiguous_frames += 1
         selected.append(primary)
+        if sample_times is not None:
+            samples.append(region_sample(primary, start=sample_times[index], end=sample_times[index], source="person_detection"))
 
     if len(selected) < min_detection_frames:
         return None
@@ -131,6 +138,7 @@ def aggregate_person_detections(
         detection_count=detection_count,
         box=(left, top, right, bottom),
         ambiguous=ambiguous_frames > 0,
+        samples=tuple(samples),
     )
 
 
@@ -189,8 +197,9 @@ def detect_person_for_clip(
         return None
 
     boxes_by_frame: list[list[PersonBox]] = []
+    sample_times = _sample_times(start, end, sample_count)
     try:
-        for time_seconds in _sample_times(start, end, sample_count):
+        for time_seconds in sample_times:
             capture.set(cv2.CAP_PROP_POS_MSEC, time_seconds * 1000)
             ok, frame = capture.read()
             if not ok or frame is None:
@@ -200,4 +209,4 @@ def detect_person_for_clip(
     finally:
         capture.release()
 
-    return aggregate_person_detections(boxes_by_frame)
+    return aggregate_person_detections(boxes_by_frame, sample_times=sample_times)
