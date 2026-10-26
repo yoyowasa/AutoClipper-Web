@@ -2726,6 +2726,7 @@ def apply_subtitle_review_clip(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="subtitle review clip not found",
             )
+        before_clip = clip.model_copy(deep=True)
         if request.hook_scene_start is not None and request.hook_scene_end is not None and video.has_audio is False:
             raise HTTPException(422, "音声のない元動画ではフック映像を追加できません。")
         allowed_segment_ids = set(clip.segment_ids)
@@ -3047,12 +3048,15 @@ def apply_subtitle_review_clip(
                 detail=str(exc),
             ) from exc
 
+        from app.jobs.review_manual_choices import changed_manual_fields, manual_choice_kinds
         from app.production_choice_capture import capture_document
-        capture_document(document, subtitle_review_output_path(output_dir), kind="review", source="manual", clip_ids={clip_id})
+        manual_fields = changed_manual_fields(before_clip, clip, request)
+        capture_document(document, subtitle_review_output_path(output_dir), kind="review", source="manual",
+                         clip_ids={clip_id}, kinds=manual_choice_kinds(manual_fields, request))
         document = _defer_subtitle_review_previews_unlocked(document, affected_clip_ids - {clip_id})
         if subtitle_only:
             from app.jobs.confirmed_clip_decisions import queue_clip_decisions
-            decision_revision = queue_clip_decisions(document, clip, request)
+            decision_revision = queue_clip_decisions(document, clip, manual_fields=manual_fields)
             document, queued_previews, _ = refresh_subtitle_review_preview_states(
                 job=job, video=video, document=document, paths=paths, clip_ids={clip_id},
             )
@@ -3067,7 +3071,7 @@ def apply_subtitle_review_clip(
             )
         document = confirm_review_clip(document, clip_id)
         document.has_saved_review_changes = True
-        _write_subtitle_review_unlocked(document, paths, choice_source="manual")
+        _write_subtitle_review_unlocked(document, paths)
         document, auto_render_queued = _prepare_auto_review_render_unlocked(
             db=db,
             job=job,

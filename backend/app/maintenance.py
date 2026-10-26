@@ -206,14 +206,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("prune-completed-previews", "delete-jobs", "backfill-production-records", "repair-youtube-video-formats",
-                    "strip-subtitle-ellipsis"):
+                    "strip-subtitle-ellipsis", "repair-unchanged-manual-choices"):
         child = commands.add_parser(command)
         mode = child.add_mutually_exclusive_group()
         mode.add_argument("--dry-run", action="store_true")
         mode.add_argument("--execute", action="store_true")
         if command == "delete-jobs":
             child.add_argument("--job-id", nargs="+", action="extend", required=True)
-        if command == "strip-subtitle-ellipsis":
+        if command in {"strip-subtitle-ellipsis", "repair-unchanged-manual-choices"}:
             child.add_argument("--job", required=True)
         if command == "backfill-production-records":
             child.add_argument("--force", action="store_true")
@@ -228,6 +228,9 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "repair-youtube-video-formats":
                 from app.intelligence.video_formats import repair_video_formats
                 report = repair_video_formats(db, execute=args.execute)
+            elif args.command == "repair-unchanged-manual-choices":
+                from app.production_choice_repair import repair_unchanged_manual_choices
+                report = repair_unchanged_manual_choices(db, paths, args.job, execute=args.execute)
             elif args.command == "strip-subtitle-ellipsis":
                 from app.jobs.subtitle_ellipsis import strip_subtitle_ellipsis
                 report = strip_subtitle_ellipsis(db, paths, args.job, execute=args.execute)
