@@ -524,6 +524,7 @@ export function useSubtitleReviewDocument() {
     get updateClipTextStyle() { return updateClipTextStyle; },
     get changeSelectedShortFraming() { return changeSelectedShortFraming; },
     get saveSelectedShortFraming() { return saveSelectedShortFraming; },
+    get resetSelectedShortFraming() { return resetSelectedShortFraming; },
     get saveShortBannerSettings() { return saveShortBannerSettings; },
     get generateTitleHookSuggestions() { return generateTitleHookSuggestions; },
     get applyTitleHookSuggestion() { return applyTitleHookSuggestion; },
@@ -563,6 +564,7 @@ export function useSubtitleReviewDocument() {
     updateClipTextStyle,
     changeSelectedShortFraming,
     saveSelectedShortFraming,
+    resetSelectedShortFraming,
     saveShortBannerSettings,
     saveHookScene
   } = useClipContentDraft(context);

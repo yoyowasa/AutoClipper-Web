@@ -2141,6 +2141,8 @@ def update_subtitle_review_settings(
                 detail="subtitle review is not awaiting edits",
             )
 
+        if document.subtitle_only_auto and request.short_layout is not None and request.short_layout != document.short_layout:
+            raise HTTPException(409, "画角方式は字幕確定後に、clipごとの詳細編集で変更してください。")
         settings = dict(job.settings_json or {})
         previous_top_banner_enabled = bool(settings.get("shortTopBannerEnabled", False))
         if request.character_preset_name is not None:
@@ -2161,6 +2163,8 @@ def update_subtitle_review_settings(
                 settings[key] = asset_id
         short_overlay_title_mode = _short_overlay_title_mode(settings)
         short_layout = request.short_layout or _short_layout(settings)
+        if document.subtitle_only_auto and short_layout != document.short_layout:
+            raise HTTPException(409, "画角方式は字幕確定後に、clipごとの詳細編集で変更してください。")
         if previous_top_banner_enabled and not request.short_top_banner_enabled:
             short_overlay_title_mode = "always"
         settings["shortTopBannerEnabled"] = request.short_top_banner_enabled
@@ -2567,6 +2571,22 @@ def update_subtitle_review_hook_scene(
     return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
 
+@router.post("/{job_id}/subtitle-review/clips/{clip_id}/framing/reset", response_model=SubtitleReviewDocument)
+def reset_subtitle_review_clip_framing(
+    job_id: str, clip_id: str, db: Session = Depends(get_db), paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_decisions: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_confirmed_clip_decisions),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    if not is_subtitle_only_auto(job.settings_json or {}):
+        raise HTTPException(409, "字幕のみ確認autoのショートで使える操作です。")
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(409, "元動画がありません。")
+    from app.api.automatic_review_framing import update_automatic_framing
+    return update_automatic_framing(job, video, clip_id, None, db, paths, None,
+                                    reset=True, enqueue_decisions=enqueue_decisions)
+
+
 @router.patch(
     "/{job_id}/subtitle-review/clips/{clip_id}/framing",
     response_model=SubtitleReviewDocument,
@@ -2577,6 +2597,7 @@ def update_subtitle_review_clip_framing(
     request: SubtitleReviewClipFramingUpdateRequest,
     db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
 ) -> SubtitleReviewDocument:
     job = _get_job_or_404(db, job_id)
     video = db.get(Video, job.video_id)
@@ -2585,6 +2606,9 @@ def update_subtitle_review_clip_framing(
             status_code=status.HTTP_409_CONFLICT,
             detail="source video record is unavailable",
         )
+    if is_subtitle_only_auto(job.settings_json or {}):
+        from app.api.automatic_review_framing import update_automatic_framing
+        return update_automatic_framing(job, video, clip_id, request, db, paths, enqueue_preview)
     if job.status != "awaiting_subtitle_review":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -2727,6 +2751,16 @@ def apply_subtitle_review_clip(
                 detail="subtitle review clip not found",
             )
         before_clip = clip.model_copy(deep=True)
+        if subtitle_only and request.framing is not None:
+            from app.jobs.manual_framing import framing_edit_error
+            framing_changed = any(
+                getattr(request.framing, name) is not None
+                and getattr(request.framing, name) != (clip.short_layout or document.short_layout
+                                                     if name == "short_layout" else getattr(clip, name))
+                for name in request.framing.model_fields_set
+            )
+            if framing_changed and (error := framing_edit_error(document, clip)):
+                raise HTTPException(409, error)
         if request.hook_scene_start is not None and request.hook_scene_end is not None and video.has_audio is False:
             raise HTTPException(422, "音声のない元動画ではフック映像を追加できません。")
         allowed_segment_ids = set(clip.segment_ids)
@@ -3029,6 +3063,8 @@ def apply_subtitle_review_clip(
                 )
                 clip.preview_framing = None
                 if request.framing.short_layout is not None:
+                    if subtitle_only and request.framing.short_layout != (clip.short_layout or document.short_layout):
+                        clip.automatic_crop = None
                     clip.short_layout = request.framing.short_layout
             document, _contract_changed = refresh_review_render_contract(
                 document,
@@ -3051,8 +3087,11 @@ def apply_subtitle_review_clip(
         from app.jobs.review_manual_choices import changed_manual_fields, manual_choice_kinds
         from app.production_choice_capture import capture_document
         manual_fields = changed_manual_fields(before_clip, clip, request)
+        if subtitle_only and "framing" in manual_fields:
+            from app.jobs.manual_framing import record_manual_framing
+            record_manual_framing(document, clip, before_clip)
         capture_document(document, subtitle_review_output_path(output_dir), kind="review", source="manual",
-                         clip_ids={clip_id}, kinds=manual_choice_kinds(manual_fields, request))
+                         clip_ids={clip_id}, kinds=manual_choice_kinds(manual_fields, request) - ({"framing"} if subtitle_only else set()))
         document = _defer_subtitle_review_previews_unlocked(document, affected_clip_ids - {clip_id})
         if subtitle_only:
             from app.jobs.confirmed_clip_decisions import queue_clip_decisions

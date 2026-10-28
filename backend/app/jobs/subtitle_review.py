@@ -299,6 +299,7 @@ class SubtitleReviewClip(BaseModel):
 
 
 class SubtitleReviewDocument(BaseModel):
+    render_clip_ids: list[str] | None = Field(default=None, alias="renderClipIds", exclude_if=lambda v: v is None)
     automatic_stop_reasons: list[str] = Field(default_factory=list, alias="automaticStopReasons")
     subtitle_only_auto: bool = Field(default=False, alias="subtitleOnlyAuto")
     choice_history: list[ProductionChoice] = Field(default_factory=list, alias="choiceHistory", exclude_if=lambda v: not v)

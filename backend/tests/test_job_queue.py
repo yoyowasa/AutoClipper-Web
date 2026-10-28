@@ -53,6 +53,21 @@ class FakeQueue:
         self.jobs[job_id] = FakeJob(JobStatus.QUEUED)
 
 
+@pytest.mark.parametrize("framing_only", [False, True])
+def test_confirmed_decisions_reuses_queue_for_explicit_framing_reset(monkeypatch, framing_only):
+    from app.jobs.confirmed_clip_decisions import run_confirmed_clip_decisions
+    queue = FakeQueue()
+    monkeypatch.setattr(queue_module, "get_queue", lambda: queue)
+    monkeypatch.setattr(queue_module, "job_media_timeout", lambda *a, **kw: 3600)
+    queue_module.enqueue_confirmed_clip_decisions("job", "clip", "revision", framing_only=framing_only)
+    queue_module.enqueue_confirmed_clip_decisions("job", "clip", "revision", framing_only=framing_only)
+    assert len(queue.calls) == 1
+    function, args, kwargs = queue.calls[0]
+    assert function is run_confirmed_clip_decisions and args == ("job", "clip", "revision")
+    assert kwargs["job_timeout"] == 5400 and kwargs["unique"] is True
+    assert kwargs.get("framing_only", False) is framing_only
+
+
 def test_retry_enqueue_uses_unique_rq_job_id(monkeypatch: pytest.MonkeyPatch) -> None:
     queue = FakeQueue()
     monkeypatch.setattr(queue_module, "get_queue", lambda: queue)

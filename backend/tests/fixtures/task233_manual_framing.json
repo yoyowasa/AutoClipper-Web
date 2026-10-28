@@ -1,0 +1,178 @@
+{
+  "subtitle_only_auto": true,
+  "short_top_banner_enabled": true,
+  "short_bottom_banner_enabled": true,
+  "clips": [
+    {
+      "id": "cand_short_363760_436240_11834381df",
+      "type": "short",
+      "confirmed": true,
+      "preview_state": "ready",
+      "preview_spec_hash": "e4fcc1e6a422481e1be305144e2bfcef33145f951b6044a74816569062e10811",
+      "preview_video_url": "/api/jobs/job_2a26bd49a2fc459ead6f24892252fdf5/subtitle-review/clips/cand_short_363760_436240_11834381df/preview-video?specHash=e4fcc1e6a422481e1be305144e2bfcef33145f951b6044a74816569062e10811",
+      "automatic_decision_state": "ready",
+      "manual_decision_fields": []
+    },
+    {
+      "id": "cand_short_4059850_4098689_28ebc63e2c",
+      "type": "short",
+      "confirmed": true,
+      "preview_state": "ready",
+      "preview_spec_hash": "41a6f4499b8a4fbbaf88efb862e2a2bea6cbd9a42c6c0606a44b91f99c13cf67",
+      "preview_video_url": "/api/jobs/job_2a26bd49a2fc459ead6f24892252fdf5/subtitle-review/clips/cand_short_4059850_4098689_28ebc63e2c/preview-video?specHash=41a6f4499b8a4fbbaf88efb862e2a2bea6cbd9a42c6c0606a44b91f99c13cf67",
+      "automatic_decision_state": "ready",
+      "manual_decision_fields": []
+    },
+    {
+      "id": "cand_short_4694830_4741470_1d666e7a07",
+      "type": "short",
+      "confirmed": true,
+      "preview_state": "ready",
+      "preview_spec_hash": "f06db6a40ff43a6d72a9465d2cb52caeb650e635ab14ac2cda6aa4944b581b93",
+      "preview_video_url": "/api/jobs/job_2a26bd49a2fc459ead6f24892252fdf5/subtitle-review/clips/cand_short_4694830_4741470_1d666e7a07/preview-video?specHash=f06db6a40ff43a6d72a9465d2cb52caeb650e635ab14ac2cda6aa4944b581b93",
+      "automatic_decision_state": "ready",
+      "manual_decision_fields": []
+    },
+    {
+      "id": "cand_short_3057050_3085010_b6c7a7b9e6",
+      "type": "short",
+      "confirmed": true,
+      "preview_state": "ready",
+      "preview_spec_hash": "ffb64a01f6a579acead4965df2e827dd9370721986ba6f4805823c6bcc19db1e",
+      "preview_video_url": "/api/jobs/job_2a26bd49a2fc459ead6f24892252fdf5/subtitle-review/clips/cand_short_3057050_3085010_b6c7a7b9e6/preview-video?specHash=ffb64a01f6a579acead4965df2e827dd9370721986ba6f4805823c6bcc19db1e",
+      "automatic_decision_state": "ready",
+      "manual_decision_fields": [
+        "framing"
+      ]
+    },
+    {
+      "id": "cand_short_2852890_2916010_7b61bb6751",
+      "type": "short",
+      "confirmed": true,
+      "preview_state": "ready",
+      "preview_spec_hash": "5f2c92c2c1995b75b615a3b81738ad50240a161817cdcee6bc4c6cbf76b2caf2",
+      "preview_video_url": "/api/jobs/job_2a26bd49a2fc459ead6f24892252fdf5/subtitle-review/clips/cand_short_2852890_2916010_7b61bb6751/preview-video?specHash=5f2c92c2c1995b75b615a3b81738ad50240a161817cdcee6bc4c6cbf76b2caf2",
+      "automatic_decision_state": "ready",
+      "manual_decision_fields": [
+        "framing"
+      ]
+    }
+  ],
+  "inspected": [
+    {
+      "clipId": "cand_short_363760_436240_11834381df",
+      "strategy": "blur_background",
+      "cropConfidence": 1.0,
+      "cropFallbackReason": null,
+      "trackingContainment": null,
+      "trackingEvidence": null,
+      "topBannerExpected": true,
+      "bottomBannerExpected": true,
+      "humanPreviewAccepted": false
+    },
+    {
+      "clipId": "cand_short_4059850_4098689_28ebc63e2c",
+      "strategy": "face_tracking_crop",
+      "cropConfidence": 1.0,
+      "cropFallbackReason": null,
+      "trackingContainment": true,
+      "trackingEvidence": {
+        "provider": "render_tracking_geometry_v1",
+        "strategy": "face_tracking_crop",
+        "sampleCount": 5,
+        "distinctSampleTimestamps": 5,
+        "outsideSampleIndexes": [],
+        "crop": {
+          "x": 674.0,
+          "y": 0.0,
+          "width": 1080.0,
+          "height": 1200.0
+        },
+        "safeArea": {
+          "x": 746.0,
+          "y": 96.0,
+          "width": 936.0,
+          "height": 744.0
+        }
+      },
+      "topBannerExpected": true,
+      "bottomBannerExpected": true,
+      "humanPreviewAccepted": false
+    },
+    {
+      "clipId": "cand_short_4694830_4741470_1d666e7a07",
+      "strategy": "face_tracking_crop",
+      "cropConfidence": 0.8996913580246915,
+      "cropFallbackReason": null,
+      "trackingContainment": true,
+      "trackingEvidence": {
+        "provider": "render_tracking_geometry_v1",
+        "strategy": "face_tracking_crop",
+        "sampleCount": 5,
+        "distinctSampleTimestamps": 5,
+        "outsideSampleIndexes": [],
+        "crop": {
+          "x": 692.0,
+          "y": 0.0,
+          "width": 1080.0,
+          "height": 1200.0
+        },
+        "safeArea": {
+          "x": 764.0,
+          "y": 96.0,
+          "width": 936.0,
+          "height": 744.0
+        }
+      },
+      "topBannerExpected": true,
+      "bottomBannerExpected": true,
+      "humanPreviewAccepted": false
+    },
+    {
+      "clipId": "cand_short_3057050_3085010_b6c7a7b9e6",
+      "strategy": "face_tracking_crop",
+      "cropConfidence": 0.4492746913580248,
+      "cropFallbackReason": null,
+      "trackingContainment": false,
+      "trackingEvidence": {
+        "provider": "render_tracking_geometry_v1",
+        "strategy": "face_tracking_crop",
+        "sampleCount": 4,
+        "distinctSampleTimestamps": 3,
+        "outsideSampleIndexes": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "crop": {
+          "x": 670.0,
+          "y": 0.0,
+          "width": 1080.0,
+          "height": 1200.0
+        },
+        "safeArea": {
+          "x": 742.0,
+          "y": 96.0,
+          "width": 936.0,
+          "height": 744.0
+        },
+        "reason": "tracking_subject_outside_safe_area"
+      },
+      "topBannerExpected": true,
+      "bottomBannerExpected": true,
+      "humanPreviewAccepted": false
+    },
+    {
+      "clipId": "cand_short_2852890_2916010_7b61bb6751",
+      "strategy": "blur_background",
+      "cropConfidence": 1.0,
+      "cropFallbackReason": null,
+      "trackingContainment": null,
+      "trackingEvidence": null,
+      "topBannerExpected": true,
+      "bottomBannerExpected": true,
+      "humanPreviewAccepted": false
+    }
+  ]
+}

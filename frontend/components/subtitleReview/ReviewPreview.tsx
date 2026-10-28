@@ -7,6 +7,7 @@ import { ClipTextOverlay } from "../ClipTextStyleEditor";
 import { formatTime, clamp } from "../../lib/subtitleReview/display";
 import { previewVideoSrc } from "../../lib/subtitleReview/preview";
 import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/context";
+import { canEditManualFraming } from "../../lib/subtitleReview/manualFraming";
 import { ReviewShortFraming } from "./ReviewStyleFraming";
 
 export function ReviewPreview({ context }: { context: SubtitleReviewViewContext }) {
@@ -96,12 +97,16 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                       <div>
                         <p className="text-sm font-semibold text-neutral-900">ショート画角</p>
                         <p className="text-xs text-neutral-500">
-                          画角は下書きに反映し、clipの確定時にまとめて保存します。
+                          {review.subtitleOnlyAuto
+                            ? canEditManualFraming(review, selectedClip)
+                              ? "手で調整して保存すると、このclipだけプレビューと書き出しを更新します。"
+                              : "字幕確定後に内容から画角を自動決定します。調整は自動決定後にできます。"
+                            : "画角は下書きに反映し、clipの確定時にまとめて保存します。"}
                         </p>
                       </div>
 
                     </div>
-                    <details open={!review.subtitleOnlyAuto}>
+                    {canEditManualFraming(review, selectedClip) && <details open={!review.subtitleOnlyAuto}>
                       <summary className="cursor-pointer p-2 text-sm">画角の詳細編集（任意）</summary>
                     {selectedShortFramingDraft ? (
                       <div className="space-y-3 border-b border-neutral-300 bg-neutral-50 px-4 py-3">
@@ -119,7 +124,7 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                         </p> : null}
                       </div>
                     ) : null}
-                    </details>
+                    </details>}
                   </div>
                 ) : null}
                 <div className="subtitle-video-area flex items-start justify-center bg-neutral-100 p-3 sm:p-4 2xl:h-full 2xl:min-h-0 2xl:flex-1 2xl:items-stretch 2xl:overflow-hidden">

@@ -1,6 +1,7 @@
 "use client";
 
-import { updateSubtitleReviewShortBannerSettings } from "../../api";
+import { canEditManualFraming } from "../manualFraming";
+import { resetSubtitleReviewClipFraming, updateSubtitleReviewClipFraming, updateSubtitleReviewShortBannerSettings } from "../../api";
 import { type ClipTextTarget } from "../../clipTextStyle";
 import type { ClipTextStyle, SubtitleReviewClipFramingUpdateRequest, SubtitleReviewDocument } from "../../types";
 import { shortFramingEquals } from "../framing";
@@ -62,7 +63,7 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
     update: Partial<SubtitleReviewClipFramingUpdateRequest>
   ): SubtitleReviewClipFramingUpdateRequest | null {
     const { selectedClip, selectedShortFramingDraft, setShortFramingDrafts } = context;
-    if (!selectedClip || selectedClip.type !== "short") {
+    if (!selectedClip || selectedClip.type !== "short" || (context.review && !canEditManualFraming(context.review, selectedClip))) {
       return null;
     }
     const current =
@@ -82,9 +83,40 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
     return next;
   }
 
+  async function resetSelectedShortFraming(clipId: string) {
+    return saveAutomaticFraming(clipId, null);
+  }
+
+  async function saveAutomaticFraming(clipId: string, framing: SubtitleReviewClipFramingUpdateRequest | null) {
+    const { setShortFramingDrafts, setShowSavedPreview, review } = context;
+    const clip = review?.clips.find(item => item.id === clipId);
+    if (!review?.subtitleOnlyAuto) return false;
+    if (!clip || !canEditManualFraming(review, clip) || context.hasReviewMutationInFlight) return false;
+    context.beginReviewMutation();
+    context.setSavingShortFramingClipId(clipId);
+    try {
+      const updated = framing === null
+        ? await resetSubtitleReviewClipFraming(context.jobId, clipId)
+        : await updateSubtitleReviewClipFraming(context.jobId, clipId, framing);
+      context.locallyUpdatedReviewRef.current = updated;
+      context.setReview(updated);
+      setShortFramingDrafts(current => { const next = { ...current }; delete next[clipId]; return next; });
+      context.setError(null);
+      setShowSavedPreview(false);
+      return true;
+    } catch (caught) {
+      context.setError(caught instanceof Error ? caught.message : "画角を保存できませんでした。");
+      return false;
+    } finally {
+      context.setSavingShortFramingClipId(null);
+      context.endReviewMutation();
+    }
+  }
+
   async function saveSelectedShortFraming(clipId: string, framing: SubtitleReviewClipFramingUpdateRequest) {
     const { setShortFramingDrafts, setShowSavedPreview, review } = context;
     const clip = review?.clips.find(item => item.id === clipId);
+    if (review?.subtitleOnlyAuto) return saveAutomaticFraming(clipId, framing);
     const unchanged = clip && shortFramingEquals(framing, { framingOffsetX: clip.framingOffsetX,
       framingOffsetY: clip.framingOffsetY, framingZoom: clip.framingZoom, shortLayout: clip.shortLayout ?? review?.shortLayout });
     setShortFramingDrafts(current => {
@@ -221,5 +253,5 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
     videoRef.current?.pause();
     updateClipContentDraft(selectedClip.id, { hookSceneStart: start, hookSceneEnd: end });
   }
-  return { updateClipContentDraft, updateClipTextStyle, changeSelectedShortFraming, saveSelectedShortFraming, saveShortBannerSettings, saveHookScene };
+  return { updateClipContentDraft, updateClipTextStyle, changeSelectedShortFraming, saveSelectedShortFraming, resetSelectedShortFraming, saveShortBannerSettings, saveHookScene };
 }

@@ -1957,6 +1957,13 @@ def _post_render_visual_check(
         applicable=bool(short_clips),
     )
     human_accepted_ids = set() if document.subtitle_only_auto else set(human_visual_evidence["acceptedReadyClipIds"])
+    manual_accepted_ids = {
+        clip.id for clip in short_clips
+        if document.subtitle_only_auto and "framing" in clip.manual_decision_fields
+        and clip.id in human_visual_evidence["acceptedReadyClipIds"]
+        and clip.automatic_decision_state == "ready"
+    }
+    human_accepted_ids.update(manual_accepted_ids)
     failures: list[dict[str, Any]] = []
     unknown: list[dict[str, Any]] = []
     inspected: list[dict[str, Any]] = []
@@ -1991,7 +1998,7 @@ def _post_render_visual_check(
             confidence = None
         tracking_status: bool | None = None
         tracking_summary: dict[str, Any] | None = None
-        if strategy in {
+        if clip_id not in manual_accepted_ids and strategy in {
             "face_tracking_crop",
             "speaker_tracking_crop",
             "person_tracking_crop",
@@ -2017,6 +2024,9 @@ def _post_render_visual_check(
         inspected.append(item)
         if banner_mismatch:
             failures.append({**item, "reason": "rendered_overlay_contract_mismatch"})
+            continue
+        if clip_id in manual_accepted_ids:
+            item["approvalSource"] = "manual_framing"
             continue
         if tracking_status is False:
             failures.append({**item, "reason": "tracking_subject_outside_safe_area"})

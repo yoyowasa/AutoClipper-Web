@@ -431,7 +431,7 @@ def get_enqueue_thumbnail_candidates() -> Callable[[str, str], None]:
     return enqueue_thumbnail_candidates
 
 
-def enqueue_confirmed_clip_decisions(job_id: str, clip_id: str, revision: str) -> None:
+def enqueue_confirmed_clip_decisions(job_id: str, clip_id: str, revision: str, *, framing_only: bool = False) -> None:
     from app.jobs.confirmed_clip_decisions import run_confirmed_clip_decisions
     queue = get_queue()
     rq_id = f"confirmed-clip-{job_id}-{revision}"
@@ -440,7 +440,8 @@ def enqueue_confirmed_clip_decisions(job_id: str, clip_id: str, revision: str) -
         return
     try:
         queue.enqueue(run_confirmed_clip_decisions, job_id, clip_id, revision,
-                      job_timeout=job_media_timeout(job_id, clip_id=clip_id) + 1800, job_id=rq_id, unique=True)
+                      job_timeout=job_media_timeout(job_id, clip_id=clip_id) + 1800, job_id=rq_id, unique=True,
+                      **({"framing_only": True} if framing_only else {}))
     except DuplicateJobError:
         return
 
