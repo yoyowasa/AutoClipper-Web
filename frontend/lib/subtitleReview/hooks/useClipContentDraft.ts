@@ -1,6 +1,7 @@
 "use client";
 
-import { updateSubtitleReviewShortBannerSettings } from "../../api";
+import { canEditManualFraming } from "../manualFraming";
+import { updateSubtitleReviewClipFraming, updateSubtitleReviewShortBannerSettings } from "../../api";
 import { type ClipTextTarget } from "../../clipTextStyle";
 import type { ClipTextStyle, SubtitleReviewClipFramingUpdateRequest, SubtitleReviewDocument } from "../../types";
 import { shortFramingEquals } from "../framing";
@@ -62,7 +63,7 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
     update: Partial<SubtitleReviewClipFramingUpdateRequest>
   ): SubtitleReviewClipFramingUpdateRequest | null {
     const { selectedClip, selectedShortFramingDraft, setShortFramingDrafts } = context;
-    if (!selectedClip || selectedClip.type !== "short") {
+    if (!selectedClip || selectedClip.type !== "short" || (context.review && !canEditManualFraming(context.review, selectedClip))) {
       return null;
     }
     const current =
@@ -85,6 +86,26 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
   async function saveSelectedShortFraming(clipId: string, framing: SubtitleReviewClipFramingUpdateRequest) {
     const { setShortFramingDrafts, setShowSavedPreview, review } = context;
     const clip = review?.clips.find(item => item.id === clipId);
+    if (review?.subtitleOnlyAuto) {
+      if (!clip || !canEditManualFraming(review, clip) || context.hasReviewMutationInFlight) return false;
+      context.beginReviewMutation();
+      context.setSavingShortFramingClipId(clipId);
+      try {
+        const updated = await updateSubtitleReviewClipFraming(context.jobId, clipId, framing);
+        context.locallyUpdatedReviewRef.current = updated;
+        context.setReview(updated);
+        setShortFramingDrafts(current => { const next = { ...current }; delete next[clipId]; return next; });
+        context.setError(null);
+        setShowSavedPreview(false);
+        return true;
+      } catch (caught) {
+        context.setError(caught instanceof Error ? caught.message : "画角を保存できませんでした。");
+        return false;
+      } finally {
+        context.setSavingShortFramingClipId(null);
+        context.endReviewMutation();
+      }
+    }
     const unchanged = clip && shortFramingEquals(framing, { framingOffsetX: clip.framingOffsetX,
       framingOffsetY: clip.framingOffsetY, framingZoom: clip.framingZoom, shortLayout: clip.shortLayout ?? review?.shortLayout });
     setShortFramingDrafts(current => {

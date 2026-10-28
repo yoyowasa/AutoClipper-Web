@@ -543,6 +543,7 @@ export type SubtitleReviewClip = {
 };
 
 export type SubtitleReviewDocument = {
+  renderClipIds?: string[] | null;
   subtitleOnlyAuto?: boolean;
   automaticStopReasons?: string[];
   previewGeneration?: string | null;

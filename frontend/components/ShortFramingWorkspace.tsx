@@ -173,7 +173,7 @@ function FramingDialog({ jobId, clipId, sourceUrl, start, end, value, layout, ed
           onChange={event => { setRetry(0); setDraftLayout(event.target.value as Layout); }}>
           {layouts.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
-        <span className="text-xs font-normal text-neutral-600">{draftOnly ? "このショートの配置を下書きに反映します。保存はclipの確定時です。" : "保存するまで試し表示。基本配置は全ショート共通、位置・倍率はこのショートのみ。"}</span>
+        <span className="text-xs font-normal text-neutral-600">{draftOnly ? "このショートの配置を下書きに反映します。保存はclipの確定時です。" : "保存するまで試し表示。このショートの基本配置・位置・倍率を調整します。"}</span>
       </label>
       <div role="status" className="shrink-0 text-sm">
         {sourceError || error ? <span className="text-red-700">{sourceError || error} <button type="button" className="underline"

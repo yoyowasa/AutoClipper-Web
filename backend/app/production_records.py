@@ -229,6 +229,7 @@ def write_production_record(
 
 def record_completed_productions(
     db: Session, job: Job, paths: StoragePaths, *, previous_exports: list[ExportItem] | None = None,
+    clip_ids: set[str] | None = None,
 ) -> None:
     """Best effort only, called after successful publication and its DB commit."""
     try:
@@ -237,6 +238,8 @@ def record_completed_productions(
         previous_by_candidate = {e.candidate_id: e for e in previous_exports or []}
         exports = list(db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)))
         for export in exports:
+            if clip_ids is not None and export.candidate_id not in clip_ids:
+                continue
             try:
                 write_production_record(job, export, paths, previous_export=previous_by_candidate.get(export.candidate_id))
             except Exception as exc:

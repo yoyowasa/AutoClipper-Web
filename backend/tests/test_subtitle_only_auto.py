@@ -126,6 +126,9 @@ def test_manual_framing_does_not_request_a_content_override(guarded_client, monk
     data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
     data.run()
     clip = load_subtitle_review(data.review_path).clips[0]
+    confirm(data, clip)
+    assert decide(data) == "ready"
+    clip = load_subtitle_review(data.review_path).clips[0]
     confirm(data, clip, framing={"framingOffsetX": 10, "framingOffsetY": 0, "framingZoom": 1})
     monkeypatch.setattr("app.jobs.content_framing.choose_content_framing", lambda *a, **kw: pytest.fail("manual framing"))
     assert decide(data) == "ready"

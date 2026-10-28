@@ -1001,6 +1001,7 @@ def _render_selected_outputs(
     asset_storage_paths: StoragePaths | None = None,
     dependencies: AutoClipperPipelineDependencies,
     visited_statuses: list[str],
+    render_clip_ids: set[str] | None = None,
 ) -> tuple[NormalRenderBatchResult, ShortRenderBatchResult, list[ExportItem], Path]:
     _set_status(db, job, "rendering_normal_clips")
     visited_statuses.append("rendering_normal_clips")
@@ -1008,7 +1009,7 @@ def _render_selected_outputs(
         db=db,
         job=job,
         input_path=input_path,
-        selected_candidates=selection.normal_clips,
+        selected_candidates=[c for c in selection.normal_clips if render_clip_ids is None or c.id in render_clip_ids],
         transcript_segments=transcript_segments,
         burn_subtitles=bool(settings.get("burnSubtitles", True)),
         normalize_audio=bool(settings.get("normalizeAudio", False)),
@@ -1017,14 +1018,17 @@ def _render_selected_outputs(
         normal_width=video.width or 1920,
         normal_height=video.height or 1080,
         subtitle_settings=settings,
+        **({"output_indices": {c.id: i for i, c in enumerate(selection.normal_clips, 1)}} if render_clip_ids is not None else {}),
     )
 
     _set_status(db, job, "rendering_shorts")
     visited_statuses.append("rendering_shorts")
     short_result = _render_short_outputs(
-        db=db, job=job, video=video, input_path=input_path, selected_candidates=selection.shorts,
+        db=db, job=job, video=video, input_path=input_path, selected_candidates=[c for c in selection.shorts
+                             if render_clip_ids is None or c.id in render_clip_ids],
         transcript_segments=transcript_segments, settings=settings, storage_paths=storage_paths,
         asset_storage_paths=asset_storage_paths, dependencies=dependencies,
+        **({"output_indices": {c.id: i for i, c in enumerate(selection.shorts, 1)}} if render_clip_ids is not None else {}),
     )
 
     render_failures_path = _write_json(
@@ -3608,6 +3612,8 @@ def run_subtitle_review_render(
         review_document: SubtitleReviewDocument | None = None
         rerender_staging_paths: StoragePaths | None = None
         rerender_promotion: _SubtitleRerenderPromotion | None = None
+        render_clip_ids: set[str] | None = None
+        retained_exports: list[ExportItem] = []
         previous_export_ids: set[str] = set()
         rerender_publication_committed = False
         is_rerender = False
@@ -3770,6 +3776,12 @@ def run_subtitle_review_render(
             )
             previous_exports = list(db.scalars(select(ExportItem).where(ExportItem.job_id == job.id)).all())
             previous_export_ids = {export.id for export in previous_exports}
+            if is_subtitle_only_auto(settings) and review_document.render_clip_ids is not None:
+                render_clip_ids = set(review_document.render_clip_ids)
+                retained_exports = [e for e in previous_exports if e.candidate_id not in render_clip_ids]
+                required = {c.id for c in _selected_candidates(selection)} - render_clip_ids
+                if {e.candidate_id for e in retained_exports} != required:
+                    raise PipelineExpectedError("partial_rerender_outputs_missing", "変更していない動画の書き出しが見つかりません。")
             render_paths = storage_paths
             if is_rerender:
                 rerender_staging_paths = _prepare_subtitle_rerender_staging(
@@ -3791,6 +3803,7 @@ def run_subtitle_review_render(
                 asset_storage_paths=storage_paths,
                 dependencies=deps,
                 visited_statuses=visited_statuses,
+                **({"render_clip_ids": render_clip_ids} if render_clip_ids is not None else {}),
             )
             if effective_automation_mode is not None:
                 def inspect_outputs():
@@ -3801,6 +3814,7 @@ def run_subtitle_review_render(
                             staging_job_dir=rerender_staging_paths.job_outputs(job.id),
                             canonical_job_dir=storage_paths.job_outputs(job.id),
                         )
+                    gate_exports = [*gate_exports, *retained_exports]
                     try:
                         return evaluate_post_render_quality_gate(
                             job_id=job.id,
@@ -3964,7 +3978,7 @@ def run_subtitle_review_render(
                 if rerender_promotion is None:
                     raise RuntimeError("subtitle rerender promotion is unavailable")
                 _write_youtube_posting_artifacts_for_publication(
-                    review_document.clips,
+                    [c for c in review_document.clips if render_clip_ids is None or c.id in render_clip_ids],
                     exports,
                     job_dir=job_dir,
                     staging_job_dir=rerender_staging_paths.job_outputs(job.id),
@@ -3996,7 +4010,8 @@ def run_subtitle_review_render(
                     )
             else:
                 _set_status(db, job, "completed")
-            record_completed_productions(db, job, storage_paths, previous_exports=previous_exports)
+            record_completed_productions(db, job, storage_paths, previous_exports=previous_exports,
+                                         **({"clip_ids": render_clip_ids} if render_clip_ids is not None else {}))
             visited_statuses.append("completed")
             prune_job_previews_after_completion(db, job, storage_paths)
         except PipelineExpectedError as exc:

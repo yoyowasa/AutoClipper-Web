@@ -59,6 +59,10 @@ def test_only_real_detail_changes_are_manual_and_protected(guarded_client, monke
     data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
     data.run()
     clip = load_subtitle_review(data.review_path).clips[0]
+    if field == "framing":
+        confirm(data, clip)
+        assert decide(data) == "ready"
+        clip = load_subtitle_review(data.review_path).clips[0]
     payload = {**full_draft(clip), **edit}
     confirm(data, clip, **payload)
     saved = load_subtitle_review(data.review_path)

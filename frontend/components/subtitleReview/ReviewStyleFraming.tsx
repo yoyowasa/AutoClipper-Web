@@ -1,5 +1,6 @@
 "use client";
 
+import { canEditManualFraming } from "../../lib/subtitleReview/manualFraming";
 import { ShortFramingWorkspace } from "../ShortFramingWorkspace";
 import { ClipTextStyleEditor } from "../ClipTextStyleEditor";
 import { toApiUrl } from "../../lib/api";
@@ -80,13 +81,13 @@ export function ReviewShortFraming({ context }: { context: SubtitleReviewViewCon
     changeSelectedShortFraming,
     saveSelectedShortFraming
   } = context;
-  if (!selectedClip || !selectedShortFramingDraft) return null;
+  if (!selectedClip || !selectedShortFramingDraft || !canEditManualFraming(review, selectedClip)) return null;
   return (
     <ShortFramingWorkspace
                           key={`${selectedClip.id}:${selectedClip.start}:${selectedClip.end}:${review.sourceVideoUrl}:${review.shortTopBannerEnabled}:${review.shortBottomBannerEnabled}`}
                           jobId={jobId} clipId={selectedClip.id} sourceUrl={review.sourceVideoUrl}
                           start={selectedClip.start} end={selectedClip.end}
-                          draftOnly value={selectedShortFramingDraft} layout={selectedShortFramingDraft.shortLayout ?? selectedClip.shortLayout ?? review.shortLayout} editable={isEditable && !hasReviewMutationInFlight}
+                          draftOnly={!review.subtitleOnlyAuto} value={selectedShortFramingDraft} layout={selectedShortFramingDraft.shortLayout ?? selectedClip.shortLayout ?? review.shortLayout} editable={(review.subtitleOnlyAuto || isEditable) && !hasReviewMutationInFlight}
                           onSave={async (next) => {
                             changeSelectedShortFraming(next);
                             return saveSelectedShortFraming(selectedClip.id, next);

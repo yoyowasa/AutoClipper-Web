@@ -1,5 +1,6 @@
 "use client";
 
+import { canEditManualFraming } from "../manualFraming";
 import { segmentDraftKey } from "../sharedSegments";
 import { useEffect, useRef } from "react";
 import { contentDraftForClip, isClipContentDirty } from "../drafts";
@@ -30,7 +31,7 @@ export function usePersistedReviewDrafts(state: SubtitleReviewState) {
       setClipContentDrafts(current => ({ ...current, [clip.id]: stored?.content ?? contentDraftForClip(clip) }));
       setShortFramingDrafts(current => {
         const next = { ...current };
-        if (stored?.framing) next[clip.id] = stored.framing; else delete next[clip.id];
+        if (stored?.framing && canEditManualFraming(review, clip)) next[clip.id] = stored.framing; else delete next[clip.id];
         return next;
       });
       for (const id of clip.segmentIds) {

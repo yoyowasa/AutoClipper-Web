@@ -7,6 +7,7 @@ import { returnToClipPlanMessage } from "../returnToClipPlan";
 import { validateClipDuration, validateHookSceneDuration } from "../../durationRules";
 import { segmentDraftKey, sharedSubtitleNotice } from "../sharedSegments";
 import { contentDraftForClip } from "../drafts";
+import { canEditManualFraming } from "../manualFraming";
 import { automaticApplyPayload } from "../automaticConfirmation";
 import type { SubtitleReviewContext } from "./context";
 
@@ -104,7 +105,8 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
         hookStyle: selectedClipContentDraft.hookStyle,
         subtitleStyle: selectedClipContentDraft.subtitleStyle,
         subtitleStyles: selectedClipContentDraft.subtitleStyles,
-        ...(selectedShortFramingDirty && selectedShortFramingDraft ? { framing: selectedShortFramingDraft } : {}),
+        ...(selectedShortFramingDirty && selectedShortFramingDraft && review && canEditManualFraming(review, selectedClip)
+          ? { framing: selectedShortFramingDraft } : {}),
         segments: segmentUpdates
       };
       const updated = await applySubtitleReviewClip(jobId, selectedClip.id,

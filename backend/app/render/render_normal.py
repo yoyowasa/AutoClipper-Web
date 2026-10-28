@@ -346,6 +346,7 @@ def render_selected_normal_candidates(
     normal_width: int = 1920,
     normal_height: int = 1080,
     subtitle_settings: SubtitleRenderSettings | dict[str, Any] | None = None,
+    output_indices: dict[str, int] | None = None,
 ) -> NormalRenderBatchResult:
     storage_paths = paths or get_storage_paths()
     output_dir = normal_output_dir(storage_paths, job.id)
@@ -355,6 +356,7 @@ def render_selected_normal_candidates(
 
     normal_candidates = [candidate for candidate in selected_candidates if candidate.type == "normal"]
     for index, candidate in enumerate(normal_candidates, start=1):
+        index = output_indices.get(candidate.id, index) if output_indices else index
         candidate = candidate_with_title(candidate, index=index, transcript_segments=transcript_segments)
         hook_scene_duration = _candidate_hook_scene_duration(candidate)
         output_duration = candidate.duration + hook_scene_duration
