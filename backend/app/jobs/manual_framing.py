@@ -31,4 +31,3 @@ def record_manual_framing(document, clip, before) -> None:
                   policyVersion="manual-framing-after-confirm-v1", inputRevision=clip.automatic_decision_revision,
                   reason="字幕確定後に人が画角を調整して承認しました。", values=values, candidates=candidates,
                   selectedIds=["manual_adjustment"], recommendedId=automatic.id if automatic else None)
-
