@@ -13,16 +13,17 @@ VISUAL_DECISION_POLICY = "confirmed-subtitle-visuals-v2"
 
 
 def decide_visuals(document, clip, *, settings, video, source, crop_resolver=None, content_choice=None, framing_revision=None,
-                   content_fallback_reason=None):
+                   content_fallback_reason=None, framing_only=False):
     """Combine content intent with existing geometric detection and ASS fitting."""
     layout = (SubtitleLayout.short(settings) if clip.type == "short" else
               SubtitleLayout.normal(video.width or 1920, video.height or 1080, settings))
     top = SHORT_BANNER_HEIGHT if clip.type == "short" and document.short_top_banner_enabled else 0
     bottom = layout.height - (SHORT_BANNER_HEIGHT if clip.type == "short" and document.short_bottom_banner_enabled else 0)
     segments = [s for s in document.segments if s.id in set(clip.segment_ids)]
-    events, _ = _subtitle_events_for_review_clip(document, clip, width=layout.width, height=layout.height)
-    choose_text_styles(clip, layout, events=events, top=top, bottom=bottom)
-    ranked, emphasis_reason = choose_emphasis(clip, segments, layout, top=top, bottom=bottom)
+    if not framing_only:
+        events, _ = _subtitle_events_for_review_clip(document, clip, width=layout.width, height=layout.height)
+        choose_text_styles(clip, layout, events=events, top=top, bottom=bottom)
+        ranked, emphasis_reason = choose_emphasis(clip, segments, layout, top=top, bottom=bottom)
     manual_framing = "framing" in clip.manual_decision_fields
     if clip.type == "short":
         from app.audio.transcribe_faster_whisper import TranscriptSegment
@@ -68,6 +69,8 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
                       reason="内容に基づく画角を選びましたが、検出・幾何条件を満たせないため全体表示に置換しました。",
                       values=choice_values({**content_values, "resolvedLayout": crop.plan.strategy_order[0],
                                             "cropFallbackReason": crop.plan.fallback_reason}), **framing_common)
+    if framing_only:
+        return
     for role in ("title", "hook", "subtitle"):
         manual = f"{role}_style" in clip.manual_decision_fields
         append_choice(document.choice_history, kind="text_style", source="manual" if manual else "automatic",

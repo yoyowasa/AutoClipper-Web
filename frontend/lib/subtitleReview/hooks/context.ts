@@ -111,6 +111,7 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   updateClipTextStyle: (target: ClipTextTarget, style: ClipTextStyle | null) => void;
   changeSelectedShortFraming: (update: Partial<SubtitleReviewClipFramingUpdateRequest>) => SubtitleReviewClipFramingUpdateRequest | null;
   saveSelectedShortFraming: (clipId: string, framing: SubtitleReviewClipFramingUpdateRequest) => Promise<boolean>;
+  resetSelectedShortFraming: (clipId: string) => Promise<boolean>;
   saveShortBannerSettings: (shortLayout: SubtitleReviewDocument["shortLayout"], shortTopBannerEnabled: boolean, shortBottomBannerEnabled: boolean, assets?: { shortTopBannerAssetId?: string; shortBottomBannerAssetId?: string; characterPresetName?: string; }) => Promise<boolean>;
   generateTitleHookSuggestions: (forceRegenerate: boolean) => Promise<void>;
   applyTitleHookSuggestion: (suggestion: TitleHookSuggestion) => void;

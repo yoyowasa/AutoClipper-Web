@@ -26,6 +26,9 @@ assert.equal(canEditManualFraming(review, clip), false);
 clip.automaticDecisionState = "ready";
 assert.equal(canEditManualFraming(review, clip), true);
 assert.match(renderToStaticMarkup(React.createElement(ReviewShortFraming, { context })), /画角を見ながら調整/);
+assert.doesNotMatch(renderToStaticMarkup(React.createElement(ReviewShortFraming, { context })), /自動に戻す/);
+clip.manualDecisionFields = ["framing"];
+assert.match(renderToStaticMarkup(React.createElement(ReviewShortFraming, { context })), /自動に戻す/);
 review.state = "completed";
 assert.equal(canEditManualFraming(review, clip), true);
 review.state = "rendering";
@@ -40,7 +43,7 @@ async function checkSave() {
   const requests: unknown[] = [];
   const previousFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
-    requests.push({ url: String(input), method: init?.method, body: JSON.parse(String(init?.body)) });
+    requests.push({ url: String(input), method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : null });
     return new Response(JSON.stringify(review), { status: 200, headers: { "Content-Type": "application/json" } });
   };
   const saved: unknown[] = [];
@@ -50,12 +53,17 @@ async function checkSave() {
   try {
     const actions = createContentActions(context);
     assert.equal(await actions.saveSelectedShortFraming(clip.id, framing), false);
+    assert.equal(await actions.resetSelectedShortFraming(clip.id), false);
     assert.equal(requests.length, 0);
     clip.confirmed = true;
     assert.equal(await actions.saveSelectedShortFraming(clip.id, framing), true);
     assert.deepEqual(requests, [{ url: "http://localhost:8000/api/jobs/test/subtitle-review/clips/short/framing",
       method: "PATCH", body: framing }]);
     assert.equal(saved.length, 1);
+    assert.equal(await actions.resetSelectedShortFraming(clip.id), true);
+    assert.deepEqual(requests[1], { url: "http://localhost:8000/api/jobs/test/subtitle-review/clips/short/framing/reset",
+      method: "POST", body: null });
+    assert.equal(saved.length, 2);
   } finally { globalThis.fetch = previousFetch; }
 }
 void checkSave().then(() => console.log("Manual framing: confirmation gate, automatic completion, legacy editing and targeted save passed"));

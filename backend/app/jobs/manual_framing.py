@@ -31,3 +31,19 @@ def record_manual_framing(document, clip, before) -> None:
                   policyVersion="manual-framing-after-confirm-v1", inputRevision=clip.automatic_decision_revision,
                   reason="字幕確定後に人が画角を調整して承認しました。", values=values, candidates=candidates,
                   selectedIds=["manual_adjustment"], recommendedId=automatic.id if automatic else None)
+
+
+def restore_automatic_framing(document, clip) -> str:
+    from app.jobs.confirmed_clip_decisions import queue_clip_decisions
+
+    before = {"framingOffsetX": clip.framing_offset_x, "framingOffsetY": clip.framing_offset_y,
+              "framingZoom": clip.framing_zoom, "shortLayout": clip.short_layout}
+    clip.manual_decision_fields = [field for field in clip.manual_decision_fields if field != "framing"]
+    clip.framing_offset_x = clip.framing_offset_y = 0
+    clip.framing_zoom = 1
+    clip.short_layout = "auto"
+    clip.automatic_crop = None
+    append_choice(document.choice_history, kind="framing", clipId=clip.id, stage="removed", source="automatic",
+                  policyVersion="manual-framing-after-confirm-v1", values=before,
+                  reason="人が「自動に戻す」を選び、手動画角の承認を解除しました。内容による画角判断をやり直します。")
+    return queue_clip_decisions(document, clip, manual_fields=set())

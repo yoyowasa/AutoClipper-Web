@@ -79,10 +79,19 @@ export function ReviewShortFraming({ context }: { context: SubtitleReviewViewCon
     isEditable,
     hasReviewMutationInFlight,
     changeSelectedShortFraming,
-    saveSelectedShortFraming
+    saveSelectedShortFraming,
+    resetSelectedShortFraming
   } = context;
   if (!selectedClip || !selectedShortFramingDraft || !canEditManualFraming(review, selectedClip)) return null;
   return (
+    <>
+    {review.subtitleOnlyAuto && selectedClip.manualDecisionFields?.includes("framing") && <div className="space-y-1">
+      <button type="button" className="min-h-10 border border-sky-700 px-3 text-sm text-sky-900"
+        disabled={hasReviewMutationInFlight} onClick={() => void resetSelectedShortFraming(selectedClip.id)}>
+        自動に戻す
+      </button>
+      <p className="text-xs text-neutral-500">手動の指定を解除し、このclipの内容から画角を選び直して作り直します。</p>
+    </div>}
     <ShortFramingWorkspace
                           key={`${selectedClip.id}:${selectedClip.start}:${selectedClip.end}:${review.sourceVideoUrl}:${review.shortTopBannerEnabled}:${review.shortBottomBannerEnabled}`}
                           jobId={jobId} clipId={selectedClip.id} sourceUrl={review.sourceVideoUrl}
@@ -93,5 +102,6 @@ export function ReviewShortFraming({ context }: { context: SubtitleReviewViewCon
                             return saveSelectedShortFraming(selectedClip.id, next);
                           }}
                         />
+    </>
   );
 }

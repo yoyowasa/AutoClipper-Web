@@ -47,11 +47,11 @@ def record_decision_failure(paths, job_id, clip_id, revision, message):
 def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=SessionLocal, paths=None,
                                  generator=generate_title_hook_suggestions_for_auto, thumbnail_generator=None,
                                  enqueue_preview=None, candidate_extractor=None, emotion_selector=None, crop_resolver=None,
-                                 framing_selector=None):
+                                 framing_selector=None, framing_only=False):
     paths = paths or get_storage_paths()
     directory = paths.job_outputs(job_id)
     path = subtitle_review_output_path(directory)
-    stage = "タイトル・フック・投稿文の自動決定"
+    stage = "内容による画角の再自動決定" if framing_only else "タイトル・フック・投稿文の自動決定"
     try:
         with session_factory() as db:
             job = db.get(Job, job_id)
@@ -83,36 +83,37 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 generation = (document.created_at, document.preview_generation)
 
             # No document lock while waiting for Codex. Other clips remain editable.
-            settings = attach_performance_hints(db, dict(job.settings_json or {}))
-            hints = active_hint_uses(settings.get("_performanceHints"), target="title_hook", format=clip.type) \
-                if settings.get("usePerformanceHints", True) else []
-            overrides = {name: getattr(clip, name) for name in clip.manual_decision_fields if hasattr(clip, name)}
-            artifact = generator(
-                document=document, clip_id=clip_id, source_path=paths.resolve_stored_file(video.stored_path), paths=paths,
-                model=str(settings.get("titleHookModel") or "codex-default"),
-                audience_familiarity="unknown" if settings.get("audienceFamiliarity") == "unknown" else "known",
-                **({"performance_hints": hints} if hints else {}),
-            )
-            apply_recommended_title_hook_suggestions(
-                document, artifact, youtube_source_title=str(settings.get("youtubeSourceTitle") or ""),
-                youtube_source_url=str(settings.get("youtubeSourceUrl") or ""),
-                youtube_posting_profile=settings.get("youtubePostingProfile"),
-            )
-            for name, value in overrides.items():
-                setattr(clip, name, value)
-            if clip.type == "normal" and not set(COPY_FIELDS.values()).intersection(overrides):
-                stage = "サムネ文言の自動決定"
-                state, _payload, _hash = confirmed_thumbnail_copy(document, clip, paths, thumbnail_generator, retry_failed=True)
-                if state["state"] != "ready":
-                    raise ValueError("サムネ文言の生成結果を検証できませんでした。")
-                selected = next(s for s in state["suggestions"] if s["id"] == state["recommendedId"])
-                for attr, value in zip(COPY_FIELDS.values(), (selected["heading"], selected["upper"], selected["lower"]), strict=True):
-                    setattr(clip, attr, value)
-            if clip.type == "normal":
-                stage = "サムネ画像の自動決定"
-                from app.jobs.confirmed_thumbnail import prepare_confirmed_thumbnail
-                prepare_confirmed_thumbnail(db, paths, job, video, document, clip,
-                                            extractor=candidate_extractor, selector=emotion_selector)
+            settings = dict(job.settings_json or {}) if framing_only else attach_performance_hints(db, dict(job.settings_json or {}))
+            if not framing_only:
+                hints = active_hint_uses(settings.get("_performanceHints"), target="title_hook", format=clip.type) \
+                    if settings.get("usePerformanceHints", True) else []
+                overrides = {name: getattr(clip, name) for name in clip.manual_decision_fields if hasattr(clip, name)}
+                artifact = generator(
+                    document=document, clip_id=clip_id, source_path=paths.resolve_stored_file(video.stored_path), paths=paths,
+                    model=str(settings.get("titleHookModel") or "codex-default"),
+                    audience_familiarity="unknown" if settings.get("audienceFamiliarity") == "unknown" else "known",
+                    **({"performance_hints": hints} if hints else {}),
+                )
+                apply_recommended_title_hook_suggestions(
+                    document, artifact, youtube_source_title=str(settings.get("youtubeSourceTitle") or ""),
+                    youtube_source_url=str(settings.get("youtubeSourceUrl") or ""),
+                    youtube_posting_profile=settings.get("youtubePostingProfile"),
+                )
+                for name, value in overrides.items():
+                    setattr(clip, name, value)
+                if clip.type == "normal" and not set(COPY_FIELDS.values()).intersection(overrides):
+                    stage = "サムネ文言の自動決定"
+                    state, _payload, _hash = confirmed_thumbnail_copy(document, clip, paths, thumbnail_generator, retry_failed=True)
+                    if state["state"] != "ready":
+                        raise ValueError("サムネ文言の生成結果を検証できませんでした。")
+                    selected = next(s for s in state["suggestions"] if s["id"] == state["recommendedId"])
+                    for attr, value in zip(COPY_FIELDS.values(), (selected["heading"], selected["upper"], selected["lower"]), strict=True):
+                        setattr(clip, attr, value)
+                if clip.type == "normal":
+                    stage = "サムネ画像の自動決定"
+                    from app.jobs.confirmed_thumbnail import prepare_confirmed_thumbnail
+                    prepare_confirmed_thumbnail(db, paths, job, video, document, clip,
+                                                extractor=candidate_extractor, selector=emotion_selector)
             stage = "画角・文字サイズ・字幕強調の自動決定"
             content_choice, framing_revision = None, None
             content_fallback_reason = None
@@ -129,7 +130,7 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
             decide_visuals(document, clip, settings=settings, video=video,
                            source=paths.resolve_stored_file(video.stored_path), crop_resolver=crop_resolver,
                            content_choice=content_choice, framing_revision=framing_revision,
-                           content_fallback_reason=content_fallback_reason)
+                           content_fallback_reason=content_fallback_reason, framing_only=framing_only)
             stage = "正式プレビューの準備"
             with subtitle_review_document_lock(directory):
                 latest = current()
@@ -148,7 +149,8 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 )
                 clip.automatic_decision_state = "ready"
                 confirm_review_clip(latest, clip_id)
-                capture_auto_review_outcome(latest, clip_id, input_revision=artifact.revision_hash)
+                if not framing_only:
+                    capture_auto_review_outcome(latest, clip_id, input_revision=artifact.revision_hash)
                 write_subtitle_review(latest, path)
                 write_subtitle_review_summary(latest, subtitle_review_summary_path(directory))
             if enqueue_preview is None:
@@ -156,6 +158,9 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 enqueue_preview = enqueue_subtitle_review_preview
             for queued_clip, spec_hash in queued:
                 enqueue_preview(job_id, queued_clip, spec_hash)
+            if framing_only and queued:
+                # The preview worker starts rendering after the new framing is ready.
+                return "ready"
             # A repeated confirmation can reuse an already-ready exact preview.
             # The final transition must not depend on a new preview job being queued.
             from app.jobs.runner import _prepare_auto_render_after_preview, _restore_auto_review_after_enqueue_failure

@@ -484,6 +484,11 @@ export async function updateSubtitleReviewClipFraming(
   return parseJsonResponse<SubtitleReviewDocument>(response);
 }
 
+export async function resetSubtitleReviewClipFraming(jobId: string, clipId: string): Promise<SubtitleReviewDocument> {
+  const response = await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/clips/${clipId}/framing/reset`, { method: "POST" });
+  return parseJsonResponse<SubtitleReviewDocument>(response);
+}
+
 export async function createClipReedit(
   jobId: string,
   clipId: string

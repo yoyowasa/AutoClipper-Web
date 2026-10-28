@@ -476,6 +476,7 @@ export type SubtitleReviewClip = {
   automaticDecisionState?: "idle" | "queued" | "generating" | "ready" | "failed";
   automaticDecisionError?: string | null;
   automaticDecisionRevision?: string | null;
+  manualDecisionFields?: string[];
   subtitleStyles?: SubtitleStyleOverride[];
   id: string;
   type: ExportType;

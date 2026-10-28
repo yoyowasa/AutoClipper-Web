@@ -2571,6 +2571,22 @@ def update_subtitle_review_hook_scene(
     return ClipPlanActionResponse(jobId=job.id, status=job.status)
 
 
+@router.post("/{job_id}/subtitle-review/clips/{clip_id}/framing/reset", response_model=SubtitleReviewDocument)
+def reset_subtitle_review_clip_framing(
+    job_id: str, clip_id: str, db: Session = Depends(get_db), paths: StoragePaths = Depends(get_storage_paths),
+    enqueue_decisions: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_confirmed_clip_decisions),
+) -> SubtitleReviewDocument:
+    job = _get_job_or_404(db, job_id)
+    if not is_subtitle_only_auto(job.settings_json or {}):
+        raise HTTPException(409, "字幕のみ確認autoのショートで使える操作です。")
+    video = db.get(Video, job.video_id)
+    if video is None:
+        raise HTTPException(409, "元動画がありません。")
+    from app.api.automatic_review_framing import update_automatic_framing
+    return update_automatic_framing(job, video, clip_id, None, db, paths, None,
+                                    reset=True, enqueue_decisions=enqueue_decisions)
+
+
 @router.patch(
     "/{job_id}/subtitle-review/clips/{clip_id}/framing",
     response_model=SubtitleReviewDocument,

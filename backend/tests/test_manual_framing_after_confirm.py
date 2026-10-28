@@ -19,7 +19,7 @@ from test_subtitle_only_auto import setup_auto, confirm, decide
 FRAMING = {"framingOffsetX": 20, "framingOffsetY": 0, "framingZoom": 1.1}
 
 
-@pytest.mark.parametrize("entry", ["framing", "apply", "framing-guide", "settings"])
+@pytest.mark.parametrize("entry", ["framing", "apply", "framing-guide", "settings", "reset"])
 def test_unconfirmed_auto_cannot_change_framing(guarded_client, monkeypatch, tmp_path, entry):
     data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
     data.run()
@@ -33,6 +33,8 @@ def test_unconfirmed_auto_cannot_change_framing(guarded_client, monkeypatch, tmp
         response = data.client.post(base + f"/clips/{clip.id}/apply", json={"framing": FRAMING})
     elif entry == "framing-guide":
         response = data.client.post(base + f"/clips/{clip.id}/framing-guide")
+    elif entry == "reset":
+        response = data.client.post(base + f"/clips/{clip.id}/framing/reset")
     else:
         response = data.client.patch(base + f"/clips/{clip.id}/framing", json=FRAMING)
     assert response.status_code == 409, response.text
@@ -152,7 +154,10 @@ def test_manual_approval_is_scoped_and_does_not_disable_overlay_contract(
 
 
 @pytest.mark.parametrize("target_index", [0, 1])
-def test_completed_manual_framing_reuses_other_exports_and_records(guarded_client, monkeypatch, tmp_path, target_index):
+@pytest.mark.parametrize("automatic_reset", [False, True])
+def test_completed_manual_framing_reuses_other_exports_and_records(
+    guarded_client, monkeypatch, tmp_path, target_index, automatic_reset,
+):
     data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
     document = ready(data)
     clip = document.clips[0]
@@ -183,6 +188,8 @@ def test_completed_manual_framing_reuses_other_exports_and_records(guarded_clien
     data.previews.clear()
     response = data.client.patch(f"/api/jobs/{data.job_id}/subtitle-review/clips/{clip.id}/framing", json=FRAMING)
     assert response.status_code == 200, response.text
+    if automatic_reset:
+        reset_and_decide(data, monkeypatch, clip.id)
     saved = load_subtitle_review(data.review_path)
     assert saved.render_clip_ids == [clip.id]
     assert saved.clips[0].confirmed and saved.clips[1].confirmed
@@ -207,3 +214,81 @@ def test_completed_manual_framing_reuses_other_exports_and_records(guarded_clien
     with data.factory() as db:
         assert db.get(ExportItem, other_export.id) is not None
         assert db.get(Job, data.job_id).status == "completed"
+
+
+def reset_and_decide(data, monkeypatch, clip_id):
+    from app.jobs.confirmed_clip_decisions import run_confirmed_clip_decisions
+    from app.jobs.queue import get_enqueue_confirmed_clip_decisions
+    from app.main import app
+    from test_automatic_visual_decisions import resolver
+    queued = []
+    app.dependency_overrides[get_enqueue_confirmed_clip_decisions] = lambda: lambda *args, **kw: queued.append((args, kw))
+    response = data.client.post(f"/api/jobs/{data.job_id}/subtitle-review/clips/{clip_id}/framing/reset")
+    assert response.status_code == 200, response.text
+    assert len(queued) == 1 and queued[0][1] == {"framing_only": True}
+    target = next(c for c in load_subtitle_review(data.review_path).clips if c.id == clip_id)
+    assert "framing" not in target.manual_decision_fields and target.automatic_decision_state == "queued"
+    data.previews.clear()
+    monkeypatch.setattr("app.jobs.automatic_visual_decisions.choose_text_styles", lambda *a, **kw: pytest.fail("text style changed"))
+    monkeypatch.setattr("app.jobs.automatic_visual_decisions.choose_emphasis", lambda *a, **kw: pytest.fail("emphasis changed"))
+    assert run_confirmed_clip_decisions(*queued[0][0], **queued[0][1], paths=data.storage, session_factory=data.factory,
+        generator=lambda **kw: pytest.fail("title regenerated"), crop_resolver=resolver,
+        enqueue_preview=lambda *args: data.previews.append(args)) == "ready"
+    return next(c for c in load_subtitle_review(data.review_path).clips if c.id == clip_id)
+
+
+def test_only_explicit_reset_removes_manual_and_restores_content_choice(guarded_client, monkeypatch, tmp_path):
+    data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
+    clip = ready(data).clips[0]
+    url = f"/api/jobs/{data.job_id}/subtitle-review/clips/{clip.id}/framing"
+    assert data.client.patch(url, json=FRAMING).status_code == 200
+    assert data.client.patch(url, json={"framingOffsetX": 0, "framingOffsetY": 0, "framingZoom": 1}).status_code == 200
+    document = load_subtitle_review(data.review_path)
+    clip = document.clips[0]
+    assert clip.framing_offset_x == 0 and "framing" in clip.manual_decision_fields
+    protected = {key: clip.model_dump()[key] for key in ("title", "hook_text", "publication_title", "title_style",
+                 "hook_style", "subtitle_style", "subtitle_styles", "post_metadata_source")}
+    other = clip.model_copy(deep=True, update={"id": "other"})
+    document.clips.append(other)
+    write_subtitle_review(document, data.review_path)
+    from app.scoring.short_framing import ShortFramingChoice
+    calls = []
+    def content(document, clip, **kw):
+        calls.append(clip.id)
+        return ShortFramingChoice(strategy="face_tracking_crop", highlightType="expression_reaction", reason="表情を見せる",
+                                  evidenceIds=[clip.segment_ids[0], "frame-0"]), "reset-input"
+    monkeypatch.setattr("app.jobs.content_framing.choose_content_framing", content)
+    updated = reset_and_decide(data, monkeypatch, clip.id)
+    assert calls == [clip.id] and "framing" not in updated.manual_decision_fields
+    assert updated.automatic_crop.plan.strategy_order[0] == "face_tracking_crop"
+    assert {key: updated.model_dump()[key] for key in protected} == protected
+    saved = load_subtitle_review(data.review_path)
+    assert saved.clips[1].model_dump() == other.model_dump()
+    assert len(data.previews) == 1 and data.previews[0][1] == clip.id
+    history = [c for c in saved.choice_history if c.kind == "framing" and c.clipId == clip.id]
+    assert any(c.stage == "removed" and c.source == "automatic" for c in history)
+    assert any(c.source == "automatic" and c.values.get("contentPreferredLayout") == "face_tracking_crop" for c in history)
+    # Without machine geometry, automatic framing must no longer pass as human-approved.
+    updated.preview_state, updated.preview_spec_hash, updated.preview_video_url = "ready", "current", "/preview.mp4"
+    monkeypatch.setattr("app.jobs.quality_gate._load_export_metadata", lambda e: ({"crop_strategy": "face_tracking_crop",
+        "top_banner_rendered": saved.short_top_banner_enabled, "bottom_banner_rendered": saved.short_bottom_banner_enabled}, None))
+    saved.clips[0] = updated
+    check = _post_render_visual_check([SimpleNamespace(candidate_id=clip.id, type="short")], saved)
+    assert check.outcome != "pass" and not check.evidence["inspected"][0]["humanPreviewAccepted"]
+    from app.candidates.select_candidates import CandidateSelection
+    from app.jobs.automatic_framing_repair import repair_automatic_short_framing
+    from app.render.render_short import ShortRenderBatchResult
+    selection = CandidateSelection.model_validate_json((data.storage.job_outputs(data.job_id) / "selected_clips.json").read_bytes())
+    export = SimpleNamespace(id="test-original", candidate_id=clip.id)
+    replacement = SimpleNamespace(id="test-repaired", candidate_id=clip.id)
+    decision = _decision(data.job_id, stage="post_render", outcome="unknown", mode="auto")
+    decision.checks = [check]
+    renders = []
+    def repair_render(**kwargs):
+        renders.append(kwargs["selected_candidates"])
+        return ShortRenderBatchResult(exports=[replacement], failures=[])
+    _, repair = repair_automatic_short_framing(db=SimpleNamespace(delete=lambda e: None, commit=lambda: None),
+        document=saved, selection=selection, decision=decision, result=ShortRenderBatchResult(exports=[export], failures=[]),
+        render_shorts=repair_render)
+    assert repair["attemptedClipIds"] == [clip.id]
+    assert len(renders) == 1 and renders[0][0].short_layout == "blur_background"
