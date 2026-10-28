@@ -163,21 +163,24 @@ def test_85_video_sync_stays_within_budget_and_resumes_initial_reports(client, e
     saved = run_sync(environment, run_id, channel_transport(85, calls))
     assert saved.status == "partial" and saved.truncated and saved.request_count == 89 <= MAX_REQUESTS
     pending = next(item["requests"] for item in saved.missing_reports if item["kind"] == "pending_reports")
-    assert len(pending) == 35 and {item["kind"] for item in pending} == {"first7"}
+    assert len(pending) == 120 and {item["kind"] for item in pending} == {"first7", "first30"}
     daily = environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "video_day")).all()
     assert len(daily) == 85 * 60
-    next_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
-    calls.clear()
-    resumed = run_sync(environment, next_id, channel_transport(85, calls))
-    assert resumed.status == "success" and not resumed.truncated and resumed.request_count == 43
-    assert all(not (request.url.params.get("filters") and "day" in request.url.params.get("dimensions", "")) for request in calls)
+    for _ in range(3):
+        next_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
+        calls.clear()
+        resumed = run_sync(environment, next_id, channel_transport(85, calls))
+        assert resumed.request_count <= MAX_REQUESTS
+        assert all(not (request.url.params.get("filters") and "day" in request.url.params.get("dimensions", "")) for request in calls)
+    assert resumed.status == "success" and not resumed.truncated
     first7 = environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "first7")).all()
     assert len(first7) == 85
+    assert len(environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "first30")).all()) == 85
 
 
 def test_20_videos_finish_without_truncation(client, environment):
     saved = run_sync(environment, enqueue(client, environment), channel_transport(20, []))
-    assert saved.status == "success" and saved.request_count == 35 and not saved.truncated
+    assert saved.status == "success" and saved.request_count == 55 and not saved.truncated
     daily = environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "video_day")).all()
     assert len(daily) == 1200
 
@@ -187,18 +190,21 @@ def test_request_limit_defers_exact_unfinished_requests_until_next_sync(client, 
     saved = run_sync(environment, enqueue(client, environment), channel_transport(3, []))
     assert saved.status == "partial" and saved.truncated and saved.request_count == 8
     pending = next(item["requests"] for item in saved.missing_reports if item["kind"] == "pending_reports")
-    assert [item["kind"] for item in pending] == ["video_format", "first7", "first7", "first7"]
+    assert [item["kind"] for item in pending] == ["video_format", "first30", "first7", "first30", "first7", "first30", "first7"]
     assert environment.db.scalar(select(VideoDailyStat).where(VideoDailyStat.kind == "video_day")) is not None
     calls = []
     next_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
     resumed = run_sync(environment, next_id, channel_transport(3, calls))
     assert resumed.status == "partial" and resumed.request_count == 8
     remaining = next(item["requests"] for item in resumed.missing_reports if item["kind"] == "pending_reports")
-    assert len(remaining) == 2 and all(item["kind"] == "first7" for item in remaining)
-    final_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
-    final = run_sync(environment, final_id, channel_transport(3, []))
-    assert final.status == "success" and final.request_count == 8
+    assert len(remaining) == 5 and remaining[0]["kind"] == "first7"
+    for _ in range(3):
+        final_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
+        final = run_sync(environment, final_id, channel_transport(3, []))
+        assert final.request_count <= 8
+    assert final.status == "success"
     assert len(environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "first7")).all()) == 3
+    assert len(environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "first30")).all()) == 3
 
 
 def test_time_limit_saves_completed_reports_and_checkpoint(client, environment):
@@ -216,18 +222,22 @@ def test_time_limit_saves_completed_reports_and_checkpoint(client, environment):
     assert saved.status == "partial" and saved.error_code == "SYNC_LIMIT" and saved.truncated
     assert saved.request_count == 12 and clock[0] == 120
     pending = next(item["requests"] for item in saved.missing_reports if item["kind"] == "pending_reports")
-    assert len(pending) == 1 and pending[0]["kind"] == "first7"
+    assert [item["kind"] for item in pending] == ["first30", "first7", "first30", "first7"]
     next_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
     assert run_sync(environment, next_id, channel_transport(3, [])).status == "success"
 
 
-@pytest.mark.parametrize("optional_kind", ["video_day", "video_period", "video_format", "first7"])
+@pytest.mark.parametrize("optional_kind", ["video_day", "video_period", "video_format", "first7", "first30"])
 def test_optional_5xx_records_missing_and_keeps_other_reports(client, environment, optional_kind):
     run_id = enqueue(client, environment)
     dims = {"video_day": "day,video", "video_period": "video", "video_format": "video,creatorContentType",
-            "first7": "creatorContentType"}[optional_kind]
+            "first7": "creatorContentType", "first30": "creatorContentType"}[optional_kind]
     def fail(endpoint, params):
         if endpoint == "reports" and params.get("filters") and params.get("dimensions") == dims:
+            if optional_kind in {"first7", "first30"}:
+                days = (date.fromisoformat(params["endDate"]) - date.fromisoformat(params["startDate"])).days + 1
+                if days != (7 if optional_kind == "first7" else 30):
+                    return None
             return failure_response()
     calls = []
     saved = run_sync(environment, run_id, channel_transport(3, calls, fail))
@@ -301,7 +311,7 @@ def test_transient_failure_preserves_previous_values_and_recovery_removes_placeh
     previous = environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "video_period")).all()
     assert len(previous) == 3 and all(row.values["views"] == 1 and row.sync_run_id == original_id for row in previous)
     placeholders = [row for row in environment.db.scalars(select(VideoDailyStat)) if "API_5XX" in row.missing_reasons.values()]
-    assert len(placeholders) == 9 and {row.kind for row in placeholders} == {"video_day", "video_format", "first7"}
+    assert len(placeholders) == 12 and {row.kind for row in placeholders} == {"video_day", "video_format", "first7", "first30"}
     recovered_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
     assert run_sync(environment, recovered_id, channel_transport(3, [])).status == "success"
     assert not [row for row in environment.db.scalars(select(VideoDailyStat)) if "API_5XX" in row.missing_reasons.values()]

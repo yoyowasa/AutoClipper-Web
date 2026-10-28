@@ -14,7 +14,17 @@ export type ConnectedYouTubeChannel = {
 export type YouTubeConnections = {
   clientConfigured: boolean; channels: ConnectedYouTubeChannel[];
   derivedAllowed: boolean; extendedStorage: boolean; reviewedAt: string; policyReference: string;
+  automation?: { enabled: boolean; syncHourUtc: number; analysisWeekday: number; timezone: string } | null;
 };
+
+export function automationLabel(automation: YouTubeConnections["automation"]): string {
+  if (!automation) return "定時実行の設定は未取得です。";
+  if (!automation.enabled) return "定時実行は無効です。手動で同期・分析できます。";
+  const hour = (automation.syncHourUtc + 9) % 24;
+  const day = (automation.analysisWeekday + Math.floor((automation.syncHourUtc + 9) / 24)) % 7;
+  return `毎日${hour}:00に同期、${["月", "火", "水", "木", "金", "土", "日"][day]}曜は同期後に自己分析（日本時間）。` +
+    "処理中・停止中は再開後に実行し、失敗は次回の予定で再試行します。";
+}
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE_URL}/api/intelligence${path}`, {

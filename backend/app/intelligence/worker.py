@@ -14,6 +14,12 @@ from app.storage.paths import get_storage_paths
 
 class IntelligenceWorker(CharacterAssetWorker):
     # Inherit RQ failure recording, including the surviving-parent SIGKILL path.
+    @property
+    def dequeue_timeout(self) -> int:
+        # RQ otherwise blocks on an empty Redis queue for worker_ttl - 15
+        # seconds, delaying our clock checks even with a shorter maintenance interval.
+        return min(super().dequeue_timeout, self.maintenance_interval)
+
     def run_maintenance_tasks(self) -> None:
         # RQ registry maintenance is per queue. Application maintenance is split:
         # media orphan checks belong to the media worker; YouTube expiry and
@@ -28,7 +34,8 @@ class IntelligenceWorker(CharacterAssetWorker):
 
 def main() -> None:
     settings = get_settings()
-    worker = IntelligenceWorker([settings.rq_intelligence_queue_name], connection=get_redis_connection())
+    worker = IntelligenceWorker([settings.rq_intelligence_queue_name], connection=get_redis_connection(),
+                                maintenance_interval=settings.youtube_maintenance_interval_seconds)
     worker.work()
 
 

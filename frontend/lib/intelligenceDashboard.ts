@@ -22,7 +22,20 @@ export type DashboardVideo = {
   id: string; title: string | null; publishedAt: string | null; durationSeconds: number | null; format: string;
   durationBand: string; current: NativeReport; first7: NativeReport; production: ProductionSummary | null;
   productionMissing: string | null; aggregateGroupIds: string[];
+  goal?: VideoGoal | null;
 };
+
+export type VideoGoal = {
+  video_id: string; format: string; target_views: number | null;
+  status: "pending" | "insufficient_data" | "reached" | "below_target";
+  reason: string | null; evidence_ids: string[]; first7: NativeReport; first30: NativeReport;
+};
+export function goalLabel(goal?: VideoGoal | null): string {
+  if (!goal) return "未判定（30日評価は未取得）";
+  if (goal.status === "pending") return "未判定（公開後30日の途中）";
+  if (goal.status === "insufficient_data") return `未判定／データ不足：${missingLabel(goal.reason)}`;
+  return goal.status === "reached" ? "30日目標に到達" : "30日目標に未達（内容の失敗とは判定しません）";
+}
 export type DashboardData = {
   channelId: number; format: DashboardFormat; lastReportDate: string | null; syncRunId: string | null;
   current: NativeReport; previous: NativeReport; daily: NativeReport[]; videos: DashboardVideo[];
@@ -60,6 +73,8 @@ const reasons: Record<string, string> = {
   NO_ROWS: "APIから値が返っていません", UNAVAILABLE: "値を取得できていません", NO_SYNC: "同期結果がありません",
   PARTIAL_COVERAGE: "日別値に未返却があるため、全期間の合計は未取得", NO_VIDEOS: "この期間の対象動画がありません",
   API_5XX: "APIの一時エラー", FIRST7_NOT_READY: "公開翌日から7暦日がまだ返却されていません",
+  FIRST30_NOT_READY: "公開後30日の途中", REPORT_NOT_RETURNED: "30日レポートの返却待ち",
+  FORMAT_UNKNOWN: "動画の形式が未確認", INVALID_OBSERVATION: "取得値を検証できませんでした",
   PUBLICATION_UNAVAILABLE: "公開日時が未取得", MULTIPLE_CONTENT_TYPES: "複数の形式が返り比較できません",
   FORMAT_MISMATCH: "動画の形式が異なります", FORMAT_UNCONFIRMED: "公式の形式が確認できていません",
   DURATION_MISMATCH: "動画の尺帯が異なります", DURATION_UNCONFIRMED: "動画の尺帯が確認できていません",

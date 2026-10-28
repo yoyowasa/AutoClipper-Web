@@ -69,7 +69,7 @@ def reports_for_video(video_id, rows, start, end) -> tuple[list[dict], int]:
         reports.append({"id": f"v:{video_id}:period_total", "kind": "period_total", "period": [str(start), str(end)],
                         "values": {}, "missing": {"report": "NO_DAILY_ROWS"}})
     # Unreturned initial/recent-period reports are missing, not zero.
-    for kind in ("first7", "video_period"):
+    for kind in ("first7", "first30", "video_period"):
         if not any(report["kind"] == kind for report in reports):
             reports.append({"id": f"v:{video_id}:{kind}", "kind": kind, "values": {}, "missing": {"report": "NO_ROWS"}})
     return reports, len(duplicates)
@@ -82,4 +82,4 @@ def within_input_period(row, last, start) -> bool:
         return (row.period_start, row.period_end) == (last - timedelta(days=27), last)
     if row.kind == "previous":
         return (row.period_start, row.period_end) == (last - timedelta(days=55), last - timedelta(days=28))
-    return row.kind == "first7"
+    return row.kind in {"first7", "first30"}

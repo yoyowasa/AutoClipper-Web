@@ -1,4 +1,4 @@
-import { formatLabels, metricLabels, missingLabel, overviewMetrics, type DashboardVideo } from "../../lib/intelligenceDashboard";
+import { formatLabels, goalLabel, metricLabels, missingLabel, overviewMetrics, type DashboardVideo } from "../../lib/intelligenceDashboard";
 import type { ProductionAggregates } from "../../lib/productionPerformance";
 import { ProductionAggregatesTable } from "../ProductionPerformance";
 import { MetricDisplay, ReportSource } from "./MetricDisplay";
@@ -9,7 +9,8 @@ export function VideoPerformanceList({ videos, onSelect }: { videos: DashboardVi
     <h2 className="text-lg font-bold">動画別の寄与（{videos.length}本）</h2>
     <p className="my-2 text-xs">各動画のYouTube公式値です。全体と取得範囲が異なるため、合算や構成比への置き換えはしていません。</p>
     <div className="max-h-[32rem] overflow-auto"><table className="w-full text-left text-sm"><thead className="bg-sky-50"><tr>
-      <th className="p-2">動画</th><th>直近28日の再生</th><th>初期7日の再生</th><th>初期7日のエンゲージビュー</th></tr></thead>
+      <th className="p-2">動画</th><th>直近28日の再生</th><th>初期7日の再生（途中評価）</th><th>30日評価</th>
+      <th>初期7日のエンゲージビュー</th></tr></thead>
       <tbody>{videos.map(video => <tr key={video.id} className="border-t align-top"><td className="max-w-md p-2">
         <button type="button" className="text-left text-sky-800 underline" onClick={() => onSelect(video.id)}>
           {video.title ?? video.id}</button><p className="mt-1 text-xs text-neutral-600">{formatLabels[video.format]} ／
@@ -17,6 +18,7 @@ export function VideoPerformanceList({ videos, onSelect }: { videos: DashboardVi
           {video.production ? " ／ 制作記録あり" : ""}</p></td>
         <td className="p-2"><MetricDisplay metric={video.current.metrics.views} /></td>
         <td className="p-2"><MetricDisplay metric={video.first7.metrics.views} /></td>
+        <td className="p-2">{goalLabel(video.goal)}{video.goal && <div><MetricDisplay metric={video.goal.first30.metrics.views} /></div>}</td>
         <td className="p-2"><MetricDisplay metric={video.first7.metrics.engagedViews} /></td></tr>)}</tbody></table></div>
     {videos.length === 0 ? <p>この形式の動画は未取得です。</p> : null}
   </section>;
@@ -39,6 +41,9 @@ export function VideoDetail({ video, aggregates, onClose }: {
       <tbody>{[...overviewMetrics, "averageViewPercentage", "averageViewDuration", "likes"].map(metric => <tr key={metric} className="border-t">
         <th className="p-2">{metricLabels[metric]}</th><td className="p-2"><MetricDisplay metric={video.current.metrics[metric]} /></td>
         <td className="p-2"><MetricDisplay metric={video.first7.metrics[metric]} /></td></tr>)}</tbody></table></div>
+    <div className="my-3 rounded border p-3 text-sm"><p>{goalLabel(video.goal)} ／ 目標 {video.goal?.target_views?.toLocaleString() ?? "未判定"}再生</p>
+      {video.goal && <><ReportSource report={video.goal.first30} /><MetricDisplay metric={video.goal.first30.metrics.views} /></>}
+      <p>公開翌日から30暦日（米国太平洋時間）。7日は途中評価です。</p></div>
     <h3 className="mt-5 font-semibold">結び付いた制作記録（自前データ）</h3>
     {!production ? <p className="text-sm">{missingLabel(video.productionMissing)}</p> : <div className="space-y-2 text-sm">
       <p>{production.characterPresetName ?? "キャラ未設定"} ／ {production.recordId}（revision {production.revision}）</p>

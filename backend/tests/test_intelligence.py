@@ -47,7 +47,7 @@ def environment(client, monkeypatch):
     db = next(generator)
     factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
     paths = app.dependency_overrides[get_storage_paths]()
-    config = Settings(_env_file=None)
+    config = Settings(_env_file=None, youtube_automation_enabled=False)
     app.dependency_overrides[get_settings] = lambda: config
     write_private_json(paths.google_client, {"installed": {
         "client_id": "test.apps.googleusercontent.com", "client_secret": "synthetic-client-secret",

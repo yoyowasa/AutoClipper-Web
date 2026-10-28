@@ -13,6 +13,13 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class AnalysisGoals(Strict):
+    normal_views: Literal[100000] = 100000
+    short_views: Literal[1000000] = 1000000
+    window_days: Literal[30] = 30
+    interim_days: Literal[7] = 7
+
+
 class Finding(Strict):
     id: str = Field(pattern=r"^[a-z0-9_-]{1,50}$")
     format: Format
@@ -90,7 +97,8 @@ class Review(Strict):
     batch_run_id: str = Field(min_length=8, max_length=64)
     title: str = Field(min_length=1, max_length=150)
     summary: str = Field(min_length=1, max_length=2000)
-    goal_views: Literal[1000000]
+    goals: AnalysisGoals | None = None
+    goal_views: Literal[1000000] | None = None  # Read-only compatibility for older saved reviews.
     recommendation_framework_version: Literal[FRAMEWORK_VERSION] | None = None
     reviewed_material: Literal["statistics_and_titles"] = "statistics_and_titles"
     limitations: list[str] = Field(min_length=1, max_length=10)
@@ -109,6 +117,8 @@ class Review(Strict):
 
 def analysis_response_schema() -> dict:
     schema = deepcopy(Review.model_json_schema())
+    schema["properties"].pop("goal_views")
+    schema["properties"]["goals"] = {"$ref": "#/$defs/AnalysisGoals"}
 
     def strict(node):
         if isinstance(node, dict):

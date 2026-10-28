@@ -55,7 +55,7 @@ def valid_review(context):
         "batch_run_id": context.payload["batch"]["run_id"],
         "title": "観測と次の確認",
         "summary": "効果はまだ検証していません。",
-        "goal_views": 1000000,
+        "goals": {"normal_views": 100000, "short_views": 1000000, "window_days": 30, "interim_days": 7},
         "recommendation_framework_version": FRAMEWORK_VERSION,
         "reviewed_material": "statistics_and_titles",
         "limitations": ["表示機会と動画本編は未確認です。"],

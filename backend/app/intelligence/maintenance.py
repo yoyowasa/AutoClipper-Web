@@ -44,3 +44,5 @@ def maintain_youtube(db, config: Settings, paths: StoragePaths, queues, *, clock
             except (KeyError, ValueError, OSError, TypeError):
                 # Do not include a private file or exception in logs.
                 continue
+    from app.intelligence.scheduling import schedule_due_channels
+    schedule_due_channels(db, config, stamp)

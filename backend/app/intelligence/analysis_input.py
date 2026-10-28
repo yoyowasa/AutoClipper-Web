@@ -10,12 +10,15 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.intelligence.analysis_budget import fit_analysis_budget
+from app.intelligence.analysis_prompt import PROMPT_VERSION
 from app.intelligence.analysis_cohort import select_video_cohort
 from app.intelligence.analysis_reports import REPORT_DEFAULTS, native_report, reports_for_video, within_input_period
 from app.intelligence.models import Channel, ChannelConnection, ProductionLink, SyncRun, VideoDailyStat, YouTubeVideo
 from app.intelligence.policy import statistical_expiry
 from app.intelligence.production_catalog import read_families
 from app.intelligence.production_aggregation import aggregate_analysis_input, build_production_aggregates
+from app.intelligence.choice_evaluation import analysis_choice_snapshot, choice_evaluation_input
+from app.intelligence.evaluation_rules import GOALS
 from app.storage.paths import StoragePaths
 
 UNITS = {"estimatedMinutesWatched": "分", "averageViewDuration": "秒", "averageViewPercentage": "%",
@@ -36,10 +39,11 @@ class AnalysisContext:
         return hashlib.sha256(json.dumps(self.payload, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 
 
-def _production(record) -> dict:
+def _production(record, published=None) -> dict:
     hook_length = (record.hookSceneEnd - record.hookSceneStart
                    if record.hookSceneStart is not None and record.hookSceneEnd is not None else None)
     return {"recordId": record.recordId, "bodyDurationSeconds": record.bodyDurationSeconds,
+        "choices": analysis_choice_snapshot(record, as_of=published),
         **({"performanceHints": [hint.model_dump(by_alias=True, mode="json") for hint in record.performanceHints]}
            if record.performanceHints else {}),
         "completedDurationSeconds": record.completedDurationSeconds, "hookSceneDuration": hook_length,
@@ -103,8 +107,10 @@ def build_analysis_input(db: Session, paths: StoragePaths, config: Settings, cha
     for row in db.scalars(select(VideoDailyStat).where(VideoDailyStat.channel_id == channel_id,
                          VideoDailyStat.expires_at > stamp,
                          or_(VideoDailyStat.video_id.is_(None), VideoDailyStat.video_id.in_(videos)),
-                         VideoDailyStat.kind.in_(["daily", "current", "previous", "video_period", "first7", "video_format", "video_day"]),
-                         or_(VideoDailyStat.kind == "first7", VideoDailyStat.period_start >= min(start, last - timedelta(days=55))))
+                         VideoDailyStat.kind.in_(["daily", "current", "previous", "video_period", "first7", "first30",
+                                                 "video_format", "video_day"]),
+                         or_(VideoDailyStat.kind.in_(["first7", "first30"]),
+                             VideoDailyStat.period_start >= min(start, last - timedelta(days=55))))
                          .order_by(VideoDailyStat.id)):
         if not within_input_period(row, last, start):
             continue
@@ -135,8 +141,10 @@ def build_analysis_input(db: Session, paths: StoragePaths, config: Settings, cha
             continue
         record = family.latest
         id = "production:" + record.recordId
-        videos[link.youtube_video_id].update(production_evidence_id=id, production={"id": id, "value": _production(record)})
-    payload = {"review_id": review_id, "channel": {"id": channel.id, "name": channel.name},
+        videos[link.youtube_video_id].update(production_evidence_id=id,
+            production={"id": id, "value": _production(record, entities[link.youtube_video_id].published_at)})
+    payload = {"review_id": review_id, "channel": {"id": channel.id, "name": channel.name}, "goals": GOALS,
+        "prompt_version": PROMPT_VERSION,
         "batch": {"run_id": batch.id, "last_report_date": str(last), "status": batch.status},
         "videos": list(videos.values()), "channel_reports": channel_reports, "report_defaults": REPORT_DEFAULTS,
         "metric_units": UNITS, "input_scope": scope, "deduplicated_reports": duplicate_reports,
@@ -149,9 +157,13 @@ def build_analysis_input(db: Session, paths: StoragePaths, config: Settings, cha
     aggregates = build_production_aggregates(db, paths, config, channel_id, stamp)
     expiry.append(datetime.fromisoformat(aggregates["expires_at"].replace("Z", "+00:00")).replace(tzinfo=None))
     payload["production_aggregates"] = aggregate_analysis_input(aggregates)
+    payload["choice_evaluations"] = choice_evaluation_input(aggregates["choice_evaluations"])
     fit_analysis_budget(payload)
     evidence = _expand_evidence(payload, min(expiry))
     for group in payload["production_aggregates"]["groups"]:
+        evidence[group["id"]] = {"id": group["id"], "video_id": None, "source": "independent_aggregation",
+                                 "value": group, "format": group["format"]}
+    for group in payload["choice_evaluations"]["groups"]:
         evidence[group["id"]] = {"id": group["id"], "video_id": None, "source": "independent_aggregation",
                                  "value": group, "format": group["format"]}
     if not any(item["source"] == "youtube_analytics" for item in evidence.values()):

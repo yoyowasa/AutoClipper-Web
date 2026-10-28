@@ -6,6 +6,9 @@
 
 状態: 現行実装と合意済みの到達目標を区別し、[残り作業1〜7](#remaining-work)の順番を固定した基準文書。
 
+2026-10-29 task-234追記: 同期・分析の定時実行と30日評価は、以下§2・§4・残り作業2の記述を更新した。
+実装PRでの検証と稼働反映は区別する。他節の確認日は上記のままとし、§3・統合構想は変えない。
+
 ## 読み方と根拠
 
 - **現行**は上記mainのコードと、[STATUS](../STATUS.md)・各機能の仕様・マージ済みPRを照合した結果。稼働環境への反映、ユーザーの画面受入、投稿成績への効果は別の確認事項とする。
@@ -60,7 +63,7 @@
 | ④ 独自集計・制作ヒント | 結び付いた動画の初期7日をキャラ・形式・制作属性で集計。中央値・相対値・観測数を示し、5本未満等はデータ不足。有効なヒントを次の選定・タイトル／フックへ参考として渡す。 | [統合④仕様](INTELLIGENCE_PRODUCTION_PERFORMANCE.md)、[独自集計](../backend/app/intelligence/production_aggregation.py)、[ヒント](../backend/app/intelligence/performance_hints.py)、[PR #151](https://github.com/yoyowasa/AutoClipper-Web/pull/151) |
 | ⑤ 分析画面・改善試験 | `/intelligence`で期間・日別・動画別・制作情報・分析履歴・集計・ヒントを表示。提案採用→試験作成→対象動画の結び付け→初期7日比較→編集・削除が可能。 | [統合⑤仕様と検証](INTELLIGENCE_DASHBOARD_TRIALS.md)、[画面](../frontend/app/intelligence/page.tsx)、[試験処理](../backend/app/intelligence/trials.py)、[PR #152](https://github.com/yoyowasa/AutoClipper-Web/pull/152) |
 
-- 同期・分析は人の開始操作を基本とする。分析前に最終同期から24時間以上経過していれば同期する選択はあるが、定時同期・公開後24時間／72時間／30日等での自動評価は未実装。保守処理は期限切れ・取り残しの処理であり、自動分析のスケジューラではない。[分析前同期](../backend/app/intelligence/analysis_runner.py)、[保守処理](../backend/app/intelligence/maintenance.py)
+- 同期は毎日・分析は週1回の定時実行（既定は日本時間12時、月曜は同期後に分析）を追加し、手動開始も残す。既存の分析用worker・キュー・保守点検を再利用し、同じチャンネルの同期／分析を重複させない。初期7日は途中評価、初期30日は通常10万／ショート100万再生の目標判定に使う。24時間／72時間等の個別イベント実行は追加していない。[定時実行・評価仕様](INTELLIGENCE_SCHEDULING_EVALUATION.md)、[保守処理](../backend/app/intelligence/maintenance.py)
 - 同期と分析は専用の `autoclipper-intelligence` キュー／CPU worker、Codex中継は通常・分析の別レーンを使う。切り抜きworkerで分析待ちをしない。[専用worker](../backend/app/intelligence/worker.py)、[中継と反映手順](INTELLIGENCE_SELF_ANALYSIS.md)
 - 全体の28日・日別は公式値、形式別の動画日次合計と制作属性別の中央値等は独自集計として区別する。平均を再平均せず、未返却・期限切れ・形式不明を明示する。現行同期には流入元・維持率曲線・CTR・Shortsのスワイプ率・収益の取得はない。[取得範囲](INTELLIGENCE_YOUTUBE_SYNC.md)、[表示の区別](INTELLIGENCE_DASHBOARD_TRIALS.md)、[取得権限](../backend/app/intelligence/credentials.py)
 - 現在の保持実装は、統計が最大36か月、更新されない動画メタデータが30日、分析本文は最大30日か根拠の最短期限まで。独自集計も元統計の期限を超えない。改善試験の意図は自前の記録として残し、YouTubeの値は表示時に期限内の元データから読む。[保持処理](../backend/app/intelligence/policy.py)、[自己分析の保持](INTELLIGENCE_SELF_ANALYSIS.md)、[改善試験の保持](INTELLIGENCE_DASHBOARD_TRIALS.md)
@@ -113,11 +116,11 @@
 | 次回への改善 | 実績ヒントを参考として自動参照、改善試験を人が採用・比較 | 根拠付きで選び方を自動更新し、版管理・悪化時の巻き戻し |
 | 費用 | 有料Platform API呼び出し経路は削除済み | 有料API禁止を今後の追加実装でも維持する |
 
-### 成績目標の既知の不一致
+### 成績目標と旧分析の区別
 
-§3.2の目標は**通常10万再生／ショート100万再生、30日区切り**。しかし現行の自己分析プロンプトには「動画1本で100万回、達成期限は指定されていない」とあり、返答も `goal_views: Literal[1000000]` に固定されている。独自集計・改善試験は初期7日を比較しており、これだけで30日目標への達否は評価できない。[プロンプト](../backend/app/intelligence/analysis_prompt.py)、[返答スキーマ](../backend/app/intelligence/analysis_schema.py)、[改善試験の比較](../backend/app/intelligence/trials.py)
+§3.2の**通常10万再生／ショート100万再生、30日区切り**に、新しい自己分析のプロンプト・返答・画面と選択ごとの評価を揃えた。期間は既存の初期7日と同じ太平洋時間の公開翌日から30暦日とし、未到達・未返却は未判定。旧 `goal_views=1000000` の分析は読み込めるが、旧目標の結果として表示する。[プロンプト](../backend/app/intelligence/analysis_prompt.py)、[返答スキーマ](../backend/app/intelligence/analysis_schema.py)、[期間・欠損・選択の仕様](INTELLIGENCE_SCHEDULING_EVALUATION.md)
 
-この不一致は**今回の文書更新では直していない**。[残り作業2](#remaining-2)で取得・評価期間と分析の目標表現を揃え、[残り作業3](#remaining-3)で同じ基準を改善判断に使う。7日比較は途中評価として残す。機能が動くことと、実投稿が目標を達成することは別に検証する。§3.2の月間収益目標も維持するが、現行同期に収益指標はなく、自動評価済みとはしない。
+既存の7日集計・改善試験は途中評価として残す。[残り作業3](#remaining-3)の自動更新・版切り替え・巻き戻しは未実装。評価の仕組みと実投稿の目標達成は別に検証する。§3.2の月間収益目標も維持するが、現行同期に収益指標はなく、自動評価済みとはしない。
 
 ## 5. まだ詳細を固定していないもの
 
@@ -152,7 +155,7 @@
 
 ### 残り作業2：同期・分析を自動実行し、選択ごとの成績を自動評価する
 
-- **段階・現在**：§3.3-7・8。手動開始の同期・分析、初期7日集計と改善試験はあるが、定時実行と選択ごとの30日評価はない。分析の目標も§4のとおり不一致。
+- **段階・現在**：§3.3-7・8。task-234で定時同期・分析、形式別30日目標、choiceHistoryの出所・方針版・設定別の観測を実装。件数・期間・観測時点・根拠を保存し、少数標本では効果を結論しない。モック・隔離環境での検証と、反映後の定刻実行・実データ受入は区別する。[仕様と未確認事項](INTELLIGENCE_SCHEDULING_EVALUATION.md)
 - **完了の判定**：取得可能な時点で自動同期・分析し、制作上の選択と実績を結ぶ。分析・評価を**通常10万／ショート100万再生、30日区切り**に揃え、7日は途中評価、未返却は未判定として根拠と結果を保存する。
 
 <a id="remaining-3"></a>

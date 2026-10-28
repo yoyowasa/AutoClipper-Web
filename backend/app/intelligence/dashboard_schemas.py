@@ -3,24 +3,8 @@ from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
-
-class MetricRead(BaseModel):
-    value: float | None = None
-    missingReason: str | None = None
-    observedSubtotal: float | None = None
-
-
-class ReportRead(BaseModel):
-    source: Literal["youtube_analytics", "independent_aggregation"] = "youtube_analytics"
-    start: date | None = None
-    end: date | None = None
-    observedAt: datetime | None = None
-    metrics: dict[str, MetricRead]
-    reason: str | None = None
-    returned: int | None = None
-    expected: int | None = None
-    format: str = "unknown"
+from app.intelligence.evaluation_schemas import VideoGoalRead
+from app.intelligence.report_schemas import MetricRead as MetricRead, ReportRead as ReportRead
 
 
 class DashboardVideoRead(BaseModel):
@@ -32,6 +16,7 @@ class DashboardVideoRead(BaseModel):
     durationBand: str
     current: ReportRead
     first7: ReportRead
+    goal: VideoGoalRead | None = None
     production: dict[str, Any] | None = None
     productionMissing: str | None = None
     aggregateGroupIds: list[str] = Field(default_factory=list)

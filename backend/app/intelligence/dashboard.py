@@ -11,6 +11,7 @@ from app.intelligence.dashboard_schemas import DashboardRead, DashboardVideoRead
 from app.intelligence.models import ProductionLink, SyncRun, VideoDailyStat, YouTubeVideo
 from app.intelligence.production_catalog import read_families
 from app.intelligence.production_dimensions import attributes, group_id
+from app.intelligence.choice_evaluation import evaluate_video_goal
 
 
 def dashboard_data(db, paths, config, channel_id, format, stamp):
@@ -35,7 +36,8 @@ def dashboard_data(db, paths, config, channel_id, format, stamp):
                    if last else missing_report("NO_SYNC"))
         entry = DashboardVideoRead(id=video.id, title=video.title, publishedAt=video.published_at,
             durationSeconds=video.duration_seconds, format=video.format, durationBand=duration_band(video.duration_seconds, video.format),
-            current=current, first7=first7_report(video, per_video[video.id], last))
+            current=current, first7=first7_report(video, per_video[video.id], last),
+            goal=evaluate_video_goal(video, per_video[video.id], last, stamp) if config.youtube_derived_allowed else None)
         link = links.get(video.id)
         family = families.get(link.record_family_id) if link else None
         if family and not family.ambiguous and family.latest.recordId == link.record_id:
@@ -85,5 +87,7 @@ def evidence_video_ids(snapshot):
         if item.get("video_id"):
             result[key] = [item["video_id"]]
     for group in snapshot.get("production_aggregates", {}).get("groups", []):
+        result[group["id"]] = group["video_ids"]
+    for group in snapshot.get("choice_evaluations", {}).get("groups", []):
         result[group["id"]] = group["video_ids"]
     return result

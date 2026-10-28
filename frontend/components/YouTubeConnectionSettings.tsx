@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ChannelAnalysisSettings } from "./ChannelAnalysisSettings";
-import { getYouTubeConnections, startYouTubeConnection, syncYouTubeChannel, youtubeSyncLabel, youtubeSyncTime,
+import { automationLabel, getYouTubeConnections, startYouTubeConnection, syncYouTubeChannel, youtubeSyncLabel, youtubeSyncTime,
   type YouTubeConnections } from "../lib/intelligence";
 
 export function YouTubeConnectionList({ data, busy, onConnect, onSync }: {
@@ -75,6 +75,7 @@ export function YouTubeConnectionSettings() {
     <p className="text-sm">自分が管理するチャンネルの動画・統計を読み取ります。投稿・変更の権限は求めません。</p>
     {error ? <p role="alert" className="text-red-700">{error}</p> : null}
     {!data ? <p>接続状態を確認中…</p> : <>
+      <p className="text-sm" aria-label="定時同期と分析">{automationLabel(data.automation)}</p>
       {!data.clientConfigured ? <p className="border border-amber-300 bg-amber-50 p-3 text-sm">
         GoogleのDesktopクライアント設定を storage/secrets/google-client.json に配置してください。
       </p> : null}

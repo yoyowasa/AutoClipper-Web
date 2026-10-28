@@ -1,4 +1,5 @@
 "use client";
+import { ChoiceEvaluations } from "./ChoiceEvaluations";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { getYouTubeConnections, youtubeSyncLabel, type ConnectedYouTubeChannel } from "../../lib/intelligence";
@@ -100,6 +101,7 @@ function ChannelDashboard({ channel }: { channel: ConnectedYouTubeChannel }) {
       <details><summary>集計表を開く（{aggregates?.groups.length ?? 0}グループ）</summary>
         {aggregates ? <ProductionAggregatesTable data={aggregates} /> : <p>未取得</p>}</details>
     </section>
+    <ChoiceEvaluations data={aggregates?.choice_evaluations} videos={allData?.videos ?? []} onVideo={selectVideo} />
   </div>;
 }
 
