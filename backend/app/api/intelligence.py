@@ -1,15 +1,14 @@
 import html
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
 from app.db import get_db
 from app.intelligence.common import ERROR_MESSAGES, YouTubeError, now
+from app.intelligence.job_claims import ChannelClaimError, claim_channel_run
 from app.intelligence.credentials import persist_credentials
 from app.intelligence.models import Channel, ChannelConnection, SyncRun
 from app.intelligence.oauth import COOKIE, STATE_TTL_SECONDS, begin_oauth, complete_oauth
@@ -51,7 +50,9 @@ def list_channels(response: Response, db: Session = Depends(get_db), paths: Stor
             lastSyncAt=channel.last_sync_at, latestRun=read_run(latest) if latest else None))
     return YouTubeConnectionsRead(clientConfigured=paths.google_client.is_file(), channels=channels,
         derivedAllowed=config.youtube_derived_allowed, extendedStorage=config.youtube_extended_storage,
-        reviewedAt=config.youtube_policy_reviewed_at, policyReference=config.youtube_policy_reference)
+        reviewedAt=config.youtube_policy_reviewed_at, policyReference=config.youtube_policy_reference,
+        automation={"enabled": config.youtube_automation_enabled, "syncHourUtc": config.youtube_auto_sync_hour_utc,
+                    "analysisWeekday": config.youtube_auto_analysis_weekday, "timezone": "UTC"})
 
 
 @router.post("/oauth/start", response_model=OAuthStartResponse)
@@ -114,13 +115,10 @@ def sync_channel(channel_id: int, request: Request, db: Session = Depends(get_db
     connection = db.get(ChannelConnection, channel_id)
     if not connection or connection.status != "connected":
         raise HTTPException(409, ERROR_MESSAGES["RECONNECT_REQUIRED"])
-    run = SyncRun(id="sync_" + uuid4().hex, channel_id=channel_id, active_channel_id=channel_id)
-    db.add(run)
     try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(409, "このチャンネルは同期中です。") from None
+        run = claim_channel_run(db, channel_id, "sync", now())
+    except ChannelClaimError:
+        raise HTTPException(409, "このチャンネルは同期または分析中です。接続状態も確認してください。") from None
     try:
         enqueue(run.id)
     except Exception:

@@ -1,6 +1,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from app.intelligence.evaluation_schemas import ChoiceEvaluationsRead
 
 
 class AggregateMetricRead(BaseModel):
@@ -38,3 +39,4 @@ class ProductionAggregatesRead(BaseModel):
     record_issues: int
     baselines: dict[str, dict[str, dict[str, int | float | None]]]
     groups: list[AggregateGroupRead]
+    choice_evaluations: ChoiceEvaluationsRead | None = None

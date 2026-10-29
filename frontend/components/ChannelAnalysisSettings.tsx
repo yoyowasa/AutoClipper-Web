@@ -23,6 +23,7 @@ const validationReasons: Record<string, string> = {
   HINT_INSUFFICIENT_DATA: "ヒントのデータ不足", HINT_LIMIT_EXCEEDED: "ヒントの件数上限超過",
   HINT_METADATA_QUOTED: "ヒントに動画タイトル等が含まれる", HINT_TEXT_INVALID: "ヒントの文章形式が不正",
   CHANNEL_MISMATCH: "チャンネルが不一致", BATCH_MISMATCH: "同期IDが不一致", FRAMEWORK_MISMATCH: "分析基準が不一致",
+  GOALS_MISMATCH: "30日・形式別の成績目標が不一致",
 };
 
 export function AnalysisValidationText({ validation }: { validation?: AnalysisValidationReport | null }) {
@@ -43,6 +44,8 @@ export function AnalysisReviewText({ review, renderEvidence, onAdopt, adopted = 
 }) {
   return <div className="space-y-3 text-sm">
     <h5 className="font-semibold">{review.title}</h5><p className="whitespace-pre-wrap">{review.summary}</p>
+    <p className="text-sm">{review.goals ? "30日目標：通常10万・ショート100万再生。7日は途中評価です。"
+      : "旧版の分析（1本100万・期限なし）。30日目標の評価とは区別してください。"}</p>
     <p className="text-xs text-neutral-600">統計・タイトル・制作記録・独自集計からの分析です。動画本編の視聴や改善効果の検証は行っていません。</p>
     <ul className="list-inside list-disc text-amber-900">{review.limitations.map((value, index) => <li key={index}>{value}</li>)}</ul>
     <h5 className="font-semibold">所見・仮説</h5>
@@ -144,6 +147,8 @@ export function ChannelAnalysisSettings({ channelId, connected, syncActive, full
   }
   return <section className="mt-4 space-y-3 border-t pt-3" aria-label="Codex自己分析">
     <h4 className="font-semibold">Codex自己分析（gpt-6-astra / high）</h4>
+    <p className="text-sm">目標は通常10万・ショート100万再生、公開翌日から30暦日（米国太平洋時間）です。
+      7日は途中評価。30日未到達・値の未返却は未判定です。</p>
     <label className="block text-sm">分析前の同期
       <select className="ml-2 border p-2" value={mode} disabled={busy || active}
         onChange={event => setMode(event.target.value as SyncBeforeAnalysis)}>

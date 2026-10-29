@@ -52,7 +52,7 @@ def run_channel_analysis(id: str, *, session_factory=SessionLocal, paths=None, c
         try:
             channel = db.get(Channel, run.channel_id)
             if needs_sync(run.sync_before, channel.last_sync_at, now()):
-                sync = SyncRun(id="sync_" + uuid4().hex, channel_id=channel.id, active_channel_id=channel.id)
+                sync = SyncRun(id="sync_" + uuid4().hex, channel_id=channel.id, active_channel_id=channel.id, queued_at=now())
                 db.add(sync)
                 try:
                     db.commit()

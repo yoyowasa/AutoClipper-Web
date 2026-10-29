@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
-from zoneinfo import ZoneInfo
 
 from app.intelligence.common import YouTubeError
 from app.intelligence.youtube_client import INITIAL_LIMIT, REPORT_PAGE_SIZE, YouTubeClient
+from app.intelligence.evaluation_rules import PACIFIC, initial_window
 
-PACIFIC = ZoneInfo("America/Los_Angeles")
 
 
 @dataclass
@@ -53,10 +52,10 @@ def optional_requests(videos, start: date, end: date, last: date) -> list[Report
         for kind, dimensions in (("video_period", "video"), ("video_format", "video,creatorContentType")):
             requests.append(ReportRequest(kind, last - timedelta(days=27), last, dimensions, ids[offset:offset + 100]))
     for video in videos:
-        begin = video.published_at.replace(tzinfo=UTC).astimezone(PACIFIC).date() + timedelta(days=1)
-        finish = begin + timedelta(days=6)
-        if finish <= last:
-            requests.append(ReportRequest("first7", begin, finish, "creatorContentType", [video.id]))
+        for kind, days in (("first30", 30), ("first7", 7)):
+            begin, finish = initial_window(video.published_at, days)
+            if finish <= last:
+                requests.append(ReportRequest(kind, begin, finish, "creatorContentType", [video.id]))
     return requests
 
 
@@ -87,7 +86,7 @@ def collect_reports(client: YouTubeClient, external_id: str, videos, stamp: date
         requests = optional_requests(videos, start, end, last)
     first7_count = 0
     for index, request in enumerate(requests):
-        if request.kind == "first7" and first7_count >= INITIAL_LIMIT:
+        if request.kind in {"first7", "first30"} and first7_count >= INITIAL_LIMIT:
             return start, end, last, reports, [item.checkpoint() for item in requests[index:]]
         error = None
         try:
@@ -98,7 +97,7 @@ def collect_reports(client: YouTubeClient, external_id: str, videos, stamp: date
             if failure.code != "API_5XX":
                 raise
             rows, error = [], failure
-        first7_count += request.kind == "first7"
+        first7_count += request.kind in {"first7", "first30"}
         for video_id in request.video_ids:
             video_rows = [row for row in rows if row.get("video", video_id) == video_id]
             reports.append(CollectedReport(request.kind, request.start, request.end, video_rows, video_id, error))

@@ -61,7 +61,7 @@ def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, r
         if placeholder and set(placeholder.missing_reasons.values()) == {"API_5XX"}:
             db.delete(placeholder)
             db.flush()
-    if kind in {"first7", "video_format"} and video_id:
+    if kind in {"first7", "first30", "video_format"} and video_id:
         video = db.get(YouTubeVideo, video_id)
         content_types = {content_format(row.get("creatorContentType")) for row in rows}
         if video and len(content_types) == 1:

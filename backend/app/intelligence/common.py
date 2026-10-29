@@ -27,6 +27,7 @@ ERROR_MESSAGES = {
     "INVALID_RESPONSE": "YouTube APIの応答を検証できませんでした。",
     "SYNC_LIMIT": "同期の上限時間またはリクエスト数に達しました。",
     "SYNC_FAILED": "同期を完了できませんでした。",
+    "EVALUATION_FAILED": "統計は同期しましたが、制作上の選択の評価を更新できませんでした。次回の同期で再試行します。",
     "QUEUE_FAILED": "同期をキューへ登録できませんでした。",
     "WORKER_INTERRUPTED": "同期のworkerが中断されました。もう一度同期してください。",
 }

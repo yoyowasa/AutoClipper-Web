@@ -105,11 +105,17 @@ def build_production_aggregates(db, paths, config, channel_id, stamp) -> dict:
         group.update(count=len(rows), sufficient=sufficient, status="available" if sufficient else "insufficient_data",
                      metrics=metrics, video_ids=sorted(row["video_id"] for row in rows))
     expires = min((row["expires_at"] for row in observations.values()), default=statistical_expiry(stamp, config))
+    from datetime import datetime
+    from app.intelligence.choice_evaluation import build_choice_evaluations
+    choice_evaluations = build_choice_evaluations(db, paths, config, channel_id, stamp, families=families)
+    if choice_evaluations["expires_at"]:
+        expires = min(expires, datetime.fromisoformat(choice_evaluations["expires_at"].removesuffix("Z")))
     return {"source": "independent_aggregation", "label": "独自集計（YouTube公式の集計ではありません）",
         "channel_id": channel_id, "generated_at": stamp.isoformat() + "Z", "expires_at": expires.isoformat() + "Z",
         "minimum_group_videos": MIN_GROUP_VIDEOS, "linked_videos": linked, "excluded_linked_videos": excluded,
         "excluded_reasons": dict(excluded_reasons),
-        "record_issues": len(issues), "baselines": baselines, "groups": sorted(groups.values(), key=lambda group: group["id"])}
+        "record_issues": len(issues), "baselines": baselines, "groups": sorted(groups.values(), key=lambda group: group["id"]),
+        "choice_evaluations": choice_evaluations}
 
 
 def save_production_aggregates(db, channel_id, payload, stamp):

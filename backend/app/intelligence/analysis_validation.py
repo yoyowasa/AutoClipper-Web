@@ -6,17 +6,18 @@ from typing import Any
 from pydantic import Field, ValidationError, create_model
 
 from app.intelligence.analysis_input import AnalysisContext
-from app.intelligence.analysis_schema import Finding, Proposal, Review
+from app.intelligence.analysis_schema import AnalysisGoals, Finding, Proposal, Review
 from app.intelligence.performance_schema import PerformanceHint
 from app.intelligence.hint_validation import hint_issue
 from app.intelligence.recommendation_rules import FRAMEWORK_VERSION
+from app.intelligence.evaluation_rules import GOALS
 
 Envelope = create_model("ReviewEnvelope", __config__=Review.model_config,
     **{name: (field.annotation, field) for name, field in Review.model_fields.items()
        if name not in {"findings", "proposals", "performance_hints"}},
     findings=(list[Any], Field(min_length=1, max_length=20)), proposals=(list[Any], Field(max_length=12)),
     performance_hints=(list[Any], Field(default_factory=list, max_length=50)))
-SAFE_FIELDS = frozenset().union(*(model.model_fields for model in (Review, Finding, Proposal, PerformanceHint))) | {
+SAFE_FIELDS = frozenset().union(*(model.model_fields for model in (Review, Finding, Proposal, PerformanceHint, AnalysisGoals))) | {
     "group_id", "count",
     "surface", "viewer_need", "stage", "signal_hypothesis", "evidence_gap", "rule_ids", "start", "end", "action"}
 
@@ -52,6 +53,8 @@ def validate_review(output, context: AnalysisContext, *, diagnostics: dict | Non
         schema_errors(error)
         fail()
     payload = context.payload
+    if envelope.goals is None or envelope.goals.model_dump() != GOALS or envelope.goal_views is not None:
+        issue("GOALS_MISMATCH", ["goals"])
     for name, expected, code in (
         ("id", payload["review_id"], "REVIEW_ID_MISMATCH"),
         ("channel_id", payload["channel"]["id"], "CHANNEL_MISMATCH"),
@@ -110,6 +113,7 @@ def validate_review(output, context: AnalysisContext, *, diagnostics: dict | Non
         fail()
     hints, counts = [], Counter()
     groups = {group["id"]: group for group in payload.get("production_aggregates", {}).get("groups", [])}
+    groups.update({group["id"]: group for group in payload.get("choice_evaluations", {}).get("groups", [])})
     for index, raw in enumerate(envelope.performance_hints):
         try:
             hint = PerformanceHint.model_validate(raw)

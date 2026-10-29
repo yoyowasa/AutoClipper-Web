@@ -92,6 +92,19 @@ def run_youtube_sync(run_id: str, *, session_factory: Callable[[], Session] = Se
             run.fetched_count, run.request_count = sum(len(report.rows) for report in reports), client.requests
             db.commit()
             reconcile_safely(db, storage)
+            try:
+                if settings.youtube_derived_allowed:
+                    from app.intelligence.production_aggregation import build_production_aggregates, save_production_aggregates
+                    save_production_aggregates(db, channel.id,
+                        build_production_aggregates(db, storage, settings, channel.id, stamp), stamp)
+                    db.commit()
+            except Exception:
+                db.rollback()
+                run = db.get(SyncRun, run_id)
+                run.missing_reports = [*run.missing_reports, {"kind": "choice_evaluation", "reason": "EVALUATION_FAILED"}]
+                run.status = "partial"
+                run.error_code = run.error_code or "EVALUATION_FAILED"
+                db.commit()
         except Exception as error:
             db.rollback()
             if isinstance(error, YouTubeError):

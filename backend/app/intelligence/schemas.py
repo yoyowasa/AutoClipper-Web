@@ -37,6 +37,13 @@ class ChannelRead(BaseModel):
     latestRun: SyncRunRead | None
 
 
+class YouTubeAutomationRead(BaseModel):
+    enabled: bool
+    syncHourUtc: int = Field(ge=0, le=23)
+    analysisWeekday: int = Field(ge=0, le=6)
+    timezone: Literal["UTC"] = "UTC"
+
+
 class YouTubeConnectionsRead(BaseModel):
     clientConfigured: bool
     channels: list[ChannelRead]
@@ -44,3 +51,4 @@ class YouTubeConnectionsRead(BaseModel):
     extendedStorage: bool
     reviewedAt: str
     policyReference: str
+    automation: YouTubeAutomationRead | None = None

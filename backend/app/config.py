@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     storage_root: str = "../storage"
     youtube_oauth_redirect_uri: str = "http://localhost:8000/api/intelligence/oauth/callback"
     youtube_sync_budget_seconds: int = Field(default=120, ge=30, le=300)
+    youtube_automation_enabled: bool = True
+    youtube_auto_sync_hour_utc: int = Field(default=3, ge=0, le=23)
+    youtube_auto_analysis_weekday: int = Field(default=0, ge=0, le=6)
+    youtube_maintenance_interval_seconds: int = Field(default=60, ge=30, le=3600)
     youtube_derived_allowed: bool = True
     youtube_extended_storage: bool = True
     youtube_policy_reviewed_at: str = "2026-10-15"

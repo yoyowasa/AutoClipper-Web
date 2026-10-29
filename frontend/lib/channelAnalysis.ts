@@ -21,7 +21,8 @@ export type AnalysisProposal = {
 };
 export type AnalysisReview = {
   performance_hints?: PerformanceHint[];
-  id: string; channel_id: number; batch_run_id: string; title: string; summary: string; goal_views: 1000000;
+  id: string; channel_id: number; batch_run_id: string; title: string; summary: string; goal_views?: 1000000 | null;
+  goals?: { normal_views: 100000; short_views: 1000000; window_days: 30; interim_days: 7 } | null;
   recommendation_framework_version: string | null; reviewed_material: "statistics_and_titles";
   limitations: string[]; findings: AnalysisFinding[]; proposals: AnalysisProposal[];
 };

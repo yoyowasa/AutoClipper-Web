@@ -1,9 +1,5 @@
-from datetime import timedelta
-from uuid import uuid4
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.intelligence import PRIVATE_HEADERS, require_local_origin
@@ -13,7 +9,8 @@ from app.intelligence.analysis_api_schemas import AnalysisHistoryRead, AnalysisR
 from app.intelligence.analysis_errors import MESSAGES
 from app.intelligence.analysis_runner import mark_analysis_failed
 from app.intelligence.common import now
-from app.intelligence.models import AnalysisRun, Channel, ChannelConnection, SyncRun
+from app.intelligence.job_claims import ChannelClaimError, claim_channel_run
+from app.intelligence.models import AnalysisRun, Channel, ChannelConnection
 from app.intelligence.queue import get_enqueue_channel_analysis
 from app.intelligence.production_aggregation import build_production_aggregates
 from app.intelligence.models import ProductionAggregate
@@ -56,16 +53,10 @@ def start_analysis(channel_id: int, body: AnalysisStartRequest, request: Request
         raise HTTPException(409, MESSAGES["OWN_OAUTH_REQUIRED"])
     if not config.youtube_derived_allowed:
         raise HTTPException(409, MESSAGES["DERIVED_NOT_ALLOWED"])
-    if db.scalar(select(SyncRun).where(SyncRun.active_channel_id == channel_id)):
-        raise HTTPException(409, MESSAGES["STATISTICS_BUSY"])
-    run = AnalysisRun(id="analysis_" + uuid4().hex, channel_id=channel_id, active_channel_id=channel_id,
-                      sync_before=body.syncBefore, queued_at=now(), expires_at=now() + timedelta(days=30))
-    db.add(run)
     try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(409, "このチャンネルは分析中です。") from None
+        run = claim_channel_run(db, channel_id, "analysis", now(), sync_before=body.syncBefore)
+    except ChannelClaimError:
+        raise HTTPException(409, "このチャンネルは同期または分析中です。接続状態も確認してください。") from None
     try:
         enqueue(run.id)
     except Exception:
