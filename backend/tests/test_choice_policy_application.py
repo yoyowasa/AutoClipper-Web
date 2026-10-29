@@ -1,6 +1,6 @@
 import json
 from app.intelligence.choice_policy_schema import ChoicePolicyValues
-from app.intelligence.choice_policy_runtime import freeze_job_policy, inherit_rendered_policy_evidence
+from app.intelligence.choice_policy_runtime import freeze_job_policy, inherit_rendered_policy_evidence, record_policy_choices
 from app.intelligence.choice_policy_models import ChoicePolicyHead, ChoicePolicyVersion
 from app.intelligence.models import Channel, ChannelConnection
 from app.jobs.automatic_visual_decisions import decide_visuals
@@ -139,3 +139,9 @@ def test_render_inheritance_requires_actual_match_and_preserves_explicit_provena
     published.values["framingOffsetX"] = .2
     inherit_rendered_policy_evidence(history, settings_for(), clip_id="clip", format="short")
     assert published.source == "automatic"
+    published.policyVersion = "policy_historical"
+    published.implementationVersion = "existing-render-decisions-v1"
+    original = published.model_dump(mode="json")
+    inherit_rendered_policy_evidence(history, settings_for(), clip_id="clip", format="short")
+    record_policy_choices(history, settings_for(), clip_id="clip", format="short")
+    assert published.model_dump(mode="json") == original

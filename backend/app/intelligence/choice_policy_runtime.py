@@ -50,10 +50,12 @@ def weight(settings, format, key):
 
 def inherit_rendered_policy_evidence(history, settings, *, clip_id, format):
     """Carry proven applied choices into matching renderer observations, never guess."""
-    if not frozen_policy(settings, format):
+    policy = frozen_policy(settings, format)
+    if not policy:
         return
     for published in history:
         if (published.clipId != clip_id or published.stage != "published"
+                or (published.policyVersion or "").startswith("policy_") and published.policyVersion != policy["id"]
                 or (published.implementationVersion or published.policyVersion) != "existing-render-decisions-v1"):
             continue
         applied = [c for c in history if c.clipId == clip_id and c.kind == published.kind and c.stage == "applied"
@@ -88,6 +90,8 @@ def record_policy_choices(history, settings, *, clip_id=None, format=None, count
         kind = format or choice.values.get("type")
         policy = frozen_policy(settings, kind) if kind in {"normal", "short"} else None
         if policy:
+            if (choice.policyVersion or "").startswith("policy_") and choice.policyVersion != policy["id"]:
+                continue
             if choice.policyVersion and not choice.policyVersion.startswith("policy_"):
                 choice.implementationVersion = choice.implementationVersion or choice.policyVersion
             choice.policyVersion = policy["id"]

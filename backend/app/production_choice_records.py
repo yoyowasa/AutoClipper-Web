@@ -26,9 +26,11 @@ def record_publication(record, *, observed: bool = False, settings=None):
     if settings:
         from app.intelligence.choice_policy_runtime import frozen_policy, inherit_rendered_policy_evidence, record_policy_choices
         inherit_rendered_policy_evidence(record.choiceHistory, settings, clip_id=record.selection.candidateId, format=record.type)
-        if frozen_policy(settings, record.type) and record.selection.openingScore is not None:
+        policy = frozen_policy(settings, record.type)
+        if policy and record.selection.openingScore is not None:
             for choice in record.choiceHistory:
                 if (choice.kind == "range" and choice.clipId == record.selection.candidateId
+                        and (not (choice.policyVersion or "").startswith("policy_") or choice.policyVersion == policy["id"])
                         and choice.source == "automatic" and choice.values.get("start") == record.source.start
                         and choice.values.get("end") == record.source.end):
                     choice.values["openingScore"] = record.selection.openingScore
