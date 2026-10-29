@@ -20,6 +20,11 @@ def statistical_expiry(observed: datetime, config: Settings) -> datetime:
 
 def expire_youtube_data(db: Session, config: Settings, *, clock: datetime | None = None) -> None:
     stamp = clock or now()
+    from app.intelligence.choice_policy_models import ChoicePolicyDecision
+    db.execute(update(ChoicePolicyDecision).where(ChoicePolicyDecision.evidence_expires_at <= stamp).values(evidence=None))
+    if not config.youtube_extended_storage:
+        db.execute(update(ChoicePolicyDecision).where(ChoicePolicyDecision.created_at <= stamp - timedelta(days=30))
+                   .values(evidence=None))
     db.execute(delete(VideoDailyStat).where(VideoDailyStat.expires_at <= stamp))
     db.execute(delete(ProductionAggregate).where(ProductionAggregate.expires_at <= stamp))
     if not config.youtube_extended_storage:

@@ -101,6 +101,19 @@ def run_channel_analysis(id: str, *, session_factory=SessionLocal, paths=None, c
             run.validation = AnalysisValidationDiagnostics(report=diagnostics)
             run.status, run.finished_at, run.active_channel_id = "success", now(), None
             db.commit()
+            try:
+                from app.intelligence.choice_policy_engine import update_choice_policies
+                update_choice_policies(db, run, now())
+            except Exception:
+                db.rollback()
+                import logging
+                logging.getLogger(__name__).warning("Choice policy evaluation failed; analysis preserved")
+                try:
+                    from app.intelligence.choice_policy_engine import record_policy_failure
+                    record_policy_failure(db, run, now())
+                except Exception:
+                    db.rollback()
+                    logging.getLogger(__name__).warning("Choice policy failure could not be recorded")
         except Exception as error:
             db.rollback()
             if isinstance(error, ReviewValidationError):

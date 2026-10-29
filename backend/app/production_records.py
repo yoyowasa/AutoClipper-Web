@@ -197,7 +197,7 @@ def build_production_record(
             assetId=data.get("thumbnail_character_asset_id"), emotion=data.get("thumbnail_emotion"),
             reason=data.get("thumbnail_subject_reason"), emotionSelectionSource=data.get("thumbnail_emotion_selection_source"),
         ),
-    ), observed=created_at is not None)
+    ), observed=created_at is not None, settings=settings)
 
 
 def refresh_completed_production(db: Session, export: ExportItem, paths: StoragePaths) -> None:

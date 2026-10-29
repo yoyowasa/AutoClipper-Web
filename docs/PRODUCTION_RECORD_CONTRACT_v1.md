@@ -115,7 +115,8 @@ YouTubeの生の統計・動画タイトル・絶対パスは含めない。記�
 | source | `automatic` / `manual` / `preset` / `default` / `fallback` / `unrecorded`。確認できる呼び出し経路だけで記録する。手動操作からの生成要求と、生成された案の採用は別の履歴 |
 | recordedAt / appliedAt | 観測時刻／実際に適用・公開した処理の時刻（UTC）。未記録の過去の適用時刻は補わない |
 | inputRevision | 既存の入力ハッシュ・字幕根拠ハッシュ・計画revision・サムネrender revision等。形式はkindに依存 |
-| policyVersion | 当該処理の固定の版識別子、または生成器の既存prompt version。記録の更新回数`revision`とは別。成績から自動更新しない |
+| policyVersion | 当該処理の固定の版識別子、生成器の既存prompt version、またはtask-235のジョブ開始時に固定した選び方の版ID（policy_...）。記録の更新回数`revision`とは別 |
+| implementationVersion | 任意。選び方の版IDをpolicyVersionに記録した場合の元の処理版。旧記録では欠落可。実装版の異なる観測を自動更新の比較に混ぜない |
 | timeBasis | `source`は元動画内秒、`clip`は本編内秒。時刻値のない履歴では省略可 |
 | reason | 記録された理由。nullまたは省略は「理由未記録」であり、成功・不採用理由を推測して補わない |
 | candidates | `{id, values, outcome, reason}`。outcomeは`proposed` / `selected` / `not_selected` / `rejected`。生成しただけの案を不採用扱いにしない |
@@ -175,6 +176,13 @@ dry-runは読み取り・形式検証だけを行い、ディレクトリも記�
 - `text_style` の `titleStyle` / `hookStyle` / `subtitleStyle` は、プリセットのフォント・色を基に、文字の収まりと帯を考慮して決めたサイズ・位置。詳細編集の明示指定を残したものは `source=manual`。
 - `effects` の任意項目 `subtitleStyles` は `{start, end, style}` の配列。時刻は `timeBasis=source`（元動画秒）、styleは既存のClipTextStyle形式。候補にはセグメントID、時間、点数、採否と理由コードを保存し、字幕本文を複製しない。空配列は強調なし。動的ズーム・効果音等は未実装で、`additionalEffects=none` を維持する。
 - 既存のschemaVersion=1とchoiceHistoryの形式を維持する。旧記録の項目不足を推定して補わない。
+
+task-235の対象となる新規autoジョブでは、上記の元の処理版をimplementationVersionに残し、
+制御した自動・fallback選択のpolicyVersionに、開始時に固定した設定版IDを記録する。
+手動選択の出所・版は置き換えない。範囲のopeningScore・audienceFamiliarity・openingRankWeight・allocationNormalWeight／ShortWeight・allocationShare、
+画角のpolicyPreferredLayout、強調のemphasisSignal・emphasisTopic／Number／ReactionWeightは任意の比較値として許可する。
+版が適用されない旧ジョブの記録に、過去の使用版を推定して補わない。
+[版の条件・保持・未確認事項](INTELLIGENCE_CHOICE_POLICIES.md)を参照。
 
 ### 内容によるショート画角の選択（task-232）
 

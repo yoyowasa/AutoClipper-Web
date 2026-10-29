@@ -61,12 +61,18 @@ def allocate_selection(
 
     def rank(c: Candidate):
         from app.scoring.rule_score import codex_opening_bonus
+        from app.intelligence.choice_policy_runtime import weight
 
         confidence_score = c.ai_score if c.used_ai_score else None
         bonus = (100 * codex_opening_bonus(c.opening_score, str(settings.get("audienceFamiliarity", "known")))
                  if c.type == "short" and c.selection_reason == "codex_direct" else 0)
+        factor = weight(settings, c.type, "ranking.opening")
+        bonus *= factor
+        if c.type == "short" and settings.get("audienceFamiliarity") == "unknown" and c.selection_reason != "codex_direct":
+            bonus += (factor - 1) * (c.opening_score or 0)
         return (
-            -((confidence_score if confidence_score is not None else c.final_score or c.rule_score or 0) + bonus),
+            -((confidence_score if confidence_score is not None else c.final_score or c.rule_score or 0) + bonus)
+                * weight(settings, c.type, f"allocation.{c.type}"),
             -(c.final_score or c.rule_score or 0),
             c.start,
             c.end,

@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import model_serializer, BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import model_serializer, BaseModel, ConfigDict, Field, ValidationError, model_validator, PrivateAttr
 
 from app.candidates.user_rejections import rejection_context_guidance
+from app.intelligence.choice_policy_runtime import weight as policy_weight
 from app.clip_allocation import is_ai_allocation, candidate_pool_counts, confirmed_counts
 from app.audio.transcribe_faster_whisper import TranscriptSegment
 from app.duration_rules import (
@@ -493,6 +494,7 @@ class CodexSelectedTopicInput(_StrictModel):
 
 
 class CodexInitialSelectionRequest(_StrictModel):
+    _choice_settings: dict = PrivateAttr(default_factory=dict)
     performance_hints: list[dict[str, Any]] = Field(default_factory=list, alias="performanceHints", exclude_if=lambda v: not v)
     version: Literal[1] = 1
     prompt_version: Literal[CODEX_INITIAL_SELECTION_PROMPT_VERSION] = Field(
@@ -1142,6 +1144,7 @@ def build_codex_initial_selection_request(
             for index, segment in enumerate(clean_heatmap, start=1)
         ],
     )
+    request._choice_settings = settings
     return request.model_copy(update={"input_hash": compute_codex_initial_selection_input_hash(request)})
 
 
@@ -1567,6 +1570,7 @@ def build_codex_boundary_refinement_request(
         transcript=transcript,
         heatmap=heatmap,
     )
+    refinement_request._choice_settings = source_request._choice_settings
     return refinement_request.model_copy(
         update={
             "input_hash": compute_codex_initial_selection_input_hash(
@@ -2276,12 +2280,13 @@ def _select_initial_short_pairs(
     max_overlap_ratio: float,
     cross_type_overlap_dedupe: bool,
     audience_familiarity: str = "known",
+    opening_weight: float = 1.0,
 ) -> list[tuple[CodexClipProposal, Candidate]]:
     selected: list[tuple[CodexClipProposal, Candidate]] = []
     used_moment_keys: set[str] = set()
     ranked_pairs = sorted(
         pairs,
-        key=lambda item: (-(item[0].confidence + codex_opening_bonus(item[1].opening_score, audience_familiarity)),
+        key=lambda item: (-(item[0].confidence + opening_weight * codex_opening_bonus(item[1].opening_score, audience_familiarity)),
                           item[0].proposal_id),
     )
     for proposal, candidate in ranked_pairs:
@@ -2456,6 +2461,7 @@ def convert_codex_initial_selection_response(
         max_overlap_ratio=request.constraints.max_overlap_ratio,
         cross_type_overlap_dedupe=request.constraints.cross_type_overlap_dedupe,
         audience_familiarity=audience_familiarity,
+        opening_weight=policy_weight(request._choice_settings, "short", "ranking.opening"),
     )
     short_candidates = [item[1] for item in selected_short_pairs]
     retained_normal_pairs = _retain_duration_band_candidate_pool(

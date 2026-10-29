@@ -1980,6 +1980,8 @@ def run_autoclipper_job(
         if video is None:
             raise ValueError(f"video not found for job: {job_id}")
 
+        from app.intelligence.choice_policy_runtime import freeze_job_policy
+        freeze_job_policy(db, job)
         settings = duration_search_settings(dict(job.settings_json or {}))
         automation_mode = str(settings.get("automationMode") or "manual").strip()
         manual_workflow = is_manual_workflow(settings)

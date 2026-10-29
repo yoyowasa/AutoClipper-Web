@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from app.db import SessionLocal
 from app.intelligence.performance_hints import active_hint_uses, attach_performance_hints
+from app.intelligence.choice_policy_runtime import choose_title_suggestion
 from app.jobs.automation import is_subtitle_only_auto
 from app.jobs.automatic_thumbnail_copy import COPY_FIELDS, confirmed_thumbnail_copy
 from app.jobs.subtitle_review import (
@@ -98,6 +99,7 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                     document, artifact, youtube_source_title=str(settings.get("youtubeSourceTitle") or ""),
                     youtube_source_url=str(settings.get("youtubeSourceUrl") or ""),
                     youtube_posting_profile=settings.get("youtubePostingProfile"),
+                    selected_suggestion_id=choose_title_suggestion(artifact, settings, clip.type),
                 )
                 for name, value in overrides.items():
                     setattr(clip, name, value)
@@ -151,6 +153,8 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 confirm_review_clip(latest, clip_id)
                 if not framing_only:
                     capture_auto_review_outcome(latest, clip_id, input_revision=artifact.revision_hash)
+                from app.intelligence.choice_policy_runtime import record_policy_choices
+                record_policy_choices(latest.choice_history, settings, clip_id=clip_id, format=clip.type)
                 write_subtitle_review(latest, path)
                 write_subtitle_review_summary(latest, subtitle_review_summary_path(directory))
             if enqueue_preview is None:

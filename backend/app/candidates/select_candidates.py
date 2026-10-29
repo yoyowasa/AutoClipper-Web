@@ -66,6 +66,7 @@ class CandidateSelection(BaseModel):
 
 
 class CandidateSelectionSettings(BaseModel):
+    policy_settings: dict = Field(default_factory=dict, exclude=True)
     normal_clip_count: int = Field(default=2, ge=0)
     short_count: int = Field(default=3, ge=0)
     max_overlap_ratio: float = Field(default=0.8, ge=0, le=1)
@@ -137,6 +138,7 @@ def parse_selection_settings(
         normalized['normal_clip_count'], normalized['short_count'] = candidate_pool_counts(settings)
         normalized['cross_type_overlap_dedupe'] = False
         normalized['selection_policy'] = 'strict_quality'
+    normalized["policy_settings"] = settings if settings.get("_choicePolicies") else {}
     return CandidateSelectionSettings(**normalized)
 
 
@@ -186,10 +188,14 @@ def record_candidate_hard_gates(
     return checked, rejected
 
 
-def _rank_key(candidate: Candidate) -> tuple[float, float, int, float, float, int, float]:
+def _rank_key(candidate: Candidate, settings: CandidateSelectionSettings | None = None) -> tuple:
+    bonus = 0
+    if settings and candidate.type == "short" and settings.policy_settings.get("audienceFamiliarity") == "unknown":
+        from app.intelligence.choice_policy_runtime import weight
+        bonus = (weight(settings.policy_settings, "short", "ranking.opening") - 1) * (candidate.opening_score or 0)
     return (
         candidate.heatmap_direct_score if candidate.heatmap_direct_score is not None else -1.0,
-        effective_final_score(candidate),
+        effective_final_score(candidate) + bonus,
         1 if candidate.should_use is True else 0,
         candidate.rule_score if candidate.rule_score is not None else 0.0,
         -candidate.duration,
@@ -323,17 +329,17 @@ def _cluster_ids(candidates: Sequence[Candidate], requested_count: int) -> dict[
     }
 
 
-def _cluster_diverse_order(candidates: Sequence[Candidate], cluster_ids: dict[str, int]) -> list[Candidate]:
+def _cluster_diverse_order(candidates: Sequence[Candidate], cluster_ids: dict[str, int], settings=None) -> list[Candidate]:
     grouped: dict[int, list[Candidate]] = {}
     for candidate in candidates:
         grouped.setdefault(cluster_ids.get(candidate.id, 0), []).append(candidate)
     for items in grouped.values():
-        items.sort(key=_rank_key, reverse=True)
+        items.sort(key=lambda c: _rank_key(c, settings), reverse=True)
 
     cluster_order = sorted(
         grouped,
         key=lambda cluster: (
-            _rank_key(grouped[cluster][0])
+            _rank_key(grouped[cluster][0], settings)
             if grouped[cluster]
             else (0.0, 0, 0.0, 0.0, 0, 0.0)
         ),
@@ -464,7 +470,7 @@ def _select_strict_for_type(
 
     ranked = sorted(
         (candidate for candidate in candidates if candidate.type == candidate_type),
-        key=_rank_key,
+        key=lambda c: _rank_key(c, settings),
         reverse=True,
     )
     cluster_ids = _cluster_ids(ranked, requested_count)
@@ -570,7 +576,7 @@ def _select_fill_requested_for_type(
 
     ranked = sorted(
         (candidate for candidate in candidates if candidate.type == candidate_type),
-        key=_rank_key,
+        key=lambda c: _rank_key(c, settings),
         reverse=True,
     )
     selected: list[Candidate] = []
@@ -598,8 +604,8 @@ def _select_fill_requested_for_type(
     below_threshold = [
         candidate for candidate in hard_gate_passed if not _score_passes_threshold(candidate, settings)
     ]
-    ordered_above_threshold = _cluster_diverse_order(above_threshold, cluster_ids)
-    ordered_below_threshold = _cluster_diverse_order(below_threshold, cluster_ids)
+    ordered_above_threshold = _cluster_diverse_order(above_threshold, cluster_ids, settings)
+    ordered_below_threshold = _cluster_diverse_order(below_threshold, cluster_ids, settings)
 
     _append_selected_from_pool(
         ordered_above_threshold,
@@ -625,7 +631,7 @@ def _select_fill_requested_for_type(
     )
 
     if len(selected) < requested_count:
-        relaxed_pool = _cluster_diverse_order(hard_gate_passed, cluster_ids)
+        relaxed_pool = _cluster_diverse_order(hard_gate_passed, cluster_ids, settings)
         for threshold in _relaxed_overlap_thresholds(settings.max_overlap_ratio):
             _append_selected_from_pool(
                 relaxed_pool,
