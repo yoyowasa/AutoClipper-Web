@@ -1582,6 +1582,7 @@ def create_job(
     new_settings.pop(AUTOMATION_POLICY_SETTING, None)
     if settings.automation_mode == "auto" and settings.workflow_mode != "manual":
         new_settings[AUTOMATION_POLICY_SETTING] = SUBTITLE_ONLY_AUTO_POLICY
+        new_settings["_choicePolicyEligible"] = True
     job = Job(
         id=make_id("job"),
         video_id=video.id,
@@ -1653,6 +1654,9 @@ def retry_job(
             )
 
     retry_settings = settings.model_dump(by_alias=True, mode="json")
+    for key in ("_choicePolicyEligible", "_choicePolicies", "_choicePolicyReasons"):
+        if key in (source_job.settings_json or {}):
+            retry_settings[key] = source_job.settings_json[key]
     retry_settings[RETRY_SOURCE_SETTING_KEY] = source_job.id
     retry_id = _retry_job_id(source_job.id)
     retry = db.get(Job, retry_id)

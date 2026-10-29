@@ -7,6 +7,7 @@ Only overflowing text is reduced; one long row never shrinks other rows.
 import math
 import re
 import unicodedata
+from dataclasses import replace
 
 from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
 from app.overlay_text import fit_overlay_text
@@ -44,7 +45,7 @@ def fitted_style(base, texts, layout, *, role, safe_top, safe_bottom, cap):
     )
 
 
-def choose_text_styles(clip, layout, *, events, top, bottom):
+def choose_text_styles(clip, layout, *, events, top, bottom, settings=None):
     manual = set(clip.manual_decision_fields)
     texts = {
         "title": [(clip.title, 2)], "hook": [(clip.hook_text, 2)],
@@ -56,6 +57,12 @@ def choose_text_styles(clip, layout, *, events, top, bottom):
         if f"{role}_style" in manual:
             continue
         base = resolve_clip_text_style(getattr(layout, f"default_{role}_style"), layout, role=role)
+        from app.intelligence.choice_policy_runtime import weight
+        current = "bold" if base.bold else "regular"
+        other = "regular" if base.bold else "bold"
+        if (weight(settings or {}, clip.type, f"text_style.{role}.{other}")
+                > weight(settings or {}, clip.type, f"text_style.{role}.{current}")):
+            base = replace(base, bold=not base.bold)
         low, high = (top, bottom) if role == "subtitle" else (0, top or layout.height * .25)
         if role == "hook":
             high = top or layout.height * .25
@@ -63,7 +70,7 @@ def choose_text_styles(clip, layout, *, events, top, bottom):
                                                   safe_top=low + 12, safe_bottom=high - 12, cap=base.font_size))
 
 
-def choose_emphasis(clip, segments, layout, *, top, bottom):
+def choose_emphasis(clip, segments, layout, *, top, bottom, settings=None):
     """Rank existing subtitle rows; never invent words or change subtitle text."""
     if "subtitle_styles" in clip.manual_decision_fields:
         return [], "explicit_manual_override_preserved"
@@ -78,7 +85,10 @@ def choose_emphasis(clip, segments, layout, *, top, bottom):
         topic = any(token in text for token in tokens)
         number = bool(re.search(r"\d", text))
         reaction = bool(re.search(r"[!?]", text))
-        score = 3 * topic + number + reaction
+        from app.intelligence.choice_policy_runtime import weight
+        score = (3 * topic * weight(settings or {}, clip.type, "effects.topic")
+                 + number * weight(settings or {}, clip.type, "effects.number")
+                 + reaction * weight(settings or {}, clip.type, "effects.reaction"))
         visible_duration = min(segment.end, clip.end) - max(segment.start, visible_start)
         eligible = score > 0 and 2 <= len(text.strip()) <= 38 and visible_duration >= .5
         ranked.append((segment, score if eligible else 0, "selected_copy_topic" if topic else

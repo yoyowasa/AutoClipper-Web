@@ -33,6 +33,7 @@ def add_video(env, index=1, *, format="shorts", age=40, views=1_000_000, source=
     video = YouTubeVideo(id=id, channel_id=1, title=f"題材{index}", published_at=published,
                          format=format, availability="available", metadata_updated_at=CLOCK)
     env.db.add(video)
+    env.db.flush()
     for days, value in ((7, 500), (30, views)):
         start, end = initial_window(published, days)
         env.db.add(VideoDailyStat(channel_id=1, video_id=id, sync_run_id="sync_eval", kind=f"first{days}",
@@ -48,6 +49,7 @@ def add_video(env, index=1, *, format="shorts", age=40, views=1_000_000, source=
         source=source, policyVersion=policy, recordedAt=(published - timedelta(minutes=1)).replace(tzinfo=UTC),
         values={"shortLayout": "face_tracking_crop"}, selectedIds=["face_tracking_crop"])]
     write_json_atomic(env.paths.production_record(item.recordId), item.model_dump(mode="json"))
+    env.db.flush()
     env.db.add(ProductionLink(record_family_id=item.recordId, record_id=item.recordId, youtube_video_id=id, mode="auto"))
     env.db.commit()
     return video, item

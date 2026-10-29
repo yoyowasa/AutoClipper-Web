@@ -21,8 +21,18 @@ def recorded_choices(paths, export, metadata, previous):
     return [choice for choice in history if choice.scope == "job" or choice.clipId == export.candidate_id]
 
 
-def record_publication(record, *, observed: bool = False):
+def record_publication(record, *, observed: bool = False, settings=None):
     """Capture what was published, without pretending to know historical decisions."""
+    if settings:
+        from app.intelligence.choice_policy_runtime import frozen_policy, inherit_rendered_policy_evidence, record_policy_choices
+        inherit_rendered_policy_evidence(record.choiceHistory, settings, clip_id=record.selection.candidateId, format=record.type)
+        if frozen_policy(settings, record.type) and record.selection.openingScore is not None:
+            for choice in record.choiceHistory:
+                if (choice.kind == "range" and choice.clipId == record.selection.candidateId
+                        and choice.source == "automatic" and choice.values.get("start") == record.source.start
+                        and choice.values.get("end") == record.source.end):
+                    choice.values["openingScore"] = record.selection.openingScore
+        record_policy_choices(record.choiceHistory, settings, clip_id=record.selection.candidateId, format=record.type)
     append_choice(record.choiceHistory, kind="publication", clipId=record.selection.candidateId,
                   stage="observed" if observed else "published",
                   inputRevision=f"{record.recordId}:{record.revision}", policyVersion="production-record-v1",

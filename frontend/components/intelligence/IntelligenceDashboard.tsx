@@ -1,5 +1,6 @@
 "use client";
 import { ChoiceEvaluations } from "./ChoiceEvaluations";
+import { ChoicePolicyHistory } from "./ChoicePolicyHistory";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { getYouTubeConnections, youtubeSyncLabel, type ConnectedYouTubeChannel } from "../../lib/intelligence";
@@ -92,6 +93,7 @@ function ChannelDashboard({ channel }: { channel: ConnectedYouTubeChannel }) {
         trials={trials} onAdopt={(analysisId, proposalId) => void adopt(analysisId, proposalId)} onVideo={selectVideo}
         adopting={adopting} onFinished={analysisFinished} />
     </section>
+    <ChoicePolicyHistory key={`${channel.id}:${revision}`} channelId={channel.id} onVideo={selectVideo} />
     <TrialPanel trials={trials} videos={allData?.videos ?? []} onRefresh={refresh} onVideo={selectVideo} />
     <section id="production-performance" className="rounded border border-violet-200 bg-violet-50 p-5" aria-label="制作属性の独自集計">
       <h2 className="font-bold">独自集計（制作属性別）</h2>

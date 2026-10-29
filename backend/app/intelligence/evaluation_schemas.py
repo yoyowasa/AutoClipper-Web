@@ -40,6 +40,7 @@ class ChoiceGroupRead(BaseModel):
     role: str
     source: str
     policy_version: str | None
+    implementation_version: str | None = None
     option_values: dict[str, JsonValue]
     count: int
     judged_count: int

@@ -63,7 +63,7 @@
   元統計の最短期限（最大36か月）と、分析本文・入力の既存30日期限を超えない。
 - `/intelligence` に「独自集計」として表示する。Codexには最大30グループ・4万文字の要約と根拠IDを渡し、
   省略数を残す。制作ヒントも既存の件数・形式・動画・期限の検証を通す。
-  **選び方の自動更新・重み変更・版の切り替えと巻き戻しは残り作業3であり、本タスクでは行わない。**
+  **task-234の範囲は評価まで。後続task-235で、残り作業3の[許可値だけの自動更新・版管理・巻き戻し](INTELLIGENCE_CHOICE_POLICIES.md)を接続する。因果効果は引き続き未確認とする。**
 
 実装: [choice_evaluation.py](../backend/app/intelligence/choice_evaluation.py)、
 [evaluation_rules.py](../backend/app/intelligence/evaluation_rules.py)、[analysis_input.py](../backend/app/intelligence/analysis_input.py)。

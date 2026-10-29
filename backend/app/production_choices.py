@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 ChoiceSource = Literal["automatic", "manual", "preset", "default", "fallback", "unrecorded"]
 ChoiceKind = Literal["range", "title_hook", "thumbnail", "framing", "text_style", "effects", "post_copy", "publication"]
 VALUE_KEYS = frozenset({
+    "openingRankWeight", "allocationNormalWeight", "allocationShortWeight",
+    "policyPreferredLayout",
+    "allocationShare", "emphasisSignal", "audienceFamiliarity",
+    "emphasisTopicWeight", "emphasisNumberWeight", "emphasisReactionWeight",
     "type", "start", "end", "title", "publicationTitle", "overlayTitle", "hookText", "hookDurationSeconds",
     "hookSceneStart", "hookSceneEnd", "thumbnailKicker", "thumbnailLine1", "thumbnailLine2", "thumbnailFrameSeconds",
     "intent", "score", "openingScore", "topicKey", "longformReason", "framingOffsetX", "framingOffsetY", "framingZoom",
@@ -81,6 +85,7 @@ class ProductionChoice(BaseModel):
     appliedAt: datetime | None = None
     inputRevision: str | None = None
     policyVersion: str | None = None
+    implementationVersion: str | None = Field(default=None, exclude_if=lambda v: v is None)
     timeBasis: Literal["source", "clip"] | None = None
     reason: str | None = None  # null explicitly means the reason was not recorded.
     candidates: list[ChoiceCandidate] = Field(default_factory=list)

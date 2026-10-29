@@ -658,6 +658,7 @@ def apply_recommended_title_hook_suggestions(
     youtube_source_title: str = "",
     youtube_source_url: str = "",
     youtube_posting_profile: YouTubePostingProfile | dict[str, Any] | None = None,
+    selected_suggestion_id: str | None = None,
 ) -> SubtitleReviewDocument:
     """Apply the generated recommendation while preserving its evidence contract."""
 
@@ -670,7 +671,7 @@ def apply_recommended_title_hook_suggestions(
         (
             item
             for item in artifact.suggestions
-            if item.id == artifact.recommended_suggestion_id
+            if item.id == (selected_suggestion_id or artifact.recommended_suggestion_id)
         ),
         None,
     )
@@ -717,7 +718,7 @@ def apply_recommended_title_hook_suggestions(
         for item in artifact.suggestions
         if item.intent is not None
     ]
-    clip.recommended_title_id = recommended.id
+    clip.recommended_title_id = artifact.recommended_suggestion_id
     clip.selected_title_id = recommended.id
     posting_copy = build_youtube_posting_copy(
         clip_type=clip.type,

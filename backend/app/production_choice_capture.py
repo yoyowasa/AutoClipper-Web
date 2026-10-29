@@ -136,6 +136,10 @@ def capture_document(document, path: Path | None, *, kind: str, source="unrecord
                     append_choice(history, kind="range", scope="job", stage="removed", source=source,
                                   inputRevision=f"clip-plan:{document.created_at}:{document.revision}",
                                   candidates=[ChoiceCandidate(id=clip["id"], values=choice_values(clip), outcome="not_selected")])
+        if kind == "plan":
+            from app.intelligence.choice_policy_runtime import record_policy_choices
+            record_policy_choices(history, document.settings,
+                                  counts={kind: sum(c.type == kind for c in document.clips) for kind in ("normal", "short")})
         document.choice_history = history
     except Exception as exc:
         logger.warning("Choice capture failed: kind=%s errorType=%s", kind, type(exc).__name__)

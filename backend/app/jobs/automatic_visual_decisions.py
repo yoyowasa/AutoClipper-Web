@@ -7,6 +7,8 @@ from app.render.short_crop_decision import ShortCropDecision
 from app.render.render_short import SHORT_BANNER_HEIGHT
 from app.render.subtitles_ass import SubtitleLayout
 from app.scoring.short_framing import SHORT_FRAMING_VERSION
+from app.intelligence.choice_policy_runtime import frozen_policy, weight
+from app.intelligence.choice_policy_schema import FRAMING_OPTIONS
 
 
 VISUAL_DECISION_POLICY = "confirmed-subtitle-visuals-v2"
@@ -22,9 +24,14 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
     segments = [s for s in document.segments if s.id in set(clip.segment_ids)]
     if not framing_only:
         events, _ = _subtitle_events_for_review_clip(document, clip, width=layout.width, height=layout.height)
-        choose_text_styles(clip, layout, events=events, top=top, bottom=bottom)
-        ranked, emphasis_reason = choose_emphasis(clip, segments, layout, top=top, bottom=bottom)
+        choose_text_styles(clip, layout, events=events, top=top, bottom=bottom, settings=settings)
+        ranked, emphasis_reason = choose_emphasis(clip, segments, layout, top=top, bottom=bottom, settings=settings)
     manual_framing = "framing" in clip.manual_decision_fields
+    preferred = content_choice.strategy if content_choice else None
+    if not manual_framing and frozen_policy(settings, clip.type):
+        learned = sorted(FRAMING_OPTIONS, key=lambda s: (-weight(settings, clip.type, f"framing.{s}"), s != preferred, s))[0]
+        if weight(settings, clip.type, f"framing.{learned}") > (weight(settings, clip.type, f"framing.{preferred}") if preferred else 1):
+            preferred = learned
     if clip.type == "short":
         from app.audio.transcribe_faster_whisper import TranscriptSegment
         from app.render.render_short import resolve_short_crop_plan
@@ -39,7 +46,7 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
             target_height=bottom - top, dialogue_windows=dialogue_windows_for_clip(
                 clip.start, clip.end, [TranscriptSegment(start=s.start, end=s.end, text=s.text) for s in segments],
             ),
-            **({"preferred_strategy": content_choice.strategy} if content_choice and not manual_framing else {}),
+            **({"preferred_strategy": preferred} if preferred and not manual_framing else {}),
         )
         clip.automatic_crop = ShortCropDecision(start=clip.start, end=clip.end, width=video.width, height=video.height,
                                                target_height=bottom - top, layout=requested, plan=plan, faces=list(faces))
@@ -63,8 +70,9 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
                       "framingOffsetY": clip.framing_offset_y, "framingZoom": clip.framing_zoom,
                       "resolvedLayout": crop.plan.strategy_order[0] if crop else "source",
                       "cropSignalSource": crop.plan.signal_source if crop else "source_video",
-                      "cropFallbackReason": crop.plan.fallback_reason if crop else None, **content_values}), **framing_common)
-    if content_values and crop and crop.plan.strategy_order[0] != content_choice.strategy:
+                      "cropFallbackReason": crop.plan.fallback_reason if crop else None, **content_values,
+                      **({"policyPreferredLayout": preferred} if preferred else {})}), **framing_common)
+    if content_values and crop and crop.plan.strategy_order[0] != preferred:
         append_choice(document.choice_history, kind="framing", source="fallback",
                       reason="内容に基づく画角を選びましたが、検出・幾何条件を満たせないため全体表示に置換しました。",
                       values=choice_values({**content_values, "resolvedLayout": crop.plan.strategy_order[0],
@@ -81,6 +89,12 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
                   source="manual" if "subtitle_styles" in clip.manual_decision_fields else "automatic",
                   timeBasis="source", reason=emphasis_reason,
                   values=choice_values({"subtitleStyles": [s.model_dump(by_alias=True) for s in clip.subtitle_styles],
+                                        "emphasisSignal": next(("topic" if reason == "selected_copy_topic" else
+                                            "number" if any(c.isdigit() for c in s.text) else "reaction"
+                                            for s, _score, reason, selected in ranked if selected), "none"),
+                                        "emphasisTopicWeight": weight(settings, clip.type, "effects.topic"),
+                                        "emphasisNumberWeight": weight(settings, clip.type, "effects.number"),
+                                        "emphasisReactionWeight": weight(settings, clip.type, "effects.reaction"),
                                         "additionalEffects": "none"}),
                   candidates=[ChoiceCandidate(id=s.id, outcome="selected" if selected else "not_selected", reason=reason,
                                               values={"start": s.start, "end": s.end, "score": score})

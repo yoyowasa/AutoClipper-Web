@@ -119,11 +119,12 @@ def build_choice_evaluations(db, paths, config, channel_id, stamp, *, families=N
         for (kind, role), choice in choices:
             options = choice_options(kind, role, choice.values)
             key = (record.characterPresetName or "未設定", record.type, kind, role, choice.source, choice.policyVersion,
-                   json.dumps(options, ensure_ascii=False, sort_keys=True))
+                   json.dumps(options, ensure_ascii=False, sort_keys=True), choice.implementationVersion)
             id = "choice:" + hashlib.sha256(json.dumps(key, ensure_ascii=False).encode()).hexdigest()[:24]
             group = groups.setdefault(id, {"id": id, "character_preset_name": key[0], "format": key[1],
                 "kind": kind, "role": role, "source": choice.source, "policy_version": choice.policyVersion,
                 "option_values": options, "observations": []})
+            group["implementation_version"] = choice.implementationVersion
             group["observations"].append({"record_id": record.recordId, "record_family_id": link.record_family_id,
                 "choice_id": choice.id, "video_id": video.id, "kind": kind, "role": role, "source": choice.source,
                 "policy_version": choice.policyVersion, "value_hash": value_hash(choice.values),

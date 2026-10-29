@@ -31,6 +31,7 @@ export type ChoiceEvaluationGroup = {
   id: string; character_preset_name: string; format: string; kind: string; role: string; source: string;
   policy_version: string | null; count: number; judged_count: number; sufficient: boolean; effect: "unconfirmed";
   option_values: Record<string, unknown>;
+  implementation_version?: string | null;
   target_views: number | null; median_views: number | null; reached_count: number; attainment_rate: number | null;
   video_ids: string[]; observations: ChoiceObservation[];
 };
