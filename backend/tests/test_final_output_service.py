@@ -228,7 +228,9 @@ def test_new_human_confirmed_input_gets_a_new_budget_but_delivery_retry_does_not
         calls.append(action)
         return e.export, e.candidate
 
-    bad = lambda *a, **kw: ("hash", [check(outcome="fail")])
+    def bad(*a, **kw):
+        return "hash", [check(outcome="fail")]
+
     with pytest.raises(FinalInspectionFailed):
         inspect_final_outputs(**e.kwargs, inspector=bad, repair=repair)
     before = saved(e).input_revision
