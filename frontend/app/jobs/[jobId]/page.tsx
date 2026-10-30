@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { JobProgress } from "../../../components/JobProgress";
+import { FinalInspectionAttention } from "../../../components/FinalInspectionAttention";
 import { ProgressTimeline } from "../../../components/ProgressTimeline";
 import { getJobStatus, retryJob } from "../../../lib/api";
 import { automationGateDisplay } from "../../../lib/automationQuality";
@@ -125,6 +126,7 @@ export default function JobPage() {
         {job ? (
           <>
             <JobProgress job={job} />
+            <FinalInspectionAttention details={job.details} />
             {job.status === "failed" && job.error?.code === "no_usable_selection" ? (
               <section className="border border-amber-300 bg-amber-50 px-5 py-5">
                 <p className="text-sm font-semibold text-amber-950">

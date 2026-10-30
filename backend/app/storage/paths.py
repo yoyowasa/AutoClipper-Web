@@ -64,6 +64,16 @@ class StoragePaths:
         path.resolve().relative_to(self.production_records.resolve())
         return path
 
+    def final_output_inspection_dir(self, job_id: str) -> Path:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+            raise ValueError("Invalid job identifier")
+        return self.outputs / job_id / "final_inspection"
+
+    def final_output_inspection(self, job_id: str, clip_id: str) -> Path:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", clip_id):
+            raise ValueError("Invalid clip identifier")
+        return self.final_output_inspection_dir(job_id) / f"{clip_id}.json"
+
     @property
     def models(self) -> Path:
         return self.root / "models"

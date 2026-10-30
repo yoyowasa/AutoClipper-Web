@@ -1,3 +1,4 @@
+from final_output_fixtures import passing_final_inspection
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -251,7 +252,7 @@ def test_ai_pipeline_partial_goes_to_review_even_in_auto_mode_and_zero_fails(cli
         job_id,
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=paths,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             probe_metadata=lambda _: VideoMetadata(duration=240, width=1920, height=1080, fps=30, has_audio=True),
             extract_audio=fake_write,
             transcribe_audio=lambda _: fake_transcript(),
@@ -285,7 +286,7 @@ def test_ai_pipeline_partial_goes_to_review_even_in_auto_mode_and_zero_fails(cli
             assert response.status_code == 202, response.text
             reselected = run_clip_plan_reselection(job_id,
                 session_factory=lambda: next(app.dependency_overrides[get_db]()), paths=paths,
-                dependencies=AutoClipperPipelineDependencies(codex_initial_selector=codex,
+                dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection, codex_initial_selector=codex,
                                                             subtitle_review_preview_renderer=fake_write))
             assert reselected[-1] == 'awaiting_clip_review'
             updated = client.get(f'/api/jobs/{job_id}/clip-plan').json()

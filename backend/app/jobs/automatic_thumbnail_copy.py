@@ -33,7 +33,8 @@ def manually_selected_copy(review, clip_id: str, values: dict) -> bool:
     return manual is not None and manual == values
 
 
-def confirmed_thumbnail_copy(review, clip, paths, generator=None, *, retry_failed=False, publication_title=None) -> tuple[dict, dict, str]:
+def confirmed_thumbnail_copy(review, clip, paths, generator=None, *, retry_failed=False, publication_title=None,
+                             force_regenerate=False) -> tuple[dict, dict, str]:
     source = [s.model_dump() for s in review.segments if s.id in set(clip.segment_ids)]
     payload = build_copy_payload(
         source, start=clip.start, end=clip.end,
@@ -45,7 +46,7 @@ def confirmed_thumbnail_copy(review, clip, paths, generator=None, *, retry_faile
     path = confirmed_copy_state_path(paths, review.job_id, clip.id, content_hash)
     with subtitle_review_document_lock(paths.job_outputs(review.job_id)):
         state = read_copy_state(path)
-        generate = state.get("contentHash") != content_hash or (retry_failed and state.get("state") != "ready")
+        generate = force_regenerate or state.get("contentHash") != content_hash or (retry_failed and state.get("state") != "ready")
         if generate:
             state = {"state": "generating", "contentHash": content_hash, "payload": payload, "clipId": clip.id,
                      "promptVersion": THUMBNAIL_COPY_PROMPT_VERSION, "suggestions": [], "recommendedId": None,

@@ -80,6 +80,7 @@ class RecordThumbnail(RecordModel):
 
 
 class ProductionRecord(RecordModel):
+    finalInspection: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     choiceHistory: list[ProductionChoice] = Field(default_factory=list, exclude_if=lambda v: not v)
     performanceHints: list[UsedPerformanceHint] = Field(default_factory=list, exclude_if=lambda v: not v)
     schemaVersion: Literal[1] = 1
@@ -142,6 +143,7 @@ def build_production_record(
     job: Job, export: ExportItem, paths: StoragePaths, *, previous: ProductionRecord | None = None,
     created_at: datetime | None = None,
 ) -> ProductionRecord:
+    from app.inspection.service import production_inspection
     selected = _selected_candidate(paths, export)
     metadata = _read_object(_resolve_stored_path(export.metadata_path, paths.root)) if export.metadata_path else {}
     data = {**selected, **metadata}
@@ -163,6 +165,7 @@ def build_production_record(
         thumbnail_source = "asset" if data["thumbnail_source_time_basis"] == "character_asset" else "video"
     now = datetime.now(UTC)
     return record_publication(ProductionRecord(
+        finalInspection=production_inspection(paths, export),
         choiceHistory=recorded_choices(paths, export, metadata, previous),
         performanceHints=recorded_performance_hints(paths, job.id, export.candidate_id, export.type),
         recordId=export.id, revision=previous.revision + 1 if previous else 1,

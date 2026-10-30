@@ -1,4 +1,5 @@
 from __future__ import annotations
+from final_output_fixtures import passing_final_inspection
 
 import app.jobs.pipeline_common as pipeline_common_module
 
@@ -214,7 +215,7 @@ def _dependencies(tmp_path: Path) -> AutoClipperPipelineDependencies:
         return path
 
     del tmp_path
-    return AutoClipperPipelineDependencies(
+    return AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=120,
             width=1920,
@@ -568,7 +569,7 @@ def test_guarded_review_render_content_non_pass_returns_before_render(
         render_revision=render_revision,
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             normal_renderer=must_not_render,
             short_renderer=must_not_render,
         ),
@@ -661,7 +662,7 @@ def test_guarded_review_render_content_pass_continues_to_renderer(
         render_revision=render_revision,
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             normal_renderer=fake_render,
             short_renderer=fake_render,
         ),

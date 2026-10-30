@@ -1,3 +1,4 @@
+from final_output_fixtures import passing_final_inspection
 import app.jobs.clip_plan_runner as clip_plan_runner_module
 import app.jobs.pipeline_common as pipeline_common_module
 import json
@@ -130,7 +131,7 @@ def test_manual_job_stops_after_probe_with_empty_editable_plan(
         "job_manual",
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             probe_metadata=lambda _path: _probe(has_audio=False),
             manual_source_proxy_renderer=_fake_manual_source_proxy,
             extract_audio=must_not_run,  # type: ignore[arg-type]
@@ -178,7 +179,7 @@ def test_manual_clip_crud_and_approve_preserve_user_values(
         "job_manual",
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             probe_metadata=lambda _path: _probe(duration=120),
             manual_source_proxy_renderer=_fake_manual_source_proxy,
         ),
@@ -354,7 +355,7 @@ def test_finalized_manual_job_skips_scene_scoring_and_preserves_identity(
         "job_manual",
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             probe_metadata=lambda _path: _probe(duration=120),
             extract_audio=fake_extract,
             transcribe_audio=lambda _path: [
@@ -461,7 +462,7 @@ def test_manual_subtitle_modes_skip_audio_and_prepare_review(
         "job_manual",
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             probe_metadata=lambda _path: _probe(has_audio=False, duration=120),
             extract_audio=must_not_run,  # type: ignore[arg-type]
             transcribe_audio=must_not_run,  # type: ignore[arg-type]
@@ -569,7 +570,7 @@ def test_manual_subtitle_modes_skip_audio_and_prepare_review(
             render_revision=1,
             session_factory=session_factory,
             paths=storage,
-            dependencies=AutoClipperPipelineDependencies(
+            dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
                 normal_renderer=fake_render,
                 short_renderer=fake_render,
             ),

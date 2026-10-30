@@ -1,3 +1,4 @@
+from final_output_fixtures import passing_final_inspection
 from pathlib import Path
 from typing import Any
 from types import SimpleNamespace
@@ -151,7 +152,8 @@ def test_hook_scene_worker_only_prepares_live_video(client: TestClient, monkeypa
     storage = app.dependency_overrides[get_storage_paths]()
     statuses = run_subtitle_review_hook_scene_update(job_id, clip_id, 0, 3,
         session_factory=lambda: next(app.dependency_overrides[get_db]()), paths=storage,
-        dependencies=AutoClipperPipelineDependencies(normal_renderer=renderer, short_renderer=renderer))
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
+                                                    normal_renderer=renderer, short_renderer=renderer))
     assert statuses[-1] == "awaiting_subtitle_review"
     assert len(outputs) == 1 and "live" in outputs[0].parts
     assert calls == []

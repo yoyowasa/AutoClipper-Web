@@ -15,6 +15,8 @@ const errorLabels: Record<string, string> = {
   no_usable_output: "切り抜き動画を生成できませんでした",
   quality_gate_render_failed: "完成動画の自動確認で問題を検出しました",
   quality_gate_record_failed: "自動確認の判定記録を保存できませんでした",
+  final_output_incomplete: "完成MP4の検査で停止しました",
+  final_output_record_failed: "完成MP4の検査記録を保存できませんでした",
 };
 
 export function JobProgress({ job }: { job: JobStatusResponse }) {

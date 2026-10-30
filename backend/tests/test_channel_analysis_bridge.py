@@ -28,7 +28,9 @@ def test_legacy_profiles_and_fingerprints_unchanged_and_analysis_schema_pinned()
     fixture = json.loads((Path(__file__).parent / "fixtures" / "codex_profiles_before_task208.json").read_text(encoding="utf-8"))
     assert host.CODEX_MODEL == fixture["model"] and host.CODEX_REASONING_EFFORT == fixture["effort"]
     assert {key: host.EXPECTED_RESPONSE_SCHEMA_SHA256[key] for key in fixture["schemas"]} == fixture["schemas"]
-    assert set(host.EXPECTED_RESPONSE_SCHEMA_SHA256) == set(fixture["schemas"]) | {"channel_self_analysis", "short_framing_select"}
+    assert set(host.EXPECTED_RESPONSE_SCHEMA_SHA256) == set(fixture["schemas"]) | {
+        "channel_self_analysis", "short_framing_select", "final_output_review",
+    }
     schema = analysis_response_schema()
     assert host._response_schema_sha256(schema) == host.EXPECTED_RESPONSE_SCHEMA_SHA256["channel_self_analysis"]
     assert len(json.dumps(schema).encode()) < host.MAX_RESPONSE_SCHEMA_BYTES

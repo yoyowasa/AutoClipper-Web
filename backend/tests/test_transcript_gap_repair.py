@@ -1,3 +1,4 @@
+from final_output_fixtures import passing_final_inspection
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -257,7 +258,7 @@ def test_pipeline_repairs_once_before_postprocess_and_continues_on_failure(clien
     def preview(source, output, **options):
         Path(output).write_bytes(b"fake preview")
         return Path(output)
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda path: VideoMetadata(duration=240, width=1920, height=1080, fps=30, has_audio=True),
         extract_audio=extract, transcription_engine_factory=Engine, detect_silence=silence,
         compute_audio_features=lambda path, duration, silence: build_audio_features(duration, silence, 0.5),

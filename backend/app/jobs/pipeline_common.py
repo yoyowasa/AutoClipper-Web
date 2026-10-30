@@ -139,6 +139,7 @@ class AutoClipperPipelineDependencies:
     auto_title_hook_generator: Callable[..., TitleHookSuggestionsDocument] = (
         generate_title_hook_suggestions_for_auto
     )
+    final_output_inspector: Callable[..., list] | None = None
 
 class PipelineExpectedError(Exception):
     def __init__(self, code: str, message: str, details: dict[str, Any] | None = None) -> None:

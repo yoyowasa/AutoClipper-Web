@@ -1104,6 +1104,11 @@ def _quality_gate_stage_order(
 
 def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
     details: dict[str, Any] = {}
+    if job.status in {"failed", "awaiting_subtitle_review", "awaiting_manual_edit"}:
+        from app.inspection.service import read_inspection_attention
+        attention = read_inspection_attention(paths, job.id)
+        if attention:
+            details["finalInspection"] = attention
     output_dir = paths.job_outputs(job.id)
     job_settings = job.settings_json if isinstance(job.settings_json, dict) else {}
     if requires_human_subtitle_review(job_settings):
