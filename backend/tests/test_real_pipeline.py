@@ -1,3 +1,4 @@
+from final_output_fixtures import passing_final_inspection
 import app.jobs.clip_plan_runner as clip_plan_runner_module
 import app.jobs.pipeline_common as pipeline_common_module
 import json
@@ -348,7 +349,7 @@ def test_real_pipeline_produces_results_metadata_and_zip(
         Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=240.0,
             width=1920,
@@ -635,7 +636,7 @@ def test_pipeline_uses_heatmap_as_reference_without_forcing_candidate_boundaries
         Path(output_path).write_bytes(b"rendered")
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=240.0,
             width=1920,
@@ -789,7 +790,7 @@ def test_clip_plan_reselection_can_switch_from_heatmap_reference_to_content_only
         Path(output_path).write_bytes(Path(output_path).name.encode("utf-8"))
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=240.0,
             width=1920,
@@ -1099,7 +1100,7 @@ def test_pipeline_falls_back_to_content_candidates_when_heatmap_reference_is_tam
         created["jobId"],
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             probe_metadata=lambda _path: VideoMetadata(
                 duration=240.0,
                 width=1920,
@@ -1240,7 +1241,7 @@ def test_pipeline_uses_exact_manual_ranges_without_scoring_or_boundary_changes(
         Path(output_path).write_bytes(b"preview")
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=240.0,
             width=1920,
@@ -1606,7 +1607,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         short_render_kwargs.append(kwargs)
         return fake_render(input_path, output_path, **kwargs)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=240.0,
             width=1920,
@@ -1914,7 +1915,7 @@ def test_pipeline_pauses_for_subtitle_review_and_renders_after_confirmation(
         render_revision=3,
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             normal_renderer=failing_render,
             short_renderer=failing_render,
         ),
@@ -1968,7 +1969,7 @@ def test_real_pipeline_does_not_backfill_normal_clip_from_60_second_video(
         Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=60.0,
             width=1920,
@@ -2043,7 +2044,7 @@ def test_real_pipeline_fixture_transcript_completes_without_transcriber(client: 
         Path(output_path).write_bytes(f"rendered {Path(output_path).name}".encode("utf-8"))
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=25.0,
             width=320,
@@ -2138,7 +2139,7 @@ def test_real_pipeline_reports_selection_failure_before_rendering(
         "select_candidates",
         lambda *_args, **_kwargs: CandidateSelection(),
     )
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=240.0,
             width=1920,
@@ -2206,7 +2207,7 @@ def test_real_pipeline_marks_failed_without_unhandled_exception_when_no_output_i
     ) -> Path:
         raise RuntimeError("all renders failed")
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=240.0,
             width=1920,
@@ -2265,7 +2266,7 @@ def test_real_pipeline_marks_failed_for_missing_audio_without_unhandled_exceptio
     ).json()
     created = client.post("/api/jobs", json={"videoId": upload["videoId"], "settings": {}}).json()
     storage = app.dependency_overrides[get_storage_paths]()
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=120.0,
             width=1920,
@@ -2304,7 +2305,7 @@ def test_real_pipeline_rejects_mismatched_media_stream_durations_before_audio_ex
     def fail_if_audio_extracted(_input_path: str | Path, _output_path: str | Path) -> Path:
         raise AssertionError("mismatched streams must fail before audio extraction")
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=1301.47,
             width=1920,
@@ -2361,7 +2362,7 @@ def test_real_pipeline_fails_silent_audio_before_transcription_and_candidates(cl
     def fail_if_scene_detected(_input_path: str | Path) -> list[SceneSegment]:
         raise AssertionError("silent audio must fail before scene detection")
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=120.0,
             width=1920,
@@ -2571,7 +2572,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
         created["jobId"],
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             probe_metadata=lambda _path: VideoMetadata(
                 duration=240.0,
                 width=1920,
@@ -2646,7 +2647,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
         created["jobId"],
         session_factory=lambda: next(app.dependency_overrides[get_db]()),
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             probe_metadata=lambda _path: VideoMetadata(
                 duration=240.0,
                 width=1920,
@@ -3053,7 +3054,7 @@ def test_real_pipeline_fails_unusable_transcript_before_candidates(client: TestC
     def fail_if_scene_detected(_input_path: str | Path) -> list[SceneSegment]:
         raise AssertionError("unusable transcript must fail before scene detection")
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=120.0,
             width=1920,
@@ -3184,7 +3185,7 @@ def test_real_pipeline_retries_repeated_turbo_transcript_with_small_on_cuda(
         Path(output_path).write_bytes(b"rendered")
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=240.0,
             width=1920,
@@ -3352,7 +3353,7 @@ def test_real_pipeline_recovers_long_form_transcript_without_user_action(
         Path(output_path).write_bytes(b"rendered")
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=3600.0,
             width=1920,
@@ -3449,7 +3450,7 @@ def test_real_pipeline_rejects_repeated_japanese_transcript_without_cuda_fallbac
         Path(output_path).write_bytes(b"fake wav")
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=120.0,
             width=1920,
@@ -3514,7 +3515,7 @@ def test_real_pipeline_marks_failed_when_no_candidates_found(client: TestClient)
         Path(output_path).write_bytes(b"fake wav")
         return Path(output_path)
 
-    dependencies = AutoClipperPipelineDependencies(
+    dependencies = AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
         probe_metadata=lambda _path: VideoMetadata(
             duration=10.0,
             width=1920,

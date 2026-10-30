@@ -1,4 +1,5 @@
 from functools import partial
+from app.jobs.final_output_inspection import inspect_pipeline_outputs
 from app.jobs.automatic_framing_repair import repair_automatic_short_framing, record_framing_recheck
 from app.storage.completed_previews import prune_job_previews_after_completion
 from app.production_records import record_completed_productions
@@ -1965,6 +1966,7 @@ def run_autoclipper_job(
     codex_initial_selection_result: Any | None = None
     exports: list[ExportItem] = []
     transcription_engine = "not_run"
+    review_document: SubtitleReviewDocument | None = None
     transcription_model: str | None = None
     transcription_language: str | None = None
     transcription_diagnostics: dict[str, Any] | None = None
@@ -3228,6 +3230,10 @@ def run_autoclipper_job(
                 character_style=settings.get("normalThumbnailStyle"),
                 db=db, job=job, paths=storage_paths,
             )
+            inspect_pipeline_outputs(db=db, job=job, video=video, source=input_path, selection=selection,
+                segments=transcript_segments, settings=settings, paths=storage_paths, render_paths=storage_paths,
+                dependencies=deps, exports=exports, normal_result=normal_result, short_result=short_result,
+                document=review_document, automation_mode=_active_quality_gate_mode(job_dir, settings))
             if guarded_content_auto_passed:
                 review_document = mark_review_completed(review_document)
                 write_subtitle_review(
@@ -3303,7 +3309,18 @@ def run_autoclipper_job(
             visited_statuses.append("completed")
             prune_job_previews_after_completion(db, job, storage_paths)
         except PipelineExpectedError as exc:
-            _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
+            if exc.code == "final_output_incomplete" and review_document is not None:
+                _discard_unpublished_exports(db, exports, job_dir=job_dir)
+                _restore_subtitle_rerender_for_retry(db=db, job=job, review_document=review_document,
+                    review_path=subtitle_review_output_path(job_dir), code=exc.code, message=exc.message)
+                visited_statuses.append("awaiting_subtitle_review")
+            elif exc.code == "final_output_incomplete" and manual_workflow:
+                from app.jobs.final_output_inspection import restore_manual_editor
+                _discard_unpublished_exports(db, exports, job_dir=job_dir)
+                restore_manual_editor(db, job, storage_paths, exc.message)
+                visited_statuses.append("awaiting_manual_edit")
+            else:
+                _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
         except Exception as exc:
             _fail_job(db, job_id, "pipeline_failed", str(exc))
             raise
@@ -3926,6 +3943,10 @@ def run_subtitle_review_render(
                 db=db, job=job, paths=storage_paths,
                 review_document=review_document, copy_generator=deps.thumbnail_copy_generator,
             )
+            inspect_pipeline_outputs(db=db, job=job, video=video, source=input_path, selection=selection,
+                segments=transcript_segments, settings=settings, paths=storage_paths, render_paths=render_paths,
+                dependencies=deps, exports=exports, normal_result=normal_result, short_result=short_result,
+                document=review_document, retained_exports=retained_exports, automation_mode=effective_automation_mode)
             if rerender_staging_paths is not None:
                 exports, _render_failures_path, rerender_promotion = _promote_subtitle_rerender(
                     db=db,
@@ -4064,7 +4085,13 @@ def run_subtitle_review_render(
                     ),
                 )
             else:
-                _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
+                if exc.code == "final_output_incomplete" and review_document is not None:
+                    _discard_unpublished_exports(db, exports, job_dir=job_dir)
+                    _restore_subtitle_rerender_for_retry(db=db, job=job, review_document=review_document,
+                        review_path=review_path, code=exc.code, message=exc.message)
+                    visited_statuses.append("awaiting_subtitle_review")
+                else:
+                    _fail_job(db, job_id, exc.code, exc.message, details=exc.details)
         except Exception as exc:
             if is_rerender and review_document is not None:
                 rollback_succeeded = True

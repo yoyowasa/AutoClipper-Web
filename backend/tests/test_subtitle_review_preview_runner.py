@@ -1,3 +1,4 @@
+from final_output_fixtures import passing_final_inspection
 import os
 import json
 from pathlib import Path
@@ -279,7 +280,7 @@ def test_preview_worker_never_overwrites_a_concurrent_api_edit(tmp_path: Path) -
         old_hash,
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             subtitle_review_exact_preview_renderer=fake_exact_renderer,
         ),
     )
@@ -417,7 +418,7 @@ def test_auto_preview_worker_queues_render_after_confirmed_preview_becomes_ready
         spec_hash,
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             subtitle_review_exact_preview_renderer=fake_exact_renderer,
         ),
     )
@@ -559,7 +560,7 @@ def test_hook_preview_worker_rejects_changed_review_snapshot(tmp_path: Path) -> 
             3,
             session_factory=session_factory,
             paths=storage,
-            dependencies=AutoClipperPipelineDependencies(
+            dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
                 subtitle_review_exact_preview_renderer=fake_exact_renderer,
             ),
         )
@@ -684,7 +685,7 @@ def test_hook_preview_worker_updates_normal_selection(tmp_path: Path) -> None:
         7,
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             subtitle_review_exact_preview_renderer=fake_exact_renderer,
         ),
     )

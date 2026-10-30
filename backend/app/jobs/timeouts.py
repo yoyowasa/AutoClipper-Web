@@ -97,3 +97,35 @@ def automatic_thumbnail_copy_timeout(job_id: str) -> int:
         return 0
     count = sum(clip["type"] == "normal" for clip in json.loads(path.read_text(encoding="utf-8"))["clips"])
     return math.ceil(count * THUMBNAIL_COPY_MAX_ATTEMPTS * DEFAULT_CODEX_RESPONSE_TIMEOUT_SECONDS)
+
+
+def final_output_inspection_timeout(job_id: str) -> int:
+    """Reserve scans for three passes, two renders, and one content regeneration."""
+    from app.inspection.models import MAX_REPAIRS, SEMANTIC_TIMEOUT_SECONDS
+    path = get_storage_paths().job_outputs(job_id) / "subtitle_review.json"
+    if path.is_file():
+        document = json.loads(path.read_text(encoding="utf-8"))
+        targets = document.get("renderClipIds")
+        clips = [c for c in document.get("clips", []) if targets is None or c["id"] in targets]
+        count = len(clips)
+        duration = sum(max(0, float(c["end"]) - float(c["start"])) + max(
+            0, float(c.get("hookSceneEnd") or 0) - float(c.get("hookSceneStart") or 0)) for c in clips)
+    else:
+        with SessionLocal() as db:
+            if not inspect(db.get_bind()).has_table("jobs"):
+                return 0
+            job = db.get(Job, job_id)
+            if job is None:
+                return 0
+            settings = job.settings_json or {}
+            count = int(settings["totalClipCount"]) if is_ai_allocation(settings) else (
+                int(settings.get("normalClipCount", 2)) + int(settings.get("shortCount", 3)))
+            duration = NORMAL_LONGFORM_MAX_SECONDS * count
+    from app.scoring.codex_title_hook_suggestions import DEFAULT_CODEX_RESPONSE_TIMEOUT_SECONDS
+    from app.scoring.thumbnail_copy import THUMBNAIL_COPY_MAX_ATTEMPTS
+    # Each pass decodes output/source and two subtitle rasters. Regeneration is
+    # permitted once and uses the existing bounded title/copy retry policies.
+    local_factor = MAX_REPAIRS * 6 + (MAX_REPAIRS + 1) * 4
+    waits = (MAX_REPAIRS + 1) * (SEMANTIC_TIMEOUT_SECONDS + 15) + (
+        2 + THUMBNAIL_COPY_MAX_ATTEMPTS) * DEFAULT_CODEX_RESPONSE_TIMEOUT_SECONDS
+    return media_timeout(duration, minimum=300, factor=local_factor) + math.ceil(count * waits) if count else 0

@@ -7,7 +7,9 @@ from rq.exceptions import DuplicateJobError
 from rq.job import JobStatus
 
 from app.config import get_settings
-from app.jobs.timeouts import job_media_timeout, thumbnail_candidates_timeout, automatic_thumbnail_copy_timeout
+from app.jobs.timeouts import (
+    job_media_timeout, thumbnail_candidates_timeout, automatic_thumbnail_copy_timeout, final_output_inspection_timeout,
+)
 from app.jobs.runner import (
     run_autoclipper_job,
     run_subtitle_review_preview,
@@ -66,7 +68,7 @@ def get_queue() -> Queue:
 
 def enqueue_autoclipper_job(job_id: str) -> None:
     queue = get_queue()
-    queue.enqueue(run_autoclipper_job, job_id, job_timeout=job_media_timeout(job_id))
+    queue.enqueue(run_autoclipper_job, job_id, job_timeout=job_media_timeout(job_id) + final_output_inspection_timeout(job_id))
 
 
 def enqueue_autoclipper_retry_job(
@@ -90,7 +92,7 @@ def enqueue_autoclipper_retry_job(
             queue.enqueue(
                 run_autoclipper_job,
                 job_id,
-                job_timeout=job_media_timeout(job_id),
+                job_timeout=job_media_timeout(job_id) + final_output_inspection_timeout(job_id),
                 job_id=rq_job_id,
                 unique=True,
             )
@@ -132,7 +134,7 @@ def enqueue_subtitle_review_render(job_id: str, render_revision: int) -> None:
                 run_subtitle_review_render,
                 job_id,
                 render_revision=render_revision,
-                job_timeout=job_media_timeout(job_id) + automatic_thumbnail_copy_timeout(job_id),
+                job_timeout=job_media_timeout(job_id) + automatic_thumbnail_copy_timeout(job_id) + final_output_inspection_timeout(job_id),
                 job_id=rq_job_id,
                 retry=Retry(max=2),
                 unique=True,

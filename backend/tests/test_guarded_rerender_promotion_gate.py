@@ -491,6 +491,8 @@ def test_guarded_rerender_failure_leaves_post_render_gate_missing(
         ),
     )
 
+    monkeypatch.setattr(runner_module, "inspect_pipeline_outputs", lambda **kwargs: kwargs["exports"])
+
     def fake_render_selected_outputs(**kwargs: Any) -> tuple[Any, Any, list[object], Path]:
         staging_dir = kwargs["storage_paths"].job_outputs(job_id)
         video_path = staging_dir / "normal" / "normal_01.mp4"
@@ -690,6 +692,8 @@ def test_guarded_rerender_hashes_projected_canonical_exports_before_promotion(
         "evaluate_content_quality_gate",
         lambda **_kwargs: _passing_content_decision(job_id),
     )
+
+    monkeypatch.setattr(runner_module, "inspect_pipeline_outputs", lambda **kwargs: kwargs["exports"])
 
     def fake_render_selected_outputs(**kwargs: Any) -> tuple[Any, Any, list[object], Path]:
         staging_dir = kwargs["storage_paths"].job_outputs(job_id)

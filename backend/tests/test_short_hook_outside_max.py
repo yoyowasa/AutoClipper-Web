@@ -1,3 +1,4 @@
+from final_output_fixtures import passing_final_inspection
 
 import json
 from pathlib import Path
@@ -149,7 +150,8 @@ def test_worker_paths_use_the_same_body_cap(client, action, duration, valid):  #
         return target
     options = dict(session_factory=lambda: next(app.dependency_overrides[get_db]()),
                    paths=app.dependency_overrides[get_storage_paths](),
-                   dependencies=AutoClipperPipelineDependencies(subtitle_review_preview_renderer=preview))
+                   dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
+                                                               subtitle_review_preview_renderer=preview))
     run = (lambda: run_clip_plan_boundary_update(job_id, "short0", 0, duration, **options)) if action == "boundary" else (
         lambda: run_clip_plan_hook_scene_update(job_id, "short0", 1, 4, **options))
     if valid:

@@ -1,3 +1,4 @@
+from final_output_fixtures import passing_final_inspection
 from collections.abc import Generator
 from pathlib import Path
 from typing import Any
@@ -199,7 +200,7 @@ def test_manual_mkv_job_generates_proxy_and_serves_editor_video(
         "job_manual_proxy",
         session_factory=session_factory,
         paths=storage,
-        dependencies=AutoClipperPipelineDependencies(
+        dependencies=AutoClipperPipelineDependencies(final_output_inspector=passing_final_inspection,
             probe_metadata=lambda _path: _metadata(has_audio=False),
             manual_source_proxy_renderer=fake_proxy_renderer,
         ),

@@ -198,3 +198,16 @@ task-235の対象となる新規autoジョブでは、上記の元の処理版�
 - `manualDecisionFields`のframing、clipの確定、現在の正式プレビュー準備完了を、人がその画角を承認した証拠として使う。機械による追従範囲検査・自動修復は自動画角に適用し、帯などの出力契約検査は手動画角でも維持する。
 - 完成後の画角保存では対象clipだけを再書き出し、既存の公開・巻き戻し処理を使う。他clipの書き出しと制作記録は更新しない。
 - 「自動に戻す」の明示操作だけで、`manualDecisionFields`のframingを解除する。位置を0に戻して保存しても解除しない。解除は`kind=framing`・`stage=removed`・`source=automatic`として記録し、その後の内容による自動判断と、必要なら完成検査による自動修復も通常どおり記録する。タイトル・投稿文・文字スタイル・字幕強調の再決定は行わない。
+
+
+### 完成MP4の独立検査（task-236、任意項目finalInspection）
+
+- schemaVersion=1を維持し、旧記録の項目なしは未検査のままとする。
+- 合格時のみ `finalInspection`（version, outcome, updatedAt, repairCount, attempts）を任意で保存する。
+  attemptsはindex, output_sha256, checks（code/outcome/evidence/second）, repair, repair_result。
+  完成clip内秒、固定の理由コード、根拠ID・集計値・ハッシュを使用し、字幕全文・パス・Codexの自由文を含めない。
+- 正常・修復後の合格と、使用した局所修復を追跡できる。未完成では新しいExportItemの公開・制作記録作成へ進まない。
+- 実MP4のSHA256、実サムネと公開タイトル／投稿文／サムネ文言のハッシュが一致する場合だけ検査証拠を転記する。
+  完成後に値を変えた場合、古い合格を新しい値の証拠にしない。旧完成ジョブの状態は変更しない。
+- 出力削除後は通常の制作記録と同じく保存する。検査記録がない過去分のbackfillでは検査済みと推定しない。
+  [検査・修復・保持・未確認事項](FINAL_OUTPUT_INSPECTION_CONTRACT_v1.md)を参照。

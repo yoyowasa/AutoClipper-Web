@@ -1234,6 +1234,7 @@ def queue_review_render(document: SubtitleReviewDocument) -> SubtitleReviewDocum
     if document.confirmed_clip_count != document.total_clip_count:
         raise ValueError("all clips must be confirmed before rendering")
     document.state = "render_queued"
+    document.automatic_stop_reasons = []
     return _refresh_counts(document)
 
 
@@ -1242,6 +1243,7 @@ def queue_auto_review_render(document: SubtitleReviewDocument) -> SubtitleReview
     if document.state != "awaiting_review":
         raise ValueError("subtitle review is not awaiting automated rendering")
     document.state = "render_queued"
+    document.automatic_stop_reasons = []
     return _refresh_counts(document)
 
 

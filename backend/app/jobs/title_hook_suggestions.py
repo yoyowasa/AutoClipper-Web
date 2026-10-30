@@ -550,6 +550,7 @@ def generate_title_hook_suggestions_for_auto(
     frame_extractor: FrameExtractor = extract_representative_frames,
     audience_familiarity: Literal["known", "unknown"] = "known",
     performance_hints: list[dict] | None = None,
+    force_regenerate: bool = False,
 ) -> TitleHookSuggestionsDocument:
     """Generate a current Codex proposal without requiring an active review stop.
 
@@ -589,7 +590,7 @@ def generate_title_hook_suggestions_for_auto(
         if cached is not None:
             previous_thread_id = cached.thread_id
             if (
-                cached.state == "ready"
+                not force_regenerate and cached.state == "ready"
                 and cached.input_hash == request.input_hash
                 and cached.draft_hash == request.draft_hash
                 and cached.revision_hash == request.revision_hash
