@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
+from app.publication.models import PublicationDecision
 from app.production_choices import ProductionChoice
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -31,6 +32,8 @@ def _utc_iso() -> str:
 
 
 class ClipPlanClip(BaseModel):
+    publication_decision: Literal["publish", "skip", "unknown"] | None = Field(
+        default=None, alias="publicationDecision", exclude_if=lambda v: v is None)
     longform_reason: str = Field(default="", alias="longformReason")
     id: str
     type: Literal["normal", "short"]
@@ -87,6 +90,7 @@ class ClipPlanClip(BaseModel):
 
 
 class ClipPlanDocument(BaseModel):
+    publication_decisions: list[PublicationDecision] = Field(default_factory=list, alias="publicationDecisions", exclude_if=lambda v: not v)
     choice_history: list[ProductionChoice] = Field(default_factory=list, alias="choiceHistory", exclude_if=lambda v: not v)
     requested_total: int | None = Field(default=None, alias="requestedTotal")
     selected_total: int | None = Field(default=None, alias="selectedTotal")
@@ -190,10 +194,12 @@ def build_clip_plan(
     selection = selection if selection.requested_total is not None else allocate_selection(selection, settings)
     type_indices = {"normal": 0, "short": 0}
     clips: list[ClipPlanClip] = []
-    for candidate in [*selection.normal_clips, *selection.shorts]:
+    decisions = {d.candidate_id:d for d in selection.publication_decisions}
+    for candidate in [*selection.normal_clips, *selection.shorts, *selection.deferred_candidates]:
         type_indices[candidate.type] += 1
         clips.append(
             ClipPlanClip(
+                publicationDecision=decisions[candidate.id].decision if candidate.id in decisions else None,
                 id=candidate.id,
                 type=candidate.type,
                 title=_repaired_artifact_text(
@@ -210,7 +216,7 @@ def build_clip_plan(
                 aiScore=candidate.ai_score,
                 selectionReason=candidate.selection_reason,
                 longformReason=candidate.longform_reason if candidate.type == "normal" and candidate.duration > NORMAL_MAX_SECONDS else "",
-                boundaryRefined=candidate.boundary_refined,
+                boundaryRefined=bool(candidate.boundary_refined),
                 recommendedStart=candidate.start,
                 recommendedEnd=candidate.end,
                 hookSceneStart=candidate.hook_scene_start,
@@ -219,6 +225,8 @@ def build_clip_plan(
         )
     now = _utc_iso()
     return ClipPlanDocument(
+        publicationDecisions=selection.publication_decisions,
+        choiceHistory=selection.choice_history,
         **allocation_summary(selection),
         jobId=job_id,
         state="preparing",
@@ -322,8 +330,9 @@ def write_clip_plan(document: ClipPlanDocument, output_path: str | Path, *, choi
     capture_document(document, Path(output_path), kind="plan", source=choice_source)
     if is_ai_allocation(document.settings):
         document.requested_total = int(document.settings['totalClipCount'])
-        document.selected_total = len(document.clips)
-        document.selected_by_type = {kind: sum(c.type == kind for c in document.clips) for kind in ('normal', 'short')}
+        active = [c for c in document.clips if c.publication_decision not in {"skip", "unknown"}]
+        document.selected_total = len(active)
+        document.selected_by_type = {kind: sum(c.type == kind for c in active) for kind in ('normal', 'short')}
         document.minimum_shortfall = {
             kind: max(0, int(document.settings.get(key, 0)) - document.selected_by_type[kind])
             for kind, key in [('normal', 'minNormalClipCount'), ('short', 'minShortCount')]

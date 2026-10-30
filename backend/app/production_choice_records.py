@@ -10,9 +10,12 @@ def recorded_choices(paths, export, metadata, previous):
     from app.jobs.title_hook_suggestions import title_hook_suggestions_path
     from app.jobs.thumbnail_copy import copy_state_path
     from app.candidates.select_candidates import selected_clips_output_path
+    from app.publication.storage import read_report
+    publication_report = read_report(paths, export.job_id)
 
     root = paths.job_outputs(export.job_id)
-    history = merge_history(previous.choiceHistory if previous else [], metadata.get("choiceHistory", []), *[
+    history = merge_history(previous.choiceHistory if previous else [], metadata.get("choiceHistory", []),
+        publication_report.choice_history if publication_report else [], *[
         read_history(path) for path in (
             selected_clips_output_path(root), clip_plan_output_path(root), subtitle_review_output_path(root),
             title_hook_suggestions_path(root, export.candidate_id), copy_state_path(paths, export),

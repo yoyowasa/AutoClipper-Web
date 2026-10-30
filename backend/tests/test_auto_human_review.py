@@ -35,7 +35,8 @@ def prepare(guarded_client, monkeypatch, tmp_path, *, short=False, selection="pa
     # Saved v1 jobs retain their original contract.
     with factory() as db:
         job = db.get(Job, job_id)
-        job.settings_json = {**job.settings_json, AUTOMATION_POLICY_SETTING: HUMAN_SUBTITLE_REVIEW_POLICY}
+        job.settings_json = {**{k: v for k, v in job.settings_json.items() if k != "_publicationPolicy"},
+                             AUTOMATION_POLICY_SETTING: HUMAN_SUBTITLE_REVIEW_POLICY}
         db.commit()
     if short:
         with factory() as db:

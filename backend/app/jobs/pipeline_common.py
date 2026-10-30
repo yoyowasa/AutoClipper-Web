@@ -577,7 +577,7 @@ def _prepare_clip_plan_review(
     kept_plan: Any = None,
 ) -> Path:
     selected = [*selection.normal_clips, *selection.shorts]
-    if not selected:
+    if not selected and not selection.deferred_candidates:
         if settings.get("_reselectionExcludedRanges"):
             raise PipelineExpectedError(
                 "reselection_no_alternatives",

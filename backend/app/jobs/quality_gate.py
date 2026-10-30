@@ -491,12 +491,16 @@ def evaluate_selection_quality_gate(
     ai = is_ai_allocation(settings)
     if ai:
         shortfall = {'total': max(0, int(settings['totalClipCount']) - len(clips))}
+    withheld = {kind: min(shortfall.get(kind, 0), selection.publication_withheld_counts.get(kind, 0))
+                for kind in ("normal", "short")}
+    intentional_shortfall = not ai and bool(selection.publication_decisions) and all(
+        shortfall.get(kind, 0) <= withheld[kind] for kind in withheld)
     has_shortfall = any(shortfall.values())
     checks.append(
         _check(
             "selection.requested_counts",
-            "fail" if has_shortfall and not ai else "pass",
-            reason_code="requested_clip_shortfall" if has_shortfall and not ai else None,
+            "fail" if has_shortfall and not ai and not intentional_shortfall else "pass",
+            reason_code="requested_clip_shortfall" if has_shortfall and not ai and not intentional_shortfall else None,
             evidence={
                 "requested": {"normal": requested_normal, "short": requested_short},
                 "selected": {
@@ -504,6 +508,7 @@ def evaluate_selection_quality_gate(
                     "short": len(selection.shorts),
                 },
                 "shortfall": shortfall,
+                "publicationWithheld": withheld,
                 **({'requestedTotal': settings['totalClipCount'], 'selectedTotal': len(clips),
                     'shortage': has_shortfall, 'shortfallReasons': selection.shortfall_reasons} if ai else {}),
             },

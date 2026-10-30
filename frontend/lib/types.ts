@@ -365,6 +365,7 @@ export type JobAuditSummary = {
 };
 
 export type JobResultsResponse = {
+  publication?: PublicationSummary | null;
   jobId: string;
   zipDownloadUrl: string;
   canReopenForEditing: boolean;
@@ -624,6 +625,7 @@ export type TitleHookSuggestionResponse = {
 };
 
 export type ClipPlanClip = {
+  publicationDecision?: "publish" | "skip" | "unknown" | null;
   id: string;
   type: ExportType;
   title: string;
@@ -646,6 +648,7 @@ export type ClipPlanClip = {
 };
 
 export type ClipPlanDocument = {
+  publicationDecisions?: PublicationDecision[];
   requestedTotal?: number | null;
   selectedTotal?: number | null;
   selectedByType?: { normal: number; short: number };
@@ -742,3 +745,16 @@ export type ThumbnailTextStyle = { fontPreset: ThumbnailFontPreset; fontSize: nu
 export type ThumbnailTextStyles = { heading: ThumbnailTextStyle; upper: ThumbnailTextStyle; lower: ThumbnailTextStyle };
 export type ThumbnailTextRegion = { x: number; y: number; width: number; height: number; targetCenterX: number };
 export type ThumbnailTextRegions = Partial<Record<keyof ThumbnailTextStyles, ThumbnailTextRegion>>;
+
+
+export type PublicationDecision = {
+  candidateId: string; type: ExportType; start: number; end: number; title: string;
+  decision: "publish" | "skip" | "unknown"; source: "automatic" | "manual";
+  policyVersion: string; reasons: string[]; originalDecision?: "publish" | "skip" | "unknown" | null;
+  evidence: { score?: number | null; scoreSource?: string | null; charactersPerSecond?: number | null;
+    hardGatePassed?: boolean | null; selectionReason?: string | null; transcriptHash?: string | null };
+};
+export type PublicationSummary = {
+  outcome: "publish" | "partial" | "no_publication" | "needs_review";
+  policyVersion: string; selectedCount: number; criteriaValidated: false; decisions: PublicationDecision[];
+};

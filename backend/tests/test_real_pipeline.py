@@ -2477,7 +2477,7 @@ def test_initial_codex_selection_bypasses_legacy_generation_and_scoring(
         start=0.0,
         end=100.0,
         duration=100.0,
-        transcript_text="why automation mistakes matter before launch",
+        transcript_text="why automation mistakes matter before launch " * 3,
         rule_score=95.0,
         ai_score=95.0,
         final_score=95.0,

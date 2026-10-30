@@ -1104,6 +1104,10 @@ def _quality_gate_stage_order(
 
 def _job_details(job: Job, paths: StoragePaths) -> dict[str, Any]:
     details: dict[str, Any] = {}
+    from app.publication.storage import summary as publication_summary
+    publication = publication_summary(paths, job.id)
+    if publication is not None:
+        details["publication"] = publication
     if job.status in {"failed", "awaiting_subtitle_review", "awaiting_manual_edit"}:
         from app.inspection.service import read_inspection_attention
         attention = read_inspection_attention(paths, job.id)
@@ -1584,6 +1588,10 @@ def create_job(
 
     new_settings = request.settings.model_dump(by_alias=True, mode="json")
     # This policy is assigned at creation, never inferred while loading/retrying old jobs.
+    from app.publication.models import PublicationPolicy, POLICY_SETTING
+    new_settings.pop(POLICY_SETTING, None)
+    if settings.workflow_mode != "manual":
+        new_settings[POLICY_SETTING] = PublicationPolicy().model_dump(by_alias=True, mode="json")
     new_settings.pop(AUTOMATION_POLICY_SETTING, None)
     if settings.automation_mode == "auto" and settings.workflow_mode != "manual":
         new_settings[AUTOMATION_POLICY_SETTING] = SUBTITLE_ONLY_AUTO_POLICY
@@ -3378,7 +3386,9 @@ def get_job_results(
         if source_job_id and db.get(Job, source_job_id) is not None:
             reedit_source_job_id = source_job_id
 
+    from app.publication.storage import summary as publication_summary
     return JobResultsResponse(
+        publication=publication_summary(paths, job.id),
         jobId=job.id,
         zipDownloadUrl=f"/api/jobs/{job.id}/download.zip",
         canReopenForEditing=_can_reopen_subtitle_review(job, video, paths),

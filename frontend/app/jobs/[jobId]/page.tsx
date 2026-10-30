@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
+import { PublicationDecisions } from "../../../components/PublicationDecisions";
+import { publicationSummary } from "../../../lib/publicationDecisions";
 import { JobProgress } from "../../../components/JobProgress";
 import { FinalInspectionAttention } from "../../../components/FinalInspectionAttention";
 import { ProgressTimeline } from "../../../components/ProgressTimeline";
@@ -84,6 +86,8 @@ export default function JobPage() {
     };
   }, [jobId]);
 
+  const publication = publicationSummary(job?.details);
+  const noPublication = job?.status === "completed" && publication?.outcome === "no_publication";
   const automationGate = automationGateDisplay(job?.details);
   const exceptionOnlyAutomation = automationGate.active;
   const automationGateAttentionCount =
@@ -127,6 +131,8 @@ export default function JobPage() {
           <>
             <JobProgress job={job} />
             <FinalInspectionAttention details={job.details} />
+            <PublicationDecisions summary={publication} />
+            {noPublication ? <Link className="underline" href={`/jobs/${job.id}/clips`}>見送りの候補を確認・範囲指定／キープで採用</Link> : null}
             {job.status === "failed" && job.error?.code === "no_usable_selection" ? (
               <section className="border border-amber-300 bg-amber-50 px-5 py-5">
                 <p className="text-sm font-semibold text-amber-950">
@@ -222,7 +228,7 @@ export default function JobPage() {
                 </Link>
               </section>
             ) : null}
-            {job.status === "completed" ? (
+            {job.status === "completed" && !noPublication ? (
               <Link
                 className="inline-flex min-h-11 w-fit items-center rounded-md bg-neutral-950 px-5 text-sm font-medium text-white"
                 href={`/results/${job.id}`}

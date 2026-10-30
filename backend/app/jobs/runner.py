@@ -2657,12 +2657,14 @@ def run_autoclipper_job(
                         )
                     )
             codex_normal_candidates = (
-                [candidate for candidate in codex_initial_selection_result.candidates if candidate.type == "normal"]
+                [candidate for candidate in [*codex_initial_selection_result.candidates, *codex_initial_selection_result.weak_candidates]
+                 if candidate.type == "normal"]
                 if codex_initial_selection_result is not None
                 else []
             )
             codex_short_candidates = (
-                [candidate for candidate in codex_initial_selection_result.candidates if candidate.type == "short"]
+                [candidate for candidate in [*codex_initial_selection_result.candidates, *codex_initial_selection_result.weak_candidates]
+                 if candidate.type == "short"]
                 if codex_initial_selection_result is not None
                 else []
             )
@@ -2875,6 +2877,15 @@ def run_autoclipper_job(
                 scored_candidates,
                 transcript_segments,
             )
+            from app.publication.pipeline import apply_publication_decisions, finish_without_publication
+            selection = apply_publication_decisions(selection, scored_candidates, settings=settings,
+                paths=storage_paths, job_id=job.id, source_duration=duration, silence_segments=silence_segments)
+            if codex_initial_selection_result is not None and selection.publication_decisions:
+                write_codex_initial_selection_summary({
+                    **_read_json_file(codex_summary_path), **allocation_summary(selection),
+                    "selectedNormalCount":len(selection.normal_clips), "selectedShortCount":len(selection.shorts),
+                    "publicationDecisions":[d.model_dump(by_alias=True, mode="json") for d in selection.publication_decisions],
+                }, codex_summary_path)
             if manual_workflow and active_manual_subtitle_mode == "manual":
                 transcript_segments = build_manual_subtitle_segments(selection)
                 transcript_path = write_transcript_segments(
@@ -2887,7 +2898,7 @@ def run_autoclipper_job(
             selected_path = write_selected_clips(selection, job_dir / "selected_clips.json")
             metadata_files.append(selected_path)
 
-            if not selection.normal_clips and not selection.shorts:
+            if not selection.normal_clips and not selection.shorts and not selection.deferred_candidates:
                 raise PipelineExpectedError(
                     "no_usable_selection",
                     "Pipeline completed analysis but selection produced no usable clips.",
@@ -2909,6 +2920,10 @@ def run_autoclipper_job(
                 if selection_gate_path is not None:
                     metadata_files.append(selection_gate_path)
 
+            if finish_without_publication(db, job, storage_paths, selection, settings, duration):
+                write_summaries()
+                visited_statuses.append("completed")
+                return visited_statuses
             if manual_workflow:
                 manual_plan_path = clip_plan_output_path(job_dir)
                 manual_document = (
@@ -2946,13 +2961,15 @@ def run_autoclipper_job(
             )
             allocation_needs_review = bool(
                 is_ai_allocation(settings) and selection.shortfall_reasons and not manual_workflow
+                and not any(d.decision == "skip" for d in selection.publication_decisions)
             )
             selection_fallback_needs_review = (
                 requires_human_subtitle_review(settings) and codex_requested and codex_initial_selection_result is None
             )
             pause_for_selection = is_subtitle_only_auto(settings) and settings.get("pauseAfterSelection", False)
             if any((pause_for_selection, guarded_selection_needs_review, manual_clip_plan_review,
-                    allocation_needs_review, selection_fallback_needs_review)):
+                    allocation_needs_review, selection_fallback_needs_review,
+                    any(d.decision == "unknown" for d in selection.publication_decisions))):
                 plan_path = _prepare_clip_plan_review(
                     db=db,
                     job=job,

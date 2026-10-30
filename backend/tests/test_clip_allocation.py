@@ -221,6 +221,13 @@ def test_ai_pipeline_partial_goes_to_review_even_in_auto_mode_and_zero_fails(cli
     )
     assert created.status_code == 201, created.text
     job_id = created.json()["jobId"]
+    # This regression covers persisted pre-task-237 jobs, including zero-selection failure.
+    from app.models import Job
+    session = next(app.dependency_overrides[get_db]())
+    old = session.get(Job, job_id)
+    old.settings_json = {k:v for k,v in old.settings_json.items() if k != "_publicationPolicy"}
+    session.commit()
+    session.close()
     paths = app.dependency_overrides[get_storage_paths]()
     candidates = [candidate("n", start=100 if manual else 0)] if count else []
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.publication.models import PublicationDecision
+
 import json
 import re
 import time
@@ -720,6 +722,7 @@ CodexInitialSelectionSummaryStatus = Literal[
 
 
 class CodexInitialSelectionSummary(_StrictModel):
+    publication_decisions: list[PublicationDecision] = Field(default_factory=list, alias="publicationDecisions", exclude_if=lambda v: not v)
     performance_hints: list[dict[str, Any]] = Field(default_factory=list, alias="performanceHints", exclude_if=lambda v: not v)
     parent_range_adjustments: list[ShortParentRangeAdjustment] = Field(default_factory=list, alias="parentRangeAdjustments")
     requested_total: int | None = Field(default=None, alias='requestedTotal')
@@ -800,6 +803,7 @@ class CodexInitialSelectionResult:
     selection: CandidateSelection
     candidates: list[Candidate]
     summary: dict[str, Any]
+    weak_candidates: list[Candidate] = field(default_factory=list)
     proposals: list[CodexClipProposal] = field(default_factory=list)
     duplicate_short_moment_keys: list[str] = field(default_factory=list)
     dropped_normal_candidates: list[CodexDroppedShortCandidate] = field(
@@ -2406,6 +2410,21 @@ def convert_codex_initial_selection_response(
         {"candidateId": item.proposal_id, "type": item.type, "reasons": ["low_codex_confidence"]}
         for item in response.selected_clips if item.confidence < CODEX_STRICT_QUALITY_MIN_CONFIDENCE
     ]
+    # Keep validated weak material solely as evidence for the new no-publication outcome.
+    # This private snapshot is never sent to Codex and old jobs retain their result.
+    from app.publication.evaluate import policy_for
+    weak_candidates = []
+    if policy_for(request._choice_settings) is not None:
+        for item in response.selected_clips:
+            if item.confidence >= CODEX_STRICT_QUALITY_MIN_CONFIDENCE:
+                continue
+            try:
+                normalized, _ = _normalize_proposal_parent_range(item, request)
+                weak_candidates.append(_proposal_candidate(normalized, request=request).model_copy(update={
+                    "should_use": False, "below_quality_threshold": True,
+                }))
+            except CodexInitialSelectionError:
+                continue  # Invalid ranges/evidence must never become a weak-material completion.
     response = response.model_copy(
         update={
             "selected_clips": [
@@ -2517,6 +2536,7 @@ def convert_codex_initial_selection_response(
     return CodexInitialSelectionResult(
         selection=selection,
         candidates=retained_candidates,
+        weak_candidates=weak_candidates,
         summary=summary_model.model_dump(by_alias=True, mode="json"),
         proposals=retained_proposals,
         duplicate_short_moment_keys=find_duplicate_short_moment_keys(

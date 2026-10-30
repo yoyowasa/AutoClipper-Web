@@ -13,8 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 
 ChoiceSource = Literal["automatic", "manual", "preset", "default", "fallback", "unrecorded"]
-ChoiceKind = Literal["range", "title_hook", "thumbnail", "framing", "text_style", "effects", "post_copy", "publication"]
+ChoiceKind = Literal[
+    "publication_decision", "range", "title_hook", "thumbnail", "framing", "text_style", "effects", "post_copy", "publication",
+]
 VALUE_KEYS = frozenset({
+    "publicationDecision", "publicationReasons", "publicationEvidenceHash", "publicationOriginalDecision",
     "openingRankWeight", "allocationNormalWeight", "allocationShortWeight",
     "policyPreferredLayout",
     "allocationShare", "emphasisSignal", "audienceFamiliarity",

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
+from app.publication.models import PublicationDecision
 from app.production_choices import ProductionChoice
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +36,9 @@ class CandidateRejection(BaseModel):
 
 
 class CandidateSelection(BaseModel):
+    publication_decisions: list[PublicationDecision] = Field(default_factory=list, alias="publicationDecisions", exclude_if=lambda v: not v)
+    deferred_candidates: list[Candidate] = Field(default_factory=list, alias="deferredCandidates", exclude_if=lambda v: not v)
+    publication_withheld_counts: dict[str, int] = Field(default_factory=dict, alias="publicationWithheldCounts", exclude_if=lambda v: not v)
     choice_history: list[ProductionChoice] = Field(default_factory=list, alias="choiceHistory", exclude_if=lambda v: not v)
     requested_total: int | None = Field(default=None, alias="requestedTotal")
     selected_total: int | None = Field(default=None, alias="selectedTotal")

@@ -1,6 +1,7 @@
 """Comparable recorded options; unique wording/ranges remain per-video evidence."""
 
 OPTION_KEYS = {
+    "publication_decision": ("publicationDecision",),
     "range": ("type", "audienceFamiliarity", "openingRankWeight", "allocationNormalWeight", "allocationShortWeight", "allocationShare"),
     "title_hook": ("intent",),
     "thumbnail": ("source", "cropMode", "templateVersion", "emotion"),
