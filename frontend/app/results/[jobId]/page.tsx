@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { PublicationDecisions } from "../../../components/PublicationDecisions";
 import { ResultVideoCard } from "../../../components/ResultVideoCard";
 import { SaveFileButton } from "../../../components/SaveFileButton";
 import {
@@ -222,7 +223,7 @@ export default function ResultsPage() {
                 元の完成動画一覧へ戻る
               </Link>
             ) : null}
-            {results ? (
+            {results && (results.normalClips.length + results.shorts.length > 0) ? (
               <SaveFileButton
                 className="inline-flex min-h-11 items-center rounded-md bg-neutral-950 px-5 text-sm font-medium text-white"
                 url={toBrowserApiUrl(results.zipDownloadUrl)}
@@ -250,13 +251,15 @@ export default function ResultsPage() {
 
         {results ? (
           <>
+            <PublicationDecisions summary={results.publication ?? null} />
+            {results.publication?.outcome === "no_publication" ? <Link className="underline" href={`/jobs/${jobId}/clips`}>見送りの候補を確認・範囲指定／キープで採用</Link> : null}
             {results.canReopenForEditing ? (
               <section className="border border-sky-300 bg-sky-50 px-5 py-4 text-sm text-sky-900">
                 各動画の「この動画だけ再編集」から1本だけ開けます。サムネイルの文言・書式はこの画面で調整できます。
               </section>
             ) : null}
 
-            <AuditSummaryPanel summary={results.auditSummary} />
+            {results.normalClips.length + results.shorts.length > 0 ? <AuditSummaryPanel summary={results.auditSummary} /> : null}
 
             <section className="flex flex-col gap-3">
               <div className="flex items-center justify-between gap-4">

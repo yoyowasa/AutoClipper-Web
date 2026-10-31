@@ -1,4 +1,7 @@
 "use client";
+import { PublicationDecisions } from "../../../../components/PublicationDecisions";
+import { publicationSummary, withheld } from "../../../../lib/publicationDecisions";
+import type { PublicationDecision } from "../../../../lib/types";
 import { durationSettingsError, longformLabel } from "../../../../lib/durationRules";
 
 import { isAIAllocation, remainingClipSlots, allocationLabel, allocationSettingsError, shortageLabels } from "../../../../lib/clipAllocation";
@@ -121,6 +124,17 @@ export default function ClipPlanReviewPage() {
     string | null
   >(null);
   const [error, setError] = useState<string | null>(null);
+  async function keepPublication(decision: PublicationDecision) {
+    setSelectedClipId(decision.candidateId);
+    setIsAdjusting(true);
+    setError(null);
+    try {
+      await updateClipPlanBoundary(jobId, decision.candidateId, { start: decision.start, end: decision.end });
+    } catch (caught) {
+      setIsAdjusting(false);
+      setError(caught instanceof Error ? caught.message : "採用できませんでした");
+    }
+  }
 
   useEffect(() => {
     if (!plan) return;
@@ -394,6 +408,7 @@ export default function ClipPlanReviewPage() {
   const planIsEditable =
     plan?.state === "awaiting_review" ||
     (isManualWorkflow && plan?.state === "manual_editing");
+  const noPublication = publicationSummary(job?.details)?.outcome === "no_publication";
   const controlsDisabled =
     isReselecting ||
     isAdjusting ||
@@ -658,7 +673,7 @@ export default function ClipPlanReviewPage() {
     );
   }
 
-  if (job?.status === "completed") {
+  if (job?.status === "completed" && !noPublication) {
     return (
       <main className="min-h-screen bg-[#f7f7f4] p-5 text-neutral-950">
         <h1 className="text-xl font-semibold">完成済み</h1>
@@ -711,6 +726,8 @@ export default function ClipPlanReviewPage() {
         </div>
       </div>
 
+      <div className="mx-5 mt-3"><PublicationDecisions summary={publicationSummary(job?.details)}
+        onKeep={d => void keepPublication(d)} disabled={controlsDisabled} /></div>
       {isAIAllocation(plan.settings) ? <div className="mx-5 mt-3 border border-sky-200 bg-sky-50 px-4 py-3">
         <p className="font-semibold">{allocationLabel(plan)}</p>
         {Object.entries(plan.shortfallReasons ?? {}).map(([reason, count]) => <p key={reason} className="mt-1 text-sm">
@@ -763,9 +780,9 @@ export default function ClipPlanReviewPage() {
         <aside className="border-r border-neutral-300 bg-white lg:row-span-2 lg:min-h-[calc(100vh-145px)]">
           <div className="border-b border-neutral-300 px-4 py-3">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold">生成予定clip</h2>
+              <h2 className="text-sm font-semibold">{plan.publicationDecisions?.length ? "投稿予定と見送り候補" : "生成予定clip"}</h2>
               <span className="text-xs tabular-nums text-neutral-500">
-                {plan.clips.length}本・第{plan.revision}案
+                {plan.clips.filter(c => !withheld(c)).length}本・第{plan.revision}案
               </span>
             </div>
           </div>
@@ -812,7 +829,7 @@ export default function ClipPlanReviewPage() {
                 {longformLabel(clip.type, clip.duration) && clip.longformReason &&
                   <p className="px-4 pb-3 text-xs text-neutral-600">長尺の理由: {clip.longformReason}</p>}
                 {!plan.boundaryReedit && <label className="flex items-center gap-2 border-b border-neutral-300 bg-sky-50 px-4 py-2 text-xs font-semibold">
-                  <input type="checkbox" checked={keptClipIds.includes(clip.id)} disabled={controlsDisabled}
+                  <input type="checkbox" checked={keptClipIds.includes(clip.id)} disabled={controlsDisabled || withheld(clip)}
                     onChange={event => setKeptClipIds(current => event.target.checked
                       ? [...current, clip.id] : current.filter(id => id !== clip.id))} />
                   この候補をキープ
@@ -844,7 +861,7 @@ export default function ClipPlanReviewPage() {
                     />
                   ) : (
                     <div className="flex h-full items-center justify-center text-sm text-neutral-300">
-                      プレビュー動画を準備できませんでした
+                      {withheld(selectedClip) ? "見送り・判定不能の候補です。採用するとプレビューを作成します。" : "プレビュー動画を準備できませんでした"}
                     </div>
                   )}
                 </div>
@@ -880,7 +897,7 @@ export default function ClipPlanReviewPage() {
                     <ClipHookSceneEditor
                       clip={selectedClip}
                       compact
-                      disabled={controlsDisabled}
+                      disabled={controlsDisabled || withheld(selectedClip)}
                       enforceMaximumDuration={selectedClip.type === "short"}
                       key={`${selectedClip.id}-${selectedClip.hookSceneStart}-${selectedClip.hookSceneEnd}`}
                       playheadSourceTime={
@@ -960,6 +977,7 @@ export default function ClipPlanReviewPage() {
         </ClipTranscriptPanel>
 
         <section className="border-b border-neutral-300 bg-[#f7f7f4] px-5 py-5 lg:col-start-2 lg:row-start-2 lg:border-r">
+          {noPublication ? <p className="mt-4 text-sm">投稿なしで終了しています。採用したい候補は「キープして採用」か範囲の保存で戻してください。</p> : null}
           {!plan.boundaryReedit && <ClipReselectionPanel
             rejectionHistory={rejectionHistory}
             rejectionHistoryError={rejectionHistoryError}
@@ -968,7 +986,7 @@ export default function ClipPlanReviewPage() {
             remainingReselectionCount={remainingReselectionCount}
             excludePreviousSelection={excludePreviousSelection}
             setExcludePreviousSelection={setExcludePreviousSelection}
-            controlsDisabled={controlsDisabled}
+            controlsDisabled={controlsDisabled || noPublication}
             draftSettings={draftSettings}
             setDraftSettings={setDraftSettings}
             isReselecting={isReselecting}
@@ -988,7 +1006,7 @@ export default function ClipPlanReviewPage() {
           </p>
           <button
             className="mt-4 min-h-12 w-full bg-blue-700 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={controlsDisabled || plan.clips.length === 0}
+            disabled={controlsDisabled || plan.clips.filter(c => !withheld(c)).length === 0}
             type="button"
             onClick={() => void handleApprove()}
           >

@@ -1446,3 +1446,17 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: Ruff 0.16.10 `cd backend && python -m ruff check . ../launcher ../scripts` 成功。Python 3.11.9全件 `2480 passed / 2 skipped / 7 warnings`（411.50秒）、その後の局所調整を含む新規検査・修復・中継契約の関連65件も成功。frontend test45ファイル・lint・typecheck・build成功。実際に生成した短いMP4で技術異常・冒頭／フック・字幕の欠落／ずれ／はみ出し／帯衝突等を検出し、黒画面MP4→対象clip修復→実ファイル再検査の合格も確認。既存の偽エンコーダを使う39箇所は明示的な検査stubを注入し、公開巻き戻しテストも同様に隔離。既存assertは変更せずASTで不変を確認した。
 - 起動・画面: 18336／18337ポート、専用DB・storageのUvicorn＋Next.jsで /health とJob API・画面が200。未完成「ショート2」の理由・2.0秒・自動修復回数と編集案内をブラウザで確認。隔離サーバーは停止。稼働DBは全件テストの前後でサイズ・更新時刻不変、主フォルダの未コミットSTATUS.mdのSHA256も不変。
 - 未確認・制限: **実際の完成動画と実Codexでの受入は未確認**。日本語フォント／GPUエンコード・長尺の実測時間・実素材に対する誤検出・内容判定の精度は別途受入が必要。5fpsの字幕画素検査はOCR／発話の意味理解ではなく、代表コマの内容検査も全フレーム・全音声の理解ではない。Windowsの媒体テストは既存FFmpeg、ffprobeが無い場合だけテスト内の実ファイルPyAV読み取りを使用。Linux CIは本番と同じffprobeで確認する。PRのPython3.11／3.12・frontendのCI確認後も、マージ・Docker反映をせずレビュー待ちで停止する。§3と統合構想は変更しない。
+
+
+## 2026-10-31 task-237 弱い素材の投稿見送りと根拠の永続記録
+
+- 目的: 残り作業5。既存の候補除外・採点・配分・品質ゲートの後に、投稿／見送り／判定不能を分け、本数・最低本数を弱い候補で埋めない。新しい映像／音声理解、課金API、Codex依頼、DBテーブル、キュー、常駐処理は追加しない。
+- 主な変更: `backend/app/publication/{models,evaluate,pipeline,storage,manual}.py`、初期選定・再選定・境界更新、clip plan・品質ゲート・制作記録・paths。frontendはJob進捗／切り抜き確認／結果とPublicationDecisions。既存の採点・必須条件検査・配分・RQ範囲更新・原子的JSON保存・choiceHistoryを流用した。
+- 基準: PublicationPolicyに `weak-material-v1`、点数65未満・字幕の英数字／文字密度0.5字/秒未満を集約。**未検証の運用基準**で、成績から確認した効果ではない。根拠不足・検査不能・範囲不正はunknownとして保存し、投稿／見送りへ推定せず確認で止める。期限切れの制作ヒントは根拠にせず、ヒントで必須条件を上書きしない。
+- 本数・互換: 新規自動ワークフローだけ作成時にサーバーで基準を固定。既存ジョブ・retryは新たに有効化せず、手動ワークフローと人の時刻指定は対象外。一部見送りは減った本数で先へ進み、固定本数の不足も実際の見送り分だけ内訳を記録する。他の尺・範囲・重複・品質検査は維持する。全件見送りは既存status=completedとoutcome=no_publicationで「投稿なし（見送り）」にし、架空のExportItem・字幕確認・MP4・ZIPを作らない。候補そのものが無い／不正な0件は従来の失敗のまま。
+- 低確信度の経路: Codexが0.6未満で返した候補も、範囲・字幕根拠の検証を通ったものだけ採用と別に内部保持し、見送りの根拠へ渡す。点数だけで既に落ちた候補は要求枠の残り以内で記録する。追加でユーザー不採用・範囲等の除外がある候補は救い上げない。既存の採用基準は下げない。
+- 記録・寿命: paths.py経由で `production_records/publication_decisions/<job_id>.json` に判断・根拠・基準の版をwrite_json_atomicで保存し、更新前の判断もrevision付きで保持。choiceHistoryのpublication_decision（既存の完成物publicationとは別）と、完成した同一候補・形式・範囲の制作記録の任意publicationDecisionに転記。字幕全文・パス・秘密情報は記録しない。出力の期限切れ・ジョブ削除で消さず、YouTube結び付けの動画記録一覧には混ぜない。
+- 人の採用: 「キープして採用」／範囲保存は既存APIとRQで対象clipだけ検査・プレビュー生成。再選定のキープも保護し、manual・元の判断と根拠を記録する。モデルの不採用票だけは人の採用票へ置き換え、その他の必須条件は再検査。キュー登録やworker失敗では元の選定・記録を復旧する。未採用をapproveのkeptClipIdsだけで黙って採用せず、先に採用操作を求める。
+- 検証: Ruff 0.16.10 `cd backend && python -m ruff check . ../launcher ../scripts` 成功。Python3.11.9全件 `2527 passed / 2 skipped / 7 warnings`、その後の部分不足の理由記録・重複する除外理由の保護を含む最終関連43件も成功。frontend test46ファイル・lint・typecheck・build成功。変更した既存テスト4ファイルは旧設定の明示と強い候補の字幕fixtureだけを調整し、assert不変をASTで照合。CI3.11／3.12・frontendの結果はPRに記載する。
+- 隔離確認: 専用DB／storage、Uvicorn18338・Next.js18339でhealth、Job／clip-plan／resultsが200。ブラウザで投稿なし／判定不能の区別、理由・採用ボタン、0本時の進行不可、空ZIPを表示しないことを確認。通常の完成済み表示が採用導線を隠す箇所も修正した。検証サーバーは停止。稼働DBのサイズ・更新時刻、主フォルダの未コミットSTATUS.mdのSHA256は不変。
+- 文書・未確認: [投稿判定の契約](docs/PUBLICATION_DECISIONS_CONTRACT_v1.md)、制作記録の契約、現行仕様§1.4・§4・残り作業5を更新。§3と統合構想は不変。**実際の素材での受入、見送り精度、閾値、投稿成績への影響は未確認**。launcher・Codexプロンプト／スキーマ指紋は変更せず、このタスクによる中継再起動は不要。PRのCI成功後もマージせず停止し、Dockerへ反映しない。

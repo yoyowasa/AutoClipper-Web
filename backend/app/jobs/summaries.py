@@ -215,6 +215,8 @@ def build_candidate_summary(
         "hard_gate_passed_count": selection.hard_gate_passed_count if selection is not None else 0,
         "hard_gate_rejected_count": selection.hard_gate_rejected_count if selection is not None else 0,
         **(allocation_summary(selection) if selection is not None else {}),
+        **({"publicationDecisions": [d.model_dump(by_alias=True, mode="json") for d in selection.publication_decisions]}
+           if selection is not None and selection.publication_decisions else {}),
         "requested_normal_count": selection.requested_normal_count if selection is not None else 0,
         "selected_normal_count": len(selection.normal_clips) if selection is not None else 0,
         "requested_short_count": selection.requested_short_count if selection is not None else 0,
@@ -385,6 +387,8 @@ def build_selected_clips_summary(
         "selected_normal_count": len(normal),
         "selected_short_count": len(shorts),
         **(allocation_summary(selection) if selection is not None else {}),
+        **({"publicationDecisions": [d.model_dump(by_alias=True, mode="json") for d in selection.publication_decisions]}
+           if selection is not None and selection.publication_decisions else {}),
         "requested_normal_count": selection.requested_normal_count if selection is not None else 0,
         "requested_short_count": selection.requested_short_count if selection is not None else 0,
         "normal_hard_gate_passed_count": selection.normal_hard_gate_passed_count if selection is not None else 0,

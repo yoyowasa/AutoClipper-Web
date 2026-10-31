@@ -15,6 +15,7 @@ from app.candidates.short_parent_range import ShortParentRangeAdjustment
 from app.downloads import export_download_name
 from app.models import ExportItem, Job
 from app.intelligence.performance_schema import UsedPerformanceHint
+from app.publication.models import PublicationDecision
 from app.production_choices import ProductionChoice
 from app.production_choice_records import recorded_choices, record_publication
 from app.production_hint_records import recorded_performance_hints
@@ -80,6 +81,7 @@ class RecordThumbnail(RecordModel):
 
 
 class ProductionRecord(RecordModel):
+    publicationDecision: PublicationDecision | None = Field(default=None, exclude_if=lambda v: v is None)
     finalInspection: dict | None = Field(default=None, exclude_if=lambda v: v is None)
     choiceHistory: list[ProductionChoice] = Field(default_factory=list, exclude_if=lambda v: not v)
     performanceHints: list[UsedPerformanceHint] = Field(default_factory=list, exclude_if=lambda v: not v)
@@ -144,6 +146,10 @@ def build_production_record(
     created_at: datetime | None = None,
 ) -> ProductionRecord:
     from app.inspection.service import production_inspection
+    from app.publication.storage import read_report
+    report = read_report(paths, job.id)
+    decision = (next((d for d in report.decisions if d.candidate_id == export.candidate_id
+                      and d.decision == "publish" and d.type == export.type), None) if report else None)
     selected = _selected_candidate(paths, export)
     metadata = _read_object(_resolve_stored_path(export.metadata_path, paths.root)) if export.metadata_path else {}
     data = {**selected, **metadata}
@@ -153,6 +159,8 @@ def build_production_record(
     selected_id = data.get("selected_title_id")
     intent = next((c.intent for c in candidates if c.id == selected_id), None)
     start, end = data.get("start"), data.get("end")
+    if decision is not None and (start != decision.start or end != decision.end):
+        decision = None  # A later range edit cannot inherit a stale publication decision.
     body = data.get("body_duration", end - start if start is not None and end is not None else export.duration)
     adjustments = []
     for filename in ("codex_initial_selection_summary.json", "codex_reselection_summary.json"):
@@ -165,6 +173,7 @@ def build_production_record(
         thumbnail_source = "asset" if data["thumbnail_source_time_basis"] == "character_asset" else "video"
     now = datetime.now(UTC)
     return record_publication(ProductionRecord(
+        publicationDecision=decision,
         finalInspection=production_inspection(paths, export),
         choiceHistory=recorded_choices(paths, export, metadata, previous),
         performanceHints=recorded_performance_hints(paths, job.id, export.candidate_id, export.type),

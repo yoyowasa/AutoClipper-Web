@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { PublicationDecisions } from "../components/PublicationDecisions";
+import { publicationSummary, withheld } from "../lib/publicationDecisions";
+import type { PublicationSummary } from "../lib/types";
+Object.assign(globalThis,{React});
+assert.equal(publicationSummary({}),null);
+assert.equal(publicationSummary({publication:{outcome:"unknown"}}),null);
+const value: PublicationSummary = { outcome:"no_publication",policyVersion:"weak-material-v1",selectedCount:0,criteriaValidated:false,
+  decisions:[{candidateId:"cand_private",type:"normal",start:0,end:90,title:"題材",decision:"skip",source:"automatic",
+    policyVersion:"weak-material-v1",reasons:["WEAK_SCORE"],evidence:{score:62}}]};
+const render=(summary:PublicationSummary|null) => renderToStaticMarkup(React.createElement(PublicationDecisions,{summary}));
+const html=render(value);
+assert.match(html,/投稿なし（見送り）/);
+assert.match(html,/未検証の運用基準/);
+assert.match(html,/弱い候補で埋め直しません/);
+assert.match(html,/採点が見送り基準を下回って/);
+assert.doesNotMatch(html,/cand_private/);
+assert.match(render({...value,outcome:"needs_review",decisions:[{...value.decisions[0],decision:"unknown",reasons:["SCORE_MISSING"]}]}),/判定不能/);
+assert.equal(render({...value,outcome:"publish",selectedCount:1,decisions:[{...value.decisions[0],decision:"publish"}]}),"");
+assert.equal(render(null),"");
+assert.equal(withheld({publicationDecision:"skip"}),true);
+assert.equal(withheld({publicationDecision:"unknown"}),true);
+assert.equal(withheld({publicationDecision:"publish"}),false);
+assert.equal(withheld({}),false);
+assert.equal(publicationSummary({publication:value})?.selectedCount,0);
+const editable=renderToStaticMarkup(React.createElement(PublicationDecisions,{summary:value,onKeep:()=>{}}));
+assert.match(editable,/キープして採用/);
+assert.match(editable,/既存の尺・品質の必須条件/);
+console.log("Publication decisions: no-publication, unknown, safe manual keep and unverified criteria are distinct.");

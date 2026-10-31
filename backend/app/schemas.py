@@ -1064,6 +1064,7 @@ class JobAuditSummary(BaseModel):
 
 
 class JobResultsResponse(BaseModel):
+    publication: dict[str, Any] | None = Field(default=None, exclude_if=lambda v: v is None)
     job_id: str = Field(alias="jobId")
     zip_download_url: str = Field(alias="zipDownloadUrl")
     can_reopen_for_editing: bool = Field(alias="canReopenForEditing")

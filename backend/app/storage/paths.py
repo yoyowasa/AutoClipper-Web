@@ -56,6 +56,11 @@ class StoragePaths:
     def youtube_oauth_states(self) -> Path:
         return self.root / "secrets" / "youtube_oauth_states"
 
+    def publication_decisions(self, job_id: str) -> Path:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+            raise ValueError("Invalid job identifier")
+        return self.production_records / "publication_decisions" / f"{job_id}.json"
+
     def production_record(self, export_id: str) -> Path:
         if not re.fullmatch(r"[A-Za-z0-9_-]+", export_id):
             raise ValueError("Invalid export identifier")

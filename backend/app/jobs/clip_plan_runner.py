@@ -380,6 +380,13 @@ def _codex_selection_with_diverse_refined_shorts(
             "unfilled_reason_counts": unfilled_reason_counts,
         }
     )
+    from app.publication.evaluate import policy_for
+    if policy_for(settings) is not None:
+        from app.publication.pipeline import include_codex_weak_evidence
+        final_selection, refined_candidates = include_codex_weak_evidence(
+            final_selection, refined_candidates,
+            [c for c in _unused_candidates(result.weak_candidates, settings) if not _is_repeated_normal_proposal(c, settings)], settings,
+        )
     return final_selection, refined_candidates, diversity
 
 def _automatic_selection_with_diverse_refined_shorts(
@@ -645,6 +652,8 @@ def run_clip_plan_boundary_update(
         document = None
         original_document = None
         original_settings = dict(job.settings_json or {})
+        publication_path = storage_paths.publication_decisions(job.id)
+        publication_payload = publication_path.read_bytes() if publication_path.is_file() else None
         selected_payload = selected_path.read_bytes() if selected_path.is_file() else None
         preview_payload = preview_path.read_bytes() if preview_path.is_file() else None
         try:
@@ -658,6 +667,8 @@ def run_clip_plan_boundary_update(
             )
             if planned_clip is None:
                 raise ValueError(f"clip plan item not found: {clip_id}")
+            from app.publication.manual import restore_for_boundary, record_manual_adoption
+            restoring_publication = restore_for_boundary(selection, clip_id)
             candidates = [*selection.normal_clips, *selection.shorts]
             candidate = next(
                 (item for item in candidates if item.id == clip_id),
@@ -718,6 +729,10 @@ def run_clip_plan_boundary_update(
                 preview_path,
                 updated_candidate,
             )
+            if restoring_publication or any(d.candidate_id == clip_id for d in selection.publication_decisions):
+                silence_segments = [SilenceSegment.model_validate(row) for row in _read_json_file(job_dir / "silence_segments.json")]
+                updated_candidate = record_manual_adoption(selection, document, updated_candidate, settings=original_settings,
+                    source_duration=source_duration, silence_segments=silence_segments)
             target_collection = selection.normal_clips if updated_candidate.type == "normal" else selection.shorts
             target_index = next(index for index, item in enumerate(target_collection) if item.id == clip_id)
             target_collection[target_index] = updated_candidate
@@ -737,6 +752,10 @@ def run_clip_plan_boundary_update(
                 preview_clip_ids=available_clip_ids,
             )
             write_clip_plan(document, plan_path, choice_source="manual")
+            if selection.publication_decisions:
+                from app.publication.storage import persist_report
+                from app.publication.evaluate import policy_for
+                persist_report(storage_paths, job.id, selection, policy_for(original_settings))
             invalidate_quality_gate_decisions(
                 job_dir,
                 ("selection", "content", "post_render"),
@@ -754,6 +773,12 @@ def run_clip_plan_boundary_update(
         except Exception as exc:
             db.rollback()
             job.settings_json = original_settings
+            from app.storage.json_io import write_json_atomic
+            import json
+            if publication_payload is not None:
+                write_json_atomic(publication_path, json.loads(publication_payload))
+            elif publication_path.is_file():
+                publication_path.unlink()
             _restore_clip_plan_after_boundary_failure(
                 db,
                 job,
@@ -919,6 +944,7 @@ def run_clip_plan_reselection(
         previous_plan_path = clip_plan_output_path(job_dir)
         previous_plan = load_clip_plan(previous_plan_path) if previous_plan_path.is_file() else None
         previous_artifact_paths = [
+            storage_paths.publication_decisions(job.id),
             job_dir / "normal_candidates.json",
             job_dir / "short_candidates.json",
             job_dir / "candidates.json",
@@ -1206,19 +1232,27 @@ def run_clip_plan_reselection(
                 selection = allocate_selection(selection, full_reselection_settings, confirmed=kept_candidates)
                 scored_candidates = list({c.id: c for c in [*scored_candidates, *kept_candidates]}.values())
             elif kept_candidates:
-                if not selection.normal_clips and not selection.shorts:
+                from app.publication.evaluate import policy_for
+                if not selection.normal_clips and not selection.shorts and policy_for(full_reselection_settings) is None:
                     raise PipelineExpectedError(
                         "reselection_no_alternatives",
                         "キープ以外の新しい候補が見つかりませんでした。前の候補を保持しています。",
                     )
                 selection = merge_kept_candidates(selection, kept_candidates, previous_plan)
                 scored_candidates = [*scored_candidates, *kept_candidates]
-            if is_ai_allocation(full_reselection_settings) and not selection.normal_clips and not selection.shorts:
+            from app.publication.pipeline import apply_publication_decisions, finish_without_publication
+            selection = apply_publication_decisions(selection, scored_candidates, settings=full_reselection_settings,
+                paths=storage_paths, job_id=job.id, source_duration=float(video.duration or visual_quality.duration),
+                silence_segments=silence_segments)
+            if (is_ai_allocation(full_reselection_settings) and not selection.normal_clips
+                    and not selection.shorts and not selection.deferred_candidates):
                 raise PipelineExpectedError('no_usable_selection', '強い候補が1本も選べませんでした。')
             settings = full_reselection_settings
-            if is_ai_allocation(settings) and codex_reselection_result is not None:
+            if codex_reselection_result is not None and (is_ai_allocation(settings) or selection.publication_decisions):
                 write_codex_initial_selection_summary({
                     **codex_reselection_result.summary, **allocation_summary(selection), 'phase': 'reselection',
+                    **({'publicationDecisions': [d.model_dump(by_alias=True, mode='json') for d in selection.publication_decisions]}
+                       if selection.publication_decisions else {}),
                     'selectedNormalCount': len(selection.normal_clips), 'selectedShortCount': len(selection.shorts),
                 }, codex_summary_path)
             write_candidates(
@@ -1263,6 +1297,9 @@ def run_clip_plan_reselection(
                 transcription_language=transcript_summary.get("transcription_language"),
                 transcription_diagnostics=transcript_summary.get("transcription_runtime"),
             )
+            if finish_without_publication(db, job, storage_paths, selection, settings, float(video.duration or visual_quality.duration)):
+                visited_statuses.append("completed")
+                return visited_statuses
             _prepare_clip_plan_review(
                 kept_plan=previous_plan,
                 db=db,

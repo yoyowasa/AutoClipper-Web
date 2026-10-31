@@ -211,3 +211,16 @@ task-235の対象となる新規autoジョブでは、上記の元の処理版�
   完成後に値を変えた場合、古い合格を新しい値の証拠にしない。旧完成ジョブの状態は変更しない。
 - 出力削除後は通常の制作記録と同じく保存する。検査記録がない過去分のbackfillでは検査済みと推定しない。
   [検査・修復・保持・未確認事項](FINAL_OUTPUT_INSPECTION_CONTRACT_v1.md)を参照。
+
+
+### 投稿可否・見送り（task-237、任意項目publicationDecision）
+
+- schemaVersion=1を維持し、旧データには推定で補わない。
+- 完成動画の `publicationDecision` に、candidateId・type・start/endが一致する投稿判断だけを転記する。
+  decision / source / policyVersion / reasons / evidence / originalDecisionを持ち、字幕全文やパスは入れない。
+- `choiceHistory.kind=publication_decision` は、投稿するかどうかの判断。完成物の `kind=publication` と区別する。
+  source=automatic/manual、結果・理由・根拠ハッシュ・覆す前の結果を残す。手動の採用は自動判断に付け替えない。
+- 動画が1本もない「投稿なし（見送り）」も保存できるよう、同じ保存領域の
+  `publication_decisions/<job_id>.json` に判断・根拠・基準の版・過去の判断を永続保存する。
+  このサブディレクトリは動画記録の一覧・YouTube結合の入力に含めず、ジョブの掃除で消さない。
+- [3つの結果、基準、既存検査との関係、人の採用、保持、未確認事項](PUBLICATION_DECISIONS_CONTRACT_v1.md)を参照。

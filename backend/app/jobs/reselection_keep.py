@@ -9,7 +9,7 @@ from app.jobs.clip_plan import ClipPlanDocument
 
 def target_count(settings: dict[str, Any], plan: ClipPlanDocument, kind: str) -> int:
     key = "normalClipCount" if kind == "normal" else "shortCount"
-    return max(int(settings.get(key, 0)), sum(c.type == kind for c in plan.clips))
+    return max(int(settings.get(key, 0)), sum(c.type == kind and c.publication_decision not in {"skip", "unknown"} for c in plan.clips))
 
 
 def prepare_kept_candidates(
@@ -18,7 +18,7 @@ def prepare_kept_candidates(
     ids = set(settings.get("keptClipIds", []))
     if not ids or plan is None:
         return settings, []
-    source = {c.id: c for c in [*previous.normal_clips, *previous.shorts]}
+    source = {c.id: c for c in [*previous.normal_clips, *previous.shorts, *previous.deferred_candidates]}
     kept = []
     for clip in plan.clips:
         if clip.id in ids:

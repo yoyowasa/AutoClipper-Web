@@ -123,7 +123,7 @@ def test_pipeline_real_gate_routes_before_review_and_delivers_warning(guarded_cl
             "initialSelectionProvider": "codex", "normalClipCount": 0, "shortCount": 1,
             "shortMinDuration": 0, "enableBoundaryRefinement": False}
         db.commit()
-    c = candidate(risk_flags=[risk])
+    c = candidate(risk_flags=[risk], transcript_text="歴史と固有名詞の説明です。" * 4)
     def select(**kwargs):
         return CodexInitialSelectionResult(candidates=[c], selection=CandidateSelection(shorts=[c], requestedShortCount=1),
                                           summary={"status": "completed", "fallbackUsed": False,

@@ -1,3 +1,4 @@
+import { publicationSummary } from "../lib/publicationDecisions";
 import type { JobStatusResponse } from "../lib/types";
 import { automationGateDisplay } from "../lib/automationQuality";
 import { InitialSelectionStatusBanner } from "./InitialSelectionStatusBanner";
@@ -20,6 +21,7 @@ const errorLabels: Record<string, string> = {
 };
 
 export function JobProgress({ job }: { job: JobStatusResponse }) {
+  const noPublication = job.status === "completed" && publicationSummary(job.details)?.outcome === "no_publication";
   const stoppedAtSelection =
     job.status === "failed" &&
     (job.error?.code === "no_usable_selection" ||
@@ -110,7 +112,7 @@ export function JobProgress({ job }: { job: JobStatusResponse }) {
             <p className="text-sm text-neutral-500">Job</p>
             <h1 className="mt-1 break-all text-2xl font-semibold text-neutral-950">{job.id}</h1>
           </div>
-          <StatusBadge status={job.status} />
+          {noPublication ? <span className="text-sm font-semibold text-amber-900">投稿なし（見送り）</span> : <StatusBadge status={job.status} />}
         </div>
 
         <div className="flex items-end justify-between gap-4">

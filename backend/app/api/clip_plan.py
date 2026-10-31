@@ -560,7 +560,11 @@ def update_clip_plan_clip_boundary(
     manual_edit = job.status == "awaiting_manual_edit" and is_manual_workflow(
         dict(job.settings_json or {})
     )
-    if job.status != "awaiting_clip_review" and not manual_edit:
+    from app.publication.storage import read_report
+    report = read_report(paths, job.id)
+    no_publication = job.status == "completed" and report is not None and report.outcome == "no_publication"
+    previous_status, previous_progress, previous_step = job.status, job.progress, job.current_step
+    if job.status != "awaiting_clip_review" and not manual_edit and not no_publication:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="clip plan is not awaiting boundary adjustment",
@@ -646,7 +650,7 @@ def update_clip_plan_clip_boundary(
     _claim_job_status(
         db,
         job,
-        expected="awaiting_clip_review",
+        expected=previous_status,
         new_status="preparing_clip_review",
         current_step="調整した範囲の確認動画を準備中",
     )
@@ -655,9 +659,7 @@ def update_clip_plan_clip_boundary(
     try:
         write_clip_plan(document, clip_plan_output_path(paths.job_outputs(job_id)), choice_source="manual")
     except Exception:
-        job.status = "awaiting_clip_review"
-        job.progress = PROGRESS_MAP["awaiting_clip_review"]
-        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
+        job.status, job.progress, job.current_step = previous_status, previous_progress, previous_step
         job.updated_at = utc_now()
         db.commit()
         raise
@@ -667,9 +669,7 @@ def update_clip_plan_clip_boundary(
         else:
             enqueue_boundary_update(job.id, clip_id, request.start, request.end)
     except Exception as exc:
-        job.status = "awaiting_clip_review"
-        job.progress = PROGRESS_MAP["awaiting_clip_review"]
-        job.current_step = CURRENT_STEP_MAP["awaiting_clip_review"]
+        job.status, job.progress, job.current_step = previous_status, previous_progress, previous_step
         job.updated_at = utc_now()
         document.state = "awaiting_review"
         write_clip_plan(
@@ -1121,6 +1121,10 @@ def approve_clip_plan(
             detail="clip plan source artifacts are unavailable",
         )
     selection = CandidateSelection.model_validate(selected_payload)
+    if request and set(request.kept_clip_ids or []) & {c.id for c in selection.deferred_candidates}:
+        raise HTTPException(422, "見送り・判定不能の候補は、先に「キープして採用」か範囲の保存で採用へ戻してください。")
+    if not selection.normal_clips and not selection.shorts:
+        raise HTTPException(422, "投稿予定が0本です。見送り・判定不能の候補をキープして採用するか、範囲を調整してください。")
     transcript_segments = [TranscriptSegment.model_validate(item) for item in transcript_payload]
     transcript_segments = repair_known_transcript_artifact_segments(transcript_segments)
     review_document = build_subtitle_review(
