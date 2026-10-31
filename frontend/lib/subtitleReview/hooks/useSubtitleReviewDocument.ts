@@ -115,7 +115,7 @@ export function useSubtitleReviewDocument() {
 
   usePendingPreviewPoll({ jobId, hasPendingPreviews, isUpdatingHookScene, reviewMutationCountRef, reviewRequestGenerationRef, setReview });
 
-  const hasReviewMutationInFlight =
+  const hasBlockingReviewMutation =
     isSavingBulkCorrection ||
     isSavingStructure ||
     retryingPreviewClipId !== null ||
@@ -125,10 +125,13 @@ export function useSubtitleReviewDocument() {
     savingShortFramingClipId !== null ||
     isFinalizing ||
     isReopeningBoundaries || isReturningToClipPlan;
+  const hasReviewMutationInFlight = hasBlockingReviewMutation || state.isSavingConfirmedSubtitles;
   const isEditable =
     review?.state === "awaiting_review" &&
     !hasReviewMutationInFlight && !(review.subtitleOnlyAuto && selectedClip?.confirmed);
   const isSubtitleEditable = Boolean(review && !hasReviewMutationInFlight && (review.state === "awaiting_review" ||
+    (review.subtitleOnlyAuto && selectedClip?.confirmed && ["render_queued", "rendering", "completed"].includes(review.state))));
+  const isSubtitleTextEditable = Boolean(review && !hasBlockingReviewMutation && (review.state === "awaiting_review" ||
     (review.subtitleOnlyAuto && selectedClip?.confirmed && ["render_queued", "rendering", "completed"].includes(review.state))));
   const segmentsById = useMemo(
     () => new Map(review?.segments.map((segment) => [segment.id, segment]) ?? []),
@@ -443,7 +446,7 @@ export function useSubtitleReviewDocument() {
     visibleClips,
     hasPendingPreviews,
     hasReviewMutationInFlight,
-    isEditable, isSubtitleEditable,
+    isEditable, isSubtitleEditable, isSubtitleTextEditable,
     segmentsById,
     selectedSegments,
     selectedSuggestionSegments,
