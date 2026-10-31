@@ -195,8 +195,8 @@ def test_split_keeps_playable_live_video_while_exact_preview_is_deferred(client)
     assert client.get(after_clip["livePreviewVideoUrl"]).content == b"playable live video"
 
 
-@pytest.mark.parametrize("start,end", [(1.5, 1.9), (3.5, 2.5), (9.9, 10.1), (3.5, 3.55)])
-def test_insert_at_paused_time_rejects_overlap_or_invalid_range_without_writes(client, start, end):  # noqa: F811
+@pytest.mark.parametrize("start,end", [(3.5, 2.5), (9.9, 10.1), (3.5, 3.55)])
+def test_insert_at_paused_time_rejects_invalid_range_without_writes(client, start, end):  # noqa: F811
     job_id, path, _, _, _ = seed_structure(client)
     before = path.read_bytes()
     response = client.post(

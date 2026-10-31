@@ -1,10 +1,10 @@
 "use client";
 
 import { bulkEditableSegments, sharedSubtitleNotice, subtitleEditTargets, segmentDraftKey } from "../sharedSegments";
-import { editSubtitleStructure } from "../../api";
+import { editSubtitleStructure, updateSubtitleReviewSegments } from "../../api";
 import type { SubtitleStructureRequest } from "../../types";
 import type { SubtitleBatchUpdate } from "../../subtitleBulkCorrection";
-import { nextNonemptySubtitleStart, subtitleInsertionConflict } from "../../subtitlePauseInsert";
+import { nextNonemptySubtitleStart } from "../../subtitlePauseInsert";
 import { remapInsertedSubtitleDraft, subtitleStructureSources } from "../../subtitleStructureDrafts";
 import type { SubtitleReviewContext } from "./context";
 
@@ -34,8 +34,6 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
       setError,
       hookSuppressionEnd,
       hookSceneDuration,
-      review,
-      dirtySegmentIds,
       saveSubtitleStructure,
       setPausedSubtitleDraft
     } = context;
@@ -48,18 +46,6 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
       pausedSubtitleDraft.end > selectedClip.end ||
       pausedSubtitleDraft.end - pausedSubtitleDraft.start < 0.1) {
       setError("冒頭の字幕非表示区間を避け、動画内の0.1秒以上の範囲にしてください。");
-      return;
-    }
-    const insertionConflict = subtitleInsertionConflict(
-      (review?.segments ?? []).filter(segment => segment.affectedClipIds.some(id =>
-        review?.clips.some(clip => clip.id === id && (!clip.confirmed || clip.id === selectedClip.id)))), pausedSubtitleDraft.start, pausedSubtitleDraft.end, dirtySegmentIds
-    );
-    if (insertionConflict === "unsaved") {
-      setError("追加区間に未保存の字幕があります。先に保存してから字幕を追加してください。");
-      return;
-    }
-    if (insertionConflict === "overlap") {
-      setError("既存字幕と時間が重なっています。空白区間に合わせてください。");
       return;
     }
     const saved = await saveSubtitleStructure({
@@ -108,19 +94,21 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
       locallyUpdatedReviewRef,
       endReviewMutation
     } = context;
-    if (!review || !isEditable || !context.selectedClip) return false;
-    request = { ...request, clipId: context.selectedClip.id };
+    if (!review || !(context.isSubtitleEditable ?? isEditable) || !context.selectedClip) return false;
+    const included = new Set(request.segments.map(item => item.segmentId));
+    const edits = context.selectedSegments.filter(segment => context.dirtySegmentIds.has(segment.id) && !included.has(segment.id))
+      .map(segment => ({ segmentId: segment.id, before: segment.text, text: context.drafts[segment.id] ?? segment.text }));
+    request = { ...request, clipId: context.selectedClip.id, ...(edits.length ? { edits } : {}) };
     const oldDocument = review;
-    const editableSegments = oldDocument.segments.filter(segment => segment.affectedClipIds.some(id =>
-      oldDocument.clips.some(clip => clip.id === id && (!clip.confirmed || clip.id === request.clipId))));
+    const editableSegments = oldDocument.segments.filter(segment => subtitleEditTargets(oldDocument, [segment], request.clipId).length > 0);
     const sourceSegments = subtitleStructureSources(editableSegments, request);
     const targets = new Set(sourceSegments.map((segment) => segment.id));
     const affected = new Set(subtitleEditTargets(oldDocument, sourceSegments, request.clipId).map(clip => clip.id));
     if (request.action === "insert_at_time") for (const clip of oldDocument.clips) {
-      if ((!clip.confirmed || clip.id === request.clipId) && clip.start < request.end! && clip.end > request.start!) affected.add(clip.id);
+      if ((oldDocument.subtitleOnlyAuto && context.selectedClip.confirmed ? clip.id === request.clipId : !clip.confirmed || clip.id === request.clipId) && clip.start < request.end! && clip.end > request.start!) affected.add(clip.id);
     }
     const notice = sharedSubtitleNotice(oldDocument, [{ affectedClipIds: [...affected] }], request.clipId!);
-    if (notice && !window.confirm(`${notice}\n確定済みの他のclipは変更しません。保存しますか？`)) return false;
+    if (request.action !== "insert_at_time" && notice && !window.confirm(`${notice}\n確定済みの他のclipは変更しません。保存しますか？`)) return false;
     const first = sourceSegments[0];
     const oldIds = new Set(oldDocument.segments.map(segment => segment.id));
     const scrollTop = subtitleListRef.current?.scrollTop ?? 0;
@@ -133,7 +121,8 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
       if (!isCurrentReviewMutation(generation)) return false;
       locallyUpdatedReviewRef.current = updated;
       setReview(updated);
-      const savedKeys = new Set([...targets].flatMap(id => [id, segmentDraftKey(context.selectedClip!, id)]));
+      const submitted = new Set([...targets, ...edits.map(item => item.segmentId)]);
+      const savedKeys = new Set([...submitted].map(id => segmentDraftKey(context.selectedClip!, id)));
       const updatedClip = updated.clips.find(clip => clip.id === request.clipId);
       const retainedDraftIds = context.selectedClip.confirmed && updatedClip && !updatedClip.confirmed
         ? updatedClip.segmentIds.filter(id => !targets.has(id)) : [];
@@ -198,5 +187,31 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
       endReviewMutation();
     }
   }
-  return { openPausedSubtitleDraft, savePausedSubtitleDraft, saveBulkCorrection, saveSubtitleStructure };
+  async function saveConfirmedSubtitles(clipId = context.selectedClip?.id) {
+    const { review, rawDrafts, rawDirtySegmentIds, setDrafts, setDirtySegmentIds } = context;
+    const clip = review?.clips.find(item => item.id === clipId);
+    if (!review?.subtitleOnlyAuto || !clip?.confirmed || context.hasReviewMutationInFlight) return;
+    const updates = review.segments.filter(segment => clip.segmentIds.includes(segment.id) && rawDirtySegmentIds.has(segmentDraftKey(clip, segment.id)))
+      .map(segment => ({ segmentId: segment.id, before: segment.text, text: rawDrafts[segmentDraftKey(clip, segment.id)] ?? segment.text }));
+    if (!updates.length) return;
+    const generation = context.beginReviewMutation();
+    context.setIsSavingBulkCorrection(true);
+    context.setShowSavedPreview(false);
+    context.setError(null);
+    try {
+      const updated = await updateSubtitleReviewSegments(context.jobId, updates, clip.id);
+      if (!context.isCurrentReviewMutation(generation)) return;
+      context.locallyUpdatedReviewRef.current = updated;
+      context.setReview(updated);
+      const keys = new Set(updates.map(item => segmentDraftKey(clip, item.segmentId)));
+      setDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => !keys.has(key))));
+      setDirtySegmentIds(current => new Set([...current].filter(key => !keys.has(key))));
+    } catch (caught) {
+      context.setError(caught instanceof Error ? caught.message : "字幕の変更を保存できませんでした。入力は保持しています。");
+    } finally {
+      context.setIsSavingBulkCorrection(false);
+      context.endReviewMutation();
+    }
+  }
+  return { openPausedSubtitleDraft, savePausedSubtitleDraft, saveBulkCorrection, saveSubtitleStructure, saveConfirmedSubtitles };
 }

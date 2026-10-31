@@ -621,10 +621,13 @@ class SubtitleReviewBatchSegmentUpdate(SubtitleReviewSegmentUpdateRequest):
 
 
 class SubtitleReviewBatchUpdateRequest(BaseModel):
+    clip_id: str | None = Field(default=None, alias="clipId")
+    model_config = ConfigDict(populate_by_name=True)
     segments: list[SubtitleReviewBatchSegmentUpdate] = Field(min_length=1, max_length=10000)
 
 
 class SubtitleStructureRequest(BaseModel):
+    edits: list[SubtitleReviewBatchSegmentUpdate] = Field(default_factory=list, max_length=10000)
     action: Literal["merge", "split", "insert", "insert_at_time", "delete", "line"]
     segments: list[SubtitleReviewBatchSegmentUpdate] = Field(default_factory=list, max_length=2)
     clip_id: str | None = Field(default=None, alias="clipId")

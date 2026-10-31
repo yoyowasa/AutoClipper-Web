@@ -83,7 +83,8 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
                     onClick={() => void context.reopenConfirmedClip()}>字幕を直し直す（このclipの自動処理を解除）</button>}
                   <p className="mb-2 text-xs font-semibold text-amber-800">未保存の変更 {pendingChanges}件</p>
                   <p className="mb-3 text-xs text-neutral-600">
-                    {selectedClipHasDirtySegments || selectedClipHasDirtyContent || selectedShortFramingDirty
+                    {review.subtitleOnlyAuto && selectedClip.confirmed ? "字幕の変更は自動で保存します。確定の解除は不要です。自動処理とプレビューは変更したclipだけ更新します。"
+                      : selectedClipHasDirtySegments || selectedClipHasDirtyContent || selectedShortFramingDirty
                       ? review.subtitleOnlyAuto ? "字幕を確定すると、このclipの自動決定を開始します。詳細編集の変更も保存します。"
                         : "簡易プレビューで下書きを確認し、確定で字幕・画角・フック・投稿情報をまとめて保存します。"
                       : review.subtitleOnlyAuto && selectedClip.automaticDecisionState === "failed" ? "字幕を確定して再試行"

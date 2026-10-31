@@ -9,12 +9,35 @@ def edit_subtitle_structure(document: SubtitleReviewDocument, request: SubtitleS
     from app.jobs.subtitle_review_edits import editable_clip_ids, editable_document, commit_structure_edit
 
     editable = editable_clip_ids(document, request.clip_id)
-    if request.clip_id is not None:
-        clip = next(clip for clip in document.clips if clip.id == request.clip_id)
-        if any(item.segment_id not in clip.segment_ids for item in request.segments):
-            raise ValueError("字幕が対象動画に含まれていません。")
+    confirmed = {clip.id for clip in document.clips if clip.confirmed} if document.subtitle_only_auto else set()
+    clip = next((clip for clip in document.clips if clip.id == request.clip_id), None)
+    if clip is not None and any(item.segment_id not in clip.segment_ids for item in [*request.segments, *request.edits]):
+        raise ValueError("字幕が対象動画に含まれていません。")
+    if request.edits and clip is None:
+        raise ValueError("下書きの保存対象の動画を指定してください。")
     working = editable_document(document, editable)
-    affected = _edit_subtitle_structure(working, request)
+    by_id = {segment.id: segment for segment in working.segments}
+    if len({item.segment_id for item in request.edits}) != len(request.edits):
+        raise ValueError("字幕の指定が重複しています。")
+    changed = set()
+    for item in request.edits:
+        segment = by_id.get(item.segment_id)
+        if segment is None:
+            raise KeyError("字幕が見つかりません。")
+        if segment.text != item.before:
+            raise RuntimeError("字幕が別の操作で更新されています。画面を読み直してください。")
+        if segment.text != item.text:
+            segment.text = item.text
+            segment.edited = item.text != segment.original_text
+            changed.update(segment.affected_clip_ids)
+    # Structure payloads already carry their own draft text. Their `before`
+    # still refers to the server snapshot, so do not submit duplicate edits.
+    if {item.segment_id for item in request.edits} & {item.segment_id for item in request.segments}:
+        raise ValueError("構成変更と下書きの字幕指定が重複しています。")
+    affected = _edit_subtitle_structure(working, request) | changed
+    for item in working.clips:
+        if item.id in affected:
+            item.confirmed = item.id in confirmed
     commit_structure_edit(document, working, editable)
     _refresh_counts(document)
     return affected
@@ -40,7 +63,8 @@ def _edit_subtitle_structure(document: SubtitleReviewDocument, request: Subtitle
             segment.text.strip() and segment.start < request.end - 0.001 and segment.end > request.start + 0.001
             for segment in overlapping
         ):
-            raise ValueError("既存字幕と時間が重なっています。開始・終了時刻を空白区間に合わせてください。")
+            from app.jobs.subtitle_insert import insert_preserving_text
+            return insert_preserving_text(document, request, overlapping)
         overlapping = [segment for segment in overlapping if not segment.text.strip()]
         if not document.segments:
             raise ValueError("元の文字起こしがないため、字幕を追加できません。")

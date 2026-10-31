@@ -28,6 +28,7 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   hasPendingPreviews: boolean;
   hasReviewMutationInFlight: boolean;
   isEditable: boolean;
+  isSubtitleEditable: boolean;
   segmentsById: Map<string, SubtitleReviewSegment>;
   selectedSegments: SubtitleReviewSegment[];
   selectedSuggestionSegments: { segmentId: string; text: string; }[];
@@ -120,6 +121,7 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   previewTitleHookSuggestion: (suggestion: TitleHookSuggestion) => void;
   retrySelectedPreview: () => Promise<void>;
   saveHookScene: (start: number | null, end: number | null) => Promise<void>;
+  saveConfirmedSubtitles: (clipId?: string) => Promise<void>;
   saveSubtitleStructure: (request: SubtitleStructureRequest) => Promise<boolean>;
   reopenConfirmedClip: () => Promise<void>;
   confirmSelectedClip: () => Promise<void>;

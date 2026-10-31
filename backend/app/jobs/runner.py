@@ -4162,5 +4162,11 @@ def run_subtitle_review_render(
         finally:
             if rerender_publication_lease is not None:
                 rerender_publication_lease.release()
+            from app.jobs.pending_subtitle_edits import activate_pending
+            try:
+                activate_pending(db, job_id, storage_paths)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning("字幕の予約変更を反映できませんでした。予約データを保持します。", exc_info=False)
 
     return visited_statuses
