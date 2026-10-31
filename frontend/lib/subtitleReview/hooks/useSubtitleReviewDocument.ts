@@ -15,6 +15,7 @@ import { useSubtitleReviewState } from "./useSubtitleReviewState";
 import type { SubtitleReviewContext } from "./context";
 import { useReviewMutations } from "./useReviewMutations";
 import { useReviewPreviews } from "./useReviewPreviews";
+import { useConfirmedSubtitleAutosave } from "./useConfirmedSubtitleAutosave";
 import { useSubtitleEditing } from "./useSubtitleEditing";
 import { useClipContentDraft } from "./useClipContentDraft";
 import { useTitleHookSuggestions } from "./useTitleHookSuggestions";
@@ -127,6 +128,8 @@ export function useSubtitleReviewDocument() {
   const isEditable =
     review?.state === "awaiting_review" &&
     !hasReviewMutationInFlight && !(review.subtitleOnlyAuto && selectedClip?.confirmed);
+  const isSubtitleEditable = Boolean(review && !hasReviewMutationInFlight && (review.state === "awaiting_review" ||
+    (review.subtitleOnlyAuto && selectedClip?.confirmed && ["render_queued", "rendering", "completed"].includes(review.state))));
   const segmentsById = useMemo(
     () => new Map(review?.segments.map((segment) => [segment.id, segment]) ?? []),
     [review]
@@ -440,7 +443,7 @@ export function useSubtitleReviewDocument() {
     visibleClips,
     hasPendingPreviews,
     hasReviewMutationInFlight,
-    isEditable,
+    isEditable, isSubtitleEditable,
     segmentsById,
     selectedSegments,
     selectedSuggestionSegments,
@@ -533,6 +536,7 @@ export function useSubtitleReviewDocument() {
     get previewTitleHookSuggestion() { return previewTitleHookSuggestion; },
     get retrySelectedPreview() { return retrySelectedPreview; },
     get saveHookScene() { return saveHookScene; },
+    get saveConfirmedSubtitles() { return saveConfirmedSubtitles; },
     get saveSubtitleStructure() { return saveSubtitleStructure; },
     get reopenConfirmedClip() { return reopenConfirmedClip; },
     get confirmSelectedClip() { return confirmSelectedClip; },
@@ -558,7 +562,7 @@ export function useSubtitleReviewDocument() {
     toggleFullscreen,
     retrySelectedPreview
   } = useReviewPreviews(context);
-  const { openPausedSubtitleDraft, savePausedSubtitleDraft, saveBulkCorrection, saveSubtitleStructure } = useSubtitleEditing(context);
+  const { openPausedSubtitleDraft, savePausedSubtitleDraft, saveBulkCorrection, saveSubtitleStructure, saveConfirmedSubtitles } = useSubtitleEditing(context);
   const {
     updateClipContentDraft,
     updateClipTextStyle,
@@ -570,5 +574,6 @@ export function useSubtitleReviewDocument() {
   } = useClipContentDraft(context);
   const { generateTitleHookSuggestions, applyTitleHookSuggestion, copyPostField, clearSelectedHook, previewTitleHookSuggestion } = useTitleHookSuggestions(context);
   const { reopenConfirmedClip, confirmSelectedClip, startRendering, returnToBoundaryEditor, returnToClipPlan } = useReviewConfirmation(context);
+  useConfirmedSubtitleAutosave(context);
   return context;
 }

@@ -5,6 +5,7 @@ export type StoredReviewDraft = {
   version: 1;
   fingerprint: string;
   content: ClipContentDraft;
+  baseContent?: ClipContentDraft;
   framing: SubtitleReviewClipFramingUpdateRequest | null;
   segments: Record<string, string>;
 };
@@ -22,6 +23,11 @@ export function clearJobReviewDrafts(jobId: string, storage: Storage | null = nu
 
 // Preview completion and polling timestamps must never invalidate text in progress.
 export function reviewDraftFingerprint(document: SubtitleReviewDocument, clip: SubtitleReviewClip): string {
+  if (document.subtitleOnlyAuto && clip.confirmed) return JSON.stringify({
+    generation: document.previewGeneration, createdAt: document.createdAt, start: clip.start, end: clip.end,
+    segments: document.segments.filter(segment => clip.segmentIds.includes(segment.id))
+      .map(segment => [segment.id, segment.start, segment.end, segment.text, segment.singleLine])
+  });
   return JSON.stringify({
     revision: document.renderRevision, generation: document.previewGeneration, start: clip.start, end: clip.end, confirmed: clip.confirmed,
     content: contentDraftForClip(clip), framing: [clip.framingOffsetX, clip.framingOffsetY, clip.framingZoom, clip.shortLayout],
@@ -58,4 +64,13 @@ export function writeReviewDraft(jobId: string, clipId: string, draft: StoredRev
     if (draft) target.setItem(reviewDraftKey(jobId, clipId), JSON.stringify(draft));
     else target.removeItem(reviewDraftKey(jobId, clipId));
   } catch { /* Storage may be disabled or full; editing and confirmation still work. */ }
+}
+
+// A background decision can change title/style while a caption draft is open.
+// Rebase only fields that still equal the previous saved value.
+export function rebaseUnchangedContent(draft: ClipContentDraft, before: ClipContentDraft, after: ClipContentDraft): ClipContentDraft {
+  return Object.fromEntries(Object.keys(after).map(key => [key,
+    JSON.stringify(draft[key as keyof ClipContentDraft]) === JSON.stringify(before[key as keyof ClipContentDraft])
+      ? after[key as keyof ClipContentDraft] : draft[key as keyof ClipContentDraft]
+  ])) as ClipContentDraft;
 }

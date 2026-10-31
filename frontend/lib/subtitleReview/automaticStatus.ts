@@ -45,6 +45,7 @@ export function automaticReviewStopReasons(review: SubtitleReviewDocument): stri
 }
 
 export function reviewNeedsPolling(review: SubtitleReviewDocument | null): boolean {
+  if (review?.pendingSubtitleClipIds?.length) return true;
   if (!review || (review.subtitleOnlyAuto && review.state === "completed")) return false;
   return Boolean(
     (review.subtitleOnlyAuto && (review.state !== "awaiting_review" || review.confirmedClipCount > 0)) ||

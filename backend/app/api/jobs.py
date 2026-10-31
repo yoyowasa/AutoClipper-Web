@@ -50,7 +50,6 @@ from app.jobs.publication_state import rerender_publication_is_unresolved
 from app.jobs.clip_plan import (
     clip_plan_output_path,
 )
-from app.jobs.subtitle_structure import edit_subtitle_structure
 from app.schemas import SubtitleStructureRequest
 from app.jobs.reedit_upload import (
     UploadSizeLimitExceeded,
@@ -77,7 +76,6 @@ from app.jobs.subtitle_review import (
     PreviewFraming,
     SubtitleReviewDocument,
     apply_reviewed_clip_content,
-    subtitle_review_source_path,
     build_subtitle_review,
     confirm_review_clip,
     load_subtitle_review,
@@ -1890,7 +1888,8 @@ def get_subtitle_review(
         )
     from app.jobs.automatic_review_status import automatic_stop_reasons
     document.automatic_stop_reasons = automatic_stop_reasons(document, output_dir)
-    return document
+    from app.jobs.pending_subtitle_edits import pending_view
+    return pending_view(document, paths)
 
 
 @router.patch(
@@ -3165,76 +3164,32 @@ def apply_subtitle_review_clip(
 
 @router.post("/{job_id}/subtitle-review/segment-structure", response_model=SubtitleReviewDocument)
 def change_subtitle_structure(
-    job_id: str,
-    request: SubtitleStructureRequest,
-    db: Session = Depends(get_db),
+    job_id: str, request: SubtitleStructureRequest, db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
     enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+    enqueue_decisions: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_confirmed_clip_decisions),
 ) -> SubtitleReviewDocument:
+    from app.api.subtitle_editing import mutate_subtitles
     job = _get_job_or_404(db, job_id)
     video = db.get(Video, job.video_id)
     if video is None:
         raise HTTPException(409, "source video record is unavailable")
-    with subtitle_review_document_lock(paths.job_outputs(job_id)):
-        db.refresh(job)
-        document = _get_subtitle_review_or_404(job_id, paths)
-        if job.status != "awaiting_subtitle_review" or document.state != "awaiting_review":
-            raise HTTPException(409, "字幕を編集できる状態ではありません。")
-        try:
-            affected = edit_subtitle_structure(document, request)
-        except KeyError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(409, str(exc)) from exc
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
-        source_snapshot = subtitle_review_source_path(paths.job_outputs(job_id), document)
-        if not source_snapshot.exists():
-            shutil.copyfile(transcript_output_path(paths.job_outputs(job_id)), source_snapshot)
-        document = _defer_subtitle_review_previews_unlocked(document, affected)
-        _write_subtitle_review_unlocked(document, paths)
-    return document
+    return mutate_subtitles(job, video, request, db, paths, enqueue_decisions, enqueue_preview, structure=True)
 
 
 @router.patch("/{job_id}/subtitle-review/segments", response_model=SubtitleReviewDocument)
 def update_subtitle_review_segments(
-    job_id: str,
-    request: SubtitleReviewBatchUpdateRequest,
-    db: Session = Depends(get_db),
+    job_id: str, request: SubtitleReviewBatchUpdateRequest, db: Session = Depends(get_db),
     paths: StoragePaths = Depends(get_storage_paths),
     enqueue_preview: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_subtitle_review_preview),
+    enqueue_decisions: SubtitleReviewPreviewEnqueue = Depends(get_enqueue_confirmed_clip_decisions),
 ) -> SubtitleReviewDocument:
+    from app.api.subtitle_editing import mutate_subtitles
     job = _get_job_or_404(db, job_id)
     video = db.get(Video, job.video_id)
     if video is None:
         raise HTTPException(409, "source video record is unavailable")
-    with subtitle_review_document_lock(paths.job_outputs(job_id)):
-        db.refresh(job)
-        document = _get_subtitle_review_or_404(job_id, paths)
-        if job.status != "awaiting_subtitle_review" or document.state != "awaiting_review":
-            raise HTTPException(409, "字幕を編集できる状態ではありません。")
-        by_id = {segment.id: segment for segment in document.segments}
-        ids = [item.segment_id for item in request.segments]
-        if len(set(ids)) != len(ids):
-            raise HTTPException(422, "字幕の指定が重複しています。")
-        # Validate the entire batch before changing any segment or preview.
-        for item in request.segments:
-            if item.segment_id not in by_id:
-                raise HTTPException(404, "字幕が見つかりません。")
-            if by_id[item.segment_id].text != item.before:
-                raise HTTPException(409, "字幕が別の操作で更新されています。画面を読み直してください。")
-        from app.jobs.subtitle_review_edits import editable_clip_ids
-        editable = editable_clip_ids(document)
-        affected_clip_ids: set[str] = set()
-        for item in request.segments:
-            if item.text != item.before:
-                affected_clip_ids.update(editable.intersection(by_id[item.segment_id].affected_clip_ids))
-                document = update_review_segment(document, item.segment_id, item.text)
-        if not affected_clip_ids:
-            return document
-        document = _defer_subtitle_review_previews_unlocked(document, affected_clip_ids)
-        _write_subtitle_review_unlocked(document, paths)
-    return document
+    return mutate_subtitles(job, video, request, db, paths, enqueue_decisions, enqueue_preview)
 
 
 @router.post(

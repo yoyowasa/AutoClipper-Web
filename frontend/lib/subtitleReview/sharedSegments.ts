@@ -20,6 +20,9 @@ export function clipDirtySegmentIds(clip: SubtitleReviewClip | null, dirty: Set<
 
 export function subtitleEditTargets(document: SubtitleReviewDocument, segments: Pick<SubtitleReviewSegment, "affectedClipIds">[], clipId?: string) {
   const ids = new Set(segments.flatMap(segment => segment.affectedClipIds));
+  if (document.subtitleOnlyAuto && document.clips.some(clip => clip.id === clipId && clip.confirmed)) {
+    return document.clips.filter(clip => clip.id === clipId && ids.has(clip.id));
+  }
   return document.clips.filter(clip => ids.has(clip.id) && (!clip.confirmed || clip.id === clipId));
 }
 

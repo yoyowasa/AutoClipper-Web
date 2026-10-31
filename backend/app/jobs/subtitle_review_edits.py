@@ -10,6 +10,8 @@ if TYPE_CHECKING:
 def editable_clip_ids(document: "SubtitleReviewDocument", clip_id: str | None = None) -> set[str]:
     if clip_id is not None and not any(clip.id == clip_id for clip in document.clips):
         raise KeyError("対象動画が見つかりません。")
+    if document.subtitle_only_auto and any(clip.id == clip_id and clip.confirmed for clip in document.clips):
+        return {clip_id}
     return {clip.id for clip in document.clips if not clip.confirmed or clip.id == clip_id}
 
 

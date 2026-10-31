@@ -52,6 +52,9 @@ export function SubtitleReviewScreen({ model }: { model: SubtitleReviewContext }
                 ? hasReviewMutationInFlight ? "保存中" : "字幕確認中"
                 : "書き出し中"}
           </span>}
+          {compactStatus && <button type="button" className="text-xs underline" onClick={() => model.setSubtitleWorkspaceOpen(value => !value)}>
+            {model.subtitleWorkspaceOpen ? "字幕編集を閉じる" : "字幕を編集"}
+          </button>}
           {compactStatus && <button type="button" className="text-xs underline" onClick={() => setDetailsOpen(value => !value)}>
             {detailsOpen ? "詳細編集を閉じる" : "詳細編集（任意）"}
           </button>}
@@ -85,9 +88,10 @@ export function SubtitleReviewScreen({ model }: { model: SubtitleReviewContext }
             {detailsOpen ? "詳細編集を閉じる" : "詳細編集（任意）"}
           </button>
         </div>}
+        {review.pendingSubtitleClipIds?.length ? <p role="status" className="text-sm text-sky-800">字幕の変更を保存しました。現在の書き出しが終わったら、変更したclipを自動で作り直します。</p> : null}
         <AutomaticReviewStatus review={review} error={error} selectedClip={selectedClip} />
 
-        {(!compactStatus || detailsOpen) && <div data-clip-type={selectedClip?.type} className="subtitle-review-grid grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
+        {(!compactStatus || detailsOpen || model.subtitleWorkspaceOpen) && <div data-clip-type={selectedClip?.type} className="subtitle-review-grid grid overflow-hidden border border-neutral-300 bg-white lg:grid-cols-[230px_minmax(0,1fr)_390px] xl:grid-cols-[260px_minmax(0,1fr)_clamp(360px,26vw,480px)] 2xl:h-[calc(100vh-4.5rem)] 2xl:min-h-[760px] 2xl:grid-cols-[clamp(210px,13vw,260px)_minmax(560px,1fr)_clamp(320px,22vw,440px)] 2xl:grid-rows-[minmax(500px,62vh)_minmax(260px,1fr)]">
           <ReviewClipList context={context} />
 
 

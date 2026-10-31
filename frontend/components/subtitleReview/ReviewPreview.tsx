@@ -17,7 +17,7 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
     retainedLivePreviews,
     review,
     jobId,
-    isEditable,
+    isEditable, isSubtitleEditable,
     selectedShortPreviewRegenerating,
     selectedShortFramingDirty,
     playerShellRef,
@@ -316,7 +316,7 @@ export function ReviewPreview({ context }: { context: SubtitleReviewViewContext 
                         <div className="flex items-center gap-2">
                           <button
                             className="border border-sky-400 px-2 py-1 font-semibold text-sky-100 disabled:opacity-50"
-                            disabled={!isEditable}
+                            disabled={!isSubtitleEditable}
                             onClick={openPausedSubtitleDraft}
                             type="button"
                           >

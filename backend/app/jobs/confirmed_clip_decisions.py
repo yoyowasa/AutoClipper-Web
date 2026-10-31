@@ -18,9 +18,10 @@ from app.production_choice_capture import capture_auto_review_outcome
 from app.storage.paths import get_storage_paths
 
 
-def queue_clip_decisions(document, clip, *, manual_fields: set[str]) -> str:
+def queue_clip_decisions(document, clip, *, manual_fields: set[str], targets=None) -> str:
     """Called under the document lock, after subtitle edits have been saved."""
     clip.manual_decision_fields = sorted(set(clip.manual_decision_fields) | manual_fields)
+    clip.automatic_decision_targets = sorted(targets) if targets is not None else None
     clip.automatic_decision_revision = uuid4().hex
     clip.automatic_decision_state = "queued"
     clip.automatic_decision_error = None
@@ -83,9 +84,14 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 write_subtitle_review(document, path)
                 generation = (document.created_at, document.preview_generation)
 
+            from app.jobs.subtitle_decision_inputs import ALL_TARGETS, decision_inputs
+            targets = ({"framing"} if framing_only else
+                       set(clip.automatic_decision_targets) if clip.automatic_decision_targets is not None else set(ALL_TARGETS))
+            original_inputs = decision_inputs(document, clip)
+            artifact = None
             # No document lock while waiting for Codex. Other clips remain editable.
             settings = dict(job.settings_json or {}) if framing_only else attach_performance_hints(db, dict(job.settings_json or {}))
-            if not framing_only:
+            if "title_hook" in targets:
                 hints = active_hint_uses(settings.get("_performanceHints"), target="title_hook", format=clip.type) \
                     if settings.get("usePerformanceHints", True) else []
                 overrides = {name: getattr(clip, name) for name in clip.manual_decision_fields if hasattr(clip, name)}
@@ -103,23 +109,32 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 )
                 for name, value in overrides.items():
                     setattr(clip, name, value)
-                if clip.type == "normal" and not set(COPY_FIELDS.values()).intersection(overrides):
-                    stage = "サムネ文言の自動決定"
-                    state, _payload, _hash = confirmed_thumbnail_copy(document, clip, paths, thumbnail_generator, retry_failed=True)
-                    if state["state"] != "ready":
-                        raise ValueError("サムネ文言の生成結果を検証できませんでした。")
-                    selected = next(s for s in state["suggestions"] if s["id"] == state["recommendedId"])
-                    for attr, value in zip(COPY_FIELDS.values(), (selected["heading"], selected["upper"], selected["lower"]), strict=True):
-                        setattr(clip, attr, value)
-                if clip.type == "normal":
-                    stage = "サムネ画像の自動決定"
-                    from app.jobs.confirmed_thumbnail import prepare_confirmed_thumbnail
-                    prepare_confirmed_thumbnail(db, paths, job, video, document, clip,
-                                                extractor=candidate_extractor, selector=emotion_selector)
+            current_inputs = decision_inputs(document, clip)
+            targets |= {key for key in ALL_TARGETS - {"title_hook"} if current_inputs[key] != original_inputs[key]}
+            if (clip.type == "normal" and "thumbnail_copy" in targets
+                    and not set(COPY_FIELDS.values()).intersection(clip.manual_decision_fields)):
+                stage = "サムネ文言の自動決定"
+                state, _payload, _hash = confirmed_thumbnail_copy(document, clip, paths, thumbnail_generator, retry_failed=True)
+                if state["state"] != "ready":
+                    raise ValueError("サムネ文言の生成結果を検証できませんでした。")
+                selected = next(s for s in state["suggestions"] if s["id"] == state["recommendedId"])
+                for attr, value in zip(COPY_FIELDS.values(), (selected["heading"], selected["upper"], selected["lower"]), strict=True):
+                    setattr(clip, attr, value)
+            if decision_inputs(document, clip)["thumbnail_image"] != original_inputs["thumbnail_image"]:
+                targets.add("thumbnail_image")
+            if "framing" in clip.manual_decision_fields:
+                targets.discard("framing")
+            if "subtitle_styles" in clip.manual_decision_fields:
+                targets.discard("effects")
+            if clip.type == "normal" and "thumbnail_image" in targets:
+                stage = "サムネ画像の自動決定"
+                from app.jobs.confirmed_thumbnail import prepare_confirmed_thumbnail
+                prepare_confirmed_thumbnail(db, paths, job, video, document, clip,
+                                            extractor=candidate_extractor, selector=emotion_selector)
             stage = "画角・文字サイズ・字幕強調の自動決定"
             content_choice, framing_revision = None, None
             content_fallback_reason = None
-            if clip.type == "short" and "framing" not in clip.manual_decision_fields:
+            if clip.type == "short" and "framing" in targets and "framing" not in clip.manual_decision_fields:
                 from app.jobs.content_framing import choose_content_framing, content_framing_fallback_reason
                 try:
                     content_choice, framing_revision = choose_content_framing(
@@ -132,7 +147,7 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
             decide_visuals(document, clip, settings=settings, video=video,
                            source=paths.resolve_stored_file(video.stored_path), crop_resolver=crop_resolver,
                            content_choice=content_choice, framing_revision=framing_revision,
-                           content_fallback_reason=content_fallback_reason, framing_only=framing_only)
+                           content_fallback_reason=content_fallback_reason, framing_only=framing_only, targets=targets)
             stage = "正式プレビューの準備"
             with subtitle_review_document_lock(directory):
                 latest = current()
@@ -149,9 +164,11 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 latest, queued, _ = refresh_subtitle_review_preview_states(
                     job=job, video=video, document=latest, paths=paths, clip_ids={clip_id}, generate_exact=True,
                 )
+                clip.automatic_decision_inputs = decision_inputs(latest, clip)
+                clip.automatic_decision_targets = None
                 clip.automatic_decision_state = "ready"
                 confirm_review_clip(latest, clip_id)
-                if not framing_only:
+                if artifact is not None:
                     capture_auto_review_outcome(latest, clip_id, input_revision=artifact.revision_hash)
                 from app.intelligence.choice_policy_runtime import record_policy_choices
                 record_policy_choices(latest.choice_history, settings, clip_id=clip_id, format=clip.type)

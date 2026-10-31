@@ -85,6 +85,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
     if (notice && !window.confirm(`${notice}\n確定済みの他のclipは変更しません。保存しますか？`)) return;
     const savedSegmentIds = new Set(segmentUpdates.map((segment) => segment.segmentId));
     const postMetadata = postMetadataApplyPayload(selectedClipContentDraft);
+    context.setSubtitleWorkspaceOpen?.(true);
     const mutationGeneration = beginReviewMutation();
     setConfirmingClipId(selectedClip.id);
     setError(null);

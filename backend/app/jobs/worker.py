@@ -41,6 +41,8 @@ class CharacterAssetWorker(Worker):
         try:
             with SessionLocal() as db:
                 failed = reconcile_orphaned_jobs(db, self.queues)
+                from app.jobs.pending_subtitle_edits import maintain_pending_subtitle_edits
+                maintain_pending_subtitle_edits(db, get_storage_paths())
                 if failed:
                     logging.getLogger(__name__).warning("Marked orphaned application jobs failed: %s", ", ".join(failed))
         except Exception:

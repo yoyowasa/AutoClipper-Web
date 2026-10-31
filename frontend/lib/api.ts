@@ -95,10 +95,10 @@ export async function editSubtitleStructure(
 }
 
 export async function updateSubtitleReviewSegments(
-  jobId: string, segments: Array<{ segmentId: string; before: string; text: string }>,
+  jobId: string, segments: Array<{ segmentId: string; before: string; text: string }>, clipId?: string,
 ): Promise<SubtitleReviewDocument> {
   return parseJsonResponse<SubtitleReviewDocument>(await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/segments`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ segments }),
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ segments, ...(clipId ? { clipId } : {}) }),
   }));
 }
 

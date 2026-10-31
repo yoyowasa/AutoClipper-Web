@@ -261,14 +261,17 @@ def test_gap_can_add_subtitle_inside_blank_rows_preserving_shared_clips_and_styl
     assert saved.clips[0].gaps == []
 
 
-def test_gap_insertion_still_rejects_nonempty_subtitle_without_partial_replacement(client: TestClient) -> None:  # noqa: F811
-    job_id, path, _ = _seed_gaps(client)
-    before = path.read_bytes()
+def test_gap_insertion_preserves_nonempty_subtitle_while_inserting_overlap(client: TestClient) -> None:  # noqa: F811
+    job_id, path, before = _seed_gaps(client)
     response = client.post(f"/api/jobs/{job_id}/subtitle-review/segment-structure", json={
-        "action": "insert_at_time", "segments": [], "clipId": "normal", "start": 1.5, "end": 3, "text": "重複禁止",
+        "action": "insert_at_time", "segments": [], "clipId": "normal", "start": 1.5, "end": 3, "text": "重なる位置への追加",
     })
-    assert response.status_code == 422
-    assert path.read_bytes() == before
+    assert response.status_code == 200, response.text
+    saved = load_subtitle_review(path)
+    assert any(segment.text == "重なる位置への追加" for segment in saved.segments)
+    assert all(any(segment.text == original.text for segment in saved.segments) for original in before.segments if original.text.strip())
+    rows = sorted([segment for segment in saved.segments if "normal" in segment.affected_clip_ids], key=lambda s: s.start)
+    assert all(left.end <= right.start for left, right in zip(rows, rows[1:]))
 
 
 def test_gap_insertion_preserves_legacy_one_millisecond_nonempty_boundary_tolerance(client: TestClient) -> None:  # noqa: F811

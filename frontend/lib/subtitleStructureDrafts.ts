@@ -11,7 +11,7 @@ export function subtitleStructureSources(
   const targets = new Set(request.segments.map((item) => item.segmentId));
   return segments.filter((segment) => targets.has(segment.id) || (
     request.action === "insert_at_time" && request.start !== undefined && request.end !== undefined &&
-    !segment.text.trim() && segment.start < request.end && segment.end > request.start
+    segment.start < request.end && segment.end > request.start
   ));
 }
 

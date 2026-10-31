@@ -109,6 +109,8 @@ class PreviewFraming(BaseModel):
 
 
 class SubtitleReviewClip(BaseModel):
+    automatic_decision_inputs: dict[str, str] = Field(default_factory=dict, alias="automaticDecisionInputs", exclude_if=lambda v: not v)
+    automatic_decision_targets: list[str] | None = Field(default=None, alias="automaticDecisionTargets", exclude_if=lambda v: v is None)
     selection_warnings: list[SelectionReviewWarning] = Field(default_factory=list, alias="selectionWarnings")
     automatic_thumbnail: dict[str, Any] | None = Field(default=None, alias="automaticThumbnail")
     automatic_decision_revision: str | None = Field(default=None, alias="automaticDecisionRevision")
@@ -299,6 +301,7 @@ class SubtitleReviewClip(BaseModel):
 
 
 class SubtitleReviewDocument(BaseModel):
+    pending_subtitle_clip_ids: list[str] = Field(default_factory=list, alias="pendingSubtitleClipIds", exclude_if=lambda v: not v)
     render_clip_ids: list[str] | None = Field(default=None, alias="renderClipIds", exclude_if=lambda v: v is None)
     automatic_stop_reasons: list[str] = Field(default_factory=list, alias="automaticStopReasons")
     subtitle_only_auto: bool = Field(default=False, alias="subtitleOnlyAuto")
@@ -853,7 +856,8 @@ def update_review_segment(
     affected = set(segment.affected_clip_ids)
     for clip in document.clips:
         if clip.id in affected:
-            clip.confirmed = False
+            if not (document.subtitle_only_auto and clip.id == clip_id and clip.confirmed):
+                clip.confirmed = False
     return _refresh_counts(document)
 
 

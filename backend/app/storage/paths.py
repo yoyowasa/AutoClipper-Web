@@ -56,6 +56,11 @@ class StoragePaths:
     def youtube_oauth_states(self) -> Path:
         return self.root / "secrets" / "youtube_oauth_states"
 
+    def pending_subtitle_edits(self, job_id: str) -> Path:
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+            raise ValueError("Invalid job identifier")
+        return self.outputs / job_id / "subtitle_review_pending_edits.json"
+
     def publication_decisions(self, job_id: str) -> Path:
         if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
             raise ValueError("Invalid job identifier")

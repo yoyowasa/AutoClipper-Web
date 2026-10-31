@@ -21,7 +21,7 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
     clipDuration,
     hookSceneDuration,
     currentSourceTime,
-    isEditable,
+    isEditable, isSubtitleEditable,
     isSavingStructure,
     savePausedSubtitleDraft,
     bulkCorrectionSelection,
@@ -48,8 +48,11 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
   if (!selectedClip) return null;
   const structureSegments = selectedSegments.map(segment => ({ ...segment,
     affectedClipIds: segment.affectedClipIds.filter(id => review?.clips.some(clip =>
-      clip.id === id && (!clip.confirmed || clip.id === selectedClip.id)))
+      clip.id === id && (review.subtitleOnlyAuto && selectedClip.confirmed ? clip.id === selectedClip.id : !clip.confirmed || clip.id === selectedClip.id)))
   }));
+  const insertionNotice = pausedSubtitleDraft?.clipId === selectedClip.id ? sharedSubtitleNotice(review, [{
+    affectedClipIds: review.clips.filter(clip => clip.start < pausedSubtitleDraft.end && clip.end > pausedSubtitleDraft.start).map(clip => clip.id)
+  }], selectedClip.id) : "";
   return (
     <div className="subtitle-review-captions flex min-h-[640px] min-w-0 flex-col bg-white lg:col-span-1 lg:col-start-3 lg:row-start-1 2xl:col-span-1 2xl:col-start-3 2xl:row-start-1 2xl:min-h-0">
                 <div className="border-b border-neutral-300 bg-white px-4 py-3">
@@ -73,7 +76,8 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                 {pausedSubtitleDraft?.clipId === selectedClip.id ? (
                   <div className="border-b border-sky-300 bg-sky-50 px-3 py-3 text-sm">
                     <p className="font-semibold">プレビューの停止位置から字幕を追加</p>
-                    <p className="mt-1 text-xs text-neutral-600">開始・終了は動画内の秒数です。再生位置を動かして各時刻を取り直せます。</p>
+                    <p className="mt-1 text-xs text-neutral-600">開始・終了は動画内の秒数です。重なる字幕は文字を残して区間を分け、編集中の文字も一緒に保存します。確定の操作は不要です。</p>
+                    {insertionNotice && <p className="mt-1 text-xs text-violet-800">{insertionNotice}。確定済みの他のclipは変更しません。</p>}
                     <textarea
                       aria-label="追加する字幕"
                       className="mt-2 min-h-16 w-full border border-neutral-300 bg-white p-2"
@@ -120,8 +124,8 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                     </div>
                     <div className="mt-2 flex gap-2">
                       <button className="min-h-9 flex-1 bg-sky-700 px-2 font-semibold text-white disabled:opacity-50"
-                        disabled={!isEditable || isSavingStructure} type="button" onClick={() => void savePausedSubtitleDraft()}>
-                        この時刻で字幕を保存
+                        disabled={!isSubtitleEditable || isSavingStructure} type="button" onClick={() => void savePausedSubtitleDraft()}>
+                        字幕を追加
                       </button>
                       <button className="min-h-9 border border-neutral-300 bg-white px-3" type="button"
                         onClick={() => setPausedSubtitleDraft(null)}>閉じる</button>
@@ -212,7 +216,7 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                                 ? "border-amber-500 bg-amber-50"
                                 : "border-neutral-300 bg-white focus:border-sky-600"
                             }`}
-                            disabled={!isEditable}
+                            disabled={!isSubtitleEditable}
                             value={drafts[segment.id] ?? segment.text}
                             onChange={(event) => updateDraft(segment.id, event.target.value)}
                             aria-label={`字幕 ${formatTime(segment.start)}`}
@@ -233,7 +237,7 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                             nextText={selectedSegments[segmentIndex + 1] ? drafts[selectedSegments[segmentIndex + 1].id] ?? selectedSegments[segmentIndex + 1].text : ""}
                             cursor={segmentCursor?.id === segment.id ? segmentCursor.offset : null}
                             origin={selectedClip.start - hookSceneDuration} playhead={absolutePlaybackTime}
-                            disabled={!isEditable} onEdit={async (request) => { await saveSubtitleStructure(request); }} />
+                            disabled={!isSubtitleEditable} onEdit={async (request) => { await saveSubtitleStructure(request); }} />
                           {longEditedSubtitleWarning(segment, drafts[segment.id] ?? segment.text) ? (
                             <p role="status" className="mt-2 text-xs font-medium text-amber-800">
                               区間が長すぎます。再生して分割してください
@@ -245,7 +249,7 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                             </span>
                             {isDirty ? (
                               <span className="text-[11px] font-semibold text-amber-700">
-                                下の保存でまとめて反映
+                                {review.subtitleOnlyAuto && selectedClip.confirmed ? "自動保存します" : "字幕の追加・確定でまとめて反映"}
                               </span>
                             ) : null}
                             {showStyleControls && <button type="button" disabled={!isEditable}

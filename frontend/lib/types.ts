@@ -405,6 +405,7 @@ export type ThumbnailCopyState = {
 };
 
 export type SubtitleStructureRequest = {
+  edits?: Array<{ segmentId: string; before: string; text: string }>;
   action: "merge" | "split" | "insert" | "insert_at_time" | "delete" | "line";
   segments: Array<{ segmentId: string; before: string; text: string }>;
   clipId?: string;
@@ -476,6 +477,8 @@ export type SubtitleReviewClip = {
   selectionWarnings?: SelectionReviewWarning[];
   automaticDecisionState?: "idle" | "queued" | "generating" | "ready" | "failed";
   automaticDecisionError?: string | null;
+  automaticDecisionInputs?: Record<string, string>;
+  automaticDecisionTargets?: string[] | null;
   automaticDecisionRevision?: string | null;
   manualDecisionFields?: string[];
   subtitleStyles?: SubtitleStyleOverride[];
@@ -548,6 +551,7 @@ export type SubtitleReviewDocument = {
   renderClipIds?: string[] | null;
   subtitleOnlyAuto?: boolean;
   automaticStopReasons?: string[];
+  pendingSubtitleClipIds?: string[];
   previewGeneration?: string | null;
   hasSavedReviewChanges?: boolean | null;
   returnToClipPlanAllowed?: boolean;
