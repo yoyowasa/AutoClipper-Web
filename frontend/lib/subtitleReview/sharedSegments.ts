@@ -35,8 +35,9 @@ export function sharedSubtitleNotice(document: SubtitleReviewDocument, segments:
   return others.length ? `次の未確定clipにも反映します：${others.map(subtitleTargetName).join("、")}` : "";
 }
 
-export function bulkEditableSegments(document: SubtitleReviewDocument): SubtitleReviewSegment[] {
-  const editable = new Set(document.clips.filter(clip => !clip.confirmed).map(clip => clip.id));
+export function bulkEditableSegments(document: SubtitleReviewDocument, clipId?: string): SubtitleReviewSegment[] {
+  const selected = document.subtitleOnlyAuto ? document.clips.find(clip => clip.id === clipId && clip.confirmed) : null;
+  const editable = new Set(selected ? [selected.id] : document.clips.filter(clip => !clip.confirmed).map(clip => clip.id));
   return document.segments.filter(segment => segment.affectedClipIds.some(id => editable.has(id)))
     .map(segment => ({ ...segment, affectedClipIds: segment.affectedClipIds.filter(id => editable.has(id)) }));
 }

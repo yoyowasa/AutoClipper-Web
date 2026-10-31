@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { matchingSubtitleCorrections, type CorrectionSelection, type SubtitleBatchUpdate } from "../lib/subtitleBulkCorrection";
+import { matchingSubtitleCorrections, subtitleUndoUpdates, type CorrectionSelection, type SubtitleBatchUpdate, type SubtitleUndoUpdate } from "../lib/subtitleBulkCorrection";
 import { subtitleTargetName } from "../lib/subtitleReview/sharedSegments";
 import type { SubtitleReviewClip, SubtitleReviewSegment } from "../lib/types";
 
-export function SubtitleBulkCorrection({ selection, onSelection, segments, clips, drafts, disabled, onSave, draftOnly = false }: {
+export function SubtitleBulkCorrection({ selection, onSelection, segments, clips, drafts, disabled, onSave, draftOnly = false, confirmedClipOnly = false }: {
   selection: CorrectionSelection | null;
   onSelection: (value: CorrectionSelection | null) => void;
   segments: SubtitleReviewSegment[];
@@ -13,29 +13,36 @@ export function SubtitleBulkCorrection({ selection, onSelection, segments, clips
   drafts: Record<string, string>;
   disabled: boolean;
   draftOnly?: boolean;
+  confirmedClipOnly?: boolean;
   onSave: (updates: SubtitleBatchUpdate[]) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [undo, setUndo] = useState<SubtitleBatchUpdate[]>([]);
+  const [undo, setUndo] = useState<SubtitleUndoUpdate[]>([]);
   const matches = matchingSubtitleCorrections(segments, drafts, selection?.source ?? "", selection?.replacement ?? "");
   const count = matches.reduce((total, match) => total + match.count, 0);
   const clipCount = new Set(matches.flatMap((match) => match.clipIds)).size;
-  const canUndo = undo.length > 0 && undo.every((item) => {
+  // A confirmed edit can fork shared segment IDs. Follow the unchanged time slot,
+  // and still require the last replacement text before offering an undo.
+  const undoChanges = subtitleUndoUpdates(segments, undo);
+  const canUndo = undo.length > 0 && undoChanges.length === undo.length && undoChanges.every((item) => {
     const segment = segments.find((value) => value.id === item.segmentId);
-    return segment?.text === item.before && (drafts[item.segmentId] ?? segment.text) === item.before;
+    return segment && (draftOnly || segment.text === item.before) && (drafts[item.segmentId] ?? segment.text) === item.before;
   });
 
   async function save(revert: boolean) {
     if (busy || disabled) return;
-    const changes = revert ? undo : matches.map(({ segmentId, before, text }) => ({ segmentId, before, text }));
+    const changes = revert ? undoChanges : matches.map(({ segmentId, before, text }) => ({ segmentId, before, text }));
     if (!changes.length) return;
     setBusy(true); setError("");
     try {
       await onSave(changes);
-      setUndo(revert ? [] : matches.map(({ segmentId, current, text }) => ({ segmentId, before: text, text: current })));
-      setNotice(revert ? "直前の一括修正を取り消しました。" : draftOnly ? `${count}か所を下書きに反映しました。clipの確定時に保存します。` : `${count}か所を修正して保存しました。対象の${clipCount}本は字幕を再確認してください。`);
+      setUndo(revert ? [] : matches.map(({ segmentId, current, text }) => {
+        const segment = segments.find(item => item.id === segmentId)!;
+        return { segmentId, before: text, text: current, index: segment.index, start: segment.start, end: segment.end };
+      }));
+      setNotice(revert ? "直前の一括修正を取り消しました。" : draftOnly ? `${count}か所を下書きに反映しました。${confirmedClipOnly ? "編集欄を離れると保存します。確定の解除は不要です。" : "clipの確定時に保存します。"}` : `${count}か所を修正して保存しました。対象の${clipCount}本は字幕を再確認してください。`);
       onSelection(null);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "一括修正を保存できませんでした。"); }
     finally { setBusy(false); }
@@ -51,7 +58,7 @@ export function SubtitleBulkCorrection({ selection, onSelection, segments, clips
           maxLength={200} value={selection.replacement} disabled={disabled || busy}
           onChange={(event) => onSelection({ ...selection, replacement: event.target.value })} />
       </label>
-      <p>確定済みのclipは対象外です。</p>
+      <p>{confirmedClipOnly ? "開いているclipだけを修正します。他のclipは確定・未確定にかかわらず変更しません。" : "確定済みのclipは対象外です。"}</p>
       <p>対象clip：{clips.filter(clip => matches.some(match => match.clipIds.includes(clip.id))).map(subtitleTargetName).join("、") || "なし"}</p>
       {selection.replacement && <p role="status">{count}か所・{matches.length}字幕・{clipCount}本</p>}
       {matches.length > 0 && <details>
@@ -64,7 +71,7 @@ export function SubtitleBulkCorrection({ selection, onSelection, segments, clips
           </div>)}
         </div>
       </details>}
-      <p className="text-neutral-500">一致する表記だけを修正します。{draftOnly ? "変更は下書きに反映し、clipの確定時にまとめて保存します。" : "対象の字幕に入力中の変更も一緒に保存します。"}</p>
+      <p className="text-neutral-500">一致する表記だけを修正します。{draftOnly ? confirmedClipOnly ? "変更は下書きに反映し、編集欄を離れると保存します。" : "変更は下書きに反映し、clipの確定時にまとめて保存します。" : "対象の字幕に入力中の変更も一緒に保存します。"}</p>
       <div className="flex flex-wrap gap-2">
         <button type="button" disabled={disabled || busy || !count || matches.some((match) => match.text.length > 4000)}
           className="min-h-9 bg-sky-700 px-3 font-semibold text-white disabled:opacity-40" onClick={() => void save(false)}>
