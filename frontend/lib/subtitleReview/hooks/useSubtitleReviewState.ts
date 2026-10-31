@@ -1,5 +1,6 @@
 "use client";
 
+import { useCaptionDraftState } from "./useCaptionDraftState";
 import { useParams, useRouter } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 import type { CorrectionSelection } from "../../subtitleBulkCorrection";
@@ -36,11 +37,11 @@ export function useSubtitleReviewState() {
   const [lastSelectedClipIds, setLastSelectedClipIds] = useState<
     Record<ExportType, string>
   >({ normal: "", short: "" });
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts, subtitleDraftsRef] = useCaptionDraftState<Record<string, string>>({});
   const [clipContentDrafts, setClipContentDrafts] = useState<
     Record<string, ClipContentDraft>
   >({});
-  const [dirtySegmentIds, setDirtySegmentIds] = useState<Set<string>>(new Set());
+  const [dirtySegmentIds, setDirtySegmentIds, subtitleDirtyRef] = useCaptionDraftState<Set<string>>(new Set());
   const [retryingPreviewClipId, setRetryingPreviewClipId] = useState<
     string | null
   >(null);
@@ -96,6 +97,7 @@ export function useSubtitleReviewState() {
   >(null);
   const [copiedPostField, setCopiedPostField] = useState<string | null>(null);
   const [bulkCorrectionSelection, setBulkCorrectionSelection] = useState<CorrectionSelection | null>(null);
+  const [isSavingConfirmedSubtitles, setIsSavingConfirmedSubtitles] = useState(false);
   const [isSavingBulkCorrection, setIsSavingBulkCorrection] = useState(false);
   const [isSavingStructure, setIsSavingStructure] = useState(false);
   const [retainedLivePreviews, setRetainedLivePreviews] = useState<
@@ -105,7 +107,7 @@ export function useSubtitleReviewState() {
   const [workspaceTab, setWorkspaceTab] = useState<"content" | "style">("content");
   const [suggestionHydrationRetryVersion, setSuggestionHydrationRetryVersion] =
     useState(0);
-  return { subtitleWorkspaceOpen, setSubtitleWorkspaceOpen, isReturningToClipPlan, setIsReturningToClipPlan, locallyUpdatedReviewRef, styledSegmentId, setStyledSegmentId, params, router, jobId, videoRef, currentPlayerMediaRef, pendingPlayerResumeRef, playerShellRef, subtitleListRef, segmentRowRefs, suggestionPlaybackEndRef, suggestionRequestGenerationRef, autoSuggestionAttemptedClipIdsRef, reviewRequestGenerationRef, reviewMutationCountRef, shortFramingSaveInFlightRef, lastSavedShortFramingSignatureRef, review, setReview, selectedClipId, setSelectedClipId, activeClipType, setActiveClipType, lastSelectedClipIds, setLastSelectedClipIds, drafts, setDrafts, clipContentDrafts, setClipContentDrafts, dirtySegmentIds, setDirtySegmentIds, retryingPreviewClipId, setRetryingPreviewClipId, isSavingShortBannerSettings, setIsSavingShortBannerSettings, savingShortFramingClipId, setSavingShortFramingClipId, shortFramingDrafts, setShortFramingDrafts, isUpdatingHookScene, setIsUpdatingHookScene, confirmingClipId, setConfirmingClipId, isFinalizing, setIsFinalizing, isReopeningBoundaries, setIsReopeningBoundaries, isPlaying, setIsPlaying, isBuffering, setIsBuffering, isPlayerReady, setIsPlayerReady, videoLoadSeconds, setVideoLoadSeconds, previewLoadFailedClipIds, setPreviewLoadFailedClipIds, clipTime, setClipTime, pausedSubtitleDraft, setPausedSubtitleDraft, volume, setVolume, isMuted, setIsMuted, playbackRate, setPlaybackRate, error, setError, openedFromReupload, setOpenedFromReupload, selectedTextStyleTarget, setSelectedTextStyleTarget, showSavedPreview, setShowSavedPreview, titleHookSuggestionRecords, setTitleHookSuggestionRecords, requestingSuggestionClipId, setRequestingSuggestionClipId, autoGeneratingSuggestionClipIds, setAutoGeneratingSuggestionClipIds, previewingSuggestionId, setPreviewingSuggestionId, copiedPostField, setCopiedPostField, bulkCorrectionSelection, setBulkCorrectionSelection, isSavingBulkCorrection, setIsSavingBulkCorrection, isSavingStructure, setIsSavingStructure, retainedLivePreviews, setRetainedLivePreviews, segmentCursor, setSegmentCursor, workspaceTab, setWorkspaceTab, suggestionHydrationRetryVersion, setSuggestionHydrationRetryVersion };
+  return { isSavingConfirmedSubtitles, setIsSavingConfirmedSubtitles, subtitleDraftsRef, subtitleDirtyRef, subtitleWorkspaceOpen, setSubtitleWorkspaceOpen, isReturningToClipPlan, setIsReturningToClipPlan, locallyUpdatedReviewRef, styledSegmentId, setStyledSegmentId, params, router, jobId, videoRef, currentPlayerMediaRef, pendingPlayerResumeRef, playerShellRef, subtitleListRef, segmentRowRefs, suggestionPlaybackEndRef, suggestionRequestGenerationRef, autoSuggestionAttemptedClipIdsRef, reviewRequestGenerationRef, reviewMutationCountRef, shortFramingSaveInFlightRef, lastSavedShortFramingSignatureRef, review, setReview, selectedClipId, setSelectedClipId, activeClipType, setActiveClipType, lastSelectedClipIds, setLastSelectedClipIds, drafts, setDrafts, clipContentDrafts, setClipContentDrafts, dirtySegmentIds, setDirtySegmentIds, retryingPreviewClipId, setRetryingPreviewClipId, isSavingShortBannerSettings, setIsSavingShortBannerSettings, savingShortFramingClipId, setSavingShortFramingClipId, shortFramingDrafts, setShortFramingDrafts, isUpdatingHookScene, setIsUpdatingHookScene, confirmingClipId, setConfirmingClipId, isFinalizing, setIsFinalizing, isReopeningBoundaries, setIsReopeningBoundaries, isPlaying, setIsPlaying, isBuffering, setIsBuffering, isPlayerReady, setIsPlayerReady, videoLoadSeconds, setVideoLoadSeconds, previewLoadFailedClipIds, setPreviewLoadFailedClipIds, clipTime, setClipTime, pausedSubtitleDraft, setPausedSubtitleDraft, volume, setVolume, isMuted, setIsMuted, playbackRate, setPlaybackRate, error, setError, openedFromReupload, setOpenedFromReupload, selectedTextStyleTarget, setSelectedTextStyleTarget, showSavedPreview, setShowSavedPreview, titleHookSuggestionRecords, setTitleHookSuggestionRecords, requestingSuggestionClipId, setRequestingSuggestionClipId, autoGeneratingSuggestionClipIds, setAutoGeneratingSuggestionClipIds, previewingSuggestionId, setPreviewingSuggestionId, copiedPostField, setCopiedPostField, bulkCorrectionSelection, setBulkCorrectionSelection, isSavingBulkCorrection, setIsSavingBulkCorrection, isSavingStructure, setIsSavingStructure, retainedLivePreviews, setRetainedLivePreviews, segmentCursor, setSegmentCursor, workspaceTab, setWorkspaceTab, suggestionHydrationRetryVersion, setSuggestionHydrationRetryVersion };
 }
 
 export type SubtitleReviewState = ReturnType<typeof useSubtitleReviewState>;

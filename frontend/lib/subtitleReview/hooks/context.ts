@@ -29,6 +29,7 @@ export type SubtitleReviewContext = SubtitleReviewState & {
   hasReviewMutationInFlight: boolean;
   isEditable: boolean;
   isSubtitleEditable: boolean;
+  isSubtitleTextEditable: boolean;
   segmentsById: Map<string, SubtitleReviewSegment>;
   selectedSegments: SubtitleReviewSegment[];
   selectedSuggestionSegments: { segmentId: string; text: string; }[];

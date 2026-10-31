@@ -1,5 +1,6 @@
 "use client";
 
+import { captionRowKey } from "../../lib/subtitleReview/captionAutosave";
 import { bulkEditableSegments, sharedSubtitleNotice } from "../../lib/subtitleReview/sharedSegments";
 
 import { SelectionWarnings } from "./SelectionWarnings";
@@ -165,7 +166,7 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                               ? "border-sky-300 bg-sky-50 shadow-[inset_4px_0_0_#0369a1]"
                               : "border-neutral-200 bg-white"
                           }`}
-                          key={segment.id}
+                          key={captionRowKey(selectedClip.id, segment)}
                           ref={(element) => {
                             segmentRowRefs.current[segment.id] = element;
                           }}
@@ -216,9 +217,16 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                                 ? "border-amber-500 bg-amber-50"
                                 : "border-neutral-300 bg-white focus:border-sky-600"
                             }`}
-                            disabled={!isSubtitleEditable}
+                            disabled={!(context.isSubtitleTextEditable ?? isSubtitleEditable)}
+                            data-caption-edit-clip={selectedClip.id}
                             value={drafts[segment.id] ?? segment.text}
-                            onChange={(event) => updateDraft(segment.id, event.target.value)}
+                            onInput={(event) => {
+                              // Mirror pre-edit text too, so an older save reply cannot replace an active IME composition.
+                              if ((event.nativeEvent as InputEvent).isComposing) updateDraft(segment.id, event.currentTarget.value);
+                            }}
+                            onChange={(event) => {
+                              if (!(event.nativeEvent as InputEvent).isComposing) updateDraft(segment.id, event.target.value);
+                            }}
                             aria-label={`字幕 ${formatTime(segment.start)}`}
                             onSelect={(event) => {
                               const field = event.currentTarget;
@@ -231,13 +239,13 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                               }
                             }}
                           />
-                          <SubtitleSegmentActions segment={structureSegments[segmentIndex]} previous={structureSegments[segmentIndex - 1]}
+                          <div data-caption-edit-clip={selectedClip.id}><SubtitleSegmentActions segment={structureSegments[segmentIndex]} previous={structureSegments[segmentIndex - 1]}
                             next={structureSegments[segmentIndex + 1]}
                             text={drafts[segment.id] ?? segment.text}
                             nextText={selectedSegments[segmentIndex + 1] ? drafts[selectedSegments[segmentIndex + 1].id] ?? selectedSegments[segmentIndex + 1].text : ""}
                             cursor={segmentCursor?.id === segment.id ? segmentCursor.offset : null}
                             origin={selectedClip.start - hookSceneDuration} playhead={absolutePlaybackTime}
-                            disabled={!isSubtitleEditable} onEdit={async (request) => { await saveSubtitleStructure(request); }} />
+                            disabled={!isSubtitleEditable} onEdit={async (request) => { await saveSubtitleStructure(request); }} /></div>
                           {longEditedSubtitleWarning(segment, drafts[segment.id] ?? segment.text) ? (
                             <p role="status" className="mt-2 text-xs font-medium text-amber-800">
                               区間が長すぎます。再生して分割してください
@@ -249,7 +257,7 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                             </span>
                             {isDirty ? (
                               <span className="text-[11px] font-semibold text-amber-700">
-                                {review.subtitleOnlyAuto && selectedClip.confirmed ? "自動保存します" : "字幕の追加・確定でまとめて反映"}
+                                {review.subtitleOnlyAuto && selectedClip.confirmed ? "編集欄を離れると保存します" : "字幕の追加・確定でまとめて反映"}
                               </span>
                             ) : null}
                             {showStyleControls && <button type="button" disabled={!isEditable}

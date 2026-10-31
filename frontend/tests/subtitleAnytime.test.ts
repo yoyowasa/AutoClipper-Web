@@ -44,7 +44,11 @@ async function main() {
   Object.assign(globalThis, { requestAnimationFrame: (callback: () => void) => callback() });
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
-    return new Response(JSON.stringify(review), { status: 200 });
+    const body = JSON.parse(String(init?.body));
+    const response = init?.method === "PATCH" ? { ...review, segments: review.segments.map(segment => ({ ...segment,
+      text: body.segments.find((item: { segmentId: string; text: string }) => item.segmentId === segment.id)?.text ?? segment.text
+    })) } : review;
+    return new Response(JSON.stringify(response), { status: 200 });
   };
   try {
     Object.assign(context, actions(context));
@@ -87,6 +91,14 @@ async function main() {
     assert.match(screen, /<button(?![^>]*\sdisabled=)[^>]*>字幕を追加<\/button>/);
     assert.match(screen, /確定の解除は不要/);
     assert.doesNotMatch(screen, /次の未確定clipにも反映/);
+    screenContext.isSubtitleEditable = false;
+    screenContext.isSubtitleTextEditable = true;
+    screenContext.hasReviewMutationInFlight = true;
+    const savingScreen = renderToStaticMarkup(React.createElement(ReviewSubtitleSegments, { context: screenContext, showStyleControls: false }));
+    assert.match(savingScreen, /<textarea(?=[^>]*aria-label="字幕 0:01.0")(?![^>]*\sdisabled=)[^>]*>/,
+      "a pending caption save must not disable the typing field");
+    screenContext.isSubtitleEditable = true;
+    screenContext.hasReviewMutationInFlight = false;
     clip.confirmed = false;
     screenContext.isEditable = true;
     const shared = renderToStaticMarkup(React.createElement(ReviewSubtitleSegments, { context: screenContext, showStyleControls: false }));

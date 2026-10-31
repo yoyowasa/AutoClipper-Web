@@ -1,5 +1,6 @@
 "use client";
 
+import { reconcileCaptionSave } from "../captionAutosave";
 import { bulkEditableSegments, sharedSubtitleNotice, subtitleEditTargets, segmentDraftKey } from "../sharedSegments";
 import { editSubtitleStructure, updateSubtitleReviewSegments } from "../../api";
 import type { SubtitleStructureRequest } from "../../types";
@@ -190,26 +191,29 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
   async function saveConfirmedSubtitles(clipId = context.selectedClip?.id) {
     const { review, rawDrafts, rawDirtySegmentIds, setDrafts, setDirtySegmentIds } = context;
     const clip = review?.clips.find(item => item.id === clipId);
-    if (!review?.subtitleOnlyAuto || !clip?.confirmed || context.hasReviewMutationInFlight) return;
+    if (!review?.subtitleOnlyAuto || review.jobId !== context.jobId || !clip?.confirmed || context.hasReviewMutationInFlight ||
+      (context.reviewMutationCountRef?.current ?? 0) > 0) return;
     const updates = review.segments.filter(segment => clip.segmentIds.includes(segment.id) && rawDirtySegmentIds.has(segmentDraftKey(clip, segment.id)))
       .map(segment => ({ segmentId: segment.id, before: segment.text, text: rawDrafts[segmentDraftKey(clip, segment.id)] ?? segment.text }));
     if (!updates.length) return;
     const generation = context.beginReviewMutation();
-    context.setIsSavingBulkCorrection(true);
+    const setSaving = context.setIsSavingConfirmedSubtitles ?? context.setIsSavingBulkCorrection;
+    setSaving(true);
     context.setShowSavedPreview(false);
     context.setError(null);
     try {
       const updated = await updateSubtitleReviewSegments(context.jobId, updates, clip.id);
       if (!context.isCurrentReviewMutation(generation)) return;
+      const reconciled = reconcileCaptionSave(review, updated, clip.id, updates,
+        context.subtitleDraftsRef?.current ?? rawDrafts, context.subtitleDirtyRef?.current ?? rawDirtySegmentIds);
       context.locallyUpdatedReviewRef.current = updated;
+      setDrafts(reconciled.drafts);
+      setDirtySegmentIds(reconciled.dirty);
       context.setReview(updated);
-      const keys = new Set(updates.map(item => segmentDraftKey(clip, item.segmentId)));
-      setDrafts(current => Object.fromEntries(Object.entries(current).filter(([key]) => !keys.has(key))));
-      setDirtySegmentIds(current => new Set([...current].filter(key => !keys.has(key))));
     } catch (caught) {
       context.setError(caught instanceof Error ? caught.message : "字幕の変更を保存できませんでした。入力は保持しています。");
     } finally {
-      context.setIsSavingBulkCorrection(false);
+      setSaving(false);
       context.endReviewMutation();
     }
   }
