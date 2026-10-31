@@ -103,7 +103,7 @@ def mutate_subtitles(job, video, request, db, paths, enqueue_decisions, enqueue_
             record_decision_failure(paths, job.id, clip_id, revision, "字幕変更後の自動処理を登録できませんでした。再試行してください。")
             document = jobs._get_subtitle_review_or_404(job.id, paths)
     return jobs._enqueue_subtitle_review_previews(job_id=job.id, document=document, queued=queued,
-        paths=paths, enqueue_preview=enqueue_preview)
+        paths=paths, enqueue_preview=enqueue_preview, preserve_confirmation_for=confirmed)
 
 
 def update_batch(document, request):

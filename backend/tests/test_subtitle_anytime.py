@@ -132,6 +132,7 @@ def test_edit_during_render_is_durable_then_activates_without_overwriting_decisi
     after = load_subtitle_review(path)
     target = next(c for c in after.clips if c.id == "short")
     assert target.confirmed and target.hook_text == "書き出し工程が直した値を残す"
+    assert after.has_saved_review_changes
     assert any(s.text == "書き出し中の追加" for s in after.segments)
     assert after.clips[0].model_dump() == latest.clips[0].model_dump()
     assert len(queued) == 1 and not paths.pending_subtitle_edits(job_id).exists()
@@ -258,3 +259,35 @@ def test_pending_legacy_inputs_are_compared_to_the_last_rendered_snapshot(client
     assert not paths.pending_subtitle_edits(job_id).exists()
     assert any(s.text == "書き出し中に保存した字幕" for s in after.segments)
     assert any(s.text == "続けて修正した字幕" for s in after.segments)
+
+
+def test_preview_enqueue_failure_does_not_unconfirm_an_edited_auto_clip(guarded_client, monkeypatch, tmp_path):  # noqa: F811
+    from app.jobs.queue import get_enqueue_subtitle_review_preview
+    from app.jobs.subtitle_review_preview import current_subtitle_review_preview_spec
+    from app.render.render_exact_review_preview import build_live_subtitle_review_preview_spec, live_subtitle_review_preview_paths
+    from app.render.render_exact_review_preview import subtitle_review_preview_spec_hash
+    from app.models import Video
+    data = setup_auto(guarded_client, monkeypatch, tmp_path, short=True)
+    data.run()
+    clip = load_subtitle_review(data.review_path).clips[0]
+    confirm(data, clip)
+    assert decide(data) == "ready"
+    before = load_subtitle_review(data.review_path)
+    with data.factory() as db:
+        job = db.get(Job, data.job_id)
+        spec, _, _ = current_subtitle_review_preview_spec(job=job, video=db.get(Video, job.video_id),
+            document=before, paths=data.storage, clip_id=clip.id)
+    live = build_live_subtitle_review_preview_spec(spec)
+    paths = live_subtitle_review_preview_paths(data.review_path.parent, clip.id, subtitle_review_preview_spec_hash(live))
+    paths.video_path.unlink(missing_ok=True)
+    def unavailable(*args):
+        raise ConnectionError("test queue unavailable")
+    app.dependency_overrides[get_enqueue_subtitle_review_preview] = lambda: unavailable
+    segment = before.segments[0]
+    response = data.client.patch(f"/api/jobs/{data.job_id}/subtitle-review/segments", json={"clipId": clip.id, "segments": [
+        {"segmentId": segment.id, "before": segment.text, "text": "プレビューの登録失敗でも確定を保つ"}]})
+    assert response.status_code == 200, response.text
+    after = load_subtitle_review(data.review_path)
+    assert after.clips[0].confirmed and after.clips[0].preview_state == "failed"
+    assert after.clips[0].automatic_decision_state == "queued"
+    assert after.segments[0].text == "プレビューの登録失敗でも確定を保つ"

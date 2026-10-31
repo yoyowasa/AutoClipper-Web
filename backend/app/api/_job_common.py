@@ -169,6 +169,7 @@ def _enqueue_subtitle_review_previews(
     queued: list[tuple[str, str]],
     paths: StoragePaths,
     enqueue_preview: SubtitleReviewPreviewEnqueue,
+    preserve_confirmation_for: set[str] | None = None,
 ) -> SubtitleReviewDocument:
     enqueue_failures: list[tuple[str, str]] = []
     for clip_id, spec_hash in queued:
@@ -190,7 +191,8 @@ def _enqueue_subtitle_review_previews(
             clip.preview_state = "failed"
             clip.preview_video_url = None
             clip.preview_error = "could not queue preview rendering"
-            clip.confirmed = False
+            if clip.id not in (preserve_confirmation_for or set()):
+                clip.confirmed = False
             changed = True
         if changed:
             latest.confirmed_clip_count = sum(1 for clip in latest.clips if clip.confirmed)

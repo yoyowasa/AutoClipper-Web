@@ -33,6 +33,7 @@ def pending_view(document, paths):
 
 def merge_subtitles(latest, edited, ids):
     result = latest.model_copy(deep=True)
+    result.has_saved_review_changes = bool(ids) or result.has_saved_review_changes
     by_id = {}
     for segment in result.segments:
         owners = [id for id in segment.affected_clip_ids if id not in ids]

@@ -5,7 +5,8 @@ ALL_TARGETS = {"title_hook", "thumbnail_copy", "thumbnail_image", "framing", "te
 
 
 def decision_inputs(document, clip):
-    text = [(s.id, s.start, s.end, s.text) for s in document.segments if s.id in set(clip.segment_ids)]
+    ids = set(clip.segment_ids)
+    text = [(s.id, s.start, s.end, s.text) for s in document.segments if s.id in ids]
     content = [clip.title, clip.publication_title, clip.hook_text]
     image = [clip.start, clip.end, clip.thumbnail_frame_seconds]
     # Video-frame harvesting is geometric and range-based; only fallback asset
