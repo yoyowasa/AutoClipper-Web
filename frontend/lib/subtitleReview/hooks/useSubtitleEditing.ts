@@ -59,15 +59,18 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
 
   async function saveBulkCorrection(updates: SubtitleBatchUpdate[]) {
     const { setDrafts, setDirtySegmentIds, setShowSavedPreview, review } = context;
-    const eligible = new Set(review ? bulkEditableSegments(review).map(segment => segment.id) : []);
+    const selected = review?.subtitleOnlyAuto && context.selectedClip?.confirmed ? context.selectedClip : null;
+    const keyFor = (id: string) => selected ? segmentDraftKey(selected, id) : id;
+    const eligible = new Set(review ? bulkEditableSegments(review, context.selectedClip?.id).map(segment => segment.id) : []);
     updates = updates.filter(item => eligible.has(item.segmentId));
     setShowSavedPreview(false);
-    setDrafts(current => ({ ...current, ...Object.fromEntries(updates.map(item => [item.segmentId, item.text])) }));
+    setDrafts(current => ({ ...current, ...Object.fromEntries(updates.map(item => [keyFor(item.segmentId), item.text])) }));
     setDirtySegmentIds(current => {
       const next = new Set(current);
       for (const update of updates) {
         const saved = review?.segments.find(item => item.id === update.segmentId);
-        if (saved?.text === update.text) next.delete(update.segmentId); else next.add(update.segmentId);
+        const key = keyFor(update.segmentId);
+        if (saved?.text === update.text) next.delete(key); else next.add(key);
       }
       return next;
     });

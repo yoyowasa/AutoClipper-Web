@@ -1,7 +1,7 @@
 "use client";
 
 import { captionRowKey } from "../../lib/subtitleReview/captionAutosave";
-import { bulkEditableSegments, sharedSubtitleNotice } from "../../lib/subtitleReview/sharedSegments";
+import { bulkEditableSegments, clipSegmentDrafts, sharedSubtitleNotice } from "../../lib/subtitleReview/sharedSegments";
 
 import { SelectionWarnings } from "./SelectionWarnings";
 import { SubtitleSegmentActions } from "../SubtitleSegmentActions";
@@ -47,6 +47,8 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
     selectedClipContentDraft
   } = context;
   if (!selectedClip) return null;
+  const confirmedBulkClip = review.subtitleOnlyAuto && selectedClip.confirmed;
+  const bulkSegments = bulkEditableSegments(review, selectedClip.id);
   const structureSegments = selectedSegments.map(segment => ({ ...segment,
     affectedClipIds: segment.affectedClipIds.filter(id => review?.clips.some(clip =>
       clip.id === id && (review.subtitleOnlyAuto && selectedClip.confirmed ? clip.id === selectedClip.id : !clip.confirmed || clip.id === selectedClip.id)))
@@ -134,11 +136,14 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                   </div>
                 ) : null}
 
-                <SubtitleBulkCorrection draftOnly
+                <div data-caption-edit-clip={selectedClip.id}><SubtitleBulkCorrection draftOnly
+                  key={`${review.jobId}:${confirmedBulkClip ? selectedClip.id : "unconfirmed"}`} confirmedClipOnly={confirmedBulkClip}
                   selection={bulkCorrectionSelection} onSelection={setBulkCorrectionSelection}
-                  segments={bulkEditableSegments(review)} clips={review.clips} drafts={context.rawDrafts} disabled={!isEditable}
+                  segments={bulkSegments} clips={review.clips}
+                  drafts={confirmedBulkClip ? clipSegmentDrafts(selectedClip, bulkSegments, context.rawDrafts) : context.rawDrafts}
+                  disabled={!(context.isSubtitleTextEditable ?? isSubtitleEditable)}
                   onSave={saveBulkCorrection}
-                />
+                /></div>
                 <div
                   aria-label="字幕一覧"
                   className="relative min-h-0 flex-1 overflow-y-auto overscroll-y-contain"
