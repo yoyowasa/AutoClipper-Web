@@ -240,6 +240,10 @@ class SubtitleReviewClip(BaseModel):
         default=None,
         alias="livePreviewSpecHash",
     )
+    # None identifies historical media with a baked-in hook; v5 media is body-only.
+    live_preview_hook_duration_seconds: float | None = Field(
+        default=None, ge=0, alias="livePreviewHookDurationSeconds",
+    )
     segment_ids: list[str] = Field(default_factory=list, alias="segmentIds")
     gaps: list[SubtitleGap] = Field(default_factory=list)
     confirmed: bool = False

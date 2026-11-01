@@ -542,6 +542,7 @@ export type SubtitleReviewClip = {
   previewVideoUrl: string | null;
   livePreviewSpecHash: string | null;
   livePreviewVideoUrl: string | null;
+  livePreviewHookDurationSeconds?: number | null;
   segmentIds: string[];
   confirmed: boolean;
   editedSegmentCount: number;

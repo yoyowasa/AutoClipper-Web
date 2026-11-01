@@ -4,6 +4,7 @@ import { canEditManualFraming } from "../manualFraming";
 import { segmentDraftKey } from "../sharedSegments";
 import { useEffect, useRef } from "react";
 import { contentDraftForClip, isClipContentDirty } from "../drafts";
+import { remapDraftEvidence } from "../draftEvidence";
 import { readReviewDraft, reviewDraftFingerprint, writeReviewDraft, rebaseUnchangedContent } from "../draftStorage";
 import type { SubtitleReviewState } from "./useSubtitleReviewState";
 
@@ -24,8 +25,11 @@ export function usePersistedReviewDrafts(state: SubtitleReviewState) {
     for (const clip of review.clips) {
       const saved = contentDraftForClip(clip), oldContent = previousContent.current[clip.id];
       previousContent.current[clip.id] = saved;
-      if (review.subtitleOnlyAuto && clip.confirmed && oldContent && !ownedUpdate && JSON.stringify(oldContent) !== JSON.stringify(saved)) {
-        setClipContentDrafts(current => ({ ...current, [clip.id]: rebaseUnchangedContent(current[clip.id] ?? oldContent, oldContent, saved) }));
+      // A caption response can also remap title/description evidence IDs (COW).
+      // Own responses need the same content rebase as background decisions;
+      // only caption restoration below must be skipped for an owned response.
+      if (review.subtitleOnlyAuto && clip.confirmed && oldContent && JSON.stringify(oldContent) !== JSON.stringify(saved)) {
+        setClipContentDrafts(current => ({ ...current, [clip.id]: remapDraftEvidence(rebaseUnchangedContent(current[clip.id] ?? oldContent, oldContent, saved), review, clip) }));
       }
       const fingerprint = reviewDraftFingerprint(review, clip);
       const previous = fingerprints.current[clip.id];
@@ -34,7 +38,7 @@ export function usePersistedReviewDrafts(state: SubtitleReviewState) {
       if (ownedUpdate || previous === fingerprint) continue;
       const stored = readReviewDraft(jobId, clip.id, fingerprint);
       restoring.current = true;
-      setClipContentDrafts(current => ({ ...current, [clip.id]: stored ? stored.baseContent ? rebaseUnchangedContent(stored.content, stored.baseContent, saved) : stored.content : saved }));
+      setClipContentDrafts(current => ({ ...current, [clip.id]: remapDraftEvidence(stored ? stored.baseContent ? rebaseUnchangedContent(stored.content, stored.baseContent, saved) : stored.content : saved, review, clip) }));
       setShortFramingDrafts(current => {
         const next = { ...current };
         if (stored?.framing && canEditManualFraming(review, clip)) next[clip.id] = stored.framing; else delete next[clip.id];

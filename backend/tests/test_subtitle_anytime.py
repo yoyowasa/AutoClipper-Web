@@ -37,6 +37,35 @@ def prepare(api, confirmed=False):
     return job_id, path, doc, original, normal, queued
 
 
+def test_confirmed_normal_save_remaps_posting_evidence_without_editing_other_clips(client):  # noqa: F811
+    from app.posting_metadata import YouTubeTitleCandidate
+    job_id, path, document, _, _, queued = prepare(client, True)
+    normal = next(c for c in document.clips if c.id == "normal")
+    normal.description_evidence_segment_ids = normal.segment_ids[:]
+    normal.title_candidates = [YouTubeTitleCandidate(id=f"title_{i}", title=f"候補{i}", intent="factual",
+        evidenceSegmentIds=normal.segment_ids[:]) for i in range(3)]
+    write_subtitle_review(document, path)
+    before = load_subtitle_review(path)
+    response = client.patch(f"/api/jobs/{job_id}/subtitle-review/segments", json={"clipId": normal.id,
+        "segments": [{"segmentId": s.id, "before": s.text, "text": f"保存した字幕{i}"}
+                     for i, s in enumerate(before.segments) if s.id in normal.segment_ids]})
+    assert response.status_code == 200, response.text
+    after = load_subtitle_review(path)
+    saved = next(c for c in after.clips if c.id == normal.id)
+    assert saved.confirmed and len(queued) == 1
+    assert set(saved.segment_ids).isdisjoint(normal.segment_ids)
+    assert saved.description_evidence_segment_ids == saved.segment_ids
+    assert all(c.evidence_segment_ids == saved.segment_ids for c in saved.title_candidates)
+    assert saved.live_preview_hook_duration_seconds == 0.0
+    assert [c.model_dump() for c in before.clips if c.id != normal.id] == [c.model_dump() for c in after.clips if c.id != normal.id]
+    protected = {s.id: s.model_dump() for s in before.segments}
+    # COW updates membership, but protected text/timing remains byte-for-byte equivalent.
+    for segment in after.segments:
+        if segment.id in protected:
+            for name in ("text", "start", "end", "original_text", "source_indices"):
+                assert getattr(segment, name) == protected[segment.id][name]
+
+
 @pytest.mark.parametrize("confirmed", [False, True])
 def test_insert_saves_overlapping_and_nonoverlapping_drafts_atomically(client, confirmed):  # noqa: F811
     job_id, path, before, original, normal, queued = prepare(client, confirmed)

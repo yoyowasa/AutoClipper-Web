@@ -41,6 +41,40 @@ def make_candidate(
     )
 
 
+@pytest.mark.parametrize("kind", ["normal", "short"])
+def test_editing_media_reuses_body_after_caption_and_hook_decisions(tmp_path: Path, kind: str) -> None:
+    calls = []
+
+    def renderer(_source, output, **kwargs):
+        calls.append(kwargs)
+        Path(output).write_bytes(b"rendered-media")
+        return Path(output)
+
+    candidate = make_candidate("clip", kind).model_copy(update={"hook_scene_start": 11.0, "hook_scene_end": 13.0})
+    kwargs = dict(source_fingerprint="source", source_width=1920, source_height=1080,
+                  normal_renderer=renderer, short_renderer=renderer, settings={"shortLayout": "blur_background"})
+    original = render_exact_subtitle_review_preview(tmp_path / "source.mp4", tmp_path / "out", candidate=candidate,
+        transcript_segments=[TranscriptSegment(start=10, end=12, text="修正前")], **kwargs)
+    assert calls[0]["hook_scene_start"] == 11.0  # the exact/final contract keeps the hook
+    assert "hook_scene_start" not in calls[1]  # editing media is body-only
+    body_bytes = original.live_path.read_bytes()
+    updated = render_exact_subtitle_review_preview(tmp_path / "source.mp4", tmp_path / "out",
+        candidate=candidate.model_copy(update={"hook_scene_start": 14.0, "hook_scene_end": 17.0}),
+        transcript_segments=[TranscriptSegment(start=10, end=12, text="保存した字幕")], **kwargs)
+    assert updated.spec_hash != original.spec_hash
+    assert updated.live_spec_hash == original.live_spec_hash
+    assert updated.live_path.read_bytes() == body_bytes and len(calls) == 3
+    assert calls[-1]["hook_scene_start"] == 14.0 and calls[-1]["hook_scene_end"] == 17.0
+    # Do not reuse editing media after a real source-range change.
+    changed_range = render_exact_subtitle_review_preview(tmp_path / "source.mp4", tmp_path / "out",
+        candidate=candidate.model_copy(update={"end": 21.0, "duration": 11.0}), transcript_segments=[], **kwargs)
+    assert changed_range.live_spec_hash != original.live_spec_hash and len(calls) == 5
+    if kind == "short":
+        changed_framing = render_exact_subtitle_review_preview(tmp_path / "source.mp4", tmp_path / "out",
+            candidate=candidate.model_copy(update={"framing_offset_x": 10.0}), transcript_segments=[], **kwargs)
+        assert changed_framing.live_spec_hash != original.live_spec_hash and len(calls) == 7
+
+
 @pytest.mark.parametrize("kind", ["short", "normal"])
 def test_preview_restores_character_default_text_styles(tmp_path: Path, kind: str) -> None:
     def renderer(_input: str | Path, output: str | Path, **kwargs: Any) -> Path:
@@ -573,8 +607,8 @@ def test_exact_normal_preview_uses_hook_scene_and_hook_text(tmp_path: Path) -> N
     assert len(calls) == 2
     assert calls[0]["hook_scene_start"] == 14.0
     assert calls[0]["hook_scene_end"] == 16.0
-    assert calls[1]["hook_scene_start"] == 14.0
-    assert calls[1]["hook_scene_end"] == 16.0
+    assert "hook_scene_start" not in calls[1]
+    assert "hook_scene_end" not in calls[1]
     assert "Dialogue: 2,0:00:00.00,0:00:02.00,Hook,Hook" in rendered_ass[0]
     assert "Dialogue: 1,0:00:02.00,0:00:12.00,Title" in rendered_ass[0]
     assert "編集前の短縮タイトル" in rendered_ass[0]
@@ -649,7 +683,8 @@ def test_exact_short_preview_uses_final_composition_and_nonoverlapping_ass(
     assert calls[0]["bottom_banner_path"] == DEFAULT_SHORT_BOTTOM_BANNER_PATH
     assert calls[1]["subtitle_path"] is None
     assert calls[1]["layout"] == "center_crop"
-    assert calls[1]["hook_scene_start"] == 14.0
+    assert "hook_scene_start" not in calls[1]
+    assert "hook_scene_end" not in calls[1]
     assert calls[1]["framing_offset_x"] == 22.5
     assert calls[1]["framing_offset_y"] == -15.0
     assert calls[1]["framing_zoom"] == 1.25
