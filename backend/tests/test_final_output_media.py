@@ -159,6 +159,38 @@ def test_opening_checks_hook_and_body_against_their_distinct_source_ranges(movie
     assert [(p["outputStart"], p["sourceStart"]) for p in check.evidence["pieces"]] == [(0, 2), (1, 5)]
 
 
+@pytest.mark.parametrize("hook_seconds", [1.42, 2.58, 2.84, 1.96])
+def test_fractional_hook_concat_frame_padding_is_aligned_without_relaxing_correlation(movies, hook_seconds):
+    from app.render.render_normal import build_render_normal_command
+
+    source, candidate, _transform, folder = movies
+    candidate.start, candidate.end, candidate.duration = 5, 9, 4
+    candidate.hook_scene_start, candidate.hook_scene_end = 5.2, 5.2 + hook_seconds
+    output = folder / "fractional-hook.mp4"
+    subprocess.run(build_render_normal_command(source, output, 5, 9,
+        hook_scene_start=candidate.hook_scene_start, hook_scene_end=candidate.hook_scene_end),
+        check=True, capture_output=True, timeout=60)
+    check = media.inspect_opening(output, candidate, source)
+    assert check.outcome == "pass", check
+    hook, body = check.evidence["pieces"]
+    assert hook["alignmentOffsetSeconds"] == 0
+    assert 0 <= body["alignmentOffsetSeconds"] <= body["maxAlignmentSeconds"] <= min(1 / 25, media.OPENING_MAX_JOIN_ALIGNMENT_SECONDS)
+    assert body["correlation"] >= media.OPENING_CORRELATION_MIN == 0.9
+
+
+def test_pcm_alignment_cannot_hide_a_wrong_opening_or_search_outside_one_frame():
+    import numpy as np
+
+    rng = np.random.default_rng(238)
+    expected = rng.standard_normal(24000)
+    shifted = np.r_[np.zeros(240), expected]
+    assert media.aligned_correlation(shifted, expected, max_offset=160)[0] < media.OPENING_CORRELATION_MIN
+    score, offset, raw = media.aligned_correlation(shifted, expected, max_offset=320)
+    assert score > 0.99 and offset == 240 and raw < media.OPENING_CORRELATION_MIN
+    assert media.aligned_correlation(rng.standard_normal(24320), expected, max_offset=320)[0] < media.OPENING_CORRELATION_MIN
+    assert media.aligned_correlation(np.zeros(24000), np.zeros(24000)) == (1.0, 0, 1.0)
+
+
 def test_real_black_mp4_is_repaired_and_reinspected_through_the_controller(movies):
     from types import SimpleNamespace
     import json

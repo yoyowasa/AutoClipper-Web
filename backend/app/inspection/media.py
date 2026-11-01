@@ -12,6 +12,8 @@ DURATION_TOLERANCE_SECONDS = 0.5
 ANOMALY_MIN_SECONDS = 3.0
 FREEZE_MIN_SECONDS = 10.0
 OPENING_CORRELATION_MIN = 0.9
+OPENING_MAX_JOIN_ALIGNMENT_SECONDS = 0.05
+OPENING_SAMPLE_RATE = 8000
 
 
 def file_hash(path):
@@ -144,16 +146,21 @@ def audio_samples(path, start, duration):
 def inspect_opening(path, candidate, source):
     evidence = []
     try:
+        # Concat pads audio to the hook video's last frame. A fractional hook
+        # therefore moves the body by at most one encoded frame; it is not a
+        # different scene. Never search beyond one frame (or 50ms), nor realign
+        # the hook/no-hook opening. The correlation threshold stays unchanged.
+        fps = probe_metadata(path).fps if candidate.hook_scene_start is not None else None
         for lo, hi, origin in source_pieces(candidate):
             duration = min(3, hi - lo)
-            a, b = audio_samples(path, lo, duration), audio_samples(source, origin, duration)
+            allowance = min(OPENING_MAX_JOIN_ALIGNMENT_SECONDS, 1 / fps) if lo > 0 and fps and fps > 0 else 0
+            a, b = audio_samples(path, lo, duration + allowance), audio_samples(source, origin, duration)
             size = min(len(a), len(b))
             if size < 800:
                 return Check(code="OPENING_UNVERIFIED", outcome="unknown", second=lo)
-            a, b = a[:size] - a[:size].mean(), b[:size] - b[:size].mean()
-            norm = np.linalg.norm(a) * np.linalg.norm(b)
-            score = float(np.dot(a, b) / norm) if norm > 1e-8 else (1.0 if np.max(np.abs(a)) < 1e-4 and np.max(np.abs(b)) < 1e-4 else 0.0)
-            evidence.append({"outputStart": lo, "sourceStart": origin, "seconds": duration, "correlation": score})
+            score, offset, raw = aligned_correlation(a, b[:size], max_offset=int(allowance * OPENING_SAMPLE_RATE))
+            evidence.append({"outputStart": lo, "sourceStart": origin, "seconds": duration, "correlation": score,
+                "rawCorrelation": raw, "alignmentOffsetSeconds": offset / OPENING_SAMPLE_RATE, "maxAlignmentSeconds": allowance})
         return Check(
             code="OPENING_MISMATCH",
             outcome="pass" if all(e["correlation"] >= OPENING_CORRELATION_MIN for e in evidence) else "fail",
@@ -161,3 +168,24 @@ def inspect_opening(path, candidate, source):
         )
     except (OSError, ValueError, subprocess.SubprocessError):
         return Check(code="OPENING_UNVERIFIED", outcome="unknown")
+
+
+def aligned_correlation(observed, expected, *, max_offset=0):
+    """Normalized correlation at bounded nonnegative PCM offsets; no text/media edits."""
+    size = len(expected)
+    count = min(max_offset, len(observed) - size) + 1
+    if size == 0 or count <= 0:
+        raise ValueError("audio samples missing")
+    a, b = observed[:size + count - 1], expected - expected.mean()
+    a = a - a.mean()
+    length = 1 << (len(a) + size - 2).bit_length()
+    dots = np.fft.irfft(np.fft.rfft(a, length) * np.fft.rfft(b[::-1], length), length)[size - 1:size + count - 1]
+    sums = np.r_[0.0, np.cumsum(a)]
+    squares = np.r_[0.0, np.cumsum(a * a)]
+    energy = np.maximum(0, squares[size:] - squares[:-size] - (sums[size:] - sums[:-size]) ** 2 / size)
+    norms = np.sqrt(energy) * np.linalg.norm(b)
+    scores = np.divide(dots, norms, out=np.zeros(count), where=norms > 1e-8)
+    if np.max(np.abs(a)) < 1e-4 and np.max(np.abs(b)) < 1e-4:
+        scores[:] = 1
+    best = int(np.argmax(scores))
+    return float(scores[best]), best, float(scores[0])

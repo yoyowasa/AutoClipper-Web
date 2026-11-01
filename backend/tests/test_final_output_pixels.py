@@ -50,7 +50,7 @@ def encoded(tmp_path):
     segments = [TranscriptSegment(start=0.6, end=2.8, text="Confirmed subtitle", preserve_segmentation=True)]
     layout = SubtitleLayout.normal(640, 360)
 
-    def burn(*, cues=segments, clip=candidate):
+    def burn(*, cues=segments, clip=candidate, rate=None):
         file = tmp_path / f"render-{len(list(tmp_path.glob('render-*.mp4')))}.mp4"
         ass = write_ass_for_candidate(clip, cues, file.with_suffix(".ass"), layout=layout, top_title="")
         subprocess.run(
@@ -62,7 +62,7 @@ def encoded(tmp_path):
                 "-i",
                 str(source),
                 "-vf",
-                ass_filter(ass),
+                (f"fps={rate}," if rate else "") + ass_filter(ass),
                 "-c:v",
                 "libx264",
                 "-crf",
@@ -87,6 +87,36 @@ def test_correct_encoded_subtitles_pass(encoded):
     _source, candidate, segments, layout, burn, folder = encoded
     checks = inspect_subtitles(burn(), candidate, segments, layout=layout, directory=folder)
     assert all(c.outcome == "pass" for c in checks), [c.model_dump() for c in checks]
+
+
+@pytest.mark.parametrize("rate", [25, "60000/1001", 60])
+def test_real_frame_timestamps_are_used_at_fractional_caption_boundaries(encoded, rate):
+    _source, candidate, _segments, layout, burn, folder = encoded
+    # Old fps=5 decoded a future frame (e.g. 1.48s) but compared it against
+    # reference glyphs at 1.4s. All three rates must retain their actual PTS.
+    cues = [
+        TranscriptSegment(start=0.62, end=1.42, text="First confirmed caption", preserve_segmentation=True),
+        TranscriptSegment(start=1.42, end=2.88, text="Second confirmed caption", preserve_segmentation=True),
+    ]
+    checks = inspect_subtitles(burn(cues=cues, rate=rate), candidate, cues, layout=layout, directory=folder)
+    assert all(c.outcome == "pass" for c in checks), [c.model_dump() for c in checks]
+
+
+def test_short_cue_requires_an_observed_interior_frame_and_missing_pixels_still_fail(encoded):
+    source, candidate, _segments, layout, burn, folder = encoded
+    cues = [TranscriptSegment(start=0.8, end=0.99, text="Brief confirmed cue", preserve_segmentation=True)]
+    checks = inspect_subtitles(burn(cues=cues), candidate, cues, layout=layout, directory=folder)
+    assert all(c.outcome == "pass" for c in checks), [c.model_dump() for c in checks]
+    assert next(c for c in checks if c.code == "SUBTITLE_PIXELS_MISMATCH").evidence["interiorSamples"] == 1
+    checks = inspect_subtitles(source, candidate, cues, layout=layout, directory=folder)
+    assert any(c.code == "SUBTITLE_PIXELS_MISMATCH" and c.outcome == "fail" for c in checks)
+
+
+def test_cue_between_native_frames_cannot_be_accepted_without_pixel_evidence(encoded):
+    _source, candidate, _segments, layout, burn, folder = encoded
+    cues = [TranscriptSegment(start=0.801, end=0.819, text="Unobservable cue", preserve_segmentation=True)]
+    checks = inspect_subtitles(burn(cues=cues), candidate, cues, layout=layout, directory=folder)
+    assert any(c.outcome != "pass" for c in checks)
 
 
 @pytest.mark.parametrize("fault", ["missing", "shifted", "different_text"])
