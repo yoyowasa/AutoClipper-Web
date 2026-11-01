@@ -6,6 +6,7 @@ import { type ClipTextTarget } from "../../clipTextStyle";
 import type { ClipTextStyle, SubtitleReviewClipFramingUpdateRequest, SubtitleReviewDocument } from "../../types";
 import { shortFramingEquals } from "../framing";
 import { type ClipContentDraft, contentDraftForClip } from "../drafts";
+import { editContentDraft } from "../contentDraftSync";
 import type { SubtitleReviewContext } from "./context";
 
 export function useClipContentDraft(context: SubtitleReviewContext) {
@@ -22,10 +23,7 @@ export function useClipContentDraft(context: SubtitleReviewContext) {
       }
       return {
         ...current,
-        [clipId]: {
-          ...(current[clipId] ?? contentDraftForClip(clip)),
-          ...update
-        }
+        [clipId]: editContentDraft(current[clipId] ?? contentDraftForClip(clip), contentDraftForClip(clip), update)
       };
     });
   }

@@ -5,31 +5,40 @@ import { segmentDraftKey } from "../sharedSegments";
 import { useEffect, useRef } from "react";
 import { contentDraftForClip, isClipContentDirty } from "../drafts";
 import { remapDraftEvidence } from "../draftEvidence";
-import { readReviewDraft, reviewDraftFingerprint, writeReviewDraft, rebaseUnchangedContent } from "../draftStorage";
+import { readReviewDraft, reviewDraftFingerprint, writeReviewDraft, archiveReviewDraft } from "../draftStorage";
+import { restoreContentDraft, synchronizeContentDraft } from "../contentDraftSync";
 import type { SubtitleReviewState } from "./useSubtitleReviewState";
 
 export function usePersistedReviewDrafts(state: SubtitleReviewState) {
   const { jobId, review, drafts, dirtySegmentIds, clipContentDrafts, shortFramingDrafts,
-    setDrafts, setDirtySegmentIds, setClipContentDrafts, setShortFramingDrafts, locallyUpdatedReviewRef } = state;
+    setDrafts, setDirtySegmentIds, setClipContentDrafts, setShortFramingDrafts, locallyUpdatedReviewRef, setError } = state;
   const fingerprints = useRef<Record<string, string>>({});
-  const previousContent = useRef<Record<string, ReturnType<typeof contentDraftForClip>>>({});
   const activeJob = useRef("");
   const restoring = useRef(false);
   useEffect(() => {
     if (!review || review.jobId !== jobId) return;
-    if (activeJob.current !== jobId) { activeJob.current = jobId; fingerprints.current = {}; previousContent.current = {}; }
+    if (activeJob.current !== jobId) { activeJob.current = jobId; fingerprints.current = {}; }
     const ownedUpdate = locallyUpdatedReviewRef.current === review;
     locallyUpdatedReviewRef.current = null;
     const restoredSegments: Record<string, string> = {};
     const resetIds = new Set<string>();
     for (const clip of review.clips) {
-      const saved = contentDraftForClip(clip), oldContent = previousContent.current[clip.id];
-      previousContent.current[clip.id] = saved;
-      // A caption response can also remap title/description evidence IDs (COW).
-      // Own responses need the same content rebase as background decisions;
-      // only caption restoration below must be skipped for an owned response.
-      if (review.subtitleOnlyAuto && clip.confirmed && oldContent && JSON.stringify(oldContent) !== JSON.stringify(saved)) {
-        setClipContentDrafts(current => ({ ...current, [clip.id]: remapDraftEvidence(rebaseUnchangedContent(current[clip.id] ?? oldContent, oldContent, saved), review, clip) }));
+      const saved = contentDraftForClip(clip);
+      if (review.subtitleOnlyAuto && clip.confirmed) {
+        const legacy = clipContentDrafts[clip.id];
+        const canMigrate = !legacy || legacy._editedFields !== undefined || !isClipContentDirty(clip, { [clip.id]: legacy }) ||
+          archiveReviewDraft(jobId, clip.id, { version: 1, fingerprint: reviewDraftFingerprint(review, clip), content: legacy,
+            baseContent: saved, framing: shortFramingDrafts[clip.id] ?? null,
+            segments: Object.fromEntries(clip.segmentIds.filter(id => dirtySegmentIds.has(segmentDraftKey(clip, id)))
+              .map(id => [id, drafts[segmentDraftKey(clip, id)] ?? ""])) });
+        if (!canMigrate) setError("以前の詳細下書きを保護できないため、同期を止めました。入力内容は保持しています。");
+        setClipContentDrafts(current => {
+          const draft = current[clip.id] ?? saved;
+          if (draft._editedFields === undefined && (!canMigrate || legacy && JSON.stringify(legacy) !== JSON.stringify(draft))) return current;
+          const mapped = remapDraftEvidence(draft, review, clip);
+          const next = synchronizeContentDraft(mapped, saved);
+          return JSON.stringify(draft) === JSON.stringify(next) ? current : { ...current, [clip.id]: next };
+        });
       }
       const fingerprint = reviewDraftFingerprint(review, clip);
       const previous = fingerprints.current[clip.id];
@@ -37,8 +46,10 @@ export function usePersistedReviewDrafts(state: SubtitleReviewState) {
       if (review.state !== "awaiting_review" && !(review.subtitleOnlyAuto && clip.confirmed)) { writeReviewDraft(jobId, clip.id, null); continue; }
       if (ownedUpdate || previous === fingerprint) continue;
       const stored = readReviewDraft(jobId, clip.id, fingerprint);
+      const restored = restoreContentDraft(review, clip, stored, draft => archiveReviewDraft(jobId, clip.id, draft));
+      if (restored.blocked) setError("以前の詳細下書きを保護できないため、同期を止めました。入力内容は保持しています。");
       restoring.current = true;
-      setClipContentDrafts(current => ({ ...current, [clip.id]: remapDraftEvidence(stored ? stored.baseContent ? rebaseUnchangedContent(stored.content, stored.baseContent, saved) : stored.content : saved, review, clip) }));
+      setClipContentDrafts(current => ({ ...current, [clip.id]: restored.content }));
       setShortFramingDrafts(current => {
         const next = { ...current };
         if (stored?.framing && canEditManualFraming(review, clip)) next[clip.id] = stored.framing; else delete next[clip.id];
@@ -62,7 +73,10 @@ export function usePersistedReviewDrafts(state: SubtitleReviewState) {
         return next;
       });
     }
-  }, [jobId, review, locallyUpdatedReviewRef, setClipContentDrafts, setShortFramingDrafts, setDrafts, setDirtySegmentIds]);
+    // Only incoming server documents trigger synchronization. A user keystroke
+    // must not rerun restoration or replace its own draft.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobId, review, locallyUpdatedReviewRef, setClipContentDrafts, setShortFramingDrafts, setDrafts, setDirtySegmentIds, setError]);
 
   useEffect(() => {
     if (!review || review.jobId !== jobId || review.state !== "awaiting_review" && !review.subtitleOnlyAuto) return;
@@ -70,7 +84,9 @@ export function usePersistedReviewDrafts(state: SubtitleReviewState) {
     for (const clip of review.clips) {
       const segments = Object.fromEntries(clip.segmentIds.filter(id => dirtySegmentIds.has(segmentDraftKey(clip, id)))
         .map(id => [id, drafts[segmentDraftKey(clip, id)] ?? ""]));
-      const content = clipContentDrafts[clip.id] ?? contentDraftForClip(clip);
+      const draft = clipContentDrafts[clip.id] ?? contentDraftForClip(clip);
+      const content = review.subtitleOnlyAuto && clip.confirmed && draft._editedFields !== undefined
+        ? synchronizeContentDraft(remapDraftEvidence(draft, review, clip), contentDraftForClip(clip)) : draft;
       const framing = shortFramingDrafts[clip.id] ?? null;
       const dirty = isClipContentDirty(clip, clipContentDrafts) || Boolean(framing) || Object.keys(segments).length > 0;
       writeReviewDraft(jobId, clip.id, dirty ? {
