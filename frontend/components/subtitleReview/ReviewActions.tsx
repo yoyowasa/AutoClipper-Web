@@ -76,6 +76,10 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
     + (selectedShortFramingDirty ? 1 : 0)
     + (selectedClipContentDraft ? (Object.keys(savedContent) as (keyof typeof savedContent)[])
       .filter(key => JSON.stringify(savedContent[key]) !== JSON.stringify(selectedClipContentDraft[key])).length : 0);
+  const savesConfirmedCaptions = review.subtitleOnlyAuto && selectedClip.confirmed && selectedClipHasDirtySegments;
+  const canSubmit = savesConfirmedCaptions
+    ? context.isSubtitleEditable && !hasReviewMutationInFlight
+    : isEditable || (review.subtitleOnlyAuto && selectedClip.automaticDecisionState === "failed" && !hasReviewMutationInFlight);
   return (
     <div className="border-t border-neutral-300 bg-neutral-50 p-4">
                   {review.subtitleOnlyAuto && selectedClip.confirmed && <button type="button"
@@ -83,7 +87,7 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
                     onClick={() => void context.reopenConfirmedClip()}>字幕を直し直す（このclipの自動処理を解除）</button>}
                   <p className="mb-2 text-xs font-semibold text-amber-800">未保存の変更 {pendingChanges}件</p>
                   <p className="mb-3 text-xs text-neutral-600">
-                    {review.subtitleOnlyAuto && selectedClip.confirmed ? "入力中は保存しません。編集欄を離れると保存します。確定の解除は不要です。自動処理とプレビューは変更したclipだけ更新します。"
+                    {review.subtitleOnlyAuto && selectedClip.confirmed ? "入力中は保存しません。編集欄を離れるか、下の保存ボタンで反映します。確定の解除は不要です。自動処理とプレビューは変更したclipだけ更新します。"
                       : selectedClipHasDirtySegments || selectedClipHasDirtyContent || selectedShortFramingDirty
                       ? review.subtitleOnlyAuto ? "字幕を確定すると、このclipの自動決定を開始します。詳細編集の変更も保存します。"
                         : "簡易プレビューで下書きを確認し、確定で字幕・画角・フック・投稿情報をまとめて保存します。"
@@ -98,7 +102,7 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
                   <button
                     className="min-h-11 w-full bg-sky-700 px-4 text-sm font-semibold text-white disabled:bg-neutral-300"
                     disabled={
-                      (!isEditable && !(review.subtitleOnlyAuto && selectedClip.automaticDecisionState === "failed" && !hasReviewMutationInFlight)) ||
+                      !canSubmit ||
                       (selectedClip.confirmed && selectedClip.automaticDecisionState !== "failed" &&
                         !selectedClipHasDirtySegments &&
                         !selectedClipHasDirtyContent && !selectedShortFramingDirty) ||
@@ -110,8 +114,10 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
                     data-caption-edit-clip={selectedClip.id}
                     onClick={() => void confirmSelectedClip()}
                   >
-                    {confirmingClipId === selectedClip.id
+                    {savesConfirmedCaptions && context.isSavingConfirmedSubtitles ? "字幕を保存中…"
+                      : confirmingClipId === selectedClip.id
                       ? "確定中"
+                      : savesConfirmedCaptions ? "字幕の変更を保存"
                       : review.subtitleOnlyAuto && selectedClip.automaticDecisionState === "failed" ? "自動処理を再試行"
                       : selectedClip.confirmed &&
                           !selectedClipHasDirtySegments &&
