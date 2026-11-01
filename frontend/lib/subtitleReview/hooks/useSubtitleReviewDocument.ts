@@ -10,6 +10,7 @@ import { normalizeReviewTitle } from "../text";
 import { contentDraftForClip, isClipContentDirty } from "../drafts";
 import { shortFramingEquals } from "../framing";
 import { reviewNeedsPolling } from "../automaticStatus";
+import { editingPreviewAvailable, livePlaybackSource } from "../livePlaybackSource";
 import { usePersistedReviewDrafts } from "./usePersistedReviewDrafts";
 import { useSubtitleReviewState } from "./useSubtitleReviewState";
 import type { SubtitleReviewContext } from "./context";
@@ -202,12 +203,10 @@ export function useSubtitleReviewDocument() {
   const retainedLivePreview = selectedClip
     ? retainedLivePreviews[selectedClip.id]
     : undefined;
-  const selectedLiveVideoUrl =
-    selectedClip?.livePreviewVideoUrl ?? retainedLivePreview?.url ?? null;
-  const selectedLivePreviewVersion = selectedClip?.livePreviewVideoUrl
-    ? selectedClip.livePreviewSpecHash ?? ""
-    : retainedLivePreview?.version ?? "";
-  const livePreviewReady = Boolean(review?.sourceVideoUrl && review.state === "awaiting_review");
+  const editingMedia = selectedClip && review ? livePlaybackSource(selectedClip, review, retainedLivePreview) : null;
+  const selectedLiveVideoUrl = editingMedia?.url ?? null;
+  const selectedLivePreviewVersion = editingMedia?.version ?? "";
+  const livePreviewReady = editingPreviewAvailable(review, selectedClip);
   const isShowingLivePreview = livePreviewReady && !showSavedPreview;
   const selectedPlayerVideoUrl = isShowingLivePreview
     ? selectedLiveVideoUrl ?? review?.sourceVideoUrl ?? null

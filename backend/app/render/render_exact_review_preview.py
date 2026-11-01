@@ -36,7 +36,7 @@ from app.video.speaker_detect import dialogue_windows_for_clip
 
 
 EXACT_SUBTITLE_REVIEW_RENDERER_VERSION = "exact-subtitle-review-v6"
-LIVE_SUBTITLE_REVIEW_RENDERER_VERSION = "live-subtitle-review-v4"
+LIVE_SUBTITLE_REVIEW_RENDERER_VERSION = "live-subtitle-review-v5"
 SUBTITLE_REVIEW_PREVIEW_DIRNAME = "subtitle_review_previews"
 # The API keeps the full SHA-256. The 128-bit filesystem key avoids MAX_PATH
 # failures under long Windows storage/test roots while remaining content addressed.
@@ -342,8 +342,10 @@ def build_live_subtitle_review_preview_spec(
                 "type": clip.get("type"),
                 "start": clip.get("start"),
                 "end": clip.get("end"),
-                "hookSceneStart": clip.get("hook_scene_start"),
-                "hookSceneEnd": clip.get("hook_scene_end"),
+                # The browser plays the hook from the body. A new title/hook
+                # decision must not invalidate this text-free editing source.
+                "hookSceneStart": None,
+                "hookSceneEnd": None,
                 "framingOffsetX": clip.get("framing_offset_x"),
                 "framingOffsetY": clip.get("framing_offset_y"),
                 "framingZoom": clip.get("framing_zoom"),
@@ -571,7 +573,8 @@ def render_exact_subtitle_review_preview(
                     input_path,
                     temporary_live_video,
                     subtitle_path=None,
-                    **normal_kwargs,
+                    **{key: value for key, value in normal_kwargs.items()
+                       if key not in {"hook_scene_start", "hook_scene_end"}},
                 )
         else:
             top_banner_enabled = bool(render_settings["shortTopBannerEnabled"])
@@ -607,7 +610,8 @@ def render_exact_subtitle_review_preview(
             ):
                 short_kwargs["hook_scene_start"] = resolved_candidate.hook_scene_start
                 short_kwargs["hook_scene_end"] = resolved_candidate.hook_scene_end
-            paired = not exact_cached and not live_cached and short_renderer is render_short_clip
+            paired = (not exact_cached and not live_cached and short_renderer is render_short_clip
+                      and "hook_scene_start" not in short_kwargs)
             if paired:
                 short_renderer(
                     input_path,
@@ -622,7 +626,9 @@ def render_exact_subtitle_review_preview(
                     **short_kwargs,
                 )
             if not live_cached and not paired:
-                live_kwargs = {**short_kwargs, "subtitle_path": None}
+                live_kwargs = {key: value for key, value in short_kwargs.items()
+                               if key not in {"hook_scene_start", "hook_scene_end"}}
+                live_kwargs["subtitle_path"] = None
                 short_renderer(
                     input_path,
                     temporary_live_video,

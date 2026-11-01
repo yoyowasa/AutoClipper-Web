@@ -32,7 +32,16 @@ export function DraftReviewPlayer({ context }: { context: SubtitleReviewContext 
       cancelAnimationFrame(frame); element.pause();
       if (videoRef.current === playback.clock) videoRef.current = null;
     };
-  }, [clipId, start, end, hookStart, hookEnd, mediaStart, mediaOffset, mediaUrl, videoRef, setClipTime, setIsPlaying]);
+    // Hook edits update the virtual clock below; they do not replace the media
+    // controller or pause the video. Real media/range changes still rebuild it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clipId, start, end, mediaStart, mediaOffset, mediaUrl, videoRef, setClipTime, setIsPlaying]);
+  useEffect(() => {
+    const playback = playbackRef.current;
+    if (!playback) return;
+    playback.updateRange({ start, end, hookStart, hookEnd, mediaStart, mediaOffset });
+    setClipTime(playback.clock.currentTime);
+  }, [clipId, start, end, hookStart, hookEnd, mediaStart, mediaOffset, mediaUrl, setClipTime]);
   useEffect(() => {
     const element = nativeRef.current;
     if (element) { element.playbackRate = playbackRate; element.volume = volume; element.muted = isMuted; }

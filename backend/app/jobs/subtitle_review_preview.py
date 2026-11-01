@@ -530,6 +530,7 @@ def refresh_subtitle_review_preview_states(
             or clip.preview_error != next_error
             or clip.live_preview_spec_hash != live_spec_hash
             or clip.live_preview_video_url != next_live_url
+            or clip.live_preview_hook_duration_seconds != 0.0
         ):
             if clip.preview_spec_hash != spec_hash:
                 clip.confirmed = False
@@ -539,6 +540,7 @@ def refresh_subtitle_review_preview_states(
             clip.preview_error = next_error
             clip.live_preview_spec_hash = live_spec_hash
             clip.live_preview_video_url = next_live_url
+            clip.live_preview_hook_duration_seconds = 0.0
             changed = True
     if changed:
         document.confirmed_clip_count = sum(
