@@ -11,13 +11,52 @@ export type StoredReviewDraft = {
 };
 type DraftStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 export const reviewDraftKey = (jobId: string, clipId: string) => `subtitle-review-draft:v1:${jobId}:${clipId}`;
+export const legacyReviewDraftKey = (jobId: string, clipId: string) => `subtitle-review-legacy:v1:${jobId}:${clipId}`;
+const LEGACY_DRAFT_EVENT = "subtitle-review-legacy-updated";
+
+export function subscribeArchivedDrafts(callback: () => void): () => void {
+  window.addEventListener("storage", callback);
+  window.addEventListener(LEGACY_DRAFT_EVENT, callback);
+  return () => { window.removeEventListener("storage", callback); window.removeEventListener(LEGACY_DRAFT_EVENT, callback); };
+}
+
+export function archivedDraftSnapshot(jobId: string, clipId: string): string | null {
+  try { return window.localStorage.getItem(legacyReviewDraftKey(jobId, clipId)); } catch { return null; }
+}
+
+export function parseArchivedDrafts(snapshot: string | null): StoredReviewDraft[] {
+  try {
+    const value = JSON.parse(snapshot ?? "[]");
+    return Array.isArray(value) ? value.filter(item => item?.version === 1 && item.content && Array.isArray(item.content.titleCandidates)) : [];
+  } catch { return []; }
+}
+
+export function archivedReviewDrafts(jobId: string, clipId: string, storage: DraftStorage | null = null): StoredReviewDraft[] {
+  try {
+    return parseArchivedDrafts((storage ?? window.localStorage).getItem(legacyReviewDraftKey(jobId, clipId)));
+  } catch { return []; }
+}
+
+export function archiveReviewDraft(jobId: string, clipId: string, draft: StoredReviewDraft, storage: DraftStorage | null = null): boolean {
+  try {
+    const target = storage ?? window.localStorage, key = legacyReviewDraftKey(jobId, clipId);
+    const previous = target.getItem(key);
+    const copies = previous === null ? [] : JSON.parse(previous);
+    if (!Array.isArray(copies)) return false; // Never overwrite unknown data.
+    if (!copies.some(copy => JSON.stringify([copy.content, copy.segments, copy.framing]) === JSON.stringify([draft.content, draft.segments, draft.framing]))) {
+      target.setItem(key, JSON.stringify([...copies, draft]));
+      if (!storage) window.dispatchEvent(new Event(LEGACY_DRAFT_EVENT));
+    }
+    return true;
+  } catch { return false; } // Keep the active draft if its backup cannot be written.
+}
 
 export function clearJobReviewDrafts(jobId: string, storage: Storage | null = null): void {
   try {
     const target = storage ?? window.localStorage;
-    const prefix = reviewDraftKey(jobId, "");
+    const prefixes = [reviewDraftKey(jobId, ""), legacyReviewDraftKey(jobId, "")];
     const keys = Array.from({ length: target.length }, (_, index) => target.key(index));
-    for (const key of keys) if (key?.startsWith(prefix)) target.removeItem(key);
+    for (const key of keys) if (key && prefixes.some(prefix => key.startsWith(prefix))) target.removeItem(key);
   } catch { /* Disabled storage must not block returning to clip review. */ }
 }
 
@@ -47,6 +86,7 @@ export function readReviewDraft(jobId: string, clipId: string, fingerprint: stri
       || [draft.content.publicationTitle, draft.content.title, draft.content.hookText, draft.content.youtubeTagsText,
         draft.content.youtubeHashtagsText, draft.content.youtubeDescription].some(value => typeof value !== "string")
       || !Array.isArray(draft.content.subtitleStyles) || !Array.isArray(draft.content.titleCandidates)
+      || draft.content._editedFields !== undefined && (!Array.isArray(draft.content._editedFields) || draft.content._editedFields.some(key => typeof key !== "string"))
       || !Number.isFinite(draft.content.hookDurationSeconds)
       || !draft.segments || Array.isArray(draft.segments)
       || Object.values(draft.segments).some(value => typeof value !== "string")) {
@@ -69,8 +109,9 @@ export function writeReviewDraft(jobId: string, clipId: string, draft: StoredRev
 // A background decision can change title/style while a caption draft is open.
 // Rebase only fields that still equal the previous saved value.
 export function rebaseUnchangedContent(draft: ClipContentDraft, before: ClipContentDraft, after: ClipContentDraft): ClipContentDraft {
-  return Object.fromEntries(Object.keys(after).map(key => [key,
+  const rebased = Object.fromEntries(Object.keys(after).map(key => [key,
     JSON.stringify(draft[key as keyof ClipContentDraft]) === JSON.stringify(before[key as keyof ClipContentDraft])
       ? after[key as keyof ClipContentDraft] : draft[key as keyof ClipContentDraft]
   ])) as ClipContentDraft;
+  return draft._editedFields ? { ...rebased, _editedFields: draft._editedFields } : rebased;
 }

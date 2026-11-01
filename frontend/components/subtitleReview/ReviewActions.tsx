@@ -1,6 +1,6 @@
 "use client";
 
-import { contentDraftForClip } from "../../lib/subtitleReview/drafts";
+import { contentDraftChangedFields } from "../../lib/subtitleReview/drafts";
 import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/context";
 
 export function ReviewRenderControls({ context }: { context: SubtitleReviewViewContext }) {
@@ -71,11 +71,9 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
     dirtySegmentIds
   } = context;
   if (!selectedClip) return null;
-  const savedContent = contentDraftForClip(selectedClip);
   const pendingChanges = selectedClip.segmentIds.filter(id => dirtySegmentIds.has(id)).length
     + (selectedShortFramingDirty ? 1 : 0)
-    + (selectedClipContentDraft ? (Object.keys(savedContent) as (keyof typeof savedContent)[])
-      .filter(key => JSON.stringify(savedContent[key]) !== JSON.stringify(selectedClipContentDraft[key])).length : 0);
+    + contentDraftChangedFields(selectedClip, selectedClipContentDraft ?? undefined).length;
   const savesConfirmedCaptions = review.subtitleOnlyAuto && selectedClip.confirmed && selectedClipHasDirtySegments;
   const canSubmit = savesConfirmedCaptions
     ? context.isSubtitleEditable && !hasReviewMutationInFlight

@@ -128,7 +128,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
         if (updatedClip) {
           setClipContentDrafts((current) => ({
             ...current,
-            [updatedClip.id]: contentDraftForClip(updatedClip)
+            [updatedClip.id]: { ...contentDraftForClip(updatedClip), ...(updated.subtitleOnlyAuto ? { _editedFields: [] } : {}) }
           }));
         }
         setDrafts((current) => {

@@ -1,8 +1,10 @@
 import type { ClipTextStyle, PostTitleCandidate, SubtitleReviewClip } from "../types";
 import { youtubeTagsText } from "../youtubePosting";
-import { hashtagsFromText, normalizeYoutubeHashtags } from "./posting";
+import { hashtagsFromText } from "./posting";
 
 export type ClipContentDraft = {
+  // Browser-only intent: full server snapshots are never evidence of a user edit.
+  _editedFields?: string[];
   subtitleStyles: NonNullable<SubtitleReviewClip["subtitleStyles"]>;
   publicationTitle: string;
   titleCandidates: PostTitleCandidate[];
@@ -86,33 +88,17 @@ export function isClipContentDirty(
   clip: SubtitleReviewClip,
   drafts: Record<string, ClipContentDraft>
 ): boolean {
-  const draft = drafts[clip.id];
-  return Boolean(
-    draft &&
-      (draft.title !== clip.title ||
-        draft.publicationTitle !== (clip.publicationTitle ?? clip.title) ||
-        JSON.stringify(draft.titleCandidates) !== JSON.stringify(clip.titleCandidates ?? []) ||
-        draft.recommendedTitleId !== (clip.recommendedTitleId ?? null) ||
-        draft.selectedTitleId !== (clip.selectedTitleId ?? null) ||
-        draft.youtubeDescription !== (clip.youtubeDescription ?? "") ||
-        JSON.stringify(hashtagsFromText(draft.youtubeHashtagsText)) !==
-          JSON.stringify(normalizeYoutubeHashtags(clip.youtubeHashtags ?? [])) ||
-        JSON.stringify(draft.descriptionEvidenceSegmentIds) !==
-          JSON.stringify(clip.descriptionEvidenceSegmentIds ?? []) ||
-        draft.postMetadataSource !== (clip.postMetadataSource ?? null) ||
-        draft.postMetadataRevisionHash !== (clip.postMetadataRevisionHash ?? null) ||
-        draft.hookText !== clip.hookText ||
-        draft.hookDurationSeconds !== clip.hookDurationSeconds ||
-        draft.hookSceneStart !== clip.hookSceneStart ||
-        draft.hookSceneEnd !== clip.hookSceneEnd ||
-        draft.youtubeTagsText !== youtubeTagsText(clip.youtubeTags ?? []) ||
-        draft.thumbnailKicker !== (clip.thumbnailKicker ?? "") ||
-        draft.thumbnailLine1 !== (clip.thumbnailLine1 ?? "") ||
-        draft.thumbnailLine2 !== (clip.thumbnailLine2 ?? "") ||
-        draft.thumbnailFrameSeconds !== (clip.thumbnailFrameSeconds ?? null) ||
-        !stylesEqual(draft.titleStyle, clip.titleStyle) ||
-        !stylesEqual(draft.hookStyle, clip.hookStyle) ||
-        !stylesEqual(draft.subtitleStyle, clip.subtitleStyle) ||
-        JSON.stringify(draft.subtitleStyles) !== JSON.stringify(clip.subtitleStyles ?? []))
-  );
+  return contentDraftChangedFields(clip, drafts[clip.id]).length > 0;
+}
+
+export function contentFieldEquals(key: string, left: unknown, right: unknown): boolean {
+  if (["titleStyle", "hookStyle", "subtitleStyle"].includes(key)) return stylesEqual(left as ClipTextStyle | null, right as ClipTextStyle | null);
+  if (key === "youtubeHashtagsText") return JSON.stringify(hashtagsFromText(String(left))) === JSON.stringify(hashtagsFromText(String(right)));
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function contentDraftChangedFields(clip: SubtitleReviewClip, draft?: ClipContentDraft): string[] {
+  if (!draft) return [];
+  const saved = contentDraftForClip(clip);
+  return Object.keys(saved).filter(key => !contentFieldEquals(key, draft[key as keyof ClipContentDraft], saved[key as keyof ClipContentDraft]));
 }

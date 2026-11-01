@@ -7,6 +7,7 @@ import { limitToTwoTextLines } from "../../lib/subtitleReview/text";
 import { hashtagsFromText, postCopyText } from "../../lib/subtitleReview/posting";
 import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/context";
 import { ReviewHookSceneSettings } from "./ReviewHookSceneSettings";
+import { LegacyContentDraftNotice } from "./LegacyContentDraftNotice";
 
 export function ReviewContentEditor({ context }: { context: SubtitleReviewViewContext }) {
   const {
@@ -36,6 +37,7 @@ export function ReviewContentEditor({ context }: { context: SubtitleReviewViewCo
   if (!selectedClip) return null;
   return (
     <div key={`content-${selectedClip.id}`} className="subtitle-content-editor min-w-0 border-b border-neutral-300 bg-neutral-50 p-3 2xl:h-full 2xl:min-h-0 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r">
+                    <LegacyContentDraftNotice context={context} />
                     <div className="subtitle-content-fields">
                     <div className="flex items-center justify-between gap-3">
                       <h3 className="text-sm font-semibold">タイトル・フック</h3>
