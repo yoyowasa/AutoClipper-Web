@@ -56,6 +56,13 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
       setError("ショート帯設定の保存完了後に確認してください。");
       return;
     }
+    if (review?.subtitleOnlyAuto && selectedClip?.confirmed &&
+      selectedClip.segmentIds.some(id => dirtySegmentIds.has(id))) {
+      // Use the same scoped caption save as blur autosave. Applying the whole
+      // clip would re-confirm it and could submit unrelated content drafts.
+      await context.saveConfirmedSubtitles(selectedClip.id);
+      return;
+    }
     if (!selectedClip || !selectedClipContentDraft) {
       return;
     }
