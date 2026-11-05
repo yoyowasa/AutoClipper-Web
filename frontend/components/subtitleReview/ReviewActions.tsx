@@ -1,5 +1,7 @@
 "use client";
 
+import { cueStylesChanged } from "../../lib/subtitleReview/cueStyles";
+
 import { contentDraftChangedFields } from "../../lib/subtitleReview/drafts";
 import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/context";
 
@@ -74,7 +76,7 @@ export function ReviewClipActions({ context }: { context: SubtitleReviewViewCont
   const pendingChanges = selectedClip.segmentIds.filter(id => dirtySegmentIds.has(id)).length
     + (selectedShortFramingDirty ? 1 : 0)
     + contentDraftChangedFields(selectedClip, selectedClipContentDraft ?? undefined).length;
-  const savesConfirmedCaptions = review.subtitleOnlyAuto && selectedClip.confirmed && selectedClipHasDirtySegments;
+  const savesConfirmedCaptions = review.subtitleOnlyAuto && selectedClip.confirmed && (selectedClipHasDirtySegments || cueStylesChanged(selectedClip, selectedClipContentDraft));
   const canSubmit = savesConfirmedCaptions
     ? context.isSubtitleEditable && !hasReviewMutationInFlight
     : isEditable || (review.subtitleOnlyAuto && selectedClip.automaticDecisionState === "failed" && !hasReviewMutationInFlight);

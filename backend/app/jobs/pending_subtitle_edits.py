@@ -103,10 +103,10 @@ def activate_pending(db, job_id, paths, enqueue=None):
         latest = load_subtitle_review(path)
         updated = pending_view(latest, paths)
         ids = set(updated.pending_subtitle_clip_ids)
-        if not ids:
+        if not ids or any(c.id in ids and c.automatic_decision_state in {"queued", "generating"} for c in latest.clips):
             return False
         from app.jobs.confirmed_clip_decisions import queue_clip_decisions
-        from app.jobs.subtitle_decision_inputs import changed_targets
+        from app.jobs.subtitle_decision_inputs import subtitle_edit_targets
         updated.state = "awaiting_review"
         updated.render_revision += 1
         exports = set(db.scalars(select(ExportItem.candidate_id).where(ExportItem.job_id == job.id)))
@@ -116,7 +116,7 @@ def activate_pending(db, job_id, paths, enqueue=None):
             if clip.id in ids:
                 before = next(c for c in latest.clips if c.id == clip.id)
                 revisions.append((clip.id, queue_clip_decisions(updated, clip, manual_fields=set(),
-                    targets=changed_targets(latest, before, updated, clip))))
+                    targets=subtitle_edit_targets(latest, before, updated, clip))))
                 confirm_review_clip(updated, clip.id)
         write_subtitle_review(updated, path)
         write_subtitle_review_summary(updated, subtitle_review_summary_path(directory))

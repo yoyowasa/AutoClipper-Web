@@ -96,9 +96,10 @@ export async function editSubtitleStructure(
 
 export async function updateSubtitleReviewSegments(
   jobId: string, segments: Array<{ segmentId: string; before: string; text: string }>, clipId?: string,
+  cueStyles?: { subtitleStyles: NonNullable<SubtitleReviewDocument["clips"][number]["subtitleStyles"]>; beforeSubtitleStyles: NonNullable<SubtitleReviewDocument["clips"][number]["subtitleStyles"]> },
 ): Promise<SubtitleReviewDocument> {
   return parseJsonResponse<SubtitleReviewDocument>(await fetch(`${API_BASE_URL}/api/jobs/${jobId}/subtitle-review/segments`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ segments, ...(clipId ? { clipId } : {}) }),
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ segments, ...(clipId ? { clipId } : {}), ...cueStyles }),
   }));
 }
 
