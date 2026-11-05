@@ -1,5 +1,6 @@
 "use client";
 
+import { resolvedClipTextStyle } from "../../lib/clipTextStyle";
 import { canEditManualFraming } from "../../lib/subtitleReview/manualFraming";
 import { ShortFramingWorkspace } from "../ShortFramingWorkspace";
 import { ClipTextStyleEditor } from "../ClipTextStyleEditor";
@@ -26,6 +27,10 @@ export function ReviewTextStyles({ context }: { context: SubtitleReviewViewConte
     setSelectedTextStyleTarget
   } = context;
   if (!selectedClip) return null;
+  const cue = selectedSegments.find(s => s.id === styledSegmentId);
+  const override = selectedClipContentDraft?.subtitleStyles.find(s => cue && s.start === cue.start && s.end === cue.end);
+  const resolvedCue = resolvedClipTextStyle(override ? { ...override.style, ...override.layoutAdjustment } : undefined,
+    resolvedClipTextStyle(selectedClipTextStyles.subtitle, selectedResolvedClipTextStyles.subtitle, "subtitle", selectedClip.type), "subtitle", selectedClip.type);
   return (
     <ClipTextStyleEditor
                     subtitleScopeLabel={selectedSegments.some((s) => s.id === styledSegmentId) ? "選択した字幕1件だけ" : "このclipの共通字幕"}
@@ -49,10 +54,7 @@ export function ReviewTextStyles({ context }: { context: SubtitleReviewViewConte
                     )}
                     styles={{
                       ...selectedClipTextStyles,
-                      subtitle: selectedClipContentDraft?.subtitleStyles.find((item) => {
-                        const segment = selectedSegments.find((s) => s.id === styledSegmentId);
-                        return segment && item.start === segment.start && item.end === segment.end;
-                      })?.style ?? selectedClipTextStyles.subtitle
+                      subtitle: cue ? resolvedCue : selectedClipTextStyles.subtitle
                     }}
                     resolvedStyles={selectedResolvedClipTextStyles}
                     defaultResolvedStyles={selectedDefaultResolvedClipTextStyles}
@@ -62,6 +64,11 @@ export function ReviewTextStyles({ context }: { context: SubtitleReviewViewConte
                     previewHeight={selectedClip.previewHeight}
                     subtitleText={stylePreviewSubtitleText}
                     titleText={selectedClipContentDraft?.title ?? ""}
+                    cueStyle={cue ? override?.style : undefined}
+                    onCueStyleChange={cue && selectedClipContentDraft ? (style) => context.updateClipContentDraft(selectedClip.id, {
+                      subtitleStyles: [...selectedClipContentDraft.subtitleStyles.filter(s => s.start !== cue.start || s.end !== cue.end),
+                        { start: cue.start, end: cue.end, style, styleVersion: 2 }]
+                    }) : undefined}
                     onChange={updateClipTextStyle}
                     onSelectedTargetChange={(target) => {
                       setSelectedTextStyleTarget(target);

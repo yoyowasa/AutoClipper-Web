@@ -410,6 +410,8 @@ def refresh_subtitle_review_preview_states(
     )
     if document.subtitle_only_auto and document.render_clip_ids is not None:
         selected_ids &= set(document.render_clip_ids)
+    from app.jobs.overlay_layout_repair import repair_overlay_layout
+    repair_overlay_layout(document, selected_ids)
     for clip in document.clips:
         if clip.id not in selected_ids:
             continue

@@ -4339,7 +4339,8 @@ def test_review_loads_saved_character_without_reselecting(client: TestClient) ->
         for key in ('id', 'start', 'end', 'title', 'hookText', 'framingOffsetX', 'framingOffsetY', 'framingZoom'):
             assert new[key] == old[key]
         assert new['resolvedSubtitleStyle']['fontSize'] == 104
-        assert new['resolvedTitleStyle']['fontSize'] == 128
+        assert new['resolvedTitleStyle']['fontSize'] <= 128  # overflowing preset text is fitted
+        assert new['overlayLayoutNotices']
         assert 'キャラB' in new['youtubeDescription']
         assert new['youtubeHashtags'] == ['#キャラB', '#shorts']
     with next(app.dependency_overrides[get_db]()) as db:

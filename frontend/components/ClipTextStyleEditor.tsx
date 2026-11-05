@@ -35,6 +35,8 @@ type ResolvedClipTextStyles = Record<
 >;
 
 type ClipTextStyleEditorProps = {
+  cueStyle?: Partial<ClipTextStyle>;
+  onCueStyleChange?: (style: Partial<ClipTextStyle>) => void;
   scopeDescription?: string;
   subtitleScopeLabel?: string;
   onCommonSubtitleStyle?: () => void;
@@ -476,6 +478,7 @@ export function ClipTextStyleEditor({
   subtitleScopeLabel,
   onCommonSubtitleStyle,
   clipType,
+  cueStyle, onCueStyleChange,
   disabled = false,
   layout = "stacked",
   selectedTarget,
@@ -538,6 +541,10 @@ export function ClipTextStyleEditor({
   }, [style.fontName]);
 
   function updateStyle(patch: Partial<ClipTextStyle>) {
+    if (target === "subtitle" && onCueStyleChange) {
+      onCueStyleChange({ ...cueStyle, ...patch });
+      return;
+    }
     const draft = storedStyle ?? styleDraftFromResolved(style);
     onChange(target, { ...draft, ...patch });
   }

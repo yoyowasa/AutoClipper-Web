@@ -1,5 +1,7 @@
 "use client";
 
+import { resolvedClipTextStyle } from "../../clipTextStyle";
+
 import { useMemo } from "react";
 import { clipSegmentDrafts, clipDirtySegmentIds } from "../sharedSegments";
 import { subtitlePreviewEvents } from "../../subtitlePreview";
@@ -361,9 +363,13 @@ export function useSubtitleReviewDocument() {
         words: segment.words,
         preserveSegmentation: segment.preserveSegmentation,
         singleLine: segment.singleLine,
-        style: selectedClipContentDraft?.subtitleStyles.find(
-          (item) => item.start === segment.start && item.end === segment.end
-        )?.style
+        style: (() => {
+          const override = selectedClipContentDraft?.subtitleStyles.find(item => item.start === segment.start && item.end === segment.end);
+          const patch = override ? { ...override.style, ...override.layoutAdjustment } : undefined;
+          return patch ? resolvedClipTextStyle(patch,
+            resolvedClipTextStyle(selectedClipContentDraft?.subtitleStyle, selectedClip.resolvedSubtitleStyle, "subtitle", selectedClip.type),
+            "subtitle", selectedClip.type) : undefined;
+        })()
       })), ...previewAddedSubtitle],
       candidateStart: selectedClip.start,
       candidateEnd: selectedClip.end,
@@ -384,7 +390,8 @@ export function useSubtitleReviewDocument() {
     selectedClip,
     selectedSegments,
     pausedSubtitleDraft,
-    selectedClipContentDraft?.subtitleStyles
+    selectedClipContentDraft?.subtitleStyles,
+    selectedClipContentDraft?.subtitleStyle
   ]);
   const activePreviewSubtitleEvent = useMemo(
     () =>

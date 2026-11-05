@@ -32,7 +32,8 @@ def regenerate_content(document, clip, *, source, paths, settings, dependencies)
     from app.intelligence.choice_policy_runtime import choose_title_suggestion
     from app.intelligence.performance_hints import active_hint_uses
 
-    preserved = {name: deepcopy(getattr(clip, name)) for name in clip.manual_decision_fields if hasattr(clip, name)}
+    preserved = {name: deepcopy(getattr(clip, name))
+                 for name in {field.split(".")[0] for field in clip.manual_decision_fields} if hasattr(clip, name)}
     hints = (
         active_hint_uses(settings.get("_performanceHints"), target="title_hook", format=clip.type)
         if settings.get("usePerformanceHints", True)
@@ -80,47 +81,10 @@ def regenerate_content(document, clip, *, source, paths, settings, dependencies)
 
 
 def refit_subtitle(document, clip, *, settings, video):
-    from app.jobs.automatic_text_style import choose_emphasis, choose_text_styles
-    from app.jobs.quality_gate import _subtitle_events_for_review_clip
-    from app.render.render_short import SHORT_BANNER_HEIGHT
-    from app.render.subtitles_ass import SubtitleLayout
-
-    layout = (
-        SubtitleLayout.short(settings)
-        if clip.type == "short"
-        else SubtitleLayout.normal(video.width or 1920, video.height or 1080, settings)
-    )
-    top = SHORT_BANNER_HEIGHT if clip.type == "short" and settings.get("shortTopBannerEnabled") else 0
-    bottom = layout.height - (SHORT_BANNER_HEIGHT if clip.type == "short" and settings.get("shortBottomBannerEnabled") else 0)
-    events, _ = _subtitle_events_for_review_clip(document, clip, width=layout.width, height=layout.height)
-    manual = list(clip.manual_decision_fields)
-    try:
-        clip.manual_decision_fields = list(set(manual) | {"title_style", "hook_style"})
-        choose_text_styles(clip, layout, events=events, top=top, bottom=bottom, settings=settings)
-        choose_emphasis(clip, [s for s in document.segments if s.id in clip.segment_ids], layout, top=top, bottom=bottom, settings=settings)
-    finally:
-        clip.manual_decision_fields = manual
-    append_choice(
-        document.choice_history,
-        kind="text_style",
-        clipId=clip.id,
-        stage="applied",
-        source="fallback",
-        policyVersion=REPAIR_POLICY,
-        reason="final_output_subtitle_safe_area",
-        values=choice_values({"subtitleStyle": clip.subtitle_style.model_dump(by_alias=True)}),
-    )
-    if "subtitle_styles" not in manual:
-        append_choice(
-            document.choice_history,
-            kind="effects",
-            clipId=clip.id,
-            stage="applied",
-            source="fallback",
-            policyVersion=REPAIR_POLICY,
-            reason="final_output_subtitle_safe_area",
-            values=choice_values({"subtitleStyles": [s.model_dump(by_alias=True) for s in clip.subtitle_styles]}),
-        )
+    from app.jobs.subtitle_review import refresh_review_render_contract
+    from app.jobs.overlay_layout_repair import repair_overlay_layout
+    refresh_review_render_contract(document, render_settings=settings, source_width=video.width, source_height=video.height)
+    repair_overlay_layout(document, {clip.id})
 
 
 def inspect_pipeline_outputs(

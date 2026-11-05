@@ -44,7 +44,8 @@ def test_confirmed_cue_styles_preserve_other_clips_and_skip_codex(client, state)
     previous = next(c for c in before.clips if c.id == "short")
     assert target.confirmed and target.subtitle_styles[0].style.font_name == "Arial"
     assert target.subtitle_styles[0].style.primary_color == "#FF0000"
-    assert target.manual_decision_fields == previous.manual_decision_fields
+    assert set(previous.manual_decision_fields).issubset(target.manual_decision_fields)
+    assert "subtitle_styles.fontName" in target.manual_decision_fields
     assert target.automatic_decision_targets == [] and len(queued) == 1
     assert target.preview_state == "stale"
     assert [s.model_dump() for s in after.segments] == [s.model_dump() for s in before.segments]

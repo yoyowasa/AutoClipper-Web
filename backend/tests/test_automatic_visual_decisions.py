@@ -86,9 +86,11 @@ def test_manual_detail_values_survive_and_still_face_quality_gate():
     clip.short_layout, clip.framing_offset_x, clip.framing_zoom = "center_crop", 15, 1.2
     clip.manual_decision_fields = ["subtitle_style", "subtitle_styles", "framing"]
     decide(doc, clip, settings, video)
-    assert clip.subtitle_style == style and clip.subtitle_styles[0].style == style
+    assert clip.subtitle_styles[0].layout_adjustment.font_size < style.font_size
+    assert clip.subtitle_styles[0].style.primary_color == style.primary_color
+    assert clip.manual_decision_fields == ["subtitle_style", "subtitle_styles", "framing"]
     assert (clip.short_layout, clip.framing_offset_x, clip.framing_zoom) == ("center_crop", 15, 1.2)
-    assert _automated_overlay_layout_check(doc, human_accepted_clip_ids=set(), human_evidence={}).outcome == "fail"
+    assert _automated_overlay_layout_check(doc, human_accepted_clip_ids=set(), human_evidence={}).outcome == "pass"
     assert next(c for c in doc.choice_history if c.kind == "effects").source == "manual"
 
 

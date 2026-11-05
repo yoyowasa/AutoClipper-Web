@@ -1542,3 +1542,14 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 回帰検証: 修正前 main 0b77cd5 で backend 5件と frontend の有効ボタン検査が失敗し、変更後は関連検査が成功。隔離 DB/storage・18440/13440 の画面で確定済みショート1行を Noto Serif CJK JP / #FF4040 に変更し保存。再読み込み後も確認済み・未保存0件、プレビュー ASS と書き出し用 ASS への反映、他 clip・共有字幕の不変を確認した。
 - 検証: backend 全件 2537 passed / 30 skipped、追加7件・既存関連テスト、Ruff 0.16.10、frontend test/lint/typecheck/build 成功。最終 CI 結果は [PR #181](https://github.com/yoyowasa/AutoClipper-Web/pull/181) を参照。
 - 制限: 画面は合成動画の隔離環境、書き出しの継続は偽エンジンの統合テストで確認。稼働環境への反映・実ジョブの操作は行わない。launcher・Codex契約は変更なし、中継の再起動不要。
+
+## 2026-11-05 task-241：帯・安全範囲からはみ出す文字の自動修復と、個別書式の継承
+
+- 目的: 個別書式で色だけを変えた字幕行に、当時の標準書式（縦位置75.5%・110px）が一式保存されて手の指定扱いになり、自動調整から外れて下の帯にかかり、`overlay_layout_outside_safe_area` で止まっていた（job_969023d3… のショート3本・計18行、人は色だけを変更）。原因に関係なく、はみ出しをシステムが自動で直して先へ進める。
+- 正本との差分（ユーザー承認済み）: 手の指定がある書式でも、帯・安全範囲に収めるための位置・サイズの補正は自動で行う。色・フォント・縁取り・手で入れた改行・文字は変えない。
+- 自動修復: `jobs/overlay_layout_repair.py` で、品質ゲートと同じ幾何計算（`overlay_geometry.py` に共通化）ではみ出す字幕行・タイトル・フックを特定し、①文字サイズを下限まで下げる、②それでも収まらなければ縦位置を最小量だけ動かす。自動の見た目決定・保存・プレビュー・最終検査の修復の前に実行し、修復後に同じ計算で検査し直す。検査の基準は変えない。修復できない行だけ失敗として残す。修復は choiceHistory（`overlay-layout-repair-v1`）と clip の `overlayLayoutNotices` に記録する。
+- 個別書式の継承: 行の書式は人が変えた項目だけを保存し（`styleVersion: 2`）、未指定の項目は clip の自動調整後の字幕書式から継承する（`cue_styles.py`）。旧来の一式保存は読み込み時に、保存時の標準書式と一致する項目を未指定へ移行する。manualDecisionFields は `subtitle_styles.primaryColor` のように変えた項目だけを記録する。
+- 画面: `OverlayLayoutNotices.tsx` で、修復した行・修復できない行を clip・秒数・文字・内容（縮小px／移動px／はみ出し量と相手）で一覧表示し、押すとその時刻と行の書式を開く。書式エディタは行の変更を差分だけ保存する。
+- 実データのコピーでの確認: job_969023d3ad7e4f93aea2d9159c7708e5 の字幕確認JSONをscratchへコピーして読み込み・修復・品質ゲートを実行。ショート2・3・5の色（#9BFF9B 等）は保持され、行の縦位置は clip と同じ72.92%に揃い、2行の下端は最大1548px（許容1560px）で overlay_layout は pass。手の指定は `subtitle_styles.primaryColor` だけになった。稼働DB・storageは変更していない。
+- 検証: backend 全件 2547 passed / 30 skipped、Ruff 0.16.10 成功、frontend test・lint・typecheck・build 成功。CI 結果は PR を参照。
+- 制限: 隔離環境の実画面での操作確認と、実ジョブの再処理は未実施。既存の job_969023d3… は反映後にユーザーの指示で再処理する。launcher・Codex契約・依存の変更なし、中継の再起動不要。

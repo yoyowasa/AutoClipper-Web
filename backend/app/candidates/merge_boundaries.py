@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 from app.duration_rules import NORMAL_MIN_SECONDS, NORMAL_MAX_SECONDS, SHORT_MAX_DEFAULT_SECONDS
 
@@ -113,6 +113,13 @@ class SubtitleStyleOverride(BaseModel):
     start: float = Field(ge=0)
     end: float = Field(gt=0)
     style: ClipTextStyle
+    style_version: int = Field(default=2, alias="styleVersion")
+    layout_adjustment: ClipTextStyle | None = Field(default=None, alias="layoutAdjustment", exclude_if=lambda value: value is None)
+    layout_adjustment_input: str | None = Field(default=None, alias="layoutAdjustmentInput", exclude_if=lambda value: value is None)
+
+    @field_serializer("style", "layout_adjustment")
+    def sparse_style(self, value, info):
+        return value.model_dump(mode=info.mode, by_alias=info.by_alias, exclude_unset=True) if value is not None else None
 
     @model_validator(mode="after")
     def valid_range(self) -> "SubtitleStyleOverride":

@@ -1,4 +1,5 @@
 """Atomic subtitle-only mutations, preserving confirmation and manual decisions."""
+from app.cue_styles import cue_style_values
 import shutil
 
 from fastapi import HTTPException
@@ -129,7 +130,7 @@ def update_batch(document, request):
         if item.before != by_id[item.segment_id].text:
             raise RuntimeError("字幕が別の操作で更新されています。画面を読み直してください。")
     if request.subtitle_styles is not None:
-        if request.before_subtitle_styles != target.subtitle_styles:
+        if cue_style_values(request.before_subtitle_styles) != cue_style_values(target.subtitle_styles):
             raise RuntimeError("個別書式が別の操作で更新されています。入力を保持して再確認してください。")
         cue_ranges = {(by_id[id].start, by_id[id].end) for id in target.segment_ids}
         ranges = [(style.start, style.end) for style in request.subtitle_styles]
@@ -141,7 +142,14 @@ def update_batch(document, request):
         if item.text != item.before:
             affected.update(editable.intersection(by_id[item.segment_id].affected_clip_ids))
             update_review_segment(document, item.segment_id, item.text, clip_id=request.clip_id)
-    if request.subtitle_styles is not None and target.subtitle_styles != request.subtitle_styles:
+    if request.subtitle_styles is not None and cue_style_values(target.subtitle_styles) != cue_style_values(request.subtitle_styles):
+        from app.cue_styles import cue_manual_changes, cue_manual_rows
+        from app.production_choices import append_choice, choice_values
+        append_choice(document.choice_history, kind="effects", source="manual", clipId=target.id, stage="applied",
+            policyVersion="cue-style-fields-v2", reason="manual_cue_style_fields", timeBasis="source",
+            values=choice_values({"subtitleStyles": cue_manual_rows(target.subtitle_styles, request.subtitle_styles)}))
+        target.manual_decision_fields = sorted(set(target.manual_decision_fields) | cue_manual_changes(
+            target.subtitle_styles, request.subtitle_styles))
         target.subtitle_styles = request.subtitle_styles
         document.has_saved_review_changes = True
         affected.add(target.id)

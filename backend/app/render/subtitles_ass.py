@@ -880,7 +880,9 @@ def subtitle_events_for_candidate(
         SubtitleLayout.short() if candidate.type == "short" else SubtitleLayout.normal()
     )
     raw_events: list[SubtitleEvent] = []
-    styles_by_range = {(item.start, item.end): item.style for item in candidate.subtitle_styles}
+    from app.cue_styles import inherit_cue_style
+    styles_by_range = {(item.start, item.end): inherit_cue_style(
+        candidate.subtitle_style, item.style, active_layout, item.layout_adjustment) for item in candidate.subtitle_styles}
     for source_segment in transcript_segments:
         override = styles_by_range.get((source_segment.start, source_segment.end))
         for segment in clipped_transcript_segments([source_segment], candidate):

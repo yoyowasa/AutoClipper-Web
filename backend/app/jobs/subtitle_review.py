@@ -1,3 +1,5 @@
+from app.cue_styles import cue_style_values
+from app.overlay_geometry import OverlayLayoutNotice
 from app.render.short_crop_decision import ShortCropDecision
 from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 import json
@@ -109,6 +111,7 @@ class PreviewFraming(BaseModel):
 
 
 class SubtitleReviewClip(BaseModel):
+    overlay_layout_notices: list[OverlayLayoutNotice] = Field(default_factory=list, alias="overlayLayoutNotices")
     automatic_decision_inputs: dict[str, str] = Field(default_factory=dict, alias="automaticDecisionInputs", exclude_if=lambda v: not v)
     automatic_decision_targets: list[str] | None = Field(default=None, alias="automaticDecisionTargets", exclude_if=lambda v: v is None)
     selection_warnings: list[SelectionReviewWarning] = Field(default_factory=list, alias="selectionWarnings")
@@ -819,6 +822,9 @@ def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | P
     if scoped_source_indices(document) and not snapshot.exists() and source.is_file():
         # A later render writes clip-specific rows; their indices are not the source index space.
         write_json_atomic(snapshot, json.loads(source.read_text(encoding="utf-8")))
+    if document.state != "completed":
+        from app.jobs.overlay_layout_repair import repair_overlay_layout
+        repair_overlay_layout(document)
     capture_document(document, Path(output_path), kind="review", source=choice_source)
     refresh_review_gaps(document, Path(output_path).parent)
     return write_json_atomic(
@@ -829,7 +835,10 @@ def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | P
 
 def load_subtitle_review(path: str | Path) -> SubtitleReviewDocument:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    document = SubtitleReviewDocument.model_validate(payload)
+    from app.cue_styles import normalize_legacy_cues, record_cue_inheritance
+    inherited = []
+    document = SubtitleReviewDocument.model_validate(normalize_legacy_cues(payload, inherited))
+    record_cue_inheritance(document, inherited)
     refresh_review_gaps(document, Path(path).parent)
     return document
 
@@ -1113,7 +1122,7 @@ def update_review_clip_content(
         or clip.title_style != next_title_style
         or clip.hook_style != next_hook_style
         or clip.subtitle_style != next_subtitle_style
-        or clip.subtitle_styles != next_subtitle_styles
+        or cue_style_values(clip.subtitle_styles) != cue_style_values(next_subtitle_styles)
         or clip.title_candidates != next_title_candidates
         or clip.recommended_title_id != next_recommended_title_id
         or clip.selected_title_id != next_selected_title_id

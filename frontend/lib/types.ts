@@ -469,11 +469,15 @@ export type ResolvedClipTextStyle = {
   positionOverride: boolean;
 };
 
-export type SubtitleStyleOverride = { start: number; end: number; style: ClipTextStyle };
+export type OverlayLayoutNotice = { role: string; start: number; end: number; text: string; failed: boolean;
+  boundary: string; overflowPx: number; fontSizeBefore: number; fontSizeAfter: number; shiftPx: number };
+
+export type SubtitleStyleOverride = { start: number; end: number; style: Partial<ClipTextStyle>; styleVersion?: number; layoutAdjustment?: Partial<ClipTextStyle>; layoutAdjustmentInput?: string };
 
 export type SelectionReviewWarning = { code: string; message: string; scope: "clip"; start: number; end: number };
 
 export type SubtitleReviewClip = {
+  overlayLayoutNotices?: OverlayLayoutNotice[];
   selectionWarnings?: SelectionReviewWarning[];
   automaticDecisionState?: "idle" | "queued" | "generating" | "ready" | "failed";
   automaticDecisionError?: string | null;
