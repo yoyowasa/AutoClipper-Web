@@ -1,4 +1,5 @@
 """Per-clip visual decisions after subtitle confirmation, before exact preview."""
+from app.cue_styles import manual_style
 
 from app.jobs.automatic_text_style import choose_emphasis, choose_text_styles
 from app.jobs.quality_gate import _subtitle_events_for_review_clip
@@ -30,6 +31,10 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
             choose_text_styles(clip, layout, events=events, top=top, bottom=bottom, settings=settings)
         if "effects" in targets:
             ranked, emphasis_reason = choose_emphasis(clip, segments, layout, top=top, bottom=bottom, settings=settings)
+    from app.jobs.subtitle_review import refresh_review_render_contract
+    from app.jobs.overlay_layout_repair import repair_overlay_layout
+    refresh_review_render_contract(document, render_settings=settings, source_width=video.width, source_height=video.height)
+    repair_overlay_layout(document, {clip.id})
     manual_framing = "framing" in clip.manual_decision_fields
     preferred = content_choice.strategy if content_choice else None
     if not manual_framing and frozen_policy(settings, clip.type):
@@ -92,7 +97,7 @@ def decide_visuals(document, clip, *, settings, video, source, crop_resolver=Non
                                             if getattr(clip, f"{role}_style") else None}), **common)
     if "effects" in targets:
         append_choice(document.choice_history, kind="effects",
-                      source="manual" if "subtitle_styles" in clip.manual_decision_fields else "automatic",
+                      source="manual" if manual_style(clip.manual_decision_fields, "subtitle_styles") else "automatic",
                       timeBasis="source", reason=emphasis_reason,
                       values=choice_values({"subtitleStyles": [s.model_dump(by_alias=True) for s in clip.subtitle_styles],
                                             "emphasisSignal": next(("topic" if reason == "selected_copy_topic" else

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from app.overlay_geometry import _text_vertical_bounds as _text_vertical_bounds, measure_overlay
+
 from app.clip_allocation import is_ai_allocation
 import hashlib
 import json
@@ -17,7 +19,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.audio.transcribe_faster_whisper import TranscriptSegment
-from app.candidates.merge_boundaries import Candidate
+from app.candidates.merge_boundaries import Candidate, ClipTextStyle
 from app.duration_rules import NORMAL_LONGFORM_MAX_SECONDS, NORMAL_MAX_SECONDS, completed_clip_duration
 from app.candidates.select_candidates import CandidateSelection
 from app.candidates.short_diversity import (
@@ -28,7 +30,6 @@ from app.jobs.subtitle_review import SubtitleReviewDocument
 from app.jobs.automation import requires_human_subtitle_review, is_subtitle_only_auto, SUBTITLE_ONLY_AUTO_POLICY
 from app.jobs.selection_warnings import SUBTITLE_REVIEW_RISKS
 from app.jobs.title_hook_suggestions import TitleHookSuggestionsDocument
-from app.overlay_text import fit_overlay_text
 from app.posting_metadata import (
     build_post_metadata_revision_hash,
     ensure_publication_title_suffix,
@@ -947,26 +948,6 @@ def _automated_subtitle_alignment_check(
     )
 
 
-def _text_vertical_bounds(
-    *,
-    y_percent: float,
-    alignment: int,
-    line_count: int,
-    font_size: int,
-    outline_width: int,
-    shadow: int,
-    output_height: int,
-) -> tuple[float, float]:
-    visual_height = max(1, line_count) * font_size * 1.20 + 2 * (
-        outline_width + shadow
-    )
-    anchor_y = output_height * min(100.0, max(0.0, y_percent)) / 100.0
-    row = (min(9, max(1, alignment)) - 1) // 3
-    if row == 0:
-        return anchor_y - visual_height, anchor_y
-    if row == 2:
-        return anchor_y, anchor_y + visual_height
-    return anchor_y - visual_height / 2, anchor_y + visual_height / 2
 
 
 def _subtitle_events_for_review_clip(
@@ -984,6 +965,8 @@ def _subtitle_events_for_review_clip(
     )
     layout = replace(
         base_layout,
+        default_subtitle_style=ClipTextStyle.model_validate(clip.resolved_subtitle_style.model_dump())
+        if clip.resolved_subtitle_style else base_layout.default_subtitle_style,
         width=width,
         height=height,
         max_chars_per_line=(
@@ -1023,6 +1006,7 @@ def _subtitle_events_for_review_clip(
         hook_duration_seconds=clip.hook_duration_seconds,
         hook_scene_start=clip.hook_scene_start,
         hook_scene_end=clip.hook_scene_end,
+        subtitle_style=clip.subtitle_style,
         subtitle_styles=clip.subtitle_styles,
     )
     transcript_segments = [
@@ -1046,6 +1030,73 @@ def _subtitle_events_for_review_clip(
     return events, layout
 
 
+def overlay_layout_rows(document, clip):
+    width, height = clip.preview_width, clip.preview_height
+    if width is None or height is None:
+        return []
+    top_content = SHORT_BANNER_HEIGHT if clip.type == "short" and document.short_top_banner_enabled else 0
+    bottom_content = height - (SHORT_BANNER_HEIGHT if clip.type == "short" and document.short_bottom_banner_enabled else 0)
+    role_items: list[tuple[str, str, Any, int, int]] = []
+    single_line_roles: set[str] = set()
+    if clip.overlay_title_expected and clip.title:
+        role_items.append(
+            (
+                "title",
+                clip.title,
+                clip.resolved_title_style,
+                0,
+                SHORT_BANNER_HEIGHT
+                if clip.type == "short" and document.short_top_banner_enabled
+                else height,
+            )
+        )
+    if clip.hook_text:
+        role_items.append(
+            (
+                "hook",
+                clip.hook_text,
+                clip.resolved_hook_style,
+                # The default hook anchor sits exactly on the lower edge of
+                # the top banner. Its centered ASS box intentionally spans
+                # that boundary, while subtitles must stay in the body.
+                0,
+                bottom_content,
+            )
+        )
+    subtitle_events, subtitle_layout = _subtitle_events_for_review_clip(
+        document,
+        clip,
+        width=width,
+        height=height,
+    )
+    for event_index, event in enumerate(subtitle_events, start=1):
+        max_lines = 1 if event.single_line else min(2, subtitle_layout.max_lines)
+        if event.single_line:
+            single_line_roles.add(f"subtitle:event_{event_index:05d}")
+        role_items.append(
+            (
+                f"subtitle:event_{event_index:05d}",
+                split_subtitle_lines(
+                    event.text,
+                    max_chars_per_line=subtitle_layout.max_chars_per_line,
+                    max_lines=max_lines,
+                ),
+                resolve_clip_text_style(event.style, subtitle_layout, role="subtitle") if event.style else clip.resolved_subtitle_style,
+                top_content,
+                bottom_content,
+            )
+        )
+
+    rows = []
+    for role, text, style, safe_top, safe_bottom in role_items:
+        event = subtitle_events[int(role.split("_")[-1]) - 1] if role.startswith("subtitle:") else None
+        rows.append({"role": role, "text": text, "style": style, "safe_top": safe_top, "safe_bottom": safe_bottom,
+                     "max_lines": 1 if role in single_line_roles else 2,
+                     "start": event.start if event else 0., "end": event.end if event else
+                     min(clip.hook_duration_seconds, clip.duration) if role == "hook" else clip.duration})
+    return rows
+
+
 def _automated_overlay_layout_check(
     document: SubtitleReviewDocument,
     *,
@@ -1064,108 +1115,17 @@ def _automated_overlay_layout_check(
         if width is None or height is None:
             unknown.append({"clipId": clip.id, "reason": "preview_dimensions_missing"})
             continue
-        top_content = (
-            SHORT_BANNER_HEIGHT
-            if clip.type == "short" and document.short_top_banner_enabled
-            else 0
-        )
-        bottom_content = height - (
-            SHORT_BANNER_HEIGHT
-            if clip.type == "short" and document.short_bottom_banner_enabled
-            else 0
-        )
-        role_items: list[tuple[str, str, Any, int, int]] = []
-        single_line_roles: set[str] = set()
-        if clip.overlay_title_expected and clip.title:
-            role_items.append(
-                (
-                    "title",
-                    clip.title,
-                    clip.resolved_title_style,
-                    0,
-                    SHORT_BANNER_HEIGHT
-                    if clip.type == "short" and document.short_top_banner_enabled
-                    else height,
-                )
-            )
-        if clip.hook_text:
-            role_items.append(
-                (
-                    "hook",
-                    clip.hook_text,
-                    clip.resolved_hook_style,
-                    # The default hook anchor sits exactly on the lower edge of
-                    # the top banner. Its centered ASS box intentionally spans
-                    # that boundary, while subtitles must stay in the body.
-                    0,
-                    bottom_content,
-                )
-            )
-        subtitle_events, subtitle_layout = _subtitle_events_for_review_clip(
-            document,
-            clip,
-            width=width,
-            height=height,
-        )
-        for event_index, event in enumerate(subtitle_events, start=1):
-            max_lines = 1 if event.single_line else min(2, subtitle_layout.max_lines)
-            if event.single_line:
-                single_line_roles.add(f"subtitle:event_{event_index:05d}")
-            role_items.append(
-                (
-                    f"subtitle:event_{event_index:05d}",
-                    split_subtitle_lines(
-                        event.text,
-                        max_chars_per_line=subtitle_layout.max_chars_per_line,
-                        max_lines=max_lines,
-                    ),
-                    resolve_clip_text_style(event.style, subtitle_layout, role="subtitle") if event.style else clip.resolved_subtitle_style,
-                    top_content,
-                    bottom_content,
-                )
-            )
-
-        for role, text, style, safe_top, safe_bottom in role_items:
-            if style is None:
-                unknown.append(
-                    {"clipId": clip.id, "reason": f"{role}_resolved_style_missing"}
-                )
+        for row in overlay_layout_rows(document, clip):
+            if row["style"] is None:
+                unknown.append({"clipId": clip.id, "reason": f"{row['role']}_resolved_style_missing"})
                 continue
-            fit = fit_overlay_text(
-                text,
-                output_width=width,
-                font_name=style.font_name,
-                font_size=style.font_size,
-                margin_x=style.margin_x,
-                outline_width=style.outline_width + style.outer_outline_width,
-                shadow=style.shadow,
-                alignment=style.alignment,
-                x_percent=style.x_percent,
-                max_lines=1 if role in single_line_roles else 2,
-            )
-            vertical_top, vertical_bottom = _text_vertical_bounds(
-                y_percent=style.y_percent,
-                alignment=style.alignment,
-                line_count=len(fit.lines),
-                font_size=fit.effective_font_size,
-                outline_width=style.outline_width + style.outer_outline_width,
-                shadow=style.shadow,
-                output_height=height,
-            )
-            item = {
-                "clipId": clip.id,
-                "role": role,
-                "fitsWidth": fit.fits,
-                "effectiveFontSize": fit.effective_font_size,
-                "lineCount": len(fit.lines),
-                "verticalBounds": [round(vertical_top, 2), round(vertical_bottom, 2)],
-                "safeBounds": [safe_top, safe_bottom],
-            }
+            measured = measure_overlay(row, width=width, height=height)
+            item = {"clipId": clip.id, **{key: row[key] for key in ("role", "text", "start", "end")},
+                    **{key: value for key, value in measured.items() if key != "fits"}}
             inspected.append(item)
-            if not fit.fits:
-                failures.append({**item, "reason": "horizontal_text_overflow"})
-            elif vertical_top < safe_top or vertical_bottom > safe_bottom:
-                failures.append({**item, "reason": "text_outside_safe_vertical_area"})
+            if not measured["fits"]:
+                failures.append({**item, "reason": "horizontal_text_overflow" if not measured["fitsWidth"]
+                                 else "text_outside_safe_vertical_area"})
 
     if failures:
         outcome: QualityGateOutcome = "fail"

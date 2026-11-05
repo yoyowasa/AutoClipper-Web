@@ -277,7 +277,7 @@ export function defaultClipTextStyle(
 }
 
 export function resolvedClipTextStyle(
-  style: ClipTextStyle | null | undefined,
+  style: Partial<ClipTextStyle> | null | undefined,
   effectiveStyle: ResolvedClipTextStyle | null | undefined,
   target: ClipTextTarget,
   clipType: ExportType
@@ -301,29 +301,31 @@ export function resolvedClipTextStyle(
     return fallback;
   }
 
-  const preset = style.fontPreset;
-  const explicitPosition = style.positionMode === "explicit";
+  const preset = style.fontPreset ?? fallback.fontPreset;
+  const explicitPosition = style.positionMode === "explicit" || (style.positionMode === undefined && ("xPercent" in style || "yPercent" in style));
   return {
     ...fallback,
     fontPreset: preset,
     fontName:
       style.fontName?.trim() ||
+      (!("fontPreset" in style) ? fallback.fontName : null) ||
       (preset ? clipTextFontName(preset) : fallback.fontName),
     bold:
       style.bold ??
+      (!("fontPreset" in style) ? fallback.bold : null) ??
       (preset ? clipTextFontWeight(preset) >= 700 : fallback.bold),
-    fontSize: style.fontSize,
-    primaryColor: style.primaryColor,
-    outlineColor: style.outlineColor,
-    outlineWidth: style.outlineWidth,
-    outerOutlineWidth: style.outerOutlineWidth ?? 0,
-    outerOutlineColor: style.outerOutlineColor ?? "#FFFFFF",
-    xPercent: explicitPosition ? style.xPercent : fallback.xPercent,
-    yPercent: explicitPosition ? style.yPercent : fallback.yPercent,
+    fontSize: style.fontSize ?? fallback.fontSize,
+    primaryColor: style.primaryColor ?? fallback.primaryColor,
+    outlineColor: style.outlineColor ?? fallback.outlineColor,
+    outlineWidth: style.outlineWidth ?? fallback.outlineWidth,
+    outerOutlineWidth: style.outerOutlineWidth ?? fallback.outerOutlineWidth ?? 0,
+    outerOutlineColor: style.outerOutlineColor ?? fallback.outerOutlineColor ?? "#FFFFFF",
+    xPercent: explicitPosition ? style.xPercent ?? fallback.xPercent : fallback.xPercent,
+    yPercent: explicitPosition ? style.yPercent ?? fallback.yPercent : fallback.yPercent,
     alignment: explicitPosition ? 5 : fallback.alignment,
     marginX: explicitPosition ? 0 : fallback.marginX,
     marginV: explicitPosition ? 0 : fallback.marginV,
-    positionMode: style.positionMode,
+    positionMode: style.positionMode ?? fallback.positionMode,
     positionOverride: explicitPosition ? true : fallback.positionOverride
   };
 }

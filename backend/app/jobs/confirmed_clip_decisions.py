@@ -1,4 +1,5 @@
 """Make production decisions from one human-confirmed subtitle snapshot."""
+from app.cue_styles import manual_style
 
 from uuid import uuid4
 
@@ -124,7 +125,7 @@ def run_confirmed_clip_decisions(job_id, clip_id, revision, *, session_factory=S
                 targets.add("thumbnail_image")
             if "framing" in clip.manual_decision_fields:
                 targets.discard("framing")
-            if "subtitle_styles" in clip.manual_decision_fields:
+            if manual_style(clip.manual_decision_fields, "subtitle_styles"):
                 targets.discard("effects")
             if clip.type == "normal" and "thumbnail_image" in targets:
                 stage = "サムネ画像の自動決定"

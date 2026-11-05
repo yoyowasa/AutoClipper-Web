@@ -1,4 +1,5 @@
 """Dependencies of the existing generators; no new model or prompt."""
+from app.cue_styles import manual_style, cue_style_values
 from app.production_choices import value_hash
 
 ALL_TARGETS = {"title_hook", "thumbnail_copy", "thumbnail_image", "framing", "text_style", "effects"}
@@ -35,7 +36,7 @@ def changed_targets(before, previous, document, clip):
         targets -= {"thumbnail_copy", "thumbnail_image"}
     if "framing" in clip.manual_decision_fields:
         targets.discard("framing")
-    if "subtitle_styles" in clip.manual_decision_fields:
+    if manual_style(clip.manual_decision_fields, "subtitle_styles"):
         targets.discard("effects")
     return targets
 
@@ -43,9 +44,10 @@ def changed_targets(before, previous, document, clip):
 def subtitle_edit_targets(before, previous, document, clip):
     # Per-cue styles belong to the clip, not to shared transcript rows. A style
     # change only needs the existing preview/render continuation, never Codex.
-    if previous.subtitle_styles != clip.subtitle_styles and decision_inputs(before, previous) == decision_inputs(document, clip):
+    if (cue_style_values(previous.subtitle_styles) != cue_style_values(clip.subtitle_styles)
+            and decision_inputs(before, previous) == decision_inputs(document, clip)):
         return set()
     targets = changed_targets(before, previous, document, clip)
-    if previous.subtitle_styles != clip.subtitle_styles:
+    if cue_style_values(previous.subtitle_styles) != cue_style_values(clip.subtitle_styles):
         targets.discard("effects")  # Do not overwrite cue styles submitted with text edits.
     return targets

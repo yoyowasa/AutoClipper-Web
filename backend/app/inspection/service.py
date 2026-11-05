@@ -22,7 +22,7 @@ def persist(paths, record):
 def protected_snapshot(document, clip):
     if document is None:
         return None
-    fields = set(clip.manual_decision_fields)
+    fields = {field.split(".")[0] for field in clip.manual_decision_fields}
     if "framing" in fields:
         fields.update(("framing_offset_x", "framing_offset_y", "framing_zoom", "short_layout", "automatic_crop"))
     return deepcopy(document.segments), {name: deepcopy(getattr(clip, name)) for name in fields if hasattr(clip, name)}
@@ -36,10 +36,24 @@ def restore_protected(document, clip, snapshot):
             setattr(clip, name, deepcopy(value))
 
 
-def protected_unchanged(document, clip, snapshot):
-    return snapshot is None or (
-        document.segments == snapshot[0] and all(getattr(clip, name) == value for name, value in snapshot[1].items())
-    )
+def _without_layout(value):
+    if hasattr(value, "model_dump"):
+        return _without_layout(value.model_dump())
+    if isinstance(value, list):
+        return [_without_layout(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _without_layout(item) for key, item in value.items()
+                if key not in {"font_size", "y_percent", "position_mode", "layout_adjustment", "layout_adjustment_input"}}
+    return value
+
+
+def protected_unchanged(document, clip, snapshot, *, allow_layout_repair=False):
+    if snapshot is None:
+        return True
+    return document.segments == snapshot[0] and all(
+        _without_layout(getattr(clip, name)) == _without_layout(value)
+        if allow_layout_repair and name in {"subtitle_style", "subtitle_styles", "title_style", "hook_style"}
+        else getattr(clip, name) == value for name, value in snapshot[1].items())
 
 
 def repair_action(checks, clip, attempted):
@@ -71,7 +85,7 @@ def repair_action(checks, clip, attempted):
     elif codes & {"SUBTITLE_OUT_OF_FRAME", "SUBTITLE_BANNER_COLLISION", "SUBTITLE_REFERENCE_EMPTY"}:
         action = (
             "refit_subtitle"
-            if clip is not None and clip.automatic_decision_state == "ready" and not manual & {"subtitle_style", "subtitle_styles"}
+            if clip is not None and clip.automatic_decision_state == "ready"
             else "rerender_same"
         )
     else:
@@ -175,7 +189,7 @@ def inspect_final_outputs(
             persist(paths, record)  # A killed worker cannot silently repeat this repair.
             try:
                 replacement, updated = repair(candidate.id, action)
-                if clip is not None and not protected_unchanged(document, clip, snapshot):
+                if clip is not None and not protected_unchanged(document, clip, snapshot, allow_layout_repair=action == "refit_subtitle"):
                     restore_protected(document, clip, snapshot)
                     raise ValueError("protected review values changed")
                 export, candidate = replacement, updated

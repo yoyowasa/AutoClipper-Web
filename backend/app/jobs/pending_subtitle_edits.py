@@ -64,6 +64,8 @@ def merge_subtitles(latest, edited, ids):
         if clip.id in ids:
             source = next(c for c in edited.clips if c.id == clip.id)
             clip.segment_ids = list(source.segment_ids)
+            clip.manual_decision_fields = sorted(set(clip.manual_decision_fields) |
+                {field for field in source.manual_decision_fields if field.startswith("subtitle_styles")})
             clip.subtitle_styles = [s.model_copy(deep=True) for s in source.subtitle_styles]
             remap_clip_segment_ids(clip, mapping)
     return result

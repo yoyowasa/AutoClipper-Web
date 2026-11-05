@@ -17,6 +17,7 @@ ChoiceKind = Literal[
     "publication_decision", "range", "title_hook", "thumbnail", "framing", "text_style", "effects", "post_copy", "publication",
 ]
 VALUE_KEYS = frozenset({
+    "overlayRepair",
     "publicationDecision", "publicationReasons", "publicationEvidenceHash", "publicationOriginalDecision",
     "openingRankWeight", "allocationNormalWeight", "allocationShortWeight",
     "policyPreferredLayout",
@@ -36,6 +37,7 @@ VALUE_KEYS = frozenset({
     "contentPreferredLayout", "highlightType", "framingEvidenceIds", "framingDecisionRevision", "framingReason",
 })
 NESTED_KEYS = frozenset({
+    "before", "after", "shiftPx", "styleVersion", "layoutAdjustment", "layoutAdjustmentInput",
     "fontPreset", "fontName", "fontSize", "primaryColor", "outlineColor", "outlineWidth", "outerOutlineColor",
     "outerOutlineWidth", "shadow", "bold", "alignment", "marginX", "marginV", "xPercent", "yPercent", "positionMode",
     "positionOverride", "scale", "offsetX", "offsetY", "offset_x", "offset_y", "heading", "upper", "lower",

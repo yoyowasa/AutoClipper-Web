@@ -3,6 +3,7 @@
 Fonts, colours and maximum sizes come from the existing character/job style.
 Only overflowing text is reduced; one long row never shrinks other rows.
 """
+from app.cue_styles import manual_style
 
 import math
 import re
@@ -72,7 +73,7 @@ def choose_text_styles(clip, layout, *, events, top, bottom, settings=None):
 
 def choose_emphasis(clip, segments, layout, *, top, bottom, settings=None):
     """Rank existing subtitle rows; never invent words or change subtitle text."""
-    if "subtitle_styles" in clip.manual_decision_fields:
+    if manual_style(clip.manual_decision_fields, "subtitle_styles"):
         return [], "explicit_manual_override_preserved"
     tokens = set(TOPIC_WORDS.findall(unicodedata.normalize("NFKC", f"{clip.title} {clip.hook_text}")))
     hook_scene = (clip.hook_scene_end - clip.hook_scene_start) if clip.hook_scene_start is not None else 0

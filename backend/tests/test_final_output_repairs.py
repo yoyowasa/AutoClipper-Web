@@ -50,10 +50,11 @@ def test_subtitle_refit_keeps_caption_text_other_roles_and_manual_emphasis(guard
     clip = document.clips[0]
     clip.manual_decision_fields = ["title_style", "hook_style", "subtitle_styles"]
     original = deepcopy((document.segments, clip.title_style, clip.hook_style, clip.subtitle_styles))
+    history_count = len(document.choice_history)
     refit_subtitle(document, clip, settings={}, video=SimpleNamespace(width=1920, height=1080))
     assert (document.segments, clip.title_style, clip.hook_style, clip.subtitle_styles) == original
     assert clip.manual_decision_fields == ["title_style", "hook_style", "subtitle_styles"]
-    assert document.choice_history[-1].kind == "text_style" and document.choice_history[-1].source == "fallback"
+    assert len(document.choice_history) == history_count  # no correction, no fabricated fallback
 
 
 def test_timeout_budget_only_counts_render_targets_and_scales_to_longform(tmp_path, monkeypatch):

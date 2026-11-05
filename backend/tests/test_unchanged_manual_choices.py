@@ -232,6 +232,6 @@ def test_changed_line_emphasis_is_manual_but_unchanged_payload_is_not(guarded_cl
     clip, segment = document.clips[0], document.segments[0]
     confirm(data, clip, subtitleStyles=[{"start": segment.start, "end": segment.end, "style": {"fontSize": 60, "primaryColor": "#FFFF00"}}])
     saved = load_subtitle_review(data.review_path)
-    assert saved.clips[0].manual_decision_fields == ["subtitle_styles"]
+    assert saved.clips[0].manual_decision_fields == ["subtitle_styles.fontSize", "subtitle_styles.primaryColor"]
     choices = [c for c in saved.choice_history if c.source == "manual"]
     assert len(choices) == 1 and choices[0].kind == "effects"
