@@ -1,5 +1,7 @@
 "use client";
 
+import { cueStylesChanged } from "../cueStyles";
+
 import { reconcileCaptionSave } from "../captionAutosave";
 import { bulkEditableSegments, sharedSubtitleNotice, subtitleEditTargets, segmentDraftKey } from "../sharedSegments";
 import { editSubtitleStructure, updateSubtitleReviewSegments } from "../../api";
@@ -198,14 +200,16 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
       (context.reviewMutationCountRef?.current ?? 0) > 0) return;
     const updates = review.segments.filter(segment => clip.segmentIds.includes(segment.id) && rawDirtySegmentIds.has(segmentDraftKey(clip, segment.id)))
       .map(segment => ({ segmentId: segment.id, before: segment.text, text: rawDrafts[segmentDraftKey(clip, segment.id)] ?? segment.text }));
-    if (!updates.length) return;
+    const styleDraft = context.clipContentDrafts?.[clip.id] ?? (context.selectedClip?.id === clip.id ? context.selectedClipContentDraft : null);
+    const cueStyles = cueStylesChanged(clip, styleDraft) ? { subtitleStyles: styleDraft!.subtitleStyles, beforeSubtitleStyles: clip.subtitleStyles ?? [] } : undefined;
+    if (!updates.length && !cueStyles) return;
     const generation = context.beginReviewMutation();
     const setSaving = context.setIsSavingConfirmedSubtitles ?? context.setIsSavingBulkCorrection;
     setSaving(true);
     context.setShowSavedPreview(false);
     context.setError(null);
     try {
-      const updated = await updateSubtitleReviewSegments(context.jobId, updates, clip.id);
+      const updated = await updateSubtitleReviewSegments(context.jobId, updates, clip.id, cueStyles);
       if (!context.isCurrentReviewMutation(generation)) return;
       const reconciled = reconcileCaptionSave(review, updated, clip.id, updates,
         context.subtitleDraftsRef?.current ?? rawDrafts, context.subtitleDirtyRef?.current ?? rawDirtySegmentIds);
@@ -213,6 +217,13 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
       setDrafts(reconciled.drafts);
       setDirtySegmentIds(reconciled.dirty);
       context.setReview(updated);
+      if (cueStyles) context.setClipContentDrafts(current => {
+        const draft = current[clip.id];
+        if (!draft) return current;
+        // Polling rebases to the saved style. Keep edits made while saving.
+        return { ...current, [clip.id]: { ...draft, _editedFields: (draft._editedFields ?? []).filter(key =>
+          key !== "subtitleStyles" || JSON.stringify(draft.subtitleStyles) !== JSON.stringify(cueStyles.subtitleStyles)) } };
+      });
     } catch (caught) {
       context.setError(caught instanceof Error ? caught.message : "字幕の変更を保存できませんでした。入力は保持しています。");
     } finally {

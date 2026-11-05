@@ -38,3 +38,14 @@ def changed_targets(before, previous, document, clip):
     if "subtitle_styles" in clip.manual_decision_fields:
         targets.discard("effects")
     return targets
+
+
+def subtitle_edit_targets(before, previous, document, clip):
+    # Per-cue styles belong to the clip, not to shared transcript rows. A style
+    # change only needs the existing preview/render continuation, never Codex.
+    if previous.subtitle_styles != clip.subtitle_styles and decision_inputs(before, previous) == decision_inputs(document, clip):
+        return set()
+    targets = changed_targets(before, previous, document, clip)
+    if previous.subtitle_styles != clip.subtitle_styles:
+        targets.discard("effects")  # Do not overwrite cue styles submitted with text edits.
+    return targets

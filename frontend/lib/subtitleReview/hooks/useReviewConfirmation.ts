@@ -1,5 +1,7 @@
 "use client";
 
+import { cueStylesChanged } from "../cueStyles";
+
 import { unconfirmAutomaticReviewClip, applySubtitleReviewClip, finalizeSubtitleReview, reopenClipPlanForBoundaryReedit, returnSubtitleReviewToClipPlan } from "../../api";
 import { postMetadataApplyPayload } from "../../youtubePosting";
 import { writeReviewDraft, clearJobReviewDrafts } from "../draftStorage";
@@ -57,7 +59,7 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
       return;
     }
     if (review?.subtitleOnlyAuto && selectedClip?.confirmed &&
-      selectedClip.segmentIds.some(id => dirtySegmentIds.has(id))) {
+      (selectedClip.segmentIds.some(id => dirtySegmentIds.has(id)) || cueStylesChanged(selectedClip, selectedClipContentDraft))) {
       // Use the same scoped caption save as blur autosave. Applying the whole
       // clip would re-confirm it and could submit unrelated content drafts.
       await context.saveConfirmedSubtitles(selectedClip.id);

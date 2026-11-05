@@ -30,6 +30,13 @@ def mutate_subtitles(job, video, request, db, paths, enqueue_decisions, enqueue_
         busy = auto and target is not None and target.confirmed and (
             job.status in {"rendering_normal_clips", "rendering_shorts", "packaging_zip"}
             or document.state in {"render_queued", "rendering"})
+        # Keep an in-flight automatic decision's immutable snapshot intact.
+        # Its completion/maintenance will activate the style edit without
+        # cancelling or repeating the already running Codex request.
+        busy = busy or (auto and target is not None and target.confirmed
+            and not structure and request.subtitle_styles is not None
+            and not any(item.text != item.before for item in request.segments)
+            and target.automatic_decision_state in {"queued", "generating"})
         if not (job.status == "awaiting_subtitle_review" and document.state == "awaiting_review") and not (
             completed and auto and target is not None and target.confirmed
         ) and not busy:
@@ -70,13 +77,13 @@ def mutate_subtitles(job, video, request, db, paths, enqueue_decisions, enqueue_
             document.render_clip_ids = sorted(affected)
             document.state = "awaiting_review"
         from app.jobs.confirmed_clip_decisions import queue_clip_decisions
-        from app.jobs.subtitle_decision_inputs import changed_targets
+        from app.jobs.subtitle_decision_inputs import subtitle_edit_targets
         for clip in document.clips:
             if clip.id not in confirmed:
                 continue
             previous = next(c for c in before.clips if c.id == clip.id)
             revision = queue_clip_decisions(document, clip, manual_fields=set(),
-                targets=changed_targets(before, previous, document, clip))
+                targets=subtitle_edit_targets(before, previous, document, clip))
             confirm_review_clip(document, clip.id)
             revisions.append((clip.id, revision))
         # Save-only structural edits never confirm an unconfirmed clip. A live
@@ -121,10 +128,21 @@ def update_batch(document, request):
             raise ValueError("字幕が対象動画に含まれていません。")
         if item.before != by_id[item.segment_id].text:
             raise RuntimeError("字幕が別の操作で更新されています。画面を読み直してください。")
+    if request.subtitle_styles is not None:
+        if request.before_subtitle_styles != target.subtitle_styles:
+            raise RuntimeError("個別書式が別の操作で更新されています。入力を保持して再確認してください。")
+        cue_ranges = {(by_id[id].start, by_id[id].end) for id in target.segment_ids}
+        ranges = [(style.start, style.end) for style in request.subtitle_styles]
+        if len(set(ranges)) != len(ranges) or any(pair not in cue_ranges for pair in ranges):
+            raise ValueError("個別書式は対象clipの字幕区間を重複せず指定してください。")
     editable = editable_clip_ids(document, request.clip_id)
     affected = set()
     for item in request.segments:
         if item.text != item.before:
             affected.update(editable.intersection(by_id[item.segment_id].affected_clip_ids))
             update_review_segment(document, item.segment_id, item.text, clip_id=request.clip_id)
+    if request.subtitle_styles is not None and target.subtitle_styles != request.subtitle_styles:
+        target.subtitle_styles = request.subtitle_styles
+        document.has_saved_review_changes = True
+        affected.add(target.id)
     return affected

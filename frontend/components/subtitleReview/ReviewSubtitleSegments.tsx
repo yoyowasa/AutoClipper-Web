@@ -22,7 +22,7 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
     clipDuration,
     hookSceneDuration,
     currentSourceTime,
-    isEditable, isSubtitleEditable,
+    isSubtitleEditable,
     isSavingStructure,
     savePausedSubtitleDraft,
     bulkCorrectionSelection,
@@ -265,7 +265,7 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                                 {review.subtitleOnlyAuto && selectedClip.confirmed ? "編集欄を離れると保存します" : "字幕の追加・確定でまとめて反映"}
                               </span>
                             ) : null}
-                            {showStyleControls && <button type="button" disabled={!isEditable}
+                            {showStyleControls && <button type="button" disabled={!isSubtitleEditable}
                               className="border border-sky-600 px-2 py-1 text-xs text-sky-800"
                               aria-pressed={styledSegmentId === segment.id}
                               onClick={() => {

@@ -623,7 +623,17 @@ class SubtitleReviewBatchSegmentUpdate(SubtitleReviewSegmentUpdateRequest):
 class SubtitleReviewBatchUpdateRequest(BaseModel):
     clip_id: str | None = Field(default=None, alias="clipId")
     model_config = ConfigDict(populate_by_name=True)
-    segments: list[SubtitleReviewBatchSegmentUpdate] = Field(min_length=1, max_length=10000)
+    segments: list[SubtitleReviewBatchSegmentUpdate] = Field(default_factory=list, max_length=10000)
+    subtitle_styles: list[SubtitleStyleOverride] | None = Field(default=None, max_length=1000, alias="subtitleStyles")
+    before_subtitle_styles: list[SubtitleStyleOverride] | None = Field(default=None, max_length=1000, alias="beforeSubtitleStyles")
+
+    @model_validator(mode="after")
+    def validate_cue_style_update(self):
+        if self.subtitle_styles is not None and (self.clip_id is None or self.before_subtitle_styles is None):
+            raise ValueError("個別書式の保存には対象clipと変更前の書式が必要です。")
+        if not self.segments and self.subtitle_styles is None:
+            raise ValueError("保存する字幕または個別書式を指定してください。")
+        return self
 
 
 class SubtitleStructureRequest(BaseModel):

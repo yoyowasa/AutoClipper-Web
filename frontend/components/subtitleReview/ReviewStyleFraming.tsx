@@ -31,7 +31,8 @@ export function ReviewTextStyles({ context }: { context: SubtitleReviewViewConte
                     subtitleScopeLabel={selectedSegments.some((s) => s.id === styledSegmentId) ? "選択した字幕1件だけ" : "このclipの共通字幕"}
                     onCommonSubtitleStyle={() => setStyledSegmentId(null)}
                     clipType={selectedClip.type}
-                    disabled={!isEditable}
+                    disabled={!(selectedTextStyleTarget === "subtitle" && selectedSegments.some(s => s.id === styledSegmentId)
+                      ? context.isSubtitleEditable : isEditable)}
                     hookText={selectedClipContentDraft?.hookText ?? ""}
                     key={selectedClip.id}
                     layout="workspace"
