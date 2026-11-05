@@ -275,14 +275,16 @@ def test_overflow_repairs_instead_of_stopping_before_export(guarded_client, monk
     clip = load_subtitle_review(data.review_path).clips[0]
     confirm(data, clip, subtitleStyle={"fontSize": 200, "yPercent": 95, "positionMode": "explicit"})
     assert decide(data) == "ready"
+    from app.jobs import queue
     from app.jobs.runner import run_subtitle_review_preview
+    monkeypatch.setattr(queue, "enqueue_subtitle_review_render", lambda *args: data.renders.append(args))
     run_subtitle_review_preview(*data.previews[0], paths=data.storage, session_factory=data.factory, dependencies=data.deps)
     response = data.client.get(f"/api/jobs/{data.job_id}/subtitle-review")
     reasons = response.json()["automaticStopReasons"]
     assert not any("安全な表示範囲" in reason for reason in reasons)
     assert response.json()["clips"][0]["overlayLayoutNotices"]
     assert all(clip.id not in reason for reason in reasons)
-    assert not data.renders
+    assert len(data.renders) == 1
 
 
 def test_unconfirm_revokes_worker_and_blocks_finalization(guarded_client, monkeypatch, tmp_path):
