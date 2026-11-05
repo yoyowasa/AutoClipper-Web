@@ -132,8 +132,9 @@ def update_batch(document, request):
         if request.before_subtitle_styles != target.subtitle_styles:
             raise RuntimeError("個別書式が別の操作で更新されています。入力を保持して再確認してください。")
         cue_ranges = {(by_id[id].start, by_id[id].end) for id in target.segment_ids}
-        if any((style.start, style.end) not in cue_ranges for style in request.subtitle_styles):
-            raise ValueError("個別書式は対象clipの字幕区間を指定してください。")
+        ranges = [(style.start, style.end) for style in request.subtitle_styles]
+        if len(set(ranges)) != len(ranges) or any(pair not in cue_ranges for pair in ranges):
+            raise ValueError("個別書式は対象clipの字幕区間を重複せず指定してください。")
     editable = editable_clip_ids(document, request.clip_id)
     affected = set()
     for item in request.segments:

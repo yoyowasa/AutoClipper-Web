@@ -70,6 +70,9 @@ def test_stale_cue_styles_are_atomic_and_invalid_ranges_rejected(client):  # noq
     request = payload(before)
     request["subtitleStyles"][0].update(start=100, end=101)
     assert client.patch(f"/api/jobs/{job_id}/subtitle-review/segments", json=request).status_code == 422
+    request = payload(before)
+    request["subtitleStyles"] *= 2
+    assert client.patch(f"/api/jobs/{job_id}/subtitle-review/segments", json=request).status_code == 422
     assert path.read_bytes() == snapshot and not queued
 
 
