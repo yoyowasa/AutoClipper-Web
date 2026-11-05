@@ -21,7 +21,7 @@ def payload(doc):
 @pytest.mark.parametrize("state", ["awaiting_review", "rendering", "completed"])
 def test_confirmed_cue_styles_preserve_other_clips_and_skip_codex(client, state):  # noqa: F811
     from app.jobs.pending_subtitle_edits import activate_pending
-    job_id, path, before, _, _, queued = prepare(client, True)
+    job_id, path, before, original, normal, queued = prepare(client, True)
     paths = app.dependency_overrides[get_storage_paths]()
     before.state = state
     write_subtitle_review(before, path)
@@ -51,6 +51,14 @@ def test_confirmed_cue_styles_preserve_other_clips_and_skip_codex(client, state)
     assert [c.model_dump() for c in after.clips if c.id != "short"] == [c.model_dump() for c in before.clips if c.id != "short"]
     if state == "completed":
         assert after.render_clip_ids == ["short"]
+    from app.jobs.subtitle_review import apply_reviewed_clip_content, apply_reviewed_text
+    from app.candidates.select_candidates import CandidateSelection
+    from app.render.subtitles_ass import build_ass_document
+    selection = apply_reviewed_clip_content(CandidateSelection(
+        normalClips=[normal], shorts=[normal.model_copy(update={"id": "short", "type": "short"})]), after)
+    ass = build_ass_document(selection.shorts[0], apply_reviewed_text(original, after))
+    assert "Arial" in ass and "0000FF" in ass
+
 
 
 def test_stale_cue_styles_are_atomic_and_invalid_ranges_rejected(client):  # noqa: F811
@@ -163,5 +171,6 @@ def test_text_and_style_save_together_use_existing_copy_on_write(client):  # noq
     target = next(c for c in after.clips if c.id == "short")
     assert target.confirmed and target.subtitle_styles and len(queued) == 1
     assert "title_hook" in target.automatic_decision_targets  # text changed, unlike style-only
+    assert "effects" not in target.automatic_decision_targets
     assert any(s.text == "手で修正した字幕" and s.affected_clip_ids == ["short"] for s in after.segments)
     assert [c.model_dump() for c in after.clips if c.id != "short"] == [c.model_dump() for c in before.clips if c.id != "short"]
