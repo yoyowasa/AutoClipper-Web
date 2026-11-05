@@ -1540,5 +1540,5 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 保存: 書式は既存の clip 別 subtitleStyles に保存。文字との同時保存は従来の copy-on-write、処理中は pending_edits、完成後は renderClipIds を利用。確定・他 clip の字幕/書式/正式プレビュー・manualDecisionFields を維持する。
 - 書式だけの変更は自動決定の対象を空にし、既存 worker で正式プレビューと部分再書き出しだけを継続する。進行中の自動決定は中断せず pending に保存し、完了後に反映する。
 - 回帰検証: 修正前 main 0b77cd5 で backend 5件と frontend の有効ボタン検査が失敗し、変更後は関連検査が成功。隔離 DB/storage・18440/13440 の画面で確定済みショート1行を Noto Serif CJK JP / #FF4040 に変更し保存。再読み込み後も確認済み・未保存0件、プレビュー ASS と書き出し用 ASS への反映、他 clip・共有字幕の不変を確認した。
-- 検証: backend 追加7件・既存関連テスト、Ruff 0.16.10、frontend test/lint/typecheck/build 成功。backend 全件と CI は実行中。
+- 検証: backend 初回全件 2535 passed / 30 skipped（追加5件時点）、最終の追加7件・既存関連テスト、Ruff 0.16.10、frontend test/lint/typecheck/build 成功。最終 CI 結果は [PR #181](https://github.com/yoyowasa/AutoClipper-Web/pull/181) を参照。
 - 制限: 画面は合成動画の隔離環境、書き出しの継続は偽エンジンの統合テストで確認。稼働環境への反映・実ジョブの操作は行わない。launcher・Codex契約は変更なし、中継の再起動不要。
