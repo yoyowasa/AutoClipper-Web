@@ -14,6 +14,9 @@ def test_openapi_paths_and_methods_match_before_clip_plan_split() -> None:
     # Explicit additions after the split; task-195 retires the harvest/candidate routes.
     assert after == {
         **before,
+        "/api/subtitle-terms": ["get"],
+        "/api/subtitle-terms/{character_id}/disable": ["post"],
+        "/api/subtitle-terms/{character_id}/enable": ["post"],
         "/api/intelligence/channels/{channel_id}/choice-policies": ["get"],
         "/api/intelligence/channels/{channel_id}/choice-policies/{policy_id}/rollback": ["post"],
         "/api/jobs/{job_id}/clip-plan/rejections": ["get"],

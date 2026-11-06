@@ -1939,6 +1939,27 @@ def _resume_auto_after_clip_review(
     return [*visited_statuses, *render_statuses]
 
 
+def _apply_learned_subtitle_terms(transcript_segments, settings, storage_paths, job_dir):
+    """Replace the character's learned exact terms before review rows exist; failures keep the original text."""
+    character = settings.get("characterPresetName")
+    if not character:
+        return transcript_segments
+    try:
+        import logging
+        from app.storage.json_io import write_json_atomic
+        from app.subtitle_terms import active_rules, apply_rules
+        rules = active_rules(storage_paths.root, character)
+        segments, applied = apply_rules(list(transcript_segments), rules)
+        if applied:
+            write_json_atomic(Path(job_dir) / "learned_subtitle_terms.json", {
+                "character": character, "rules": [{k: r[k] for k in ("src", "dst", "count", "jobs")} for r in rules],
+                "applied": applied})
+        return segments
+    except Exception:
+        logging.getLogger(__name__).warning("Learned subtitle terms were not applied", exc_info=True)
+        return transcript_segments
+
+
 def run_autoclipper_job(
     job_id: str,
     session_factory: SessionFactory = SessionLocal,
@@ -2993,10 +3014,11 @@ def run_autoclipper_job(
             guarded_content_auto_passed = False
             title_hook_evidence: dict[str, TitleHookSuggestionsDocument] = {}
             if subtitle_review_requested:
+                review_segments = _apply_learned_subtitle_terms(transcript_segments, settings, storage_paths, job_dir)
                 review_document = build_subtitle_review(
                     job.id,
                     selection,
-                    transcript_segments,
+                    review_segments,
                     short_max_duration=float(settings.get("shortMaxDuration", 75.0)),
                     render_mode=str(settings.get("mode", "high_quality")),
                     short_overlay_title_mode=settings.get(

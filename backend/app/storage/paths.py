@@ -30,6 +30,10 @@ class StoragePaths:
         return self.root / "banner_assets"
 
     @property
+    def subtitle_terms(self) -> Path:
+        return self.root / "subtitle_terms"
+
+    @property
     def character_assets(self) -> Path:
         return self.root / "character_assets"
 

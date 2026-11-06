@@ -9,7 +9,7 @@ from app.api import (
     production_links, channel_analysis, intelligence_dashboard, short_banners, storage, videos,
 )
 from app.config import Settings, get_settings
-from app.api import choice_policies
+from app.api import choice_policies, subtitle_terms
 from app.db import init_db
 
 
@@ -49,6 +49,7 @@ app.include_router(production_links.router)
 app.include_router(channel_analysis.router)
 app.include_router(intelligence_dashboard.router)
 app.include_router(choice_policies.router)
+app.include_router(subtitle_terms.router)
 
 
 @app.get("/health")

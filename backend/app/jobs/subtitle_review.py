@@ -3,6 +3,7 @@ from app.overlay_geometry import OverlayLayoutNotice
 from app.render.short_crop_decision import ShortCropDecision
 from app.duration_rules import HOOK_SCENE_MIN_SECONDS, HOOK_SCENE_MAX_SECONDS, HOOK_SCENE_DURATION_ERROR
 import json
+import logging
 from app.duration_rules import clip_body_duration, effective_short_max, validate_clip_duration
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -315,6 +316,7 @@ class SubtitleReviewDocument(BaseModel):
     choice_history: list[ProductionChoice] = Field(default_factory=list, alias="choiceHistory", exclude_if=lambda v: not v)
     version: int = 1
     job_id: str = Field(alias="jobId")
+    character_preset_name: str | None = Field(default=None, alias="characterPresetName", exclude_if=lambda v: v is None)
     state: SubtitleReviewState = "awaiting_review"
     render_revision: int = Field(default=1, ge=1, alias="renderRevision")
     preview_generation: str | None = Field(default=None, alias="previewGeneration")
@@ -724,6 +726,7 @@ def build_subtitle_review(
     document = _refresh_counts(
         SubtitleReviewDocument(
             jobId=job_id,
+            characterPresetName=(render_settings or {}).get("characterPresetName") or None,
             sourceVideoUrl=f"/api/jobs/{job_id}/source-video",
             renderMode=str(render_mode or "high_quality"),
             shortMaxDuration=short_max_duration,
@@ -827,10 +830,22 @@ def write_subtitle_review(document: SubtitleReviewDocument, output_path: str | P
         repair_overlay_layout(document)
     capture_document(document, Path(output_path), kind="review", source=choice_source)
     refresh_review_gaps(document, Path(output_path).parent)
+    _learn_subtitle_terms(document, Path(output_path))
     return write_json_atomic(
         Path(output_path),
         document.model_dump(by_alias=True, mode="json"),
     )
+
+
+def _learn_subtitle_terms(document: SubtitleReviewDocument, output_path: Path) -> None:
+    """Remember repeated human term corrections per character; learning never blocks saving."""
+    if output_path.parent.parent.name != "outputs":
+        return
+    try:
+        from app.subtitle_terms import learn_from_document
+        learn_from_document(document, output_path.parent.parent.parent)
+    except Exception:
+        logging.getLogger(__name__).warning("Subtitle term learning failed", exc_info=True)
 
 
 def load_subtitle_review(path: str | Path) -> SubtitleReviewDocument:
