@@ -843,9 +843,20 @@ def _learn_subtitle_terms(document: SubtitleReviewDocument, output_path: Path) -
         return
     try:
         from app.subtitle_terms import learn_from_document
+        if not document.character_preset_name:
+            # Reviews made before the character was stored take it from the job's own settings.
+            document.character_preset_name = _job_character(document.job_id)
         learn_from_document(document, output_path.parent.parent.parent)
     except Exception:
         logging.getLogger(__name__).warning("Subtitle term learning failed", exc_info=True)
+
+
+def _job_character(job_id: str) -> str | None:
+    from app.db import SessionLocal
+    from app.models import Job
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        return ((job.settings_json or {}).get("characterPresetName") or None) if job else None
 
 
 def load_subtitle_review(path: str | Path) -> SubtitleReviewDocument:

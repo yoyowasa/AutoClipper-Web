@@ -1574,3 +1574,9 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 画面: 分析画面の「選び方の版」に、比較群の出所（自動／手動／代替）と、修正由来の更新の根拠（変更前→変更後）を表示する。旧 `MIXED_PROVENANCE` の履歴は「旧基準」と表示する。
 - 検証: backend `test_choice_policies.py` に、manual/fallbackが根拠になること、別項目の手動で動画が除外されないこと、5本の同方向修正で1項目だけ+10%、4本・色のみ・自動→自動では動かないこと、悪化判定と巻き戻し後の再採用防止を追加（旧テストの「manualは保留」は新基準に更新）。frontend `choicePolicies.test.ts` を更新。稼働DBのコピーで分析を実行した結果、ch1・ch2とも `hold / INSUFFICIENT_OR_UNCONFIRMED`（MIXED_PROVENANCEは解消。30日判定済み動画がまだなく、ch1の修正は5本未満: タイトル→factual 2件）。
 - 制限: 修正由来の学習は、公開して制作記録と結び付いた動画に限る（結び付く前の修正は数えない）。許可リストに対応する修正だけが対象で、1人の操作者の癖が反映される。実際の30日後の効果は未確認。launcher・Codex契約・DB構造の変更なし、中継の再起動不要。
+
+## 2026-11-06 task-244：既存ジョブの字幕修正も学習する（キャラ名の補完）
+
+- 症状: task-243の反映前に作った字幕確認の文書は `characterPresetName` を持たず、作業中の7件で字幕を直しても学習されなかった。
+- 変更: `subtitle_review.py` の学習フックが、文書にキャラ名がなければジョブの設定（`characterPresetName`）から補い、文書にも保存する。ジョブ・キャラ名がなければ従来どおり学習しない。保存済みの修正（`edited` 行）は次の保存で一度に取り込まれる。
+- 検証: `test_subtitle_terms.py` に、キャラ名のない文書が保存時にジョブ設定から補われて学習されること、ジョブがなければ補わないことを追加。backend `test_subtitle_terms.py`・`test_subtitle_review.py` 35件成功、Ruff成功。backend 全件 2567 passed / 30 skipped。frontend は変更なし。
