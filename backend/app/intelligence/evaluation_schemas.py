@@ -63,4 +63,5 @@ class ChoiceEvaluationsRead(BaseModel):
     linked_videos: int = 0
     excluded_reasons: dict[str, int] = Field(default_factory=dict)
     groups: list[ChoiceGroupRead] = Field(default_factory=list)
+    corrections: list[dict] = Field(default_factory=list)
     expires_at: str | None = None

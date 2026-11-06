@@ -9,10 +9,6 @@ from app.intelligence.choice_policy_schema import FRAMING_OPTIONS, INTENTS
 
 def policy_cohorts(db, payload, channel_id):
     videos = {v.id: v for v in db.scalars(select(YouTubeVideo).where(YouTubeVideo.channel_id == channel_id))}
-    controlled = {"range", "title_hook", "framing", "text_style", "effects"}
-    mixed = {o["video_id"] for g in payload.get("groups", []) if g["kind"] != "publication"
-             for o in g["observations"] if o["source"] == "manual" or
-             o["source"] == "unrecorded" and g["kind"] in controlled}
     result = []
     for group in payload.get("groups", []):
         by_band = defaultdict(dict)
@@ -32,7 +28,7 @@ def policy_cohorts(db, payload, channel_id):
                 "band": band, "count": len(rows), "total_count": len(all_rows),
                 "implementation_version": group.get("implementation_version") or (
                     group["policy_version"] if not (group["policy_version"] or "").startswith("policy_") else None),
-                "mixed": bool(set(observations) & mixed), "median": median(values) if values else None,
+                "median": median(values) if values else None, "video_views": {r["video_id"]: v for r, v in zip(rows, values)},
                 "rate": sum(r["evaluation"]["status"] == "reached" for r in rows) / len(rows) if rows else None,
                 "video_ids": sorted(r["video_id"] for r in rows),
                 "observed_at": max((r["evaluation"]["first30"]["observedAt"] for r in rows), default=None),
@@ -41,8 +37,12 @@ def policy_cohorts(db, payload, channel_id):
     return result
 
 
+# Automatic, manual and fallback choices are all evidence; only an unknown applied value is not.
+USABLE_SOURCES = ("automatic", "manual", "fallback")
+
+
 def pure(cohort, minimum):
-    return (cohort["source"] == "automatic" and not cohort["mixed"] and cohort["band"] != "unknown"
+    return (cohort["source"] in USABLE_SOURCES and cohort["band"] != "unknown"
             and cohort["policy_version"] and cohort["implementation_version"]
             and cohort["count"] >= minimum and cohort["median"] is not None
             and len(cohort["evidence_ids"]) >= minimum)

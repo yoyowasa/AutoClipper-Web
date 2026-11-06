@@ -55,34 +55,74 @@ def evaluate_video_goal(video, rows, last, stamp):
                          status=status, reason=reason, evidence_ids=evidence, first7=first7, first30=first30)
 
 
-def final_choices(record, *, as_of=None):
-    # Do not attribute an unpublished recommendation and its manual replacement
-    # to the same outcome. Preserve provenance; observed legacy values are last resort.
-    def applied_time(choice):
-        value = choice.appliedAt or choice.recordedAt
-        return value.astimezone(UTC).replace(tzinfo=None) if value.tzinfo else value
+def _applied_time(choice):
+    value = choice.appliedAt or choice.recordedAt
+    return value.astimezone(UTC).replace(tzinfo=None) if value.tzinfo else value
+
+
+def _ordered_items(record, as_of):
+    """Choice history in applied order, split per text-style role, for this record's clip only."""
     cutoff = as_of.astimezone(UTC).replace(tzinfo=None) if as_of is not None and as_of.tzinfo else as_of
-    selected, observed = {}, {}
-    for choice in sorted(record.choiceHistory, key=lambda c: (applied_time(c), c.id)):
-        if cutoff is not None and applied_time(choice) > cutoff:
+    for choice in sorted(record.choiceHistory, key=lambda c: (_applied_time(c), c.id)):
+        if cutoff is not None and _applied_time(choice) > cutoff:
             continue
         if choice.scope == "clip" and choice.clipId and choice.clipId != record.selection.candidateId:
             continue
-        roles = [key for key in ("titleStyle", "hookStyle", "subtitleStyle") if key in choice.values] \
-            if choice.kind == "text_style" else []
+        roles = ([key for key in ("titleStyle", "hookStyle", "subtitleStyle") if key in choice.values]
+                 if choice.kind == "text_style" else [])
         for role in roles or [""]:
-            item = choice.model_copy(update={"values": {role: choice.values[role]}}) if role else choice
-            key = (choice.kind, role)
-            if choice.stage == "removed":
-                selected.pop(key, None)
-                observed.pop(key, None)
-            elif choice.stage in {"applied", "published"}:
-                if key in selected and choice.source in {"manual", "unrecorded"} and selected[key].values == item.values:
-                    continue
-                selected[key] = item
-            elif choice.stage == "observed":
-                observed[key] = item
+            yield (choice.kind, role), choice.model_copy(update={"values": {role: choice.values[role]}}) if role else choice
+
+
+def final_choices(record, *, as_of=None):
+    # Do not attribute an unpublished recommendation and its manual replacement
+    # to the same outcome. Preserve provenance; observed legacy values are last resort.
+    selected, observed = {}, {}
+    for key, item in _ordered_items(record, as_of):
+        if item.stage == "removed":
+            selected.pop(key, None)
+            observed.pop(key, None)
+        elif item.stage in {"applied", "published"}:
+            if key in selected and item.source in {"manual", "unrecorded"} and selected[key].values == item.values:
+                continue
+            selected[key] = item
+        elif item.stage == "observed":
+            observed[key] = item
     return [(key, selected.get(key) or observed[key]) for key in sorted(selected.keys() | observed.keys())]
+
+
+def record_corrections(record, *, as_of=None):
+    """Human changes to an automatic choice, as comparable option pairs. Wording and colours stay unmapped."""
+    from app.intelligence.choice_policy_evidence import option_change
+    final = dict(final_choices(record, as_of=as_of))
+    automatic = {}
+    for key, item in _ordered_items(record, as_of):
+        if item.stage == "applied" and item.source in {"automatic", "fallback"}:
+            automatic[key] = item
+    intents = {c.id: c.intent for c in record.titleCandidates.candidates}
+    result = []
+    for key, choice in final.items():
+        before = automatic.get(key)
+        if choice.source != "manual" or before is None:
+            continue
+        kind, role = key
+        if kind == "title_hook":
+            pair = [intents.get(choice.values.get(name)) for name in ("recommendedTitleId", "selectedTitleId")]
+            before_options, after_options = ({"intent": value} for value in pair)
+            if None in pair:
+                before_options = after_options = {}
+        else:
+            before_options, after_options = (choice_options(kind, role, item.values) for item in (before, choice))
+        if before_options == after_options:
+            continue
+        mapped = option_change({"kind": kind, "role": role, "format": record.type, "option_values": before_options},
+                               {"kind": kind, "role": role, "format": record.type, "option_values": after_options})
+        result.append({"record_id": record.recordId, "kind": kind, "role": role, "format": record.type,
+            "character_preset_name": record.characterPresetName or "未設定",
+            "before": before_options, "after": after_options,
+            "key": mapped[0] if mapped else None, "target": mapped[1] if mapped else None,
+            "applied_at": _applied_time(choice).isoformat()})
+    return result
 
 
 def build_choice_evaluations(db, paths, config, channel_id, stamp, *, families=None):
@@ -98,7 +138,7 @@ def build_choice_evaluations(db, paths, config, channel_id, stamp, *, families=N
         if valid_stat(row, config, stamp):
             rows[row.video_id].append(row)
             expiries.append(min(row.expires_at, statistical_expiry(row.observed_at, config)))
-    groups, excluded, linked = {}, Counter(), 0
+    groups, excluded, linked, corrections = {}, Counter(), 0, []
     for link in db.scalars(select(ProductionLink).where(ProductionLink.youtube_video_id.in_(videos))):
         linked += 1
         family, video = families.get(link.record_family_id), videos[link.youtube_video_id]
@@ -114,6 +154,7 @@ def build_choice_evaluations(db, paths, config, channel_id, stamp, *, families=N
             continue
         evaluation = evaluate_video_goal(video, rows[video.id], last, stamp).model_dump(mode="json")
         choices = final_choices(record, as_of=video.published_at)
+        corrections += [{**item, "video_id": video.id} for item in record_corrections(record, as_of=video.published_at)]
         if not choices:
             excluded["CHOICES_UNRECORDED"] += 1
         for (kind, role), choice in choices:
@@ -141,6 +182,7 @@ def build_choice_evaluations(db, paths, config, channel_id, stamp, *, families=N
             video_ids=sorted({r["video_id"] for r in group["observations"]}))
     return ChoiceEvaluationsRead(minimum_group_videos=MIN_GROUP_VIDEOS, linked_videos=linked,
         excluded_reasons=dict(excluded), groups=sorted(groups.values(), key=lambda g: g["id"]),
+        corrections=sorted(corrections, key=lambda c: (c["applied_at"], c["record_id"], c["kind"], c["role"])),
         expires_at=min(expiries).isoformat() + "Z" if expiries else None).model_dump(mode="json")
 
 

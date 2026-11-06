@@ -10,6 +10,7 @@ from app.intelligence.production_aggregation import build_production_aggregates,
 from app.intelligence.models import SyncRun, YouTubeVideo
 from app.intelligence.policy import expire_youtube_data
 from app.intelligence.evaluation_rules import GOALS
+from app.production_choices import ProductionChoice
 from app.storage.json_io import write_json_atomic
 from test_api_routes import client as client
 from test_intelligence import environment as environment
@@ -67,16 +68,116 @@ def test_approved_observation_rule_versions_one_item_and_deduplicates(environmen
     assert len(list(e.db.scalars(select(ChoicePolicyVersion)))) == 2
 
 
-@pytest.mark.parametrize("kwargs,reason", [({"count": 4}, "INSUFFICIENT_OR_UNCONFIRMED"),
-    ({"source": "manual"}, "MIXED_PROVENANCE"), ({"source": "unrecorded"}, "MIXED_PROVENANCE"),
-    ({"source": "fallback"}, "INSUFFICIENT_OR_UNCONFIRMED"),
-    ({"target_views": 1199999}, "INSUFFICIENT_OR_UNCONFIRMED"),
-    ({"option": "unvalidated_mode"}, "INSUFFICIENT_OR_UNCONFIRMED")])
-def test_insufficient_unconfirmed_or_mixed_data_is_held(environment, kwargs, reason):
+@pytest.mark.parametrize("kwargs", [{"count": 4}, {"source": "unrecorded"}, {"target_views": 1199999},
+    {"option": "unvalidated_mode"}])
+def test_insufficient_unconfirmed_or_unrecorded_data_is_held(environment, kwargs):
     setup_groups(environment, **kwargs)
     result = evaluate(environment)[0]
-    assert result.action == "hold" and result.reason == reason
+    assert result.action == "hold" and result.reason == "INSUFFICIENT_OR_UNCONFIRMED"
     assert len(list(environment.db.scalars(select(ChoicePolicyVersion)))) == 1
+
+
+@pytest.mark.parametrize("source", ["manual", "fallback"])
+def test_manual_and_fallback_choices_are_evidence_not_exclusions(environment, source):
+    setup_groups(environment, source=source)
+    result = evaluate(environment)[0]
+    assert result.action == "update" and result.reason == "OBSERVATIONAL_CRITERIA_MET"
+    assert result.evidence["after"]["source"] == source and "mixed" not in result.evidence["after"]
+
+
+def test_a_manual_choice_of_another_kind_does_not_exclude_the_video(environment):
+    e = environment
+    setup_groups(e)
+    for path in sorted(e.paths.production_records.glob("*.json")):
+        item = record_from(path)
+        item.choiceHistory.append(ProductionChoice(id="colour_" + item.recordId, clipId="clip", kind="text_style",
+            stage="applied", source="manual", policyVersion="subtitle-review-v1", recordedAt=item.createdAt,
+            values={"subtitleStyle": {"primaryColor": "#9BFF9B"}}))
+        write_json_atomic(path, item.model_dump(mode="json"))
+    result = evaluate(e)[0]
+    assert result.action == "update" and result.evidence["key"] == "framing.blur_background"
+
+
+def record_from(path):
+    import json
+    from app.production_records import ProductionRecord
+    return ProductionRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
+
+
+def add_correction(e, index, *, bold_before=True, bold_after=False, colour=None, source="manual"):
+    video, item = add_video(e, index, views=1000000)
+    base = {"fontPreset": "heavy", "fontSize": 110}
+    when = item.createdAt
+    item.choiceHistory = [
+        ProductionChoice(id=f"auto_{index}", clipId="clip", kind="text_style", stage="applied", source="automatic",
+            policyVersion="choice-v1", recordedAt=when, values={"subtitleStyle": {**base, "bold": bold_before}}),
+        ProductionChoice(id=f"human_{index}", clipId="clip", kind="text_style", stage="applied", source=source,
+            policyVersion="subtitle-review-v1", recordedAt=when + timedelta(minutes=1),
+            values={"subtitleStyle": {**base, "bold": bold_after, **({"primaryColor": colour} if colour else {})}})]
+    write_json_atomic(e.paths.production_record(item.recordId), item.model_dump(mode="json"))
+    e.db.commit()
+
+
+def test_five_same_direction_human_corrections_move_one_weight_ten_percent(environment):
+    e = environment
+    seed(e)
+    for index in range(1, 6):
+        add_correction(e, index)
+    result = evaluate(e)[0]
+    head = e.db.scalar(select(ChoicePolicyHead))
+    new = e.db.get(ChoicePolicyVersion, result.to_id)
+    assert result.action == "update" and result.reason == "HUMAN_CORRECTIONS" and head.current_id == new.id
+    assert result.evidence["key"] == "text_style.subtitle.regular" and result.evidence["count"] == 5
+    assert new.values["weights"]["text_style.subtitle.regular"] == 1.1
+    assert sum(v != 1.0 for v in new.values["weights"].values()) == 1
+    assert evaluate(e, "analysis_again", CLOCK + timedelta(minutes=1))[0].action == "hold"
+
+
+def test_four_corrections_unmapped_changes_and_colour_only_changes_do_not_move_weights(environment):
+    e = environment
+    seed(e)
+    for index in range(1, 5):
+        add_correction(e, index)
+    for index in range(5, 10):
+        add_correction(e, index, bold_after=True, colour="#9BFF9B")
+    result = evaluate(e)[0]
+    assert result.action == "hold" and result.reason == "INSUFFICIENT_OR_UNCONFIRMED"
+    payload = build_production_aggregates(e.db, e.paths, e.config, 1, CLOCK)["choice_evaluations"]
+    assert len(payload["corrections"]) == 4 and all(c["key"] == "text_style.subtitle.regular" for c in payload["corrections"])
+
+
+def test_automatic_to_automatic_changes_are_not_human_corrections(environment):
+    e = environment
+    seed(e)
+    for index in range(1, 6):
+        add_correction(e, index, source="automatic")
+    assert build_production_aggregates(e.db, e.paths, e.config, 1, CLOCK)["choice_evaluations"]["corrections"] == []
+
+
+def test_correction_version_is_rolled_back_when_new_videos_decline_and_not_adopted_again(environment):
+    from app.intelligence.choice_policy_corrections import judge_correction_version
+    def cohort(version, views):
+        return {"source": "automatic", "band": "30-60", "policy_version": version,
+                "video_views": {f"{version}{i}": v for i, v in enumerate(views)}}
+
+    assert judge_correction_version([cohort("old", [100] * 5), cohort("new", [100] * 4)], "new")[0] == "pending"
+    assert judge_correction_version([cohort("old", [100] * 5), cohort("new", [81] * 5)], "new")[0] == "stable"
+    verdict, proof = judge_correction_version([cohort("old", [100] * 5), cohort("new", [80] * 5)], "new")
+    assert verdict == "rollback" and proof["before_median"] == 100 and proof["after_median"] == 80
+    e = environment
+    seed(e)
+    for index in range(1, 6):
+        add_correction(e, index)
+    updated = evaluate(e)[0]
+    head = e.db.get(ChoicePolicyHead, updated.policy_id)
+    e.db.add(ChoicePolicyDecision(id="decision_rb", policy_id=head.id, analysis_id="analysis_rb", action="rollback",
+        reason="REGRESSION_30_DAY", from_id=updated.to_id, to_id=updated.from_id, evidence={},
+        evidence_expires_at=CLOCK + timedelta(days=30), created_at=CLOCK))
+    head.current_id = updated.from_id
+    e.db.commit()
+    for index in range(6, 8):
+        add_correction(e, index)
+    assert evaluate(e, "analysis_after_rollback", CLOCK + timedelta(minutes=2))[0].action == "hold"
 
 
 def test_new_jobs_freeze_version_and_keep_manual_and_legacy_paths(environment):
