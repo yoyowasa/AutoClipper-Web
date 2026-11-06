@@ -32,3 +32,11 @@ def changed_values(before, key, value):
     if key not in old or value == old[key] or abs(value - old[key]) > old[key] * MAX_CHANGE + 1e-9:
         raise ValueError("POLICY_STEP_NOT_ALLOWED")
     return ChoicePolicyValues(weights={**old, key: value}).model_dump()
+
+
+def next_weight(old, target):
+    """One bounded step toward an option (or a recorded numeric target)."""
+    value = min(2.0, round(old * 1.1, 8)) if target is None or target > old else max(.5, round(old * .9, 8))
+    if target is not None:
+        value = min(value, target) if target > old else max(value, target)
+    return value

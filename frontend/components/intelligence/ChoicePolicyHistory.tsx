@@ -1,16 +1,26 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { getChoicePolicies, restoreChoicePolicy, policyReason, type ChoicePolicy, type PolicyCohort } from "../../lib/choicePolicies";
+import { getChoicePolicies, restoreChoicePolicy, policyReason, sourceLabel, type ChoicePolicy, type PolicyCohort,
+  type PolicyCorrection } from "../../lib/choicePolicies";
 import { youtubeSyncTime } from "../../lib/intelligence";
 
 function CohortEvidence({ data, onVideo }: { data?: PolicyCohort | null; onVideo?: (id: string) => void }) {
   if (!data) return null;
-  return <div className="my-2 rounded border p-2 text-sm"><p>集計: {data.id}</p>
+  return <div className="my-2 rounded border p-2 text-sm"><p>集計: {data.id}{data.source ? `（出所: ${sourceLabel[data.source] ?? data.source}）` : ""}</p>
     <p>{data.band} ／ 判定済み{data.count}本 ／ 到達率{data.rate == null ? "未取得" : `${Math.round(data.rate * 100)}%`}
       ／ 中央値{data.median?.toLocaleString() ?? "未取得"}再生</p><p>観測: {youtubeSyncTime(data.observed_at)}</p>
     {data.first7_count ? <p>7日途中評価: {data.first7_count}本 ／ 中央値{data.first7_median?.toLocaleString() ?? "未取得"}（警告用）</p> : null}
     {data.video_ids.map((id, index) => <button type="button" key={id} onClick={() => onVideo?.(id)}
       className="mr-3 underline">根拠動画{index + 1}</button>)}</div>;
+}
+
+const optionText = (value: Record<string, unknown>) => Object.entries(value).map(([key, item]) => `${key}=${String(item)}`).join("、") || "未記録";
+
+function CorrectionEvidence({ items, count }: { items?: PolicyCorrection[]; count?: number }) {
+  if (!items?.length) return null;
+  return <div className="my-2 rounded border p-2 text-sm"><p>人の修正 {count ?? items.length}本（直近{items.length}件を表示）</p>
+    {items.map(item => <p key={`${item.record_id}:${item.kind}:${item.role}`}>{item.kind}{item.role ? `／${item.role}` : ""}：
+      {optionText(item.before)} → {optionText(item.after)}</p>)}</div>;
 }
 
 export function ChoicePolicyHistory({ channelId, onVideo }: { channelId: number; onVideo?: (id: string) => void }) {
@@ -36,7 +46,8 @@ export function ChoicePolicyHistory({ channelId, onVideo }: { channelId: number;
   }
   return <section aria-label="選び方の版と自動更新" className="space-y-3 rounded border border-emerald-200 bg-emerald-50 p-5">
     <h2 className="font-bold">選び方の版と自動更新</h2>
-    <p className="text-sm">自動由来・同形式・同じ尺帯で各5本以上の30日評価を比較します。
+    <p className="text-sm">自動・手動・代替のすべての選択を使い、同形式・同じ尺帯で各5本以上の30日評価を比較します（出所は表示のみ）。
+      人の修正も、同じ方向が5本以上そろえば30日を待たずに1項目へ反映します。
       到達率が下がらず中央値が20%以上改善した場合だけ、1項目を最大10%変更します。
       30日の中央値が20%以上悪化すると直前の版へ戻します。7日は警告のみ。因果効果の証明ではありません。</p>
     <button type="button" onClick={() => void refresh()} className="underline">版と履歴を読み直す</button>
@@ -60,7 +71,8 @@ export function ChoicePolicyItems({ items, busy, restore, onVideo }: {
         {item.decisions.map(event => <details key={event.id} className="border-t pt-2">
           <summary>{youtubeSyncTime(event.createdAt)}：{policyReason[event.reason] ?? event.reason}</summary>
           <p className="text-sm">{event.fromId} → {event.toId}</p>
-          {event.evidence ? <><CohortEvidence data={event.evidence.before} onVideo={onVideo} />
+          {event.evidence ? <><CorrectionEvidence items={event.evidence.corrections} count={event.evidence.count} />
+            <CohortEvidence data={event.evidence.before} onVideo={onVideo} />
             <CohortEvidence data={event.evidence.after} onVideo={onVideo} />
             {event.evidence.cohorts?.map(group => <CohortEvidence key={`${group.id}:${group.band}`} data={group} onVideo={onVideo} />)}
             {event.evidence.omitted_cohorts ? <p>ほか{event.evidence.omitted_cohorts}グループ（省略）</p> : null}

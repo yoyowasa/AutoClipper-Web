@@ -19,7 +19,16 @@ assert.match(render([policy]), /直前の版に戻す/);
 assert.match(render([policy]), /因果効果は未確認/);
 assert.match(render([policy]), /判定済み5本.*到達率100%.*1,400,000/);
 assert.match(render([policy]), /根拠動画1/);
-assert.match(render([{ ...policy, decisions: [{ ...policy.decisions[0], reason: "MIXED_PROVENANCE", evidence: null }] }]), /手動・出所未記録/);
+assert.match(render([{ ...policy, decisions: [{ ...policy.decisions[0], reason: "MIXED_PROVENANCE", evidence: null }] }]), /旧基準/);
+const manual = { ...cohort, source: "manual" };
+assert.match(render([{ ...policy, decisions: [{ ...policy.decisions[0], evidence: { before: cohort, after: manual } }] }]), /出所: 手動/);
+const corrected = { ...policy.decisions[0], reason: "HUMAN_CORRECTIONS", evidence: { source: "human_corrections", key: "text_style.subtitle.regular", count: 5,
+  corrections: [{ record_id: "exp_1", video_id: "video000001", kind: "text_style", role: "subtitleStyle", before: { bold: true }, after: { bold: false },
+    applied_at: "2026-10-29T00:00:00" }] } };
+const humanHtml = render([{ ...policy, decisions: [corrected] }]);
+assert.match(humanHtml, /人の修正 5本/);
+assert.match(humanHtml, /bold=true.*→.*bold=false/);
+assert.match(policyReason.HUMAN_CORRECTIONS, /人の修正が5本以上/);
 assert.match(render([{ ...policy, decisions: [{ ...policy.decisions[0], evidence: null }] }]), /保持期限/);
 assert.match(render([]), /版はまだありません/);
 assert.match(policyReason.EARLY_7_DAY_DECLINE, /警告のみ/);

@@ -1,12 +1,16 @@
 import { request } from "./intelligence";
 export type PolicyCohort = { id: string; kind: string; role: string; band: string; count: number;
   rate: number | null; median: number | null; observed_at: string | null; video_ids: string[];
-  first7_count?: number; first7_median?: number | null };
+  first7_count?: number; first7_median?: number | null; source?: string };
+export type PolicyCorrection = { record_id: string; video_id: string; kind: string; role: string;
+  before: Record<string, unknown>; after: Record<string, unknown>; applied_at: string };
+export const sourceLabel: Record<string, string> = { automatic: "自動", manual: "手動", fallback: "代替", unrecorded: "出所未記録" };
 export type ChoicePolicy = { id: string; character: string; format: string; currentId: string;
   versions: { id: string; previousId: string | null; createdAt: string; values: { weights: Record<string, number> } }[];
   decisions: { id: string; action: string; reason: string; fromId: string; toId: string; analysisId: string; createdAt: string;
     evidence: { key?: string; before?: PolicyCohort | null; after?: PolicyCohort | null; groups?: string[]; minimum?: number;
-      cohorts?: PolicyCohort[]; omitted_cohorts?: number } | null }[] };
+      cohorts?: PolicyCohort[]; omitted_cohorts?: number; source?: string; count?: number;
+      corrections?: PolicyCorrection[] } | null }[] };
 export const getChoicePolicies = (id: number) => request<ChoicePolicy[]>(`/channels/${id}/choice-policies`);
 export const restoreChoicePolicy = (channel: number, policy: ChoicePolicy) => request<void>(
   `/channels/${channel}/choice-policies/${encodeURIComponent(policy.id)}/rollback`, {
@@ -15,7 +19,8 @@ export const restoreChoicePolicy = (channel: number, policy: ChoicePolicy) => re
 export const policyReason: Record<string, string> = {
   OBSERVATIONAL_CRITERIA_MET: "承認された30日観測の更新基準を満たしました（因果効果は未確認）",
   INSUFFICIENT_OR_UNCONFIRMED: "データ不足、または更新基準未達のため保留",
-  MIXED_PROVENANCE: "手動・出所未記録の選択が含まれるため保留",
+  MIXED_PROVENANCE: "手動・出所未記録の選択が含まれるため保留（旧基準。現在は手動も学習に使います）",
+  HUMAN_CORRECTIONS: "同じ方向の人の修正が5本以上そろったため、1項目を更新しました（因果効果は未確認）",
   VERSION_30_DAY_PENDING: "現在の版の30日評価待ち",
   UPDATE_BUDGET_LIMIT: "1回1項目の更新上限のため、次の分析まで保留",
   VERSION_NOT_WORSE: "現在の版は悪化基準に該当せず、新しい更新は保留",
