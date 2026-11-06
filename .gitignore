@@ -18,6 +18,7 @@ build/
 .env.*.local
 
 # Runtime storage
+storage/subtitle_terms/
 storage/uploads/*
 storage/temp/*
 storage/outputs/*

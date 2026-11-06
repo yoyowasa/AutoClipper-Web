@@ -1580,3 +1580,169 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 症状: task-243の反映前に作った字幕確認の文書は `characterPresetName` を持たず、作業中の7件で字幕を直しても学習されなかった。
 - 変更: `subtitle_review.py` の学習フックが、文書にキャラ名がなければジョブの設定（`characterPresetName`）から補い、文書にも保存する。ジョブ・キャラ名がなければ従来どおり学習しない。保存済みの修正（`edited` 行）は次の保存で一度に取り込まれる。
 - 検証: `test_subtitle_terms.py` に、キャラ名のない文書が保存時にジョブ設定から補われて学習されること、ジョブがなければ補わないことを追加。backend `test_subtitle_terms.py`・`test_subtitle_review.py` 35件成功、Ruff成功。backend 全件 2567 passed / 30 skipped。frontend は変更なし。
+## 2026-10-27 運用：PR #167・#168の反映と手動選択の誤記録16件の修復
+
+- 目的・許可: ユーザー承認により、#167→#168の順でmerge commitによるマージ、Docker反映、Codex中継の再起動、指定ジョブの誤記録修復を実施。#167は`c0d231d`、#168は`c7676cb`。反映元はmain `c7676cb`。アプリコードの追加修正はなく、この運用記録の変更ファイルは`STATUS.md`のみ。
+- マージ時の確認: STATUS.md末尾の競合は両PRの追記を一字一句残して解消。統合後のRuff 0.16.10と関連106テスト成功。PR #168の更新head `c918f82`のCIはPython 3.11／3.12とも`2352 passed / 4 skipped / 7 warnings`、frontend成功。3.12の外部パッケージ取得が遅かったため一度中止・再実行し、成功後にマージした。mainのtreeは検証済みheadと一致。
+- 反映直前: main・未コミット変更なし、切り抜き／分析の両キュー・実行中登録・中間キューが0件。DBの実行中ジョブなし、Codex中継requests／processingも0件。DBはjobs 17件（切り抜き確認待ち7、字幕確認待ち6、completed 4）、export_items 25件。
+- バックアップ: SQLiteのbackup()で`storage/backups/autoclipper-20261027-013547-before-pr167-168.db`を作成。integrity_check=ok、jobs／export_itemsの件数一致。修復する5ファイルは`storage/backups/pr167-168-choice-history-20261027-013547/`へ元の相対パスで退避し、SHA-256一致を確認。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker intelligence-worker frontend`成功。backend／worker／intelligence-workerを再作成し、変更のないfrontendはビルドキャッシュ・既存コンテナを使用。redisのコンテナID・起動時刻は不変。全サービスrunning、backend healthy。backendの`/health`・`/api/health`、frontendの`/upload`・`/settings`は200（確認中にfrontend側へ誤って送った`/api/health`の404は、正しいbackend側で再確認）。3サービスの変更したbackendファイルのSHA-256はmainと一致し、avは18.1.0。起動後ログのERROR／CRITICAL／Traceback／Exceptionは0件。
+- 中継: `LauncherController.stop_codex_bridge()`→`ensure_codex_bridge_running()`で再起動。旧PIDの終了、新PIDの生存、state=ready、契約／コードの指紋とmainの一致、新依頼`short_framing_select`の登録を確認。修復後もready・依頼0件を再確認。
+- 履歴修復: `job_dc1a7b8ff4bb4d4fa8421c0fc4676dc1`について、コピーでdry-run→execute→再dry-runを確認後、稼働backendでも`python -m app.maintenance repair-unchanged-manual-choices --job <対象ID> --dry-run`で同じ16件を確認し、`--execute`を実行。通常1・ショート1／3／4のtitle_hook／framing／text_style／post_copy各4件、計16件をmanualから元のunrecordedへ戻した。automaticへの推定変更はしていない。字幕確認JSONと制作記録4件の計5ファイルを更新。制作記録はrevision 1→2、createdAtと制作内容は保持。再dry-runは対象0件、エラー0件。
+- 修復後の照合: 字幕・タイトル・画角等の値は不変。対象以外のJSON10件はSHA-256不変。jobsとexport_itemsはバックアップと全行・全項目一致し、件数・状態内訳も不変。DBのintegrity_check=ok。詳細な照合結果は`.codex_tmp/pr167-168-preflight-20261027-004120/`へ保存。
+- 未確認: 反映後の新規autoジョブによる実Codexの内容画角判断・全工程・字幕以外の手直し不要率は未確認。実ジョブの新規実行／再試行、状態変更を伴い得るジョブGET・字幕確認GETは実施していない。
+
+## 2026-10-29 運用：PR #169（task-233）のマージと反映
+
+- 許可: ユーザー指示「マージして反映」。PR #169をmerge commitでマージ（`addc89f`、ブランチ削除なし）。
+- 反映直前: 切り抜き／分析の両キューとも待ち0・実行中0、実行中のジョブなし、Codex中継のrequests／processingは0件。
+- バックアップ: SQLiteのbackup()で`storage/backups/autoclipper-20261028-170227-before-task233-deploy.db`を作成。integrity ok、jobs 16件で元と一致。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。`/health` 200、frontend応答、worker・intelligence-workerがそれぞれのキューで待機、workerで新モジュールのimport成功、OpenAPIに `framing/reset` を確認。中継の再起動は不要（launcher・Codex契約の変更なし）。
+- 主フォルダの未コミットSTATUS運用記録は、stashしてpull後に戻し、両方の追記を残して競合を解消した。
+- 未確認: `job_2a26bd49a2fc459ead6f24892252fdf5` の再書き出しと、実動画での完成検査の通過は未実施（ユーザーが詳細編集で画角を保存すると開始する）。
+
+## 2026-10-29 運用：PR #170（task-234）のマージと反映
+
+- 許可: ユーザー指示「マージして反映」。PR #170をmerge commitでマージ（`d7b565f`、ブランチ削除なし）。
+- 反映直前: 切り抜き／分析の両キューとも待ち0・実行中0、実行中のジョブ・同期・分析なし、Codex中継のrequests／processingは0件。
+- バックアップ: SQLiteのbackup()で`storage/backups/autoclipper-20261029-015537-before-task234-deploy.db`を作成。integrity ok、jobs 16・sync_runs 12・channel_analysis_runs 4件で元と一致。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。`/health` 200、`/intelligence` 200、定時設定は有効（同期 毎日03:00 UTC、分析 月曜）。分析の返答形式が変わったため、Codex中継を`stop_codex_bridge()`→`ensure_codex_bridge_running()`で再起動（新PIDでready）。
+- 反映直後の定時実行: 今週分の分析が未実行だったため、接続済み2チャンネルとも自動で同期→分析が走り、すべてsuccess。保存された入力と分析結果は、新しい目標（通常10万／ショート100万・30日・途中評価7日）で、旧`goal_views`はなし。選択ごとの評価（choice_evaluations）も入力に含まれていた。
+- 未確認: 翌日以降の定刻（03:00 UTC）の同期が自動で走るか。選択ごとの評価は、30日に届いた動画が少ないため、現状は効果未確認が中心と見込まれる（数値はまだ確認していない）。
+
+## 2026-10-29 task-235 稼働反映（PR #171）
+
+- 目的: 30日評価に基づく選び方の限定更新・版固定・巻き戻しを稼働環境へ反映。
+- 事前確認: 両キュー待ち0・実行中0、sync/analysis実行中0、Codex中継requests/processing空。確認待ちジョブ（clip確認7・字幕確認6）は実行中でないため対象外。
+- バックアップ: `storage/backups/autoclipper_before_task235_20261029.db`（SQLite backup()、integrity ok、jobs 16・analysis runs 6で一致）。
+- 反映: PR #171をmerge commit（41152a9）、GPU構成で `up -d --build`。launcher・Codex契約は変更なしのため中継再起動なし。
+- 確認: `/health` ok、`choice-policies` GET／rollback POSTがOpenAPIに存在、ch1・ch2のGETは200（方針行は0件、次回分析で作成見込み）、分析画面200、`choice_policy_*` 3テーブル作成、起動後ログにerrorなし。
+- 未確認: 次回定時分析での方針行作成と判定、新規autoジョブでの版固定（`_choicePolicyReasons`、2チャンネルで同名キャラ時の `CHANNEL_AMBIGUOUS` 有無）、実30日観測での更新・巻き戻しと効果、手動復元の画面操作完了。
+
+## 2026-10-30 task-236 稼働反映（PR #172）
+
+- 目的: 完成MP4の独立検査・局所修復・未完成停止を稼働環境へ反映。
+- 事前状態: 稼働コンテナ5つが約25時間前から停止（exit 255、ホスト再起動等と推定）。実行中ジョブ・sync/analysis実行中0、Codex中継requests/processing空。確認待ちジョブ（clip確認7・字幕確認6）は対象外。2026-10-30 03:00 UTCの定時同期は停止中のため未実行だった。
+- バックアップ: `storage/backups/autoclipper_before_task236_20261030.db`（SQLite backup()、integrity ok、jobs 16・analysis runs 6で一致）。
+- 反映: main `85fb996`、GPU構成で `up -d --build`。`final_output_review` 追加に伴いCodex中継を起動（停止中だったため stop=False、起動 ready）。
+- 確認: `/health` ok、分析画面200、choice-policies 200、workerで検査モジュールimport可、起動後ログにerrorなし。起動直後に定時同期が追いつき実行（ch1はSYNC_LIMITでpartial、残りの30日・7日報告を次回へ持ち越し、ch2は実行中）。
+- 未確認: 実ジョブでの完成検査の誤検出有無（特に字幕画素照合・中継不通時のunknown停止）、修復の実動作、実Codexでの内容整合判定。
+
+
+## 2026-11-01 運用：PR #174（task-238）のマージとDocker反映
+
+- 許可とマージ: ユーザーの「merge commitでマージして、いつもの手順でDockerへ反映」に従い実施。Python3.11／3.12・frontendのCI成功を確認したhead `3efa131` をPR #174からmerge commit `24c460a` でmainへ取り込み、ブランチは削除していない。mainのtreeはCI成功headと一致。
+- 事前確認: 主フォルダの未コミットSTATUS.mdの運用記録47行を原文・追記部分・SHA256付きで保全し、取り込みとbuild時はmain・未コミット変更なしを確認。切り抜き／分析の両RQキュー・実行中登録・scheduled／deferred／intermediateは0件、DBの実行中ジョブなし、中継requests／processingも0件。実行コンテナのCompose作業フォルダとstorageのbind mountが主フォルダを参照することを確認した。
+- バックアップ: SQLiteのConnection.backup()で `storage/backups/autoclipper-20261101-025922-before-pr174.db` を作成。integrity_check=ok、jobs16件・export_items11件が元DBと一致。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker intelligence-worker frontend` 成功。4サービスを再作成。backendはhealthy、worker／intelligence-worker／frontendはrunning。RedisはコンテナIDと起動時刻が不変。
+- 動作とコード: backendの `/health`・`/api/health`、frontendの `/upload`・`/settings` が200。workerのav18.1.0／faster-whisper1.2.1を確認。backend／worker／intelligence-worker各15ファイル、frontend17ファイルの変更対象ソースがmainの作業ツリーとSHA256一致。照合スクリプトは最初に誤った `/app/app` を指定して失敗したため、Dockerfileと実際のmodule位置 `/app/backend/app` を確認して指定を直し、全件照合し直した。アプリの起動後ログではERROR／CRITICAL／Traceback／Exceptionは0件。
+- データと中継: jobs16件（切り抜き確認待ち7・字幕確認待ち7・completed2）とexport_items11件はバックアップと全行・全項目一致、DBのintegrity_check=ok。両キュー・実行中登録、中継requests／processingは反映後も0件。Codex中継は再起動せず、ready・PID21444の生存・契約／コードの指紋とmainの一致・反映前からの不変を確認。
+- 記録の保護: 退避した既存の運用記録47行をバイト単位で維持してmainのSTATUS.mdへ戻し、この記録だけ追記した。既存記録は削除・改変・コミットしていない。照合結果は `.codex_tmp/pr174-deploy/` に保存。
+- 未確認・実施しないこと: 状態更新を伴い得るジョブGET・字幕確認GET・結果GET、実ジョブの新規実行／再試行、字幕編集・確定・再生成は呼んでいない。稼働ジョブでの字幕追加・自動決定・部分再書き出しの受入はユーザー操作で今後確認する。アプリコードの追加変更なし。今回の差分は未コミットの運用記録だけとする。
+
+
+## 2026-11-01 運用：PR #175のマージと字幕入力の修正の反映
+
+- 許可と反映元: ユーザー指示によりPR #175をmerge commit `53513e6`でマージし、mainをDockerへ反映した。CIはPython 3.11／3.12各2543成功・4skip、frontend成功。アプリコードの追加修正は行っていない。
+- 事前確認: main `24c460a`、未コミット変更は既存のSTATUS.md運用記録59行だけ。原文と追記分を`.codex_tmp/pr175-deploy/`へ保護し、main更新後に追記分をバイト一致で復元した。両RQキューのqueued／running／scheduled／deferred／intermediateはすべて0、実行中のアプリジョブ・同期・分析はなし、中継requests／processingも0だった。
+- バックアップ: SQLiteのbackup()で`storage/backups/autoclipper-20261031-185724-before-pr175.db`を作成（ファイル名の時刻はUTC）。integrity_check=ok、jobs 16件／export_items 11件で元DBと一致。
+- Docker: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker intelligence-worker frontend`成功。frontendを再作成し、変更のないbackend／worker／intelligence-workerはビルドキャッシュと既存コンテナを利用。RedisのID・起動時刻は不変。全サービスrunning、backend healthy。
+- 反映確認: `/health`・`/api/health`・`/upload`・`/settings`は200。変更したfrontendソース10ファイルのSHA-256がmainと一致。workerのav 18.1.0／faster-whisper 1.2.1。反映後のログ検査にエラーなし。Codex中継はready、PID 21444・契約／コード指紋はmainと一致し、再起動していない。
+- データと残る確認: jobs 16件（切り抜き確認待ち7、字幕確認待ち7、completed 2）とexport_items 11件は全行のハッシュが反映前と一致。両キューと中継依頼は反映後も0。状態更新を起こし得るジョブ／字幕確認API、実ジョブの再試行・編集は実行していない。入力と遅い応答の確認はPR #175の隔離環境で実施済みだが、稼働環境での実IME入力は未確認。既存の運用記録を保持し、この追記も未コミットで残す。
+
+
+## 2026-11-01 運用：PR #176のマージと字幕の一括修正の反映
+
+- 許可と反映元: ユーザー指示によりPR #176をmerge commit `c3d5aec`でマージし、mainをDockerへ反映した。CIはPython 3.11／3.12各2543成功・4skip、frontend成功。マージ後のtreeはCI済みhead `377cb45`と一致する。アプリコードの追加変更は行っていない。
+- 事前確認と文書保護: main `53513e6`、未コミット変更は既存のSTATUS.md運用記録69行のみ。原文と追記分を`.codex_tmp/pr176-deploy/`へ保護し、main更新後に追記分をバイト一致で復元した。切り抜き／分析の両RQキューのqueued／running／scheduled／deferred／intermediateはすべて0。実行中のアプリジョブ・同期・分析はなく、中継requests／processingも0だった。
+- DBバックアップ: SQLiteのbackup()で`storage/backups/autoclipper-20261101-084439-before-pr176.db`を作成（日本時間のファイル名）。integrity_check=ok、jobs 16件／export_items 11件で元DBと一致した。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker intelligence-worker frontend`成功。frontendを再作成し、変更のないbackend／worker／intelligence-workerはビルドキャッシュと既存コンテナを利用した。RedisのID・起動時刻は不変。全サービスrunning、backend healthy。
+- 反映後の確認: `/health`・`/api/health`・`/upload`・`/settings`は200。変更したfrontendソース5ファイルのSHA-256がmainと一致し、workerのavは18.1.0、faster-whisperは1.2.1。反映後のログ検査にエラーなし。中継はreadyでPID 21444・契約／コード指紋は不変かつmainと一致し、再起動していない。
+- データと受入の区別: jobs 16件（切り抜き確認待ち7、字幕確認待ち7、completed 2）とexport_items 11件は全行のハッシュが反映前と一致。両キューと中継依頼は反映後も0。状態更新を起こし得るジョブ／字幕確認APIや、実ジョブの編集・再試行は実行していない。一括修正・取り消し・再適用の操作確認はPR #176の隔離環境で実施済みで、稼働ジョブ上の操作受入は未実施。既存の運用記録を保ち、この追記も未コミットで残す。
+
+
+## 2026-11-01 運用：PR #177のマージと字幕保存ボタンの修正の反映
+
+- 許可と反映元: ユーザー指示によりPR #177をmerge commit `0ebfbd2`でマージし、mainをDockerへ反映した。CIはPython 3.11／3.12各2543成功・4skip、frontend成功。マージ後のtreeはCI済みhead `61745c6`と一致。アプリコードの追加変更はない。
+- 事前確認と文書保護: main `c3d5aec`、未コミット変更は既存のSTATUS.md運用記録79行のみ。原文と追記分を`.codex_tmp/pr177-deploy/`へ保護し、main更新後に追記分をバイト一致で復元した。切り抜き／分析の両RQキューのqueued／running／scheduled／deferred／intermediateはすべて0。実行中のアプリジョブ・同期・分析はなく、中継requests／processingも0だった。
+- DBバックアップ: SQLiteのbackup()で`storage/backups/autoclipper-20261101-235706-before-pr177.db`を作成（日本時間のファイル名）。integrity_check=ok、jobs 16件／export_items 11件で元DBと一致した。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker intelligence-worker frontend`成功。frontendを再作成し、変更のないbackend／worker／intelligence-workerはビルドキャッシュと既存コンテナを利用。RedisのID・起動時刻は不変。全サービスrunning、backend healthy。
+- 反映後の確認: `/health`・`/api/health`・`/upload`・`/settings`は200。変更したfrontendソース2ファイルのSHA-256がmainと一致。workerのavは18.1.0、faster-whisperは1.2.1。反映後のログ検査にエラーなし。中継はreadyでPID 21444・契約／コード指紋は不変かつmainと一致し、再起動していない。
+- データと受入の区別: jobs 16件（切り抜き確認待ち7、字幕確認待ち7、completed 2）とexport_items 11件は全行のハッシュが反映前と一致。両キューと中継依頼は反映後も0。状態更新を起こし得るジョブ／字幕確認API、実ジョブの保存・再試行は実行していない。保存ボタンの操作確認はPR #177の隔離環境で実施済みで、稼働ジョブでの保存受入とは区別する。既存の運用記録を保ち、この追記も未コミットで残す。
+
+
+## 2026-11-02 運用：PR #178のマージと字幕保存・編集映像の同期修正の反映
+
+- 許可と反映元: ユーザーの「マージして反映」に従い、Python 3.11／3.12各2546成功・4skip、frontendのCI成功head `448c320` をmerge commit `f3a3fdc`でmainへ取り込んだ。マージ後のtreeはCI済みheadと一致。アプリコードの追加変更は行っていない。
+- 事前確認と文書保護: main `0ebfbd2`、未コミット変更は既存STATUS運用記録89行だけ。`.codex_tmp/pr178-deploy/`へ原文・追記分・SHA-256を保護し、main更新・build開始時は変更なしにした。反映後に89行をバイト一致で復元した。両RQキューのqueued／running／scheduled／deferred／intermediate、DBの実行中ジョブ・同期・分析、中継requests／processingは事前にすべて0。Compose作業フォルダと3サービスのstorage bind mountが主フォルダを参照することも確認した。
+- DBバックアップ: SQLiteのbackup()で`storage/backups/autoclipper-20261102-011008-before-pr178.db`を作成（日本時間）。integrity_check=ok、jobs16件／export_items11件が元DBと一致。
+- Docker: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker intelligence-worker frontend`が成功。4サービスを再作成し、backend healthy、他サービスrunning。RedisのID・起動時刻は不変。
+- 反映確認: `/health`・`/api/health`・`/upload`・`/settings`は200。backend／worker／intelligence-workerそれぞれ変更ソース3ファイル、frontend7ファイルのSHA-256がmainと一致。workerの編集映像rendererはv5、av18.1.0／faster-whisper1.2.1。4サービスの起動後ログにERROR／例外なし。Codex中継は再起動せず、ready・PID21444・契約／コード指紋のmainとの一致と反映前からの不変を確認した。
+- 反映後のキューの変化: 最終のidle確認は切り抜きキュー6待ち・1実行中で停止した。読み取り調査で、起動直後から続く`job_ac031265d2224d82b1d5535fcd944b8a`の字幕確認GETにより、新しいv5編集映像を用意するプレビュー7件が登録されたことを確認。PRに記載した初回の作成に当たり、新規ジョブ／再選定ではない。処理を止めたり取消・再試行したりせず、正常起動とコード照合を別途確認した。確認時点では1件完了、5待ち・1実行中、分析キューは0。反映後キュー0件の確認が通ったとは記録しない。
+- データと受入の区別: jobs16件（切り抜き確認待ち7・字幕確認待ち7・completed2）とexport_items11件は全行・全項目のハッシュが反映前と一致、DBのintegrity_check=ok。こちらから状態更新を起こすジョブ／字幕確認API、実ジョブの保存・再試行は行っていない。稼働中のプレビュー初回生成の完了と、稼働画面での字幕保存の受入は未確認。コピー環境での保存0件・再生継続の検証と区別する。既存の運用記録を保ち、この追記も未コミットで残す。
+
+
+## 2026-11-02 運用：PR #179をマージしてDockerへ反映
+
+- 許可・マージ: ユーザー指示でPR #179をmerge commitでマージ。CIはPython 3.11/3.12・frontend全3件成功、head `5357ef5`を確認し、mainは`686e7a1d78d0ead7b581e57605e1219517539b17`。launcher/Codex契約に変更はなく、中継の再起動は行っていない。
+- 事前確認: 通常1の正式プレビュー1件が実行中だったため、終了を待って再確認した。両キューのqueued/running/scheduled/deferred/intermediate、DBの実行中ジョブ・同期/分析、中継requests/processingはすべて0件。未コミットSTATUSの運用記録100行は`.codex_tmp/pr179-deploy/`へSHA-256付きで保護し、main更新後に同じバイト列のまま戻した。既存の運用記録はコミットへ混ぜていない。
+- バックアップ: SQLiteのbackup()で`storage/backups/autoclipper-20261102-020927-before-pr179.db`を作成。integrity_check=ok、元とjobs 16件・export_items 11件で一致。
+- 反映: GPU構成で`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build backend worker intelligence-worker frontend`成功。変更のあるfrontendを再作成し、変更のないbackend/worker/intelligence-workerはビルドキャッシュ・既存コンテナを利用した。RedisのコンテナID・起動時刻は不変。
+- 反映後: 4サービスrunning、backend healthy。backend `/health`・`/api/health`、frontend `/upload`・`/settings`は200。変更したfrontendソース9ファイルのSHA-256がmainと一致。workerはav 18.1.0/faster-whisper 1.2.1、編集映像はlive-subtitle-review-v5。ログのエラー0件、両キューと実行中登録は0件。
+- データ・中継: DBのintegrity_check=ok。jobs/export_itemsの全行ハッシュ・件数・状態内訳は反映前後で不変（切り抜き確認待ち7、字幕確認待ち7、completed 2）。中継はready、pid 21444と契約/コード指紋は不変でmainと一致。ジョブ取得API・字幕取得API・再試行は呼ばず、ユーザーのブラウザの下書きにも触れていない。稼働画面での保存操作そのものの受入は未実施（コピー環境の確認とは区別する）。
+
+
+## 2026-11-02 運用：PR #180の反映と対象ジョブ7本の再書き出し完了
+
+- 許可・マージ: ユーザー指示でPR #180をmerge commitでマージし、main `0b77cd57f0ee3f059270c51b0ffd388d9b15b511`を反映。CIはhead `e95256b`のPython 3.11/3.12・frontend全3件成功。Codex中継の再起動は行っていない。
+- 事前確認・保護: 両RQキューのqueued/running/scheduled/deferred/intermediate、DB実行状態・同期/分析、中継requests/processingは0件。未コミットSTATUS運用記録110行をSHA-256付きで退避し、main更新後に同じバイト列で復元した。既存記録はコミットに混ぜていない。
+- バックアップ: SQLite backup()で`storage/backups/autoclipper-20261102-050152-before-pr180.db`を作成。integrity_check=ok、元とjobs 16件・export_items 11件で一致。対象ジョブのJSON115ファイルも`storage/backups/pr180-job_ac031265d2224d82b1d5535fcd944b8a-20261102-050152/`へ相対パスで退避し、SHA-256を照合。
+- 反映: GPU構成の`up -d --build backend worker intelligence-worker frontend`成功。backend/worker/intelligence-workerを再作成し、変更のないfrontendは既存コンテナを利用。全サービスrunning、backend healthy。backend `/health`・`/api/health`、frontend `/upload`・`/settings`は200。変更した検査コード2ファイルのSHA-256は3サービスともmainと一致。av 18.1.0/faster-whisper 1.2.1を確認。起動ログのエラー0件。反映前後のjobs/export_items全行は不変。
+- 再書き出し: `job_ac031265d2224d82b1d5535fcd944b8a`について、退避後に字幕確認JSONが変わっていないことと、全7本の字幕確定・自動決定readyを確認。既存の`POST /api/jobs/{id}/subtitle-review/finalize`を1回呼び出し、202で再開。2026-11-01 20:04:04 UTCに開始し、20:19:05 UTCにcompleted/100%/error_codeなしで完了した（約15分）。
+- 完成物: 通常2本・ショート5本のMP4、サムネ7枚、制作記録7件を確認。各MP4のSHA-256は最新検査記録と一致し、7本とも修正前に誤判定されたMP4とも同一だった。全15項目×7本（実Codexの内容/サムネ判定を含む）がpassで、今回の追加修復は0回。サムネは画像として読み取り検証、制作記録のrecordId/jobId/完成尺はExportItemと一致。結果APIは200で通常2本・ショート5本を返す。
+- 不変と稼働: 確定字幕の文字/区間/対象clip、タイトル・フック・画角・文字スタイル・投稿文・manualDecisionFieldsは退避時と一致。他15ジョブと既存11書き出しの全行も不変。DBはjobs 16件・export_items 18件、状態は切り抜き確認待ち7・字幕確認待ち6・completed 3。終了後は両キュー/実行中登録/中継依頼0件。RedisのID/起動時刻と、中継のready・pid 21444・契約/コード指紋は不変。証拠は`.codex_tmp/pr180-deploy/`。この1ジョブの実運用確認と、他の動画での検査精度の一般的な受入は区別する。
+
+
+## 2026-11-05 PR #181 反映（task-240 確定済み字幕の個別書式）
+
+- PR #181 を merge commit でマージし、main `1271170` を backend / worker / intelligence-worker / frontend へ GPU 構成で再build・反映。Redis と Codex中継は再起動していない。
+- 事前・事後: 両 RQ キューと実行中/待機登録は0、DBに実行中ジョブ・同期/分析なし、中継 requests/processing は0、ready と指紋・PIDの不変を確認。
+- SQLite backup(): `storage/backups/autoclipper-20261105-150746-before-pr181.db`。integrity_check=ok、jobs=17 / export_items=7 が一致。反映前後の両テーブル全行ハッシュも一致。
+- 反映後: backend healthy、他3サービス稼働、/health・/api/health・/upload・/settings は200、worker av=18.1.0、起動ログのエラー0。変更対象 frontend 7ファイル、backend 4ファイル（3サービス）の SHA-256 が main と一致。字幕個別書式の保存フィールドが稼働APIで利用可能。
+- 既存の未コミット運用記録121行はバイト単位で保護・復元。稼働ジョブの字幕/個別書式の書き換え・再実行は行っていない。実画面での個別書式操作は先の隔離検証まで。
+
+## 2026-11-05 PR #182（task-241）反映
+
+- 反映前: 両キューLLEN/WIP 0、実行中ジョブ・同期・分析なし、Codex中継のrequests/processing空。SQLite backup() で `storage/backups/autoclipper_pre_task241_deploy_20261105T135037Z.db`（integrity ok・主要表の件数一致）。
+- マージ: PR #182 を merge commit（a218256）。初回CIは `test_overflow_repairs_instead_of_stopping_before_export` が実Redisへ書き出しを登録して失敗。ローカル実行時にはテスト用ジョブID宛ての書き出し依頼3件が稼働Redisへ入り、稼働workerが `job not found` で即失敗（DB・storageの変化なし、RQの失敗記録が3件増えたのみ）。テストで登録をスタブ化して再CI成功。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。5コンテナ running、/health ok、/settings・/intelligence・字幕確認画面 200、worker/backendで新モジュールのimport成功、直近ログにエラーなし。
+- Codex中継: ensure が False だったため stop→ensure で再起動し ready（14:00Z）。待ち依頼なし。※訂正: False は「すでに準備完了で起動不要」の意味で、status.jsonのupdatedAtは起動時の時刻。停止ではなく、再起動は不要だった。
+- 未実施: job_969023d3ad7e4f93aea2d9159c7708e5 の再処理（ユーザー指示待ち）。
+
+## 2026-11-06 Codex上限回復後の書き出し再試行（運用）
+
+- 対象: `job_969023d3ad7e4f93aea2d9159c7708e5`。ユーザーの上限回復連絡を受け、保存済みの確定内容で subtitle-review/finalize を再実行。コード変更・Docker反映・中継再起動なし。
+- 直前確認: 両RQキューと実行中登録は0件。5clipとも confirmed / automaticDecisionState=ready / previewState=ready。
+- バックアップ: `storage/backups/before-codex-review-retry-20261105-151014/autoclipper.db`（SQLite backup、integrity_check=ok）と同フォルダの `subtitle_review.json`。
+- 結果: 2026-11-06 00:15:30 JST に completed（100%）、書き出し5件。完成検査5本すべて pass、エラーなし。字幕セグメントは再試行前と一致。前回のCodex失敗が利用上限によるものだったかは記録不足のため未確定。
+
+## 2026-11-06 PR #183（task-242）・PR #184（task-243）反映
+
+- 反映前: 両キューLLEN/WIP 0、実行中ジョブ・同期・分析なし、Codex中継のrequests/processing空。SQLite backup() で `storage/backups/autoclipper_pre_task242_243_20261106T040743Z.db`（integrity ok・主要表の件数一致）。
+- マージ: PR #183（選び方の学習: 手動も使う・人の修正）を merge commit。PR #184（字幕の語の学習）はSTATUS.mdが競合したため、mainを取り込んで両方の記録を残し（b27acfc）、CI再実行で成功後に merge commit（f040bf3）。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。5コンテナ running、/health ok、/settings・/intelligence・字幕確認画面 200、`GET /api/subtitle-terms` は `[]`（学習済みの語は反映後の字幕保存から溜まる）、worker/backendで新モジュールのimport成功、直近ログにエラーなし。
+- Codex中継: ensure が False だったため stop→ensure で再起動し ready。待ち依頼なし。※訂正: False は「すでに準備完了で起動不要」の意味で、再起動は不要だった。
+- 注意: 既存ジョブの字幕レビューは `characterPresetName` を持たないため、反映前に作った字幕の修正は学習されない。学習は反映後に作ったジョブから始まる。
+
+## 2026-11-06 PR #185（task-244）反映
+
+- 反映前: 両キューLLEN/WIP 0、実行中ジョブ・同期・分析なし、Codex中継のrequests/processing空。SQLite backup() で `storage/backups/autoclipper_pre_task244_20261106T044149Z.db`（integrity ok・主要表の件数一致）。
+- マージ: PR #185 を merge commit（66c4ebd）。CI 3件成功。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。backend/worker/intelligence-worker を再作成（frontendは変更なしで継続）。/health ok、/settings・/intelligence・字幕確認画面 200、worker/backendで `_job_character` のimport成功、直近ログにエラーなし。
+- Codex中継: ensure は False（`codex_bridge_ready()` が真で起動不要）、PID 58336 の稼働を確認。再起動はしていない。待ち依頼なし。
+- 未実施: 既存ジョブの修正の取り込みは、そのジョブの次の字幕保存で行われる。一括取り込みは実施していない。
+
+## 2026-11-06 字幕の語の学習：既存ジョブの取り込み
+
+- ユーザー指示で、字幕確認待ち7件と完成済み2件（job_ac031265…、job_969023d3…）の修正を `storage/subtitle_terms/` へ取り込んだ。字幕の文書は変更なし（ハッシュ一致）。キュー投入なし。
+- 有効になった語: 儒烏風亭らでん「ラデン→らでん」15回・「リグロス→ＲｅＧＬＯＳＳ」5回、宙科そぴあ「ラデン→らでん」5回。「ソピ→そぴ」は3回・1本のため学習中。
