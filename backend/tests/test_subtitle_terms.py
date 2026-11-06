@@ -185,3 +185,29 @@ def test_api_lists_rules_and_switches_one_off_with_origin_check(client):  # noqa
     assert client.get("/api/subtitle-terms").json()[0]["terms"][0]["disabled"] is True
     assert client.post(url.replace("disable", "enable"), json=body).status_code == 204
     assert client.get("/api/subtitle-terms").json()[0]["terms"][0]["active"] is True
+
+
+def test_review_made_before_the_character_was_stored_takes_it_from_the_job_settings(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    import app.db
+    from app.db import Base
+    from app.models import Job, Video
+    engine = create_engine(f"sqlite:///{tmp_path / 'jobs.db'}")
+    Base.metadata.create_all(bind=engine)
+    session = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+    monkeypatch.setattr(app.db, "SessionLocal", session)
+    with session() as db:
+        db.add(Video(id="vid_old", original_filename="a.mp4", stored_path="a.mp4"))
+        db.add(Job(id="job_old", video_id="vid_old", status="awaiting_subtitle_review", progress=0,
+                   settings_json={"characterPresetName": CHARACTER}))
+        db.commit()
+    old = correct(document("job_old", ["ラデンです", "またラデン"], character=None), [("ラデン", "らでん")])
+    assert old.character_preset_name is None
+    write_subtitle_review(old, tmp_path / "outputs" / "job_old" / "subtitle_review.json")
+    assert old.character_preset_name == CHARACTER
+    assert read_store(tmp_path, CHARACTER)["jobs"]["job_old"]["pairs"] == {"ラデン	らでん": 2}
+    other = document("job_none", ["x"], character=None)
+    write_subtitle_review(other, tmp_path / "outputs" / "job_none" / "subtitle_review.json")
+    assert other.character_preset_name is None
+    engine.dispose()
