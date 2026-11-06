@@ -30,6 +30,7 @@ def apply_review_character(
     snapshot.pop("normalClipCount")
     snapshot.pop("shortCount")
     updated = {**settings, **snapshot, "characterPresetName": preset.name, "characterPresetId": preset.id}
+    document.character_preset_name = preset.name
     for clip in document.clips:
         clip.title_style = None
         clip.hook_style = None

@@ -553,6 +553,7 @@ export type SubtitleReviewClip = {
 };
 
 export type SubtitleReviewDocument = {
+  characterPresetName?: string | null;
   renderClipIds?: string[] | null;
   subtitleOnlyAuto?: boolean;
   automaticStopReasons?: string[];

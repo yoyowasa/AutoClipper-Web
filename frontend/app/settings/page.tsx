@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { YouTubeConnectionSettings } from "../../components/YouTubeConnectionSettings";
 import { ProductionLinkSettings } from "../../components/ProductionLinkSettings";
+import { SubtitleTermRules } from "../../components/SubtitleTermRules";
 
 export default function SettingsPage() {
   return <main className="mx-auto max-w-4xl space-y-6 p-6">
@@ -8,5 +9,6 @@ export default function SettingsPage() {
       <Link href="/upload" className="underline">動画作成へ戻る</Link></header>
     <YouTubeConnectionSettings />
     <ProductionLinkSettings />
+    <SubtitleTermRules />
   </main>;
 }
