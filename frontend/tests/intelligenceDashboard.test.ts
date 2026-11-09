@@ -54,12 +54,13 @@ assert.equal("baseline" in trialDraft(trial), false); // No YouTube values are w
 const review: AnalysisReview = { id: "analysis_test", channel_id: 1, batch_run_id: "sync_test", title: "検証", summary: "仮説",
   recommendation_framework_version: null, reviewed_material: "statistics_and_titles", goal_views: 1000000,
   limitations: ["未取得"], findings: [], proposals: [{ id: "proposal_one", format: "shorts", priority: 1, title: "試す",
-    baseline_video_id: "video000001", evidence_ids: ["r:1:views"], reason: "仮説", goal_path: "確認", material_to_find: "題材",
+    baseline_video_id: "video000001", evidence_ids: ["r:1:views", "w:2026-09-07:shorts"], reason: "仮説", goal_path: "確認", material_to_find: "題材",
     title_candidates: [], hook: "冒頭", structure: [], change_one: "題材語", keep_fixed: "尺", primary_metric: "views",
     result_check: "7日", rejection_condition: "差がなければ保留", recommendation_link: null }] };
 const adopted = renderToStaticMarkup(createElement(AnalysisReviewText, { review, adopted: ["proposal_one"], onAdopt: () => undefined,
   renderEvidence: () => createElement("a", { href: "#video-detail" }, "根拠動画") }));
 assert.match(adopted, /採用済み/); assert.match(adopted, /disabled=""/); assert.match(adopted, /根拠動画/);
+assert.match(adopted, /週別独自集計（w:2026-09-07:shorts）/);
 
 async function main() {
   const original = globalThis.fetch;

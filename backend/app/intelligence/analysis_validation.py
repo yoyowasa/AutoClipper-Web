@@ -99,7 +99,8 @@ def validate_review(output, context: AnalysisContext, *, diagnostics: dict | Non
             elif not unknown and item.format != "all" and any(
                 (evidence["video_id"] and context.videos.get(evidence["video_id"], {}).get("format") != item.format)
                 or (evidence["source"] == "independent_aggregation"
-                    and {"normal": "videoondemand", "short": "shorts"}.get(evidence["format"]) != item.format)
+                    and (evidence.get("analysis_format")
+                         or {"normal": "videoondemand", "short": "shorts"}.get(evidence.get("format"))) != item.format)
                 for evidence in (context.evidence[id] for id in item.evidence_ids)
             ):
                 issue("FINDING_FORMAT_MISMATCH", (*prefix, "format"))

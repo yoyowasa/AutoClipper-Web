@@ -2,9 +2,15 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 
 from app.intelligence.common import YouTubeError
-from app.intelligence.youtube_client import INITIAL_LIMIT, REPORT_PAGE_SIZE, YouTubeClient
+from app.intelligence.youtube_client import INITIAL_LIMIT, REPORT_PAGE_SIZE, RETENTION_DIMENSION, RETENTION_METRICS, YouTubeClient
 from app.intelligence.evaluation_rules import PACIFIC, initial_window
 
+
+RETENTION_WINDOWS = {"retention7": 7, "retention30": 30}
+RETENTION_DEFINITION = "youtube-retention-v1"
+# Reports can silently truncate endDate. Allow the documented 48–72 hour
+# processing delay after the last Pacific day has fully ended.
+RETENTION_LAG_DAYS = 3
 
 
 @dataclass
@@ -59,7 +65,8 @@ def optional_requests(videos, start: date, end: date, last: date) -> list[Report
     return requests
 
 
-def collect_reports(client: YouTubeClient, external_id: str, videos, stamp: datetime, *, pending: list[dict] | None = None):
+def collect_reports(client: YouTubeClient, external_id: str, videos, stamp: datetime, *,
+                    pending: list[dict] | None = None, retention_completed=(), before_optional=None):
     """The basic collect_self periods; no diagnosis/derived metrics/deep reports."""
     end = stamp.replace(tzinfo=UTC).astimezone(PACIFIC).date() - timedelta(days=1)
     start = end - timedelta(days=59)
@@ -73,10 +80,14 @@ def collect_reports(client: YouTubeClient, external_id: str, videos, stamp: date
     daily = fetch("daily", start, end, "day")
     last = max((date.fromisoformat(row["day"]) for row in daily), default=None)
     if last is None:
+        if before_optional:
+            before_optional()
         return start, end, None, reports, pending or []
     current = last - timedelta(days=27)
     fetch("current", current, last)
     fetch("previous", last - timedelta(days=55), last - timedelta(days=28))
+    if before_optional:
+        before_optional()
     if pending:
         available = {video.id for video in videos}
         requests = [ReportRequest(item["kind"], date.fromisoformat(item["start"]), date.fromisoformat(item["end"]),
@@ -84,6 +95,13 @@ def collect_reports(client: YouTubeClient, external_id: str, videos, stamp: date
         requests = [request for request in requests if request.video_ids]
     else:
         requests = optional_requests(videos, start, end, last)
+        for video in videos:
+            for kind, days in RETENTION_WINDOWS.items():
+                begin, finish = initial_window(video.published_at, days)
+                if finish <= min(last, end - timedelta(days=RETENTION_LAG_DAYS)):
+                    requests.append(ReportRequest(kind, begin, finish, RETENTION_DIMENSION, [video.id]))
+    requests = [request for request in requests if request.kind not in RETENTION_WINDOWS or
+                (request.kind, request.video_ids[0], request.start, request.end) not in retention_completed]
     first7_count = 0
     for index, request in enumerate(requests):
         if request.kind in {"first7", "first30"} and first7_count >= INITIAL_LIMIT:
@@ -94,9 +112,16 @@ def collect_reports(client: YouTubeClient, external_id: str, videos, stamp: date
         except YouTubeError as failure:
             if failure.code == "SYNC_LIMIT":
                 return start, end, last, reports, [item.checkpoint() for item in requests[index:]]
-            if failure.code != "API_5XX":
+            if failure.code != "API_5XX" and not (request.kind in RETENTION_WINDOWS and failure.code in
+                    {"API_BAD_REQUEST", "API_NOT_FOUND", "FORBIDDEN", "INVALID_RESPONSE", "NETWORK_ERROR"}):
                 raise
             rows, error = [], failure
+        if request.kind in RETENTION_WINDOWS:
+            # One stored row per fixed window. Preserve every returned bucket,
+            # but never treat an entirely null report as a finished observation.
+            curves = {metric: {row[RETENTION_DIMENSION]: row[metric] for row in rows if row[metric] is not None}
+                      for metric in RETENTION_METRICS}
+            rows = [{metric: curve or None for metric, curve in curves.items()}] if any(curves.values()) else []
         first7_count += request.kind in {"first7", "first30"}
         for video_id in request.video_ids:
             video_rows = [row for row in rows if row.get("video", video_id) == video_id]

@@ -3,7 +3,7 @@
 import json
 from app.intelligence.recommendation_rules import FRAMEWORK_VERSION, prompt_rules
 
-PROMPT_VERSION = "channel_self_analysis_v4"
+PROMPT_VERSION = "channel_self_analysis_v5"
 MAX_ANALYSIS_PROMPT_CHARS = 280_000
 
 
@@ -50,7 +50,8 @@ def render_analysis_prompt(payload: dict) -> str:
         "形式未確定の動画を根拠に含むfindingのformatはallにする。"
         "分析は観測事実、原因候補、性質の違う代替説明2つ以上、反対証拠、次の検証、確度に分ける。"
         "evidence_idsは入力中のIDをそのまま引用。数字は対応する公式値、明示されたperiod_totalの返却日合計、"
-        "production_aggregatesの独自中央値・相対値、choice_evaluationsの観測中央値・到達件数・到達率・対象数だけを"
+        "production_aggregatesの独自中央値・相対値、choice_evaluationsの観測中央値・到達件数・到達率・対象数、"
+        "weekly_trendsの観測中央値・件数・分布だけを"
         "出所と期間を区別して引用する。"
         "独自スコア・倍率・増減率を作らない。"
         "根拠はchannel_reportsと各videosのreportsに一度だけ収録。各reportのvaluesは指標名と値の対応。"
@@ -94,7 +95,14 @@ def render_analysis_prompt(payload: dict) -> str:
         "制作情報の数値は制作記録の値であり、YouTube公式統計と区別する。"
         "尺・フック・タイトル・openingScoreと成績の相関から因果や効果を断定しない。"
         "形式別の全体集計は未取得。format_videosは公式形式で分けた個々の原値で、合計や平均ではない。"
-        "入力に無い流入元・維持率も欠損として扱う。提案の採用や改善試験は実行しない。"
+        "retention7/retention30は公開翌日からの固定期間。watch_at_*は時点の区間視聴比、relative_at_3sは同程度の尺との相対維持。"
+        "sample_ratiosは引用した値の区間終端。短すぎて時点が範囲外、期間未到達、未返却は未判定とし、0で埋めない。"
+        "weekly_trendsは直近90日の投稿週×形式の独自集計で、個別入力から省いた動画を含む。グループidをそのまま根拠に引用する。"
+        "指標ごとの観測件数を明記し、少数標本・返却率や尺の構成の違いでは断定しない。7日と30日は混ぜない。"
+        "再生減少は冒頭離脱の変化と表示・流入機会の変化に分け、冒頭が戻っても再生が戻らない場合は別要因を検討する。"
+        "維持率は再生した人の反応であり、表示量・流入元は未取得なので、減少のうち表示・流入で説明する部分は仮説に留める。"
+        "制作記録のcreatedAtだけを作成日時と呼び、公開日時や元配信の日時を代用しない。source_timingの根拠はそのidを引用する。"
+        "提案の採用や改善試験は実行しない。"
     )
     prompt = instructions + "\n<untrusted_channel_data>\n" + body + "\n</untrusted_channel_data>"
     return prompt

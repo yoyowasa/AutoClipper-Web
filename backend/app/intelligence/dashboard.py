@@ -82,6 +82,8 @@ def evidence_video_ids(snapshot):
                 result[report["id"] + ":" + metric] = [video["id"]]
         if video.get("production"):
             result[video["production"]["id"]] = [video["id"]]
+        if video.get("source_timing"):
+            result[video["source_timing"]["id"]] = [video["id"]]
     # Older snapshots used the expanded evidence map.
     for key, item in snapshot.get("evidence", {}).items():
         if item.get("video_id"):
