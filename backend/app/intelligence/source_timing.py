@@ -12,7 +12,6 @@ from app.intelligence.models import ProductionLink
 from app.intelligence.production_catalog import read_families
 
 SOURCE_TIMING = "source_timing"
-SOURCE_LABEL = re.compile(r"元配信|元動画|切り抜き元|source\s+(?:stream|video)|original\s+(?:stream|video)", re.I)
 URL = re.compile(r"https?://[^\s<>「」【】]+")
 
 
@@ -35,16 +34,16 @@ def youtube_video_id(url):
         return None
 
 
-def description_source(description):
-    lines = [line.strip() for line in description.splitlines() if line.strip()]
-    candidates = set()
-    for index, line in enumerate(lines):
-        if SOURCE_LABEL.search(line):
-            urls = URL.findall(line)
-            if not urls and index + 1 < len(lines) and URL.match(lines[index + 1]):
-                urls = URL.findall(lines[index + 1])
-            candidates.update(id for url in urls if (id := youtube_video_id(url)))
-    return next(iter(candidates)) if len(candidates) == 1 else None
+def description_candidates(description, own_ids):
+    return {id for url in URL.findall(description) if (id := youtube_video_id(url)) and id not in own_ids}
+
+
+def external_source(candidates, items, own_channel_ids):
+    channels = [items.get(id, {}).get("snippet", {}).get("channelId") for id in candidates]
+    if not all(channels):
+        return None
+    foreign = [id for id in candidates if items[id]["snippet"]["channelId"] not in own_channel_ids]
+    return foreign[0] if len(foreign) == 1 else None
 
 
 def linked_records(db, paths, video_ids, *, families=None):
@@ -83,37 +82,44 @@ def _timing(video, item, origin, id, stamp):
     days = (video.published_at.replace(tzinfo=UTC).astimezone(PACIFIC).date()
             - source_date.astimezone(PACIFIC).date()).days
     return {"source_video_id": id, "link_origin": origin, "observed_at": stamp.isoformat(),
+            "source_channel_id": item.get("snippet", {}).get("channelId"),
             "source_published_at": published.isoformat() if published else None,
             "source_started_at": started.isoformat() if started else None,
             "days_since_source": days}
 
 
-def refresh_source_timings(db, paths, client, videos, descriptions, stamp):
+def refresh_source_timings(db, paths, client, videos, descriptions, stamp, own_channel_ids, own_ids):
     records = dict(linked_records(db, paths, [video.id for video in videos]))
-    lookup = {}
+    lookup, requested_ids = [], set()
     for video in videos:
         record = records.get(video.id)
-        id = youtube_video_id(record.source.url) if record and record.source.url else None
-        origin = "production_record" if id else "description"
-        id = id or description_source(descriptions.get(video.id, ""))
+        explicit = youtube_video_id(record.source.url) if record and record.source.url else None
+        origin = "production_record" if explicit else "description"
+        candidates = {explicit} if explicit else description_candidates(descriptions.get(video.id, ""), own_ids)
         timing = fresh_source_timing(video, stamp)
-        if timing and timing["source_video_id"] == id and timing["link_origin"] == origin:
+        if (timing and candidates == {timing["source_video_id"]} and timing["link_origin"] == origin
+                and (explicit or (timing.get("source_channel_id") and timing["source_channel_id"] not in own_channel_ids))):
             continue
         video.public_statistics = {k: v for k, v in video.public_statistics.items() if k != SOURCE_TIMING}
-        if id and id != video.id:
-            lookup.setdefault(id, []).append((video, origin))
+        candidates.discard(video.id)
+        if candidates:
+            lookup.append((video, origin, candidates))
+            requested_ids.update(candidates)
     if not lookup:
         return
+    items_by_id = {}
     try:
-        for requested, items in client.videos(list(lookup)):
+        for requested, items in client.videos(sorted(requested_ids)):
             for item in items:
                 id = item.get("id")
                 if id not in requested:
                     raise YouTubeError("INVALID_RESPONSE")
-                for video, origin in lookup[id]:
-                    timing = _timing(video, item, origin, id, stamp)
-                    if timing:
-                        video.public_statistics = {**video.public_statistics, SOURCE_TIMING: timing}
+                items_by_id[id] = item
     except YouTubeError as error:
         if error.code not in {"SYNC_LIMIT", "API_5XX", "NETWORK_ERROR", "FORBIDDEN", "API_NOT_FOUND"}:
             raise
+    for video, origin, candidates in lookup:
+        id = (next(iter(candidates)) if origin == "production_record"
+              else external_source(sorted(candidates), items_by_id, own_channel_ids))
+        if id in items_by_id and (timing := _timing(video, items_by_id[id], origin, id, stamp)):
+            video.public_statistics = {**video.public_statistics, SOURCE_TIMING: timing}

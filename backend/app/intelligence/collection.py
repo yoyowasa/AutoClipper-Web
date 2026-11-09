@@ -11,6 +11,10 @@ RETENTION_DEFINITION = "youtube-retention-v1"
 # Reports can silently truncate endDate. Allow the documented 48–72 hour
 # processing delay after the last Pacific day has fully ended.
 RETENTION_LAG_DAYS = 3
+RETENTION_LIMIT = 20
+RETENTION_MAX_ATTEMPTS = 3
+RETENTION_RETRY_DAYS = 14
+RETENTION_FINAL = "RETENTION_NOT_RETURNED_FINAL"
 
 
 @dataclass
@@ -34,6 +38,8 @@ class CollectedReport:
     rows: list[dict]
     video_id: str | None = None
     error: YouTubeError | None = None
+    attempts: int | None = None
+    missing_reason: str | None = None
 
 
 def split_video_day_requests(video_ids: list[str], start: date, end: date) -> list[ReportRequest]:
@@ -66,11 +72,13 @@ def optional_requests(videos, start: date, end: date, last: date) -> list[Report
 
 
 def collect_reports(client: YouTubeClient, external_id: str, videos, stamp: datetime, *,
-                    pending: list[dict] | None = None, retention_completed=(), before_optional=None):
+                    pending: list[dict] | None = None, retention_states=None, retention_final=(),
+                    previous_last=None, before_optional=None):
     """The basic collect_self periods; no diagnosis/derived metrics/deep reports."""
     end = stamp.replace(tzinfo=UTC).astimezone(PACIFIC).date() - timedelta(days=1)
     start = end - timedelta(days=59)
     reports = []
+    pending = [item for item in (pending or []) if item["kind"] not in RETENTION_WINDOWS]
 
     def fetch(kind, begin, finish, dimensions=""):
         rows = client.report(external_id, begin, finish, dimensions)
@@ -93,37 +101,76 @@ def collect_reports(client: YouTubeClient, external_id: str, videos, stamp: date
         requests = [ReportRequest(item["kind"], date.fromisoformat(item["start"]), date.fromisoformat(item["end"]),
                                   item["dimensions"], [id for id in item["videoIds"] if id in available]) for item in pending]
         requests = [request for request in requests if request.video_ids]
+        if previous_last and last > previous_last:
+            # Keep the newly available video day fresh while older normal
+            # requests drain. Same-day reruns can reuse the saved daily slice.
+            requests = split_video_day_requests([video.id for video in videos], last, last) + requests
     else:
         requests = optional_requests(videos, start, end, last)
-        for video in videos:
-            for kind, days in RETENTION_WINDOWS.items():
-                begin, finish = initial_window(video.published_at, days)
-                if finish <= min(last, end - timedelta(days=RETENTION_LAG_DAYS)):
-                    requests.append(ReportRequest(kind, begin, finish, RETENTION_DIMENSION, [video.id]))
-    requests = [request for request in requests if request.kind not in RETENTION_WINDOWS or
-                (request.kind, request.video_ids[0], request.start, request.end) not in retention_completed]
+    checkpoint = []
     first7_count = 0
     for index, request in enumerate(requests):
         if request.kind in {"first7", "first30"} and first7_count >= INITIAL_LIMIT:
-            return start, end, last, reports, [item.checkpoint() for item in requests[index:]]
+            checkpoint = [item.checkpoint() for item in requests[index:]]
+            break
         error = None
         try:
             rows = client.report(external_id, request.start, request.end, request.dimensions, request.video_ids)
         except YouTubeError as failure:
             if failure.code == "SYNC_LIMIT":
                 return start, end, last, reports, [item.checkpoint() for item in requests[index:]]
-            if failure.code != "API_5XX" and not (request.kind in RETENTION_WINDOWS and failure.code in
-                    {"API_BAD_REQUEST", "API_NOT_FOUND", "FORBIDDEN", "INVALID_RESPONSE", "NETWORK_ERROR"}):
+            if failure.code != "API_5XX":
                 raise
             rows, error = [], failure
-        if request.kind in RETENTION_WINDOWS:
-            # One stored row per fixed window. Preserve every returned bucket,
-            # but never treat an entirely null report as a finished observation.
-            curves = {metric: {row[RETENTION_DIMENSION]: row[metric] for row in rows if row[metric] is not None}
-                      for metric in RETENTION_METRICS}
-            rows = [{metric: curve or None for metric, curve in curves.items()}] if any(curves.values()) else []
         first7_count += request.kind in {"first7", "first30"}
         for video_id in request.video_ids:
             video_rows = [row for row in rows if row.get("video", video_id) == video_id]
             reports.append(CollectedReport(request.kind, request.start, request.end, video_rows, video_id, error))
-    return start, end, last, reports, []
+    reports.extend(collect_retention(client, external_id, videos, end, last, retention_states or {}, retention_final))
+    return start, end, last, reports, checkpoint
+
+
+def collect_retention(client, external_id, videos, end, last, states, final_windows):
+    today = end + timedelta(days=1)
+    latest = min(last, end - timedelta(days=RETENTION_LAG_DAYS))
+    reports, attempted = [], 0
+    for video in videos:
+        for kind, days in RETENTION_WINDOWS.items():
+            begin, finish = initial_window(video.published_at, days)
+            if finish > latest or (kind, video.id, str(begin), str(finish)) in final_windows:
+                continue
+            state = states.get((kind, video.id, begin, finish))
+            if state and (any(state.values.values()) or RETENTION_FINAL in state.missing_reasons.values()):
+                continue
+            attempts = state.dimensions.get("attempts", 1) if state else 0
+            deadline = finish + timedelta(days=RETENTION_RETRY_DAYS)
+            # Historical backfill gets one first attempt. Only retries have a
+            # calendar deadline, so old clips can still contribute evidence.
+            if attempts and (attempts >= RETENTION_MAX_ATTEMPTS or today > deadline):
+                reports.append(CollectedReport(kind, begin, finish, [], video.id, attempts=attempts,
+                                               missing_reason=RETENTION_FINAL))
+                continue
+            if attempted >= RETENTION_LIMIT:
+                continue
+            before = client.requests
+            error = None
+            try:
+                rows = client.report(external_id, begin, finish, RETENTION_DIMENSION, [video.id])
+            except YouTubeError as failure:
+                if failure.code == "SYNC_LIMIT" and client.requests == before:
+                    return reports
+                if failure.code in {"QUOTA_EXCEEDED", "RECONNECT_REQUIRED"}:
+                    reports.append(CollectedReport(kind, begin, finish, [], video.id, failure, attempts))
+                    return reports
+                rows, error = [], failure
+            attempted += 1
+            attempts += 1
+            curves = {metric: {row[RETENTION_DIMENSION]: row[metric] for row in rows if row[metric] is not None}
+                      for metric in RETENTION_METRICS}
+            values = [{metric: curve or None for metric, curve in curves.items()}] if any(curves.values()) else []
+            final = not values and (attempts >= RETENTION_MAX_ATTEMPTS or today >= deadline)
+            reports.append(CollectedReport(kind, begin, finish, values, video.id, error, attempts,
+                                           RETENTION_FINAL if final else None))
+            if error and error.code == "SYNC_LIMIT":
+                return reports
+    return reports

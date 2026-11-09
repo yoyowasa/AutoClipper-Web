@@ -48,12 +48,13 @@ class YouTubeClient:
         self._deadline = clock() + budget_seconds
         self.requests = 0
 
-    def get(self, endpoint: str, params: dict[str, Any], *, analytics: bool = False) -> dict[str, Any]:
+    def get(self, endpoint: str, params: dict[str, Any], *, analytics: bool = False, retry: bool = True) -> dict[str, Any]:
         if endpoint not in ({"reports"} if analytics else {"channels", "playlistItems", "videos"}):
             raise YouTubeError("API_REJECTED")
         base = "https://youtubeanalytics.googleapis.com/v2/" if analytics else "https://www.googleapis.com/youtube/v3/"
         try:
-            for attempt in range(len(RETRY_DELAYS) + 1):
+            delays = RETRY_DELAYS if retry else ()
+            for attempt in range(len(delays) + 1):
                 remaining = self._deadline - self._clock()
                 if remaining <= 0 or self.requests >= MAX_REQUESTS:
                     raise YouTubeError("SYNC_LIMIT")
@@ -67,9 +68,9 @@ class YouTubeClient:
                     if not isinstance(result, dict):
                         raise YouTubeError("INVALID_RESPONSE")
                     return result
-                if response.status_code not in RETRYABLE_STATUS or attempt == len(RETRY_DELAYS):
+                if response.status_code not in RETRYABLE_STATUS or attempt == len(delays):
                     raise response_error(response)
-                delay = RETRY_DELAYS[attempt]
+                delay = delays[attempt]
                 if self.requests >= MAX_REQUESTS or self._deadline - self._clock() <= delay:
                     raise YouTubeError("SYNC_LIMIT")
                 self._sleep(delay)
@@ -129,7 +130,7 @@ class YouTubeClient:
         expected = set(metrics) | (set(wire_dimensions.split(",")) if wire_dimensions else set())
         rows, seen, index = [], set(), 1
         while True:
-            result = self.get("reports", {**params, "startIndex": index}, analytics=True)
+            result = self.get("reports", {**params, "startIndex": index}, analytics=True, retry=not retention)
             columns = [column.get("name") for column in result.get("columnHeaders", [])]
             raw = result.get("rows", [])
             if not isinstance(raw, list) or len(rows) + len(raw) > 2000:

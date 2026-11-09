@@ -53,11 +53,14 @@ def ingest_video(db: Session, channel_id: int, item: dict[str, Any], observed: d
 
 
 def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, rows, observed, video_id=None,
-                *, error: YouTubeError | None = None) -> None:
+                *, error: YouTubeError | None = None, attempts: int | None = None, missing_reason: str | None = None) -> None:
     metrics = RETENTION_METRICS if kind in RETENTION_WINDOWS else METRICS
     if error:
+        details = error.details()
+        if missing_reason:
+            details.update(reason=missing_reason, lastError=error.code)
         run.missing_reports = [*run.missing_reports, {"kind": kind, "videoId": video_id, "start": str(start), "end": str(end),
-                                                    **error.details()}]
+                                                    **details}]
     elif rows and video_id and kind not in RETENTION_WINDOWS:
         # A successful retry supersedes the null placeholder for that range.
         placeholder = db.scalar(select(VideoDailyStat).where(
@@ -85,7 +88,7 @@ def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, r
         saved = db.scalar(select(VideoDailyStat).where(
             VideoDailyStat.channel_id == run.channel_id, VideoDailyStat.kind == kind,
             VideoDailyStat.dimension_key == key, VideoDailyStat.period_start == period_start, VideoDailyStat.period_end == period_end))
-        if saved is not None and error:
+        if saved is not None and error and (attempts is None or any(saved.values.values())):
             # A transient failure must not erase previously returned statistics.
             continue
         if saved is None:
@@ -95,10 +98,13 @@ def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, r
         saved.video_id, saved.sync_run_id = selected_id, run.id
         if kind in RETENTION_WINDOWS:
             saved.definition_version = RETENTION_DEFINITION
-        saved.dimensions = dimensions
+        saved.dimensions = {**dimensions, **({"attempts": attempts} if attempts is not None else {})}
         saved.values = {metric: row.get(metric) for metric in metrics}
-        missing = error.code if error else "NO_ROWS"
+        missing = missing_reason or (error.code if error else "NO_ROWS")
         saved.missing_reasons = {metric: "UNAVAILABLE" if rows else missing for metric in metrics if row.get(metric) is None}
         saved.observed_at, saved.expires_at = observed, statistical_expiry(observed, config)
         if not rows and not error:
-            run.missing_reports = [*run.missing_reports, {"kind": kind, "videoId": video_id, "reason": "NO_ROWS"}]
+            record = {"kind": kind, "videoId": video_id, "reason": missing}
+            if attempts is not None:
+                record.update(start=str(start), end=str(end))
+            run.missing_reports = [*run.missing_reports, record]

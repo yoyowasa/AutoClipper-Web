@@ -2,22 +2,40 @@ from datetime import UTC, timedelta
 
 import httpx
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 import app.intelligence.analysis_input as inputs
+import app.intelligence.sync as sync
 from app.intelligence.analysis_budget import fit_analysis_budget
 from app.intelligence.analysis_prompt import render_analysis_prompt
 from app.intelligence.models import VideoDailyStat, YouTubeVideo
 from app.intelligence.production_links import reconcile_safely
+from app.intelligence.source_timing import description_candidates, external_source
 from app.storage.json_io import write_json_atomic
 from test_api_routes import client as client
 from test_channel_analysis import URL, FixedGenerator, execute, prepared as prepared, valid_review
-from test_intelligence import CLOCK, VIDEO_ID, enqueue, environment as environment, transport
+from test_intelligence import CHANNEL_ID, CLOCK, VIDEO_ID, enqueue, environment as environment, transport
 from test_intelligence_report_chunking import run_sync
 from test_production_links import record
 
 SOURCE_ID = "source00001"
 OTHER_ID = "source00002"
+
+
+def test_description_links_require_one_verified_external_video():
+    description = f"配信タイトル\nhttps://youtu.be/{SOURCE_ID}\n関連動画 https://youtu.be/{VIDEO_ID}"
+    candidates = description_candidates(description, {VIDEO_ID})
+    own_channels = {CHANNEL_ID, "second-own-channel"}
+    foreign = {"snippet": {"channelId": "other-channel"}}
+    own = {"snippet": {"channelId": CHANNEL_ID}}
+    assert candidates == {SOURCE_ID}
+    assert external_source(candidates, {SOURCE_ID: foreign}, own_channels) == SOURCE_ID
+    assert external_source(candidates, {SOURCE_ID: own}, own_channels) is None
+    assert external_source(candidates, {}, own_channels) is None
+    assert external_source(candidates, {SOURCE_ID: {"snippet": {"channelId": "second-own-channel"}}}, own_channels) is None
+    assert external_source({SOURCE_ID, OTHER_ID}, {SOURCE_ID: foreign, OTHER_ID: foreign}, own_channels) is None
+    assert external_source({SOURCE_ID, OTHER_ID}, {SOURCE_ID: foreign}, own_channels) is None
+    assert external_source({SOURCE_ID, OTHER_ID}, {SOURCE_ID: foreign, OTHER_ID: own}, own_channels) == SOURCE_ID
 
 
 def test_fixed_windows_saved_once_and_used_as_evidence(client, environment):
@@ -69,11 +87,61 @@ def test_retention_no_rows_and_unreached_are_not_zero(client, environment, retur
     if publication:
         assert not calls and all(r["missing"]["report"] == "WINDOW_NOT_REACHED" for r in reports)
     else:
-        assert len(calls) == 2 and all(r["missing"]["report"] == "NO_ROWS" for r in reports)
-        assert {r["kind"] for r in run.missing_reports if r["reason"] == "NO_ROWS"} >= {"retention7", "retention30"}
+        assert len(calls) == 2 and all(r["missing"]["report"] == "RETENTION_NOT_RETURNED_FINAL" for r in reports)
+        assert {r["kind"] for r in run.missing_reports if r["reason"] == "RETENTION_NOT_RETURNED_FINAL"} >= {"retention7", "retention30"}
         calls.clear()
+        environment.db.execute(delete(VideoDailyStat).where(VideoDailyStat.kind.in_(["retention7", "retention30"])))
+        environment.db.commit()
         run_sync(environment, client.post("/api/intelligence/channels/1/sync").json()["id"], mocked)
-        assert len(calls) == 2
+        assert not calls
+
+
+@pytest.mark.parametrize("status", [200, 503])
+def test_recent_retention_retries_stop_after_three_attempts(client, environment, status):
+    calls = []
+
+    def mocked(request):
+        if request.url.params.get("dimensions") == "elapsedVideoTimeRatio":
+            calls.append(request)
+            return httpx.Response(status, json={"rows": []})
+        response = transport(request)
+        if request.url.path.endswith("/videos"):
+            data = response.json()
+            data["items"][0]["snippet"]["publishedAt"] = "2026-09-30T00:00:00Z"
+            return httpx.Response(200, json=data)
+        return response
+
+    run_id = enqueue(client, environment)
+    for _ in range(4):
+        run_sync(environment, run_id, mocked)
+        run_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
+    assert len(calls) == 3
+    row = environment.db.scalar(select(VideoDailyStat).where(VideoDailyStat.kind == "retention7"))
+    assert row.dimensions["attempts"] == 3
+    assert set(row.missing_reasons.values()) == {"RETENTION_NOT_RETURNED_FINAL"}
+    assert set(row.values.values()) == {None}
+
+
+def test_retention_deadline_stops_retry_without_api_call(client, environment, monkeypatch):
+    calls = []
+
+    def mocked(request):
+        if request.url.params.get("dimensions") == "elapsedVideoTimeRatio":
+            calls.append(request)
+            return httpx.Response(200, json={"rows": []})
+        response = transport(request)
+        if request.url.path.endswith("/videos"):
+            data = response.json()
+            data["items"][0]["snippet"]["publishedAt"] = "2026-09-30T00:00:00Z"
+            return httpx.Response(200, json=data)
+        return response
+
+    run_sync(environment, enqueue(client, environment), mocked)
+    monkeypatch.setattr(sync, "now", lambda: CLOCK + timedelta(days=10))
+    run_sync(environment, client.post("/api/intelligence/channels/1/sync").json()["id"], mocked)
+    row = environment.db.scalar(select(VideoDailyStat).where(VideoDailyStat.kind == "retention7"))
+    assert len(calls) == row.dimensions["attempts"] == 1
+    assert set(row.missing_reasons.values()) == {"RETENTION_NOT_RETURNED_FINAL"}
 
 
 @pytest.mark.parametrize("origin", ["production_record", "description", None])
@@ -92,10 +160,11 @@ def test_explicit_source_and_weekly_evidence_in_saved_snapshot(client, prepared,
         if id == VIDEO_ID:
             payload = transport(request).json()
             payload["items"][0]["snippet"]["description"] = (
-                f"元配信\nhttps://youtu.be/{OTHER_ID}" if origin else f"関連動画 https://youtu.be/{OTHER_ID}")
+                f"配信タイトル\nhttps://youtu.be/{OTHER_ID}" if origin else f"関連動画 https://youtu.be/{VIDEO_ID}")
             return httpx.Response(200, json=payload)
         lookups.append(id)
-        return httpx.Response(200, json={"items": [{"id": id, "snippet": {"publishedAt": "2026-08-29T02:00:00Z"},
+        return httpx.Response(200, json={"items": [{"id": id, "snippet": {
+            "channelId": "external-channel", "publishedAt": "2026-08-29T02:00:00Z"},
             "liveStreamingDetails": {"actualStartTime": "2026-08-30T02:00:00Z"}}]})
 
     run_sync(prepared, client.post("/api/intelligence/channels/1/sync").json()["id"], mocked)

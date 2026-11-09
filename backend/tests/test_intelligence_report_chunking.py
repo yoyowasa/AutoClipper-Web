@@ -12,7 +12,7 @@ from app.intelligence.common import YouTubeError
 from app.intelligence.models import SyncRun, VideoDailyStat, YouTubeVideo
 from app.intelligence.youtube_client import MAX_REQUESTS, METRICS, YouTubeClient
 from test_api_routes import client as client
-from test_intelligence import CHANNEL_ID, enqueue, transport
+from test_intelligence import CHANNEL_ID, CLOCK, enqueue, transport
 from test_intelligence import environment as environment
 
 START, END = date(2026, 8, 16), date(2026, 10, 14)
@@ -159,36 +159,48 @@ def run_sync(environment, run_id, mocked):
     return environment.db.get(SyncRun, run_id)
 
 
-def test_85_video_sync_stays_within_budget_and_resumes_initial_reports(client, environment):
+def test_85_video_sync_stays_within_budget_and_resumes_initial_reports(client, environment, monkeypatch):
     run_id = enqueue(client, environment)
     calls = []
     saved = run_sync(environment, run_id, channel_transport(85, calls))
-    assert saved.status == "partial" and saved.truncated and saved.request_count == 89 <= MAX_REQUESTS
+    assert saved.status == "partial" and saved.truncated and saved.request_count == MAX_REQUESTS
     pending = next(item["requests"] for item in saved.missing_reports if item["kind"] == "pending_reports")
-    assert len(pending) == 290 and {item["kind"] for item in pending} == {"first7", "first30", "retention7", "retention30"}
+    assert len(pending) == 120 and {item["kind"] for item in pending} == {"first7", "first30"}
     daily = environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "video_day")).all()
     assert len(daily) == 85 * 60
-    for _ in range(5):
+    for offset in range(1, 4):
+        monkeypatch.setattr(sync, "now", lambda: CLOCK + timedelta(days=offset))
         next_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
         calls.clear()
         resumed = run_sync(environment, next_id, channel_transport(85, calls))
         assert resumed.request_count <= MAX_REQUESTS
-        assert all(not (request.url.params.get("filters") and "day" in request.url.params.get("dimensions", "")) for request in calls)
+        fresh_days = [r.url.params for r in calls if r.url.params.get("dimensions") == "day,video"]
+        fresh_day = str(END + timedelta(days=offset))
+        assert len(fresh_days) == 1 and fresh_days[0]["startDate"] == fresh_days[0]["endDate"] == fresh_day
+        initial = [r.url.params for r in calls if r.url.params.get("dimensions") == "creatorContentType"]
+        assert {(date.fromisoformat(r["endDate"]) - date.fromisoformat(r["startDate"])).days + 1 for r in initial} == {7, 30}
     assert resumed.status == "success" and not resumed.truncated
     first7 = environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "first7")).all()
     assert len(first7) == 85
     assert len(environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "first30")).all()) == 85
 
 
-def test_20_videos_resume_retention_after_reaching_request_limit(client, environment):
-    saved = run_sync(environment, enqueue(client, environment), channel_transport(20, []))
-    assert saved.status == "partial" and saved.request_count == MAX_REQUESTS and saved.truncated
-    pending = next(item["requests"] for item in saved.missing_reports if item["kind"] == "pending_reports")
-    assert len(pending) == 5 and all(item["kind"] in {"retention7", "retention30"} for item in pending)
-    run_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
-    assert run_sync(environment, run_id, channel_transport(20, [])).status == "success"
+def test_20_videos_keep_normal_sync_during_retention_backfill(client, environment):
+    run_id = enqueue(client, environment)
+    for _ in range(2):
+        calls = []
+        saved = run_sync(environment, run_id, channel_transport(20, calls))
+        assert saved.status == "success" and saved.request_count == 75 and not saved.truncated
+        assert not any(item["kind"] == "pending_reports" for item in saved.missing_reports)
+        dimensions = [r.url.params.get("dimensions") for r in calls if r.url.path.endswith("/reports")]
+        assert "day,video" in dimensions
+        assert dimensions.count("creatorContentType") == 40
+        assert dimensions[-20:] == ["elapsedVideoTimeRatio"] * 20
+        run_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
     daily = environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "video_day")).all()
     assert len(daily) == 1200
+    curves = environment.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind.in_(["retention7", "retention30"]))).all()
+    assert len(curves) == 40
 
 
 def test_request_limit_defers_exact_unfinished_requests_until_next_sync(client, environment, monkeypatch):
@@ -198,7 +210,6 @@ def test_request_limit_defers_exact_unfinished_requests_until_next_sync(client, 
     pending = next(item["requests"] for item in saved.missing_reports if item["kind"] == "pending_reports")
     assert [item["kind"] for item in pending] == [
         "video_format", "first30", "first7", "first30", "first7", "first30", "first7",
-        "retention7", "retention30", "retention7", "retention30", "retention7", "retention30",
     ]
     assert environment.db.scalar(select(VideoDailyStat).where(VideoDailyStat.kind == "video_day")) is not None
     calls = []
@@ -206,8 +217,8 @@ def test_request_limit_defers_exact_unfinished_requests_until_next_sync(client, 
     resumed = run_sync(environment, next_id, channel_transport(3, calls))
     assert resumed.status == "partial" and resumed.request_count == 8
     remaining = next(item["requests"] for item in resumed.missing_reports if item["kind"] == "pending_reports")
-    assert len(remaining) == 11 and remaining[0]["kind"] == "first7"
-    for _ in range(6):
+    assert len(remaining) == 5 and remaining[0]["kind"] == "first7"
+    for _ in range(3):
         final_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
         final = run_sync(environment, final_id, channel_transport(3, []))
         assert final.request_count <= 8
@@ -233,7 +244,6 @@ def test_time_limit_saves_completed_reports_and_checkpoint(client, environment):
     pending = next(item["requests"] for item in saved.missing_reports if item["kind"] == "pending_reports")
     assert [item["kind"] for item in pending] == [
         "first30", "first7", "first30", "first7",
-        "retention7", "retention30", "retention7", "retention30", "retention7", "retention30",
     ]
     next_id = client.post("/api/intelligence/channels/1/sync").json()["id"]
     assert run_sync(environment, next_id, channel_transport(3, [])).status == "success"
