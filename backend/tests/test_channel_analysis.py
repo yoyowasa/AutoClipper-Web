@@ -47,8 +47,8 @@ def prepared(client, environment, monkeypatch):
     return environment
 
 
-def valid_review(context):
-    ref = next(id for id, item in context.evidence.items() if item["video_id"] == VIDEO_ID and item["source"] == "youtube_analytics")
+def valid_review(context, video_id=VIDEO_ID):
+    ref = next(id for id, item in context.evidence.items() if item["video_id"] == video_id and item["source"] == "youtube_analytics")
     return {
         "id": context.payload["review_id"],
         "channel_id": context.payload["channel"]["id"],
@@ -79,7 +79,7 @@ def valid_review(context):
                 "format": "shorts",
                 "priority": 1,
                 "title": "題材を先に示す仮説",
-                "baseline_video_id": VIDEO_ID,
+                "baseline_video_id": video_id,
                 "evidence_ids": [ref],
                 "reason": "初期7日をそろえて比較するためです。",
                 "goal_path": "反応を確認する仮説です。",

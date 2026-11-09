@@ -11,6 +11,10 @@ import { getEvidenceVideos, type DashboardVideo, type ImprovementTrial } from ".
 const formatLabel = { all: "全体", shorts: "ショート", videoondemand: "通常" };
 const surfaceLabel = { shorts_feed: "Shortsフィード", home: "ホーム", up_next: "次の動画", search: "検索", multi_surface: "複数の表示面" };
 
+function evidenceLabel(id: string) {
+  return id.startsWith("w:") ? `週別独自集計（${id}）` : id;
+}
+
 const validationReasons: Record<string, string> = {
   EVIDENCE_UNKNOWN: "存在しない根拠ID", BASELINE_FORMAT_MISMATCH: "基準動画の形式が不一致",
   BASELINE_FORMAT_UNKNOWN: "基準動画の形式が不明", BASELINE_NOT_FOUND: "基準動画がない",
@@ -57,7 +61,7 @@ export function AnalysisReviewText({ review, renderEvidence, onAdopt, adopted = 
         <dt className="font-semibold">別の説明</dt><dd>{finding.alternatives.join(" ／ ")}</dd>
         <dt className="font-semibold">反対証拠</dt><dd>{finding.counter_evidence}</dd>
         <dt className="font-semibold">次の確認</dt><dd>{finding.next_check}</dd>
-      </dl><p className="mt-2 text-xs">確度: {finding.confidence === "low" ? "低" : "中"} ／ 根拠: {finding.evidence_ids.join(", ")}</p>
+      </dl><p className="mt-2 text-xs">確度: {finding.confidence === "low" ? "低" : "中"} ／ 根拠: {finding.evidence_ids.map(evidenceLabel).join(", ")}</p>
       {renderEvidence?.(finding.evidence_ids)}
     </details>)}
     <h5 className="font-semibold">次の動画案（{onAdopt ? "効果未確認" : "未採用・効果未確認"}）</h5>
@@ -76,7 +80,7 @@ export function AnalysisReviewText({ review, renderEvidence, onAdopt, adopted = 
       {proposal.recommendation_link ? <p className="mt-2">推薦面: {surfaceLabel[proposal.recommendation_link.surface]} ／
         {proposal.recommendation_link.viewer_need}<br />{proposal.recommendation_link.signal_hypothesis}<br />
         未取得の根拠: {proposal.recommendation_link.evidence_gap}</p> : null}
-      <p className="mt-2 text-xs">根拠: {proposal.evidence_ids.join(", ")}</p>
+      <p className="mt-2 text-xs">根拠: {proposal.evidence_ids.map(evidenceLabel).join(", ")}</p>
       {renderEvidence?.(proposal.evidence_ids, proposal.baseline_video_id)}
       {onAdopt ? <button type="button" disabled={busy || adopted.includes(proposal.id)}
         className="mt-3 rounded bg-sky-800 px-4 py-2 text-white disabled:opacity-40" onClick={() => onAdopt(proposal.id)}>

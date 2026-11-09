@@ -119,7 +119,9 @@ def test_three_times_82_videos_fit_complete_prompt_and_keep_valid_evidence(prepa
     assert len(analysis_prompt(ctx.payload)) <= ANALYSIS_PROMPT_BUDGET_CHARS < MAX_ANALYSIS_PROMPT_CHARS
     assert "evidence_groups" not in ctx.payload and "evidence" not in ctx.payload
     assert len([r for r in ctx.payload["channel_reports"] if r["kind"] == "daily"]) == 60
-    assert validate_review(valid_review(ctx), ctx).findings
+    baseline = next(item["video_id"] for item in ctx.evidence.values()
+                    if item["video_id"] in ctx.videos and item["source"] == "youtube_analytics")
+    assert validate_review(valid_review(ctx, baseline), ctx).findings
 
 
 def test_short_requested_daily_window_still_keeps_previous_native_28_days(prepared):

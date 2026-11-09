@@ -9,7 +9,9 @@ from app.config import Settings
 from app.intelligence.common import YouTubeError
 from app.intelligence.models import SyncRun, VideoDailyStat, YouTubeVideo
 from app.intelligence.policy import statistical_expiry
-from app.intelligence.youtube_client import METRICS
+from app.intelligence.source_timing import SOURCE_TIMING, fresh_source_timing
+from app.intelligence.collection import RETENTION_DEFINITION, RETENTION_WINDOWS
+from app.intelligence.youtube_client import METRICS, RETENTION_METRICS
 from app.intelligence.video_formats import content_format
 
 
@@ -22,6 +24,7 @@ def ingest_video(db: Session, channel_id: int, item: dict[str, Any], observed: d
     if video is None:
         video = YouTubeVideo(id=item["id"], channel_id=channel_id)
         db.add(video)
+    previous_publication = video.published_at
     video.title = item["snippet"]["title"]
     video.published_at = datetime.fromisoformat(item["snippet"]["publishedAt"].replace("Z", "+00:00")).astimezone(UTC).replace(tzinfo=None)
     match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?", item["contentDetails"]["duration"])
@@ -42,17 +45,23 @@ def ingest_video(db: Session, channel_id: int, item: dict[str, Any], observed: d
             raise YouTubeError("INVALID_RESPONSE")
         if raw is None:
             missing[name] = "UNAVAILABLE"
-    video.public_statistics = {"source": "youtube_public", "values": values, "missingReasons": missing}
+    source_timing = fresh_source_timing(video, observed) if previous_publication == video.published_at else None
+    video.public_statistics = {"source": "youtube_public", "values": values, "missingReasons": missing,
+                               **({SOURCE_TIMING: source_timing} if source_timing else {})}
     video.public_observed_at = observed
     return video
 
 
 def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, rows, observed, video_id=None,
-                *, error: YouTubeError | None = None) -> None:
+                *, error: YouTubeError | None = None, attempts: int | None = None, missing_reason: str | None = None) -> None:
+    metrics = RETENTION_METRICS if kind in RETENTION_WINDOWS else METRICS
     if error:
+        details = error.details()
+        if missing_reason:
+            details.update(reason=missing_reason, lastError=error.code)
         run.missing_reports = [*run.missing_reports, {"kind": kind, "videoId": video_id, "start": str(start), "end": str(end),
-                                                    **error.details()}]
-    elif rows and video_id:
+                                                    **details}]
+    elif rows and video_id and kind not in RETENTION_WINDOWS:
         # A successful retry supersedes the null placeholder for that range.
         placeholder = db.scalar(select(VideoDailyStat).where(
             VideoDailyStat.channel_id == run.channel_id, VideoDailyStat.kind == kind,
@@ -71,7 +80,7 @@ def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, r
     # Persist a null report row instead of inventing zeroes when no rows return.
     for row in rows or [{}]:
         selected_id = row.get("video", video_id)
-        dimensions = {key: value for key, value in row.items() if key not in METRICS}
+        dimensions = {key: value for key, value in row.items() if key not in metrics}
         key = ":".join(str(dimensions.get(name, selected_id if name == "video" else ""))
                        for name in ("day", "video", "creatorContentType"))
         period_start = date.fromisoformat(row["day"]) if "day" in row else start
@@ -79,7 +88,7 @@ def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, r
         saved = db.scalar(select(VideoDailyStat).where(
             VideoDailyStat.channel_id == run.channel_id, VideoDailyStat.kind == kind,
             VideoDailyStat.dimension_key == key, VideoDailyStat.period_start == period_start, VideoDailyStat.period_end == period_end))
-        if saved is not None and error:
+        if saved is not None and error and (attempts is None or any(saved.values.values())):
             # A transient failure must not erase previously returned statistics.
             continue
         if saved is None:
@@ -87,10 +96,15 @@ def save_report(db: Session, run: SyncRun, config: Settings, kind, start, end, r
                                    period_start=period_start, period_end=period_end)
             db.add(saved)
         saved.video_id, saved.sync_run_id = selected_id, run.id
-        saved.dimensions = dimensions
-        saved.values = {metric: row.get(metric) for metric in METRICS}
-        missing = error.code if error else "NO_ROWS"
-        saved.missing_reasons = {metric: "UNAVAILABLE" if rows else missing for metric in METRICS if row.get(metric) is None}
+        if kind in RETENTION_WINDOWS:
+            saved.definition_version = RETENTION_DEFINITION
+        saved.dimensions = {**dimensions, **({"attempts": attempts} if attempts is not None else {})}
+        saved.values = {metric: row.get(metric) for metric in metrics}
+        missing = missing_reason or (error.code if error else "NO_ROWS")
+        saved.missing_reasons = {metric: "UNAVAILABLE" if rows else missing for metric in metrics if row.get(metric) is None}
         saved.observed_at, saved.expires_at = observed, statistical_expiry(observed, config)
         if not rows and not error:
-            run.missing_reports = [*run.missing_reports, {"kind": kind, "videoId": video_id, "reason": "NO_ROWS"}]
+            record = {"kind": kind, "videoId": video_id, "reason": missing}
+            if attempts is not None:
+                record.update(start=str(start), end=str(end))
+            run.missing_reports = [*run.missing_reports, record]

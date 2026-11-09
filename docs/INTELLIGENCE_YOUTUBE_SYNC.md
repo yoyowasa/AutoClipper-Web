@@ -44,7 +44,7 @@ Clip Intelligenceのファイル・DB・認証情報は読み取り/参照だけ
 ## 取得と保存
 
 参照元の `collect_self` / `native_report` の基本取得を移植し、動画別日次を追加する。
-V2の流入元・維持率などの詳細分析やCodex実行は移していない。
+流入元・表示回数・CTR・Shortsのスワイプ率・収益は取得しない。
 
 |対象|取得範囲・粒度|
 |---|---|
@@ -55,7 +55,33 @@ V2の流入元・維持率などの詳細分析やCodex実行は移していな�
 |動画別日次|同じ60日、既知の自動画でfilter。複数動画はday,video、単一動画はdayに既知IDを添える|
 |動画別期間集計|同じ28日、動画ごとの公式集計|
 |動画の形式|同じ28日のcreatorContentType。Shorts/通常/ライブを尺から推測しない。返却なしはunknown|
-|初期7日|公開翌日から7暦日（America/Los_Angeles）、1回で最大50本。未取得分は次回に継続|
+|初期7日・30日|公開翌日から7暦日・30暦日（America/Los_Angeles）、両者合わせて1回で最大50窓。未取得分は次回に継続|
+|視聴維持率|公開翌日から7暦日・30暦日（America/Los_Angeles）の固定窓。返却済みで有効な窓は再取得しない|
+|元配信日|制作記録の `source.url` を優先し、なければ説明文のYouTube動画リンクから自チャンネル動画を除き、外部動画が1件だけのときに特定する|
+
+維持率は接続済みの本人チャンネルを対象とし、既存の `yt-analytics.readonly` で取得する。
+`reports.query` の `dimensions=elapsedVideoTimeRatio`、
+`metrics=audienceWatchRatio,relativeRetentionPerformance`、
+`filters=video==<ID>` を使う。動画フィルターは単一IDのみで、比率0.01から1.00まで100区間が定義されている。
+区間視聴比は再視聴により1を超え得る。相対維持は同程度の尺との比較で0〜1。
+[チャンネルレポート](https://developers.google.com/youtube/analytics/channel_reports#audience-retention)、
+[Query](https://developers.google.com/youtube/analytics/reference/reports/query)、
+[ディメンション](https://developers.google.com/youtube/analytics/dimensions#elapsedVideoTimeRatio)、
+[指標](https://developers.google.com/youtube/analytics/metrics#audienceWatchRatio)
+
+APIは全指標の処理済み最終日までしか返さず、通常48〜72時間遅れる。固定窓の末日が既存チャンネル日次の最終返却日以前で、かつ末日の終了から太平洋時間で3暦日が経過してから要求する。維持率の返答には日付次元がないため、個々の返答の末日充足を直接確認することはできない。
+空・全NULLや取り直し対象の失敗は、初回を含め3回または窓の末日から14日まで。過去分にも初回要求を1回行う。上限に達したら値をNULLのまま `RETENTION_NOT_RETURNED_FINAL` として保存し、同期対象から外す。認証・割当量の停止は窓の試行回数に含めない。
+各窓は `video_daily_stats` の `retention7` / `retention30` 1行に、指標別の比率→値と試行回数を格納する。部分欠損の区間は補間しない。同期履歴にも上限到達の理由・窓を残すため、統計行の期限後も再要求しない。
+[データの鮮度と遅れ](https://developers.google.com/youtube/analytics/data_model#data_freshness_and_latency)
+
+説明文は見出し語を必要とせず、配信タイトルの次行にあるURLも対象とする。登録済みの自チャンネル全体の既知動画を除き、残るリンクは `videos.list` の投稿チャンネルIDで確認する。外部の動画IDが複数、リンク先未返却、外部動画なし、日時未返却なら未判定。尺やタイトルから動画を推定しない。
+既存の `videos.list` で公開日時と実配信開始日時を取得し、実配信開始を優先して投稿との差を太平洋時間の暦日で保存する。元配信の日時は既存の動画JSON属性内で30日まで保持する。説明文の原文は保存しない。新規に自動で結び付いた制作記録は次の同期で元配信の特定に使う。
+[videos.list](https://developers.google.com/youtube/v3/docs/videos/list)、
+[動画リソース](https://developers.google.com/youtube/v3/docs/videos#liveStreamingDetails.actualStartTime)
+
+新規の維持率は成熟窓ごとに1要求で、両窓が対象なら最大2要求/動画。元配信は未取得の重複しないIDを50件ずつ取得し、`videos.list` 1要求はData APIの1ユニット。
+維持率は通常取得とその繰り越しの処理後、残りの90要求・時間予算の範囲で1同期最大20窓。維持率を `pending_reports` に入れず、毎回保存状態から対象を組み直す。通常取得を繰り越した同期も、日次の最終返却日が進めば新しい動画別日次を先に取得する。
+163本の両窓が成熟済みなら326窓で、20窓ずつの最短は17回。通常取得を含む日次同期の模擬では20回（約20日）で完了した。元配信の追加取得、時間予算、APIの返却状況によって所要日数は変わる。
 
 内部の10指標: views、engagedViews、estimatedMinutesWatched、averageViewDuration、
 averageViewPercentage、likes、comments、shares、subscribersGained、subscribersLost。

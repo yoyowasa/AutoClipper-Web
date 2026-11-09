@@ -9,6 +9,8 @@ from app.intelligence.common import YouTubeError
 
 METRICS = ("views", "engagedViews", "estimatedMinutesWatched", "averageViewDuration", "averageViewPercentage",
            "likes", "comments", "shares", "subscribersGained", "subscribersLost")
+RETENTION_DIMENSION = "elapsedVideoTimeRatio"
+RETENTION_METRICS = ("audienceWatchRatio", "relativeRetentionPerformance")
 MAX_REQUESTS = 90
 DISCOVERY_LIMIT = 200
 INITIAL_LIMIT = 50
@@ -46,12 +48,13 @@ class YouTubeClient:
         self._deadline = clock() + budget_seconds
         self.requests = 0
 
-    def get(self, endpoint: str, params: dict[str, Any], *, analytics: bool = False) -> dict[str, Any]:
+    def get(self, endpoint: str, params: dict[str, Any], *, analytics: bool = False, retry: bool = True) -> dict[str, Any]:
         if endpoint not in ({"reports"} if analytics else {"channels", "playlistItems", "videos"}):
             raise YouTubeError("API_REJECTED")
         base = "https://youtubeanalytics.googleapis.com/v2/" if analytics else "https://www.googleapis.com/youtube/v3/"
         try:
-            for attempt in range(len(RETRY_DELAYS) + 1):
+            delays = RETRY_DELAYS if retry else ()
+            for attempt in range(len(delays) + 1):
                 remaining = self._deadline - self._clock()
                 if remaining <= 0 or self.requests >= MAX_REQUESTS:
                     raise YouTubeError("SYNC_LIMIT")
@@ -65,9 +68,9 @@ class YouTubeClient:
                     if not isinstance(result, dict):
                         raise YouTubeError("INVALID_RESPONSE")
                     return result
-                if response.status_code not in RETRYABLE_STATUS or attempt == len(RETRY_DELAYS):
+                if response.status_code not in RETRYABLE_STATUS or attempt == len(delays):
                     raise response_error(response)
-                delay = RETRY_DELAYS[attempt]
+                delay = delays[attempt]
                 if self.requests >= MAX_REQUESTS or self._deadline - self._clock() <= delay:
                     raise YouTubeError("SYNC_LIMIT")
                 self._sleep(delay)
@@ -106,23 +109,28 @@ class YouTubeClient:
             yield batch, result.get("items", [])
 
     def report(self, channel_id: str, start: date, end: date, dimensions: str = "", video_ids: list[str] | None = None):
-        single_page = dimensions == "day,video"
-        if single_page and (not video_ids or end < start or len(video_ids) * ((end - start).days + 1) > REPORT_PAGE_SIZE):
+        retention = dimensions == RETENTION_DIMENSION
+        metrics = RETENTION_METRICS if retention else METRICS
+        single_page = dimensions in {"day,video", RETENTION_DIMENSION}
+        if retention and (not video_ids or len(video_ids) != 1 or end < start):
+            raise YouTubeError("API_BAD_REQUEST")
+        if dimensions == "day,video" and (not video_ids or end < start
+                or len(video_ids) * ((end - start).days + 1) > REPORT_PAGE_SIZE):
             raise YouTubeError("API_BAD_REQUEST")
         # The API permits adding a multi-value filter as a dimension. A single
         # video uses the base report and we attach that known ID to the result.
         single_video = bool(video_ids and len(video_ids) == 1 and "video" in dimensions.split(","))
         wire_dimensions = ",".join(key for key in dimensions.split(",") if not (single_video and key == "video"))
         params = {"ids": "channel==" + channel_id, "startDate": str(start), "endDate": str(end),
-                  "metrics": ",".join(METRICS), "maxResults": REPORT_PAGE_SIZE}
+                  "metrics": ",".join(metrics), "maxResults": REPORT_PAGE_SIZE}
         if wire_dimensions:
             params.update(dimensions=wire_dimensions, sort="-views" if "video" in wire_dimensions.split(",") else wire_dimensions)
         if video_ids:
             params["filters"] = "video==" + ",".join(video_ids)
-        expected = set(METRICS) | (set(wire_dimensions.split(",")) if wire_dimensions else set())
+        expected = set(metrics) | (set(wire_dimensions.split(",")) if wire_dimensions else set())
         rows, seen, index = [], set(), 1
         while True:
-            result = self.get("reports", {**params, "startIndex": index}, analytics=True)
+            result = self.get("reports", {**params, "startIndex": index}, analytics=True, retry=not retention)
             columns = [column.get("name") for column in result.get("columnHeaders", [])]
             raw = result.get("rows", [])
             if not isinstance(raw, list) or len(rows) + len(raw) > 2000:
@@ -137,11 +145,19 @@ class YouTubeClient:
                 row = dict(zip(columns, values))
                 if single_video:
                     row["video"] = video_ids[0]
-                for metric in METRICS:
+                for metric in metrics:
                     value = row[metric]
                     if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
                                              or not math.isfinite(value) or (metric != "likes" and value < 0)):
                         raise YouTubeError("INVALID_RESPONSE")
+                    if metric == "relativeRetentionPerformance" and value is not None and value > 1:
+                        raise YouTubeError("INVALID_RESPONSE")
+                if retention:
+                    ratio = row[RETENTION_DIMENSION]
+                    if (isinstance(ratio, bool) or not isinstance(ratio, (int, float))
+                            or not 0.01 <= ratio <= 1 or abs(ratio * 100 - round(ratio * 100)) > 1e-7):
+                        raise YouTubeError("INVALID_RESPONSE")
+                    row[RETENTION_DIMENSION] = f"{ratio:.2f}"
                 key = tuple(row.get(d) for d in dimensions.split(",")) if dimensions else ("aggregate",)
                 if any(not isinstance(value, str) for value in key) or key in seen:
                     raise YouTubeError("INVALID_RESPONSE")

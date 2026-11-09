@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.config import Settings
 from app.intelligence.common import now
 from app.intelligence.models import AnalysisRun, Channel, ProductionAggregate, VideoDailyStat, YouTubeVideo
+from app.intelligence.source_timing import SOURCE_TIMING, fresh_source_timing
 
 POLICY_URL = "https://developers.google.com/youtube/terms/derived-metrics-policy"
 
@@ -44,4 +45,6 @@ def expire_youtube_data(db: Session, config: Settings, *, clock: datetime | None
         if statistical_expiry(video.public_observed_at, config) <= stamp:
             video.public_statistics = None
             video.public_observed_at = None
+        elif SOURCE_TIMING in (video.public_statistics or {}) and not fresh_source_timing(video, stamp):
+            video.public_statistics = {k: v for k, v in video.public_statistics.items() if k != SOURCE_TIMING}
     db.commit()

@@ -1,17 +1,19 @@
 from collections.abc import Callable
 
-from sqlalchemy import select, update
+from sqlalchemy import String, cast, select, update
 from sqlalchemy.orm import Session
 from rq.timeouts import JobTimeoutException
 
 from app.config import Settings, get_settings
 from app.db import SessionLocal
-from app.intelligence.collection import collect_reports
+from app.intelligence.collection import RETENTION_DEFINITION, RETENTION_FINAL, RETENTION_WINDOWS, collect_reports
 from app.intelligence.common import YouTubeError, now
 from app.intelligence.credentials import load_credentials
 from app.intelligence.ingest import ingest_video, save_report
-from app.intelligence.models import Channel, ChannelConnection, SyncRun, YouTubeVideo
+from app.intelligence.models import Channel, ChannelConnection, SyncRun, VideoDailyStat, YouTubeVideo
+from app.intelligence.policy import statistical_expiry
 from app.intelligence.production_links import reconcile_safely
+from app.intelligence.source_timing import refresh_source_timings
 from app.intelligence.youtube_client import YouTubeClient
 from app.storage.paths import StoragePaths, get_storage_paths
 
@@ -56,8 +58,10 @@ def run_youtube_sync(run_id: str, *, session_factory: Callable[[], Session] = Se
                 # metadata from the 30-day refresh/delete requirement.
                 known = db.scalars(select(YouTubeVideo.id).where(YouTubeVideo.channel_id == channel.id)).all()
                 ids = list(dict.fromkeys([*ids, *known]))
+                own_ids = set(ids) | set(db.scalars(select(YouTubeVideo.id)))
+                own_channels = set(db.scalars(select(Channel.external_id)))
                 stamp = now()
-                prepared = []
+                prepared, descriptions = [], {}
                 for requested, items in client.videos(ids):
                     if any(item["snippet"]["channelId"] != channel.external_id or item["id"] not in requested for item in items):
                         raise YouTubeError("CHANNEL_MISMATCH")
@@ -65,6 +69,7 @@ def run_youtube_sync(run_id: str, *, session_factory: Callable[[], Session] = Se
                     for item in items:
                         if item.get("status", {}).get("privacyStatus") == "public":
                             prepared.append(ingest_video(db, channel.id, item, stamp))
+                            descriptions[item["id"]] = item["snippet"].get("description") or ""
                             returned.add(item["id"])
                     for missing in set(requested) - returned:
                         old = db.get(YouTubeVideo, missing)
@@ -75,18 +80,38 @@ def run_youtube_sync(run_id: str, *, session_factory: Callable[[], Session] = Se
                                      .order_by(SyncRun.queued_at.desc(), SyncRun.id.desc()).limit(1))
                 pending = next((entry["requests"] for entry in previous.missing_reports if entry.get("kind") == "pending_reports"),
                                []) if previous else []
-                start, end, last, reports, pending = collect_reports(client, channel.external_id, videos, stamp, pending=pending)
+                states = {(row.kind, row.video_id, row.period_start, row.period_end): row
+                             for row in db.scalars(select(VideoDailyStat).where(
+                                 VideoDailyStat.channel_id == channel.id, VideoDailyStat.kind.in_(RETENTION_WINDOWS),
+                                 VideoDailyStat.definition_version == RETENTION_DEFINITION,
+                                 VideoDailyStat.expires_at > stamp))
+                             if statistical_expiry(row.observed_at, settings) > stamp}
+                # Technical failure records outlive the expiring Analytics
+                # observations and keep exhausted windows out of later syncs.
+                final_windows = {
+                    (item.get("kind"), item.get("videoId"), item.get("start"), item.get("end"))
+                    for items in db.scalars(select(SyncRun.missing_reports).where(
+                        SyncRun.channel_id == channel.id,
+                        cast(SyncRun.missing_reports, String).contains(RETENTION_FINAL, autoescape=True)))
+                    for item in items if item.get("reason") == RETENTION_FINAL
+                }
+                start, end, last, reports, pending = collect_reports(
+                    client, channel.external_id, videos, stamp, pending=pending, retention_states=states,
+                    retention_final=final_windows,
+                    previous_last=previous.last_report_date if previous else None,
+                    before_optional=lambda: refresh_source_timings(
+                        db, storage, client, videos, descriptions, stamp, own_channels, own_ids))
             db.flush()
             for report in reports:
                 save_report(db, run, settings, report.kind, report.start, report.end, report.rows, stamp, report.video_id,
-                            error=report.error)
+                            error=report.error, attempts=report.attempts, missing_reason=report.missing_reason)
             if pending:
                 run.missing_reports = [*run.missing_reports, {"kind": "pending_reports", "reason": "SYNC_LIMIT", "requests": pending}]
             channel.name, channel.metadata_updated_at, channel.last_sync_at = identity["snippet"]["title"], stamp, stamp
             run.requested_start, run.requested_end, run.last_report_date = start, end, last
             run.truncated = truncated or bool(pending)
-            partial_failure = any(report.error for report in reports)
-            run.error_code = "API_5XX" if partial_failure else "SYNC_LIMIT" if pending else None
+            partial_failure = next((report.error for report in reports if report.error), None)
+            run.error_code = partial_failure.code if partial_failure else "SYNC_LIMIT" if pending else None
             run.status = "partial" if run.truncated or partial_failure else "success"
             run.finished_at, run.active_channel_id = now(), None
             run.fetched_count, run.request_count = sum(len(report.rows) for report in reports), client.requests

@@ -13,17 +13,20 @@ from app.intelligence.analysis_budget import fit_analysis_budget
 from app.intelligence.analysis_prompt import PROMPT_VERSION
 from app.intelligence.analysis_cohort import select_video_cohort
 from app.intelligence.analysis_reports import REPORT_DEFAULTS, native_report, reports_for_video, within_input_period
-from app.intelligence.models import Channel, ChannelConnection, ProductionLink, SyncRun, VideoDailyStat, YouTubeVideo
+from app.intelligence.collection import RETENTION_WINDOWS
+from app.intelligence.dashboard_reports import valid_stat
+from app.intelligence.models import Channel, ChannelConnection, SyncRun, VideoDailyStat, YouTubeVideo
 from app.intelligence.policy import statistical_expiry
 from app.intelligence.production_catalog import read_families
 from app.intelligence.production_aggregation import aggregate_analysis_input, build_production_aggregates
 from app.intelligence.choice_evaluation import analysis_choice_snapshot, choice_evaluation_input
 from app.intelligence.evaluation_rules import GOALS
+from app.intelligence.retention_analysis import FORMATS, pacific_day, retention_reports, weekly_trends
+from app.intelligence.source_timing import fresh_source_timing, linked_records
 from app.storage.paths import StoragePaths
 
 UNITS = {"estimatedMinutesWatched": "分", "averageViewDuration": "秒", "averageViewPercentage": "%",
          "subscribersGained": "人", "subscribersLost": "人"}
-FORMATS = {"shorts": "shorts", "long": "videoondemand", "live": "live", "unknown": "unknown"}
 
 
 @dataclass
@@ -42,7 +45,7 @@ class AnalysisContext:
 def _production(record, published=None) -> dict:
     hook_length = (record.hookSceneEnd - record.hookSceneStart
                    if record.hookSceneStart is not None and record.hookSceneEnd is not None else None)
-    return {"recordId": record.recordId, "bodyDurationSeconds": record.bodyDurationSeconds,
+    return {"recordId": record.recordId, "createdAt": record.createdAt.isoformat(), "bodyDurationSeconds": record.bodyDurationSeconds,
         "choices": analysis_choice_snapshot(record, as_of=published),
         **({"performanceHints": [hint.model_dump(by_alias=True, mode="json") for hint in record.performanceHints]}
            if record.performanceHints else {}),
@@ -63,6 +66,10 @@ def _expand_evidence(payload, expires):
             production = video["production"]
             evidence[production["id"]] = {"id": production["id"], "video_id": video["id"], "source": "production_record",
                                            "kind": "production", "value": production["value"], "metric": "production"}
+        if "source_timing" in video:
+            timing = video["source_timing"]
+            evidence[timing["id"]] = {"id": timing["id"], "video_id": video["id"], "source": "source_timing",
+                                      "kind": "source_timing", "value": timing["value"]}
     for video_id, report in pairs:
         meta = {**REPORT_DEFAULTS, **{key: value for key, value in report.items() if key not in {"id", "values", "missing"}},
                 "video_id": video_id, "expires_at": expires.isoformat() + "Z"}
@@ -70,6 +77,36 @@ def _expand_evidence(payload, expires):
             id = report["id"] + ":" + metric
             evidence[id] = {"id": id, "value": value, "metric": metric, **meta}
     return evidence
+
+
+def _retention_input(db, entities, videos, channel_id, stamp, last, config, expiry):
+    today = pacific_day(stamp)
+    recent = [v for v in entities.values() if v.published_at and
+              today - timedelta(days=89) <= pacific_day(v.published_at) <= today]
+    ids = set(videos) | {video.id for video in recent}
+    rows = defaultdict(list)
+    for row in db.scalars(select(VideoDailyStat).where(
+            VideoDailyStat.channel_id == channel_id, VideoDailyStat.video_id.in_(ids),
+            VideoDailyStat.kind.in_([*RETENTION_WINDOWS, "first7"]), VideoDailyStat.expires_at > stamp)):
+        if row.kind == "first7" and not valid_stat(row, config, stamp):
+            continue
+        if statistical_expiry(row.observed_at, config) <= stamp:
+            continue
+        rows[row.video_id].append(row)
+        expiry.extend((row.expires_at, statistical_expiry(row.observed_at, config)))
+    curves = {id: retention_reports(entities[id], rows[id], today, last) for id in ids}
+    timings = {}
+    for id in ids:
+        if timing := fresh_source_timing(entities[id], stamp):
+            timings[id] = timing
+            expiry.append(datetime.fromisoformat(timing["observed_at"]) + timedelta(days=30))
+    for id, video in videos.items():
+        video["reports"].extend(curves[id])
+        if id in timings:
+            video["source_timing"] = {"id": f"s:{id}", "value": timings[id]}
+        else:
+            video["source_timing_missing"] = "NO_CONFIRMED_SOURCE_DATE"
+    return weekly_trends(recent, rows, curves, timings, today, last)
 
 
 def build_analysis_input(db: Session, paths: StoragePaths, config: Settings, channel_id: int,
@@ -134,15 +171,14 @@ def build_analysis_input(db: Session, paths: StoragePaths, config: Settings, cha
                             for key, value in values.items() if value is None}})
             expiry.append(statistical_expiry(entity.public_observed_at, config))
     families, issues = read_families(paths)
-    for link in db.scalars(select(ProductionLink).where(ProductionLink.youtube_video_id.in_(videos))):
-        family = families.get(link.record_family_id)
-        if not family or family.ambiguous or family.latest.recordId != link.record_id:
-            videos[link.youtube_video_id]["production_missing"] = "PRODUCTION_RECORD_UNAVAILABLE"
+    for video_id, record in linked_records(db, paths, videos, families=families):
+        if record is None:
+            videos[video_id]["production_missing"] = "PRODUCTION_RECORD_UNAVAILABLE"
             continue
-        record = family.latest
         id = "production:" + record.recordId
-        videos[link.youtube_video_id].update(production_evidence_id=id,
-            production={"id": id, "value": _production(record, entities[link.youtube_video_id].published_at)})
+        videos[video_id].update(production_evidence_id=id,
+            production={"id": id, "value": _production(record, entities[video_id].published_at)})
+    trends = _retention_input(db, entities, videos, channel_id, stamp, last, config, expiry)
     payload = {"review_id": review_id, "channel": {"id": channel.id, "name": channel.name}, "goals": GOALS,
         "prompt_version": PROMPT_VERSION,
         "batch": {"run_id": batch.id, "last_report_date": str(last), "status": batch.status},
@@ -152,7 +188,8 @@ def build_analysis_input(db: Session, paths: StoragePaths, config: Settings, cha
                           for format in ("shorts", "videoondemand", "live", "unknown")},
         "missing_reports": [{key: value for key, value in item.items() if key != "requests"} for item in batch.missing_reports],
         "production_record_issues": len(issues),
-        "unavailable_reports": ["format_channel_aggregates", "traffic_sources", "retention", "impressions", "CTR", "swipe_rate"],
+        "unavailable_reports": ["format_channel_aggregates", "traffic_sources", "impressions", "CTR", "swipe_rate"],
+        "weekly_trends": trends,
         "improvement_plans": []}
     aggregates = build_production_aggregates(db, paths, config, channel_id, stamp)
     expiry.append(datetime.fromisoformat(aggregates["expires_at"].replace("Z", "+00:00")).replace(tzinfo=None))
@@ -160,6 +197,9 @@ def build_analysis_input(db: Session, paths: StoragePaths, config: Settings, cha
     payload["choice_evaluations"] = choice_evaluation_input(aggregates["choice_evaluations"])
     fit_analysis_budget(payload)
     evidence = _expand_evidence(payload, min(expiry))
+    for group in trends["groups"]:
+        evidence[group["id"]] = {"id": group["id"], "video_id": None, "source": "independent_aggregation",
+                                 "value": group, "analysis_format": group["format"]}
     for group in payload["production_aggregates"]["groups"]:
         evidence[group["id"]] = {"id": group["id"], "video_id": None, "source": "independent_aggregation",
                                  "value": group, "format": group["format"]}

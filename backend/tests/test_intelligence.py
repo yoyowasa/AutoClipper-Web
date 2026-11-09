@@ -183,6 +183,12 @@ def transport(request):
             "snippet": {"channelId": CHANNEL_ID, "title": "公開動画", "publishedAt": "2026-09-01T00:00:00Z"},
             "contentDetails": {"duration": "PT1M10S"}, "statistics": {"viewCount": "10"}, "status": {"privacyStatus": "public"}}]})
     dimensions = request.url.params.get("dimensions", "")
+    if dimensions == "elapsedVideoTimeRatio":
+        return httpx.Response(200, json={
+            "columnHeaders": [{"name": name} for name in
+                              ("elapsedVideoTimeRatio", "audienceWatchRatio", "relativeRetentionPerformance")],
+            "rows": [[index / 100, 0.83, 0.56] for index in range(1, 101)],
+        })
     dims = {"day": "2026-10-13", "video": VIDEO_ID, "creatorContentType": "SHORTS"}
     row = api_row({key: dims[key] for key in dimensions.split(",") if key}, shares=None)
     return httpx.Response(200, json={"columnHeaders": [{"name": key} for key in row], "rows": [list(row.values())]})
