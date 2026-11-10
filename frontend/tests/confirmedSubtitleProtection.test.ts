@@ -113,7 +113,7 @@ async function main() {
     let source = [segments[0]];
     for (const [action, replacement] of [["split", split], ["merge", [sharedEdit]]] as const) {
       const ids = replacement.map(segment => segment.id);
-      const inputs = source.map(segment => ({ segmentId: segment.id, before: segment.text }));
+      const inputs = source.map(segment => ({ segmentId: segment.id, before: segment.text, text: segment.text }));
       globalThis.fetch = async (_input, init) => {
         requests++;
         const request = JSON.parse(String(init?.body));
