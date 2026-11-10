@@ -58,7 +58,7 @@
 - 選定・内容・レンダリング後の品質ゲートがあり、メディア属性・出力数・描画メタデータ等を検査する。task-236で完成MP4の技術・字幕画素・冒頭音声と、Codex中継による文言／サムネ整合を独立に検査し、clip単位の局所修復・再検査（最大2回）を追加した。unknown・未修復は完成にしない。実動画での精度・速度と全面的な発話／意味理解は未確認。[契約・閾値・制限](FINAL_OUTPUT_INSPECTION_CONTRACT_v1.md)。文字起こし段階の補修とは別である。[品質ゲート](../backend/app/jobs/quality_gate.py)
 - 完成動画ごとの制作記録を `storage/production_records/<export_id>.json` に保存する。投稿タイトル、候補と選択ID、フック、尺、選定理由、サムネの出どころ、利用ヒントなどを記録し、再書き出しはrevisionとpreviousRecordIdで追跡する。ジョブ削除後も残る。記録の保存失敗は警告として扱い、動画の完成は取り消さない。[実装](../backend/app/production_records.py)、[契約v1](PRODUCTION_RECORD_CONTRACT_v1.md)、[PR #132](https://github.com/yoyowasa/AutoClipper-Web/pull/132)、[PR #133](https://github.com/yoyowasa/AutoClipper-Web/pull/133)
 - 制作記録は「すべての選択・不採用理由・スタイル・軽い演出・選択方針の版」を網羅する契約にはまだなっていない。書き出しのrevisionも、選び方の版管理・巻き戻しとは別である。[記録モデル](../backend/app/production_records.py)
-- 有料OpenAI Platform APIの採点・字幕補正・文言生成経路と依存は削除済み。ローカル処理とChatGPTログインのCodex中継を使い、有料APIへ切り替える経路はない。旧データ互換や秘密値の伏せ字等に残るOpenAI表記は呼び出し経路ではない。[依存定義](../backend/pyproject.toml)、[PR #100](https://github.com/yoyowasa/AutoClipper-Web/pull/100)
+- 有料OpenAI Platform APIの採点・字幕補正・文言生成経路と依存は削除済み。ローカル処理とホスト側中継を使い、有料APIへ切り替える経路はない。task-249で中継の実行エンジンを Codex（ChatGPTログイン）と Claude Code（Claudeサブスクリプションのログイン、APIキー不使用）から選べるようにした。既定は Codex。[切替手順](WINDOWS_LAUNCHER.md#high-quality-mode)旧データ互換や秘密値の伏せ字等に残るOpenAI表記は呼び出し経路ではない。[依存定義](../backend/pyproject.toml)、[PR #100](https://github.com/yoyowasa/AutoClipper-Web/pull/100)
 
 ## 2. 現行仕様：AutoClipper内のClip Intelligence統合①〜⑤
 
