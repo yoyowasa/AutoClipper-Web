@@ -7,7 +7,7 @@ import { postMetadataApplyPayload } from "../../youtubePosting";
 import { writeReviewDraft, clearJobReviewDrafts } from "../draftStorage";
 import { returnToClipPlanMessage } from "../returnToClipPlan";
 import { validateClipDuration, validateHookSceneDuration } from "../../durationRules";
-import { segmentDraftKey, sharedSubtitleNotice } from "../sharedSegments";
+import { segmentDraftKey } from "../sharedSegments";
 import { contentDraftForClip } from "../drafts";
 import { canEditManualFraming } from "../manualFraming";
 import { automaticApplyPayload } from "../automaticConfirmation";
@@ -90,8 +90,6 @@ export function useReviewConfirmation(context: SubtitleReviewContext) {
         segmentId: segment.id,
         text: drafts[segment.id] ?? segment.text
       }));
-    const notice = review && sharedSubtitleNotice(review, selectedSegments.filter(segment => dirtySegmentIds.has(segment.id)), selectedClip.id);
-    if (notice && !window.confirm(`${notice}\n確定済みの他のclipは変更しません。保存しますか？`)) return;
     const savedSegmentIds = new Set(segmentUpdates.map((segment) => segment.segmentId));
     const postMetadata = postMetadataApplyPayload(selectedClipContentDraft);
     context.setSubtitleWorkspaceOpen?.(true);
