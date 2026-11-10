@@ -15,16 +15,26 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
+
+try:
+    from . import claude_engine
+except ImportError:  # Executed as a script: launcher/codex_bridge.py serve
+    import claude_engine  # type: ignore[no-redef]
 
 
 BRIDGE_PROTOCOL_VERSION = 1
 CODEX_MODEL = "gpt-5.6-sol"
 CODEX_REASONING_EFFORT = "high"
 BRIDGE_DIRNAME = "codex_bridge"
+BRIDGE_ENGINE_CODEX = "codex"
+BRIDGE_ENGINE_CLAUDE = "claude"
+BRIDGE_ENGINES = frozenset({BRIDGE_ENGINE_CODEX, BRIDGE_ENGINE_CLAUDE})
+BRIDGE_ENGINE_ENV = "AUTOCLIPPER_BRIDGE_ENGINE"
+BRIDGE_ENGINE_FILENAME = "engine.json"
 REQUEST_TASK = "title_hook_suggestions"
 INITIAL_CLIP_TOPIC_SELECTION_TASK = "initial_clip_topic_selection"
 INITIAL_CLIP_SELECTION_TASK = "initial_clip_selection"
@@ -271,6 +281,12 @@ def bridge_build_fingerprint(module_path: str | Path | None = None) -> str:
         payload = path.read_bytes()
     except OSError:
         return ""
+    engine_module = path.with_name("claude_engine.py")
+    if engine_module.is_file():
+        try:
+            payload += b"\0" + engine_module.read_bytes()
+        except OSError:
+            return ""
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -384,6 +400,29 @@ def private_bridge_paths(project_root: str | Path) -> PrivateBridgePaths:
         work=root / "work",
         threads=root / "threads",
     )
+
+
+def configured_bridge_engine(project_root: str | Path) -> str:
+    """Engine chosen by env var, else storage/codex_bridge/engine.json, else Codex."""
+    configured = os.environ.get(BRIDGE_ENGINE_ENV)
+    if configured is None:
+        engine_file = bridge_paths(project_root).root / BRIDGE_ENGINE_FILENAME
+        try:
+            configured = read_json_object(engine_file, max_bytes=4096).get("engine")
+        except (OSError, ValueError, json.JSONDecodeError):
+            configured = None
+    engine = str(configured or BRIDGE_ENGINE_CODEX).strip().lower()
+    return engine if engine in BRIDGE_ENGINES else BRIDGE_ENGINE_CODEX
+
+
+ACTIVE_ENGINE = BRIDGE_ENGINE_CODEX
+
+
+def engine_status_fields(engine: str) -> dict[str, str]:
+    if engine == BRIDGE_ENGINE_CLAUDE:
+        return {"engine": engine, "model": claude_engine.CLAUDE_MODEL,
+                "reasoningEffort": claude_engine.CLAUDE_EFFORT}
+    return {"engine": BRIDGE_ENGINE_CODEX, "model": CODEX_MODEL, "reasoningEffort": CODEX_REASONING_EFFORT}
 
 
 def ensure_bridge_directories(paths: BridgePaths) -> None:
@@ -872,6 +911,7 @@ def register_bridge_thread(
     thread_id: str,
     thread_scope: str,
     task: str,
+    engine: str = BRIDGE_ENGINE_CODEX,
 ) -> None:
     existing_path = _thread_record_path(paths, thread_id)
     if existing_path.is_file():
@@ -891,6 +931,7 @@ def register_bridge_thread(
             "threadId": thread_id,
             "threadScope": thread_scope,
             "createdByTask": task,
+            "engine": engine,
             "createdAt": utc_iso(),
         },
     )
@@ -915,6 +956,16 @@ def bridge_thread_matches_scope(
         and record.get("threadScope") == thread_scope
         and record.get("revokedAt") is None
     )
+
+
+def bridge_thread_engine(paths: PrivateBridgePaths, thread_id: str) -> str:
+    """Engine that created a registered thread; records before engines existed are Codex."""
+    try:
+        record = read_json_object(_thread_record_path(paths, thread_id), max_bytes=16_384)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return BRIDGE_ENGINE_CODEX
+    engine = record.get("engine") or BRIDGE_ENGINE_CODEX
+    return engine if engine in BRIDGE_ENGINES else BRIDGE_ENGINE_CODEX
 
 
 def revoke_bridge_thread(
@@ -1039,6 +1090,8 @@ def _process_request_file(
     codex_executable: str | None = None,
     runner: CodexRunner = run_codex_command,
     timeout: float = DEFAULT_CODEX_TIMEOUT_SECONDS,
+    engine: str = BRIDGE_ENGINE_CODEX,
+    claude_executable: str | None = None,
 ) -> dict[str, Any]:
     paths = bridge_paths(project_root)
     private_paths = private_bridge_paths(project_root)
@@ -1083,6 +1136,19 @@ def _process_request_file(
             thread_id=request.thread_id,
             request=request,
         )
+    if request.thread_id and bridge_thread_engine(private_paths, request.thread_id) != engine:
+        # A thread from the other engine cannot be resumed; the prompt is complete on its own.
+        request = replace(request, thread_id=None)
+    if engine == BRIDGE_ENGINE_CLAUDE:
+        return _process_claude_request(
+            request,
+            payload=payload,
+            paths=paths,
+            private_paths=private_paths,
+            executable=claude_executable or claude_engine.find_claude_executable(),
+            runner=runner,
+            timeout=timeout,
+        )
 
     # Do not retain the versioned Desktop CLI path across requests.
     executable = codex_executable or find_codex_executable()
@@ -1115,15 +1181,7 @@ def _process_request_file(
         schema_path=schema_path,
         output_path=output_path,
     )
-    effective_timeout = max(
-        timeout,
-        CHANNEL_SELF_ANALYSIS_TIMEOUT_SECONDS if request.task == CHANNEL_SELF_ANALYSIS_TASK else
-        INITIAL_CLIP_SELECTION_TIMEOUT_SECONDS
-        if request.task in INITIAL_SELECTION_TASKS
-        else DEFAULT_CODEX_TIMEOUT_SECONDS,
-    )
-    if request.task == FINAL_OUTPUT_REVIEW_TASK:
-        effective_timeout = min(effective_timeout, FINAL_OUTPUT_REVIEW_TIMEOUT_SECONDS)
+    effective_timeout = _effective_timeout(request, timeout)
     result = runner(
         command,
         PROMPT_GUARD + request.prompt + "\n\n" + PROMPT_GUARD,
@@ -1206,9 +1264,95 @@ def _process_request_file(
     return _ready_response(request, thread_id=thread_id, output=output)
 
 
+def _effective_timeout(request: BridgeRequest, timeout: float) -> float:
+    effective_timeout = max(
+        timeout,
+        CHANNEL_SELF_ANALYSIS_TIMEOUT_SECONDS if request.task == CHANNEL_SELF_ANALYSIS_TASK else
+        INITIAL_CLIP_SELECTION_TIMEOUT_SECONDS
+        if request.task in INITIAL_SELECTION_TASKS
+        else DEFAULT_CODEX_TIMEOUT_SECONDS,
+    )
+    if request.task == FINAL_OUTPUT_REVIEW_TASK:
+        effective_timeout = min(effective_timeout, FINAL_OUTPUT_REVIEW_TIMEOUT_SECONDS)
+    return effective_timeout
+
+
+def _process_claude_request(
+    request: BridgeRequest,
+    *,
+    payload: dict[str, Any],
+    paths: BridgePaths,
+    private_paths: PrivateBridgePaths,
+    executable: str | None,
+    runner: CodexRunner,
+    timeout: float,
+) -> dict[str, Any]:
+    if not executable:
+        return _failed_response(request.request_id, "claude_cli_missing", request=request)
+    try:
+        schema_text = claude_engine.schema_argument(request.response_schema)
+        stdin_text = claude_engine.build_claude_input(
+            PROMPT_GUARD + request.prompt + "\n\n" + PROMPT_GUARD, request.image_paths
+        )
+    except (OSError, ValueError) as exc:
+        code = str(exc) if str(exc).startswith(("claude_", "image_")) else "claude_input_invalid"
+        return _failed_response(request.request_id, code, request=request)
+    session_dir = private_paths.sessions / request.request_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    work_dir = private_paths.work / request.request_id
+    work_dir.mkdir(parents=True, exist_ok=True)
+    analysis = request.task == CHANNEL_SELF_ANALYSIS_TASK
+    if analysis:
+        atomic_write_json(work_dir / ".channel-self-analysis", {
+            "expiresAt": min(time.time() + 30 * 24 * 60 * 60, _analysis_expiry(payload)),
+        })
+    command = claude_engine.build_claude_command(
+        executable,
+        schema_text=schema_text,
+        resume_session_id=request.thread_id,
+        ephemeral=analysis,
+    )
+    result = runner(command, stdin_text, session_dir, _effective_timeout(request, timeout), paths.stop_request)
+    parsed = claude_engine.parse_claude_stream(result.stdout)
+    thread_id = parsed.session_id or request.thread_id
+    if thread_id and not analysis:
+        try:
+            register_bridge_thread(
+                private_paths,
+                thread_id=thread_id,
+                thread_scope=request.thread_scope,
+                task=request.task,
+                engine=BRIDGE_ENGINE_CLAUDE,
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            return _failed_response(request.request_id, "thread_registry_invalid", thread_id=thread_id,
+                                    request=request)
+    if parsed.used_api_key:
+        return _failed_response(request.request_id, "claude_api_key_forbidden", thread_id=thread_id,
+                                request=request)
+    if parsed.used_forbidden_tool:
+        if thread_id and not analysis:
+            revoke_bridge_thread(private_paths, thread_id=thread_id, thread_scope=request.thread_scope)
+        return _failed_response(request.request_id, "claude_tool_forbidden", thread_id=thread_id, request=request)
+    if result.returncode != 0 or not parsed.succeeded:
+        code = {
+            124: "claude_timeout",
+            127: "claude_start_failed",
+            130: "claude_cancelled",
+        }.get(result.returncode, "claude_rate_limited" if parsed.rate_limited else "claude_failed")
+        return _failed_response(request.request_id, code, thread_id=thread_id, request=request)
+    if not thread_id:
+        return _failed_response(request.request_id, "claude_session_id_missing", request=request)
+    output = parsed.output
+    if output is None or len(json.dumps(output, ensure_ascii=False).encode("utf-8")) > MAX_OUTPUT_BYTES:
+        return _failed_response(request.request_id, "claude_output_invalid", thread_id=thread_id, request=request)
+    return _ready_response(request, thread_id=thread_id, output=output)
+
+
 def process_request_file(
     request_path: Path, *, project_root: Path, codex_executable: str | None = None,
     runner: CodexRunner = run_codex_command, timeout: float = DEFAULT_CODEX_TIMEOUT_SECONDS,
+    engine: str = BRIDGE_ENGINE_CODEX, claude_executable: str | None = None,
 ) -> dict[str, Any]:
     # Analysis contains expiring YouTube metadata. Its private scratch must not
     # survive success, malformed output, timeout, or an exception. Old tasks keep
@@ -1221,7 +1365,8 @@ def process_request_file(
         pass
     try:
         return _process_request_file(request_path, project_root=project_root, codex_executable=codex_executable,
-                                     runner=runner, timeout=timeout)
+                                     runner=runner, timeout=timeout, engine=engine,
+                                     claude_executable=claude_executable)
     finally:
         if analysis:
             private = private_bridge_paths(project_root)
@@ -1309,6 +1454,7 @@ def process_pending_requests(
     status_heartbeat_seconds: float = STATUS_HEARTBEAT_INTERVAL_SECONDS,
     analysis_only: bool = False,
     status_publisher: _RequestStatusPublisher | None = None,
+    engine: str = BRIDGE_ENGINE_CODEX,
 ) -> int:
     publisher = status_publisher or _RequestStatusPublisher(paths)
     processed = 0
@@ -1347,6 +1493,7 @@ def process_pending_requests(
                     codex_executable=codex_executable,
                     runner=runner,
                     timeout=timeout,
+                    engine=engine,
                 )
             except Exception as exc:
                 record_bridge_error(paths, "request", exc)
@@ -1406,8 +1553,7 @@ def _write_status(paths: BridgePaths, state: str, **extra: Any) -> None:
             "bridgeBuildFingerprint": BRIDGE_BUILD_FINGERPRINT,
             "contractFingerprint": BRIDGE_CONTRACT_FINGERPRINT,
             "taskSchemaFingerprints": EXPECTED_RESPONSE_SCHEMA_SHA256,
-            "model": CODEX_MODEL,
-            "reasoningEffort": CODEX_REASONING_EFFORT,
+            **engine_status_fields(ACTIVE_ENGINE),
             **extra,
         },
     )
@@ -1506,13 +1652,25 @@ def serve(
         if not acquired:
             return 3
         paths.stop_request.unlink(missing_ok=True)
-        codex_executable = find_codex_executable()
-        if not codex_executable:
-            _write_status(paths, "error", errorCode="codex_cli_missing")
-            return 4
-        if not codex_login_configured(codex_executable):
-            _write_status(paths, "error", errorCode="codex_login_missing")
-            return 5
+        global ACTIVE_ENGINE
+        engine = configured_bridge_engine(root)
+        ACTIVE_ENGINE = engine
+        if engine == BRIDGE_ENGINE_CLAUDE:
+            claude_executable = claude_engine.find_claude_executable()
+            if not claude_executable:
+                _write_status(paths, "error", errorCode="claude_cli_missing")
+                return 4
+            if not claude_engine.claude_login_configured(claude_executable, safe_codex_environment()):
+                _write_status(paths, "error", errorCode="claude_login_missing")
+                return 5
+        else:
+            codex_executable = find_codex_executable()
+            if not codex_executable:
+                _write_status(paths, "error", errorCode="codex_cli_missing")
+                return 4
+            if not codex_login_configured(codex_executable):
+                _write_status(paths, "error", errorCode="codex_login_missing")
+                return 5
         recover_processing_requests(paths)
         _write_request_status(paths, request_id=None, request_state="idle")
         publisher = _RequestStatusPublisher(paths)
@@ -1524,7 +1682,7 @@ def serve(
                 while not shutdown.is_set() and not paths.stop_request.exists():
                     try:
                         process_pending_requests(paths, project_root=root, runner=runner, timeout=timeout,
-                                                 analysis_only=True, status_publisher=publisher)
+                                                 analysis_only=True, status_publisher=publisher, engine=engine)
                     except Exception as exc:
                         record_bridge_error(paths, "analysis_poll", exc)
                     if once:
@@ -1544,7 +1702,7 @@ def serve(
                             expire_analysis_scratch(root)
                             last_analysis_cleanup = time.monotonic()
                         process_pending_requests(paths, project_root=root, runner=runner, timeout=timeout,
-                                                 status_publisher=publisher)
+                                                 status_publisher=publisher, engine=engine)
                     except Exception as exc:
                         record_bridge_error(paths, "poll", exc)
                     if once or paths.stop_request.exists():

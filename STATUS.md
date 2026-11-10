@@ -803,3 +803,12 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 最終検査のフック後の本編だけ、出力側の読み始めを次のフレーム境界に整列する。concat後の平均fpsは公称値とずれるため、出力の公称fpsを使う。許容幅は1フレームと50msの小さい方、相関の合格ラインは0.90。
 - 整列前の相関、実際の読み始め、整列量と上限を検査記録に残す。フック自身・フックなし・フレーム境界に一致する本編の読み始めは従来どおり。
 - 短い合成MP4で60fps・2.38秒フックの修正前の不合格（相関0.705）を再現し、143/60秒からの読み込みで0.9997を確認。別場面の本編は不合格。2.40秒フック・フックなしと50ms上限も検証する。全件テストとCIの結果はPRに記録する。
+
+## 2026-11-11 task-249 中継エンジンに Claude Code を追加
+
+- 目的: Codex の利用上限中も選定・文言生成・最終検査・自己分析を止めないため、ホスト側中継の実行エンジンを Codex／Claude Code から選べるようにした。既定は Codex のまま。
+- 変更: `launcher/claude_engine.py` を新設（CLI探索、サブスクリプションのログイン確認、コマンドと標準入力の組み立て、stream-json の解析）。`launcher/codex_bridge.py` は `storage/codex_bridge/engine.json`（または `AUTOCLIPPER_BRIDGE_ENGINE`）でエンジンを選び、状態ファイルに engine・model・effort を出す。ビルド指紋は `claude_engine.py` も含む。スレッド台帳に作成エンジンを記録し、他エンジンのスレッドは再開せず新規セッションで処理する。`launcher/controller.py` は設定と稼働中のエンジンが違う中継を再起動する。
+- Claude の実行条件: `claude-opus-5-5`・effort medium、`--tools ""`・`--safe-mode`・MCPなし、`--json-schema` で構造化出力。子プロセスへ `ANTHROPIC_*` 等を渡さず、APIキー経由・構造化出力以外のツール使用・出力なしは失敗にする。自己分析はセッションを保存しない。
+- 正本: AGENTS.md（Current Product and Operation／Architecture）と現行・到達仕様 §1 の中継の記述を、ユーザー承認の修正案どおり更新。切替手順は `docs/WINDOWS_LAUNCHER.md`。
+- 検証: 新規 `backend/tests/test_claude_bridge_engine.py`（18件）と既存の中継・launcherテスト、ruff 0.16.10。隔離した一時プロジェクトで実CLIの往復を確認（画像付きの最終検査、タイトル生成、同じセッションの再開）。全件テストとCIの結果はPRに記録する。
+- 未確認: 実ジョブでの初期選定（長いプロンプト・600秒枠）と週次の自己分析の Claude での品質・所要時間、サブスクリプションの利用上限に達した時の挙動（`claude_rate_limited` で失敗する想定）。

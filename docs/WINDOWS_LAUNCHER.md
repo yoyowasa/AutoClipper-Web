@@ -65,8 +65,17 @@ docker compose up -d --build
 
 ## High-quality Mode
 
-High-quality rendering uses local processing and the Codex login bridge.
+High-quality rendering uses local processing and the host login bridge.
 The launcher has no paid API configuration display. Log redaction for historical secrets is retained.
+
+The bridge engine is `codex` (default, Codex CLI with ChatGPT login) or `claude` (Claude Code CLI with a Claude subscription login).
+Select it with `storage/codex_bridge/engine.json`, for example `{"engine": "claude"}`, or the `AUTOCLIPPER_BRIDGE_ENGINE` environment variable (it takes precedence).
+The launcher restarts a running bridge whose engine differs from the configured one; with no launcher, stop the bridge and start `python launcher/codex_bridge.py serve --project-root <root>` again.
+
+- Claude engine: model `claude-opus-5-5`, effort `medium`, all built-in tools disabled (`--tools ""`), `--safe-mode`, no MCP. Only the structured-output tool may appear.
+- The child process never receives `ANTHROPIC_*`, Bedrock/Vertex or cloud credentials. A run that reports an API key source, uses any other tool, or returns no structured output fails without output.
+- A thread created by the other engine is not resumed; the request starts a new session. Self-analysis runs without session persistence.
+- Rate-limit rejection is reported as `claude_rate_limited`. Engines are not switched automatically.
 
 ## Errors
 
