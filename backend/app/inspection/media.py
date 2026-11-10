@@ -1,6 +1,7 @@
 """Probe and decode output and corresponding source intervals with local FFmpeg."""
 
 import hashlib
+import math
 import re
 import subprocess
 from pathlib import Path
@@ -133,7 +134,7 @@ def audio_samples(path, start, duration):
             "-ac",
             "1",
             "-ar",
-            "8000",
+            str(OPENING_SAMPLE_RATE),
             "-f",
             "f32le",
             "-",
@@ -146,21 +147,32 @@ def audio_samples(path, start, duration):
 def inspect_opening(path, candidate, source):
     evidence = []
     try:
-        # Concat pads audio to the hook video's last frame. A fractional hook
-        # therefore moves the body by at most one encoded frame; it is not a
-        # different scene. Never search beyond one frame (or 50ms), nor realign
-        # the hook/no-hook opening. The correlation threshold stays unchanged.
-        fps = probe_metadata(path).fps if candidate.hook_scene_start is not None else None
+        fps = None
+        if candidate.hook_scene_start is not None:
+            metadata = probe_metadata(path)
+            # The mean rate can drift at a concat join. Use the frame grid
+            # rate to locate the first frame of the body.
+            fps = metadata.nominal_fps or metadata.fps
         for lo, hi, origin in source_pieces(candidate):
             duration = min(3, hi - lo)
-            allowance = min(OPENING_MAX_JOIN_ALIGNMENT_SECONDS, 1 / fps) if lo > 0 and fps and fps > 0 else 0
-            a, b = audio_samples(path, lo, duration + allowance), audio_samples(source, origin, duration)
-            size = min(len(a), len(b))
-            if size < 800:
+            read_start, allowance = lo, 0
+            if lo > 0 and fps and math.isfinite(fps) and fps > 0:
+                allowance = min(OPENING_MAX_JOIN_ALIGNMENT_SECONDS, 1 / fps)
+                position = lo * fps
+                if not math.isclose(position, round(position), rel_tol=0, abs_tol=1e-7):
+                    boundary = math.ceil(position) / fps
+                    if 0 < boundary - lo <= allowance:
+                        read_start = boundary
+
+            observed = audio_samples(path, lo, duration)
+            expected = audio_samples(source, origin, duration)
+            raw = audio_correlation(observed, expected)
+            score = raw if read_start == lo else audio_correlation(audio_samples(path, read_start, duration), expected)
+            if score is None or raw is None:
                 return Check(code="OPENING_UNVERIFIED", outcome="unknown", second=lo)
-            score, offset, raw = aligned_correlation(a, b[:size], max_offset=int(allowance * OPENING_SAMPLE_RATE))
-            evidence.append({"outputStart": lo, "sourceStart": origin, "seconds": duration, "correlation": score,
-                "rawCorrelation": raw, "alignmentOffsetSeconds": offset / OPENING_SAMPLE_RATE, "maxAlignmentSeconds": allowance})
+            evidence.append({"outputStart": lo, "readStartSeconds": read_start, "sourceStart": origin,
+                "seconds": duration, "correlation": score, "rawCorrelation": raw,
+                "alignmentOffsetSeconds": read_start - lo, "maxAlignmentSeconds": allowance})
         return Check(
             code="OPENING_MISMATCH",
             outcome="pass" if all(e["correlation"] >= OPENING_CORRELATION_MIN for e in evidence) else "fail",
@@ -170,22 +182,13 @@ def inspect_opening(path, candidate, source):
         return Check(code="OPENING_UNVERIFIED", outcome="unknown")
 
 
-def aligned_correlation(observed, expected, *, max_offset=0):
-    """Normalized correlation at bounded nonnegative PCM offsets; no text/media edits."""
-    size = len(expected)
-    count = min(max_offset, len(observed) - size) + 1
-    if size == 0 or count <= 0:
-        raise ValueError("audio samples missing")
-    a, b = observed[:size + count - 1], expected - expected.mean()
-    a = a - a.mean()
-    length = 1 << (len(a) + size - 2).bit_length()
-    dots = np.fft.irfft(np.fft.rfft(a, length) * np.fft.rfft(b[::-1], length), length)[size - 1:size + count - 1]
-    sums = np.r_[0.0, np.cumsum(a)]
-    squares = np.r_[0.0, np.cumsum(a * a)]
-    energy = np.maximum(0, squares[size:] - squares[:-size] - (sums[size:] - sums[:-size]) ** 2 / size)
-    norms = np.sqrt(energy) * np.linalg.norm(b)
-    scores = np.divide(dots, norms, out=np.zeros(count), where=norms > 1e-8)
+def audio_correlation(observed, expected):
+    size = min(len(observed), len(expected))
+    if size < 800:
+        return None
+    a, b = observed[:size], expected[:size]
     if np.max(np.abs(a)) < 1e-4 and np.max(np.abs(b)) < 1e-4:
-        scores[:] = 1
-    best = int(np.argmax(scores))
-    return float(scores[best]), best, float(scores[0])
+        return 1.0
+    a, b = a - a.mean(), b - b.mean()
+    norm = np.linalg.norm(a) * np.linalg.norm(b)
+    return float(a @ b / norm) if norm > 1e-8 else 0.0

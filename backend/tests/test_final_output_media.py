@@ -10,7 +10,7 @@ from app.video.probe import VideoMetadata
 
 
 @pytest.fixture
-def movies(tmp_path, monkeypatch):
+def movies(tmp_path, monkeypatch, request):
     if not shutil.which("ffmpeg"):
         pytest.skip("FFmpeg required for real MP4 defect fixtures")
     if not shutil.which("ffprobe"):
@@ -30,6 +30,7 @@ def movies(tmp_path, monkeypatch):
                     width=v.width if v else None,
                     height=v.height if v else None,
                     fps=float(v.average_rate) if v and v.average_rate else None,
+                    nominal_fps=float(v.base_rate) if v and v.base_rate else None,
                     has_audio=a is not None,
                     video_stream_duration=duration,
                     audio_stream_duration=seconds(a),
@@ -42,16 +43,21 @@ def movies(tmp_path, monkeypatch):
     def ffmpeg(args):
         subprocess.run(["ffmpeg", "-v", "error", "-nostdin", *args], check=True, capture_output=True, timeout=60)
 
+    fps = getattr(request, "param", 25)
+    # At 60fps, a frame is not an integer number of 8kHz samples.
+    # High-frequency noise makes the resulting fractional phase error visible.
+    audio = ("anoisesrc=a=0.1:r=48000:d=12:seed=248,highpass=f=2500,highpass=f=2500,lowpass=f=3700" if fps == 60
+             else "aevalsrc=0.1*sin(2*PI*(200*t+10*t*t)):s=16000:d=12")
     ffmpeg(
         [
             "-f",
             "lavfi",
             "-i",
-            "testsrc2=s=640x360:r=25:d=12",
+            f"testsrc2=s=640x360:r={fps}:d=12",
             "-f",
             "lavfi",
             "-i",
-            "aevalsrc=0.1*sin(2*PI*(200*t+10*t*t)):s=16000:d=12",
+            audio,
             "-c:v",
             "libx264",
             "-preset",
@@ -80,7 +86,11 @@ def test_real_normal_mp4_passes(movies):
     source, candidate, _transform, _folder = movies
     digest, checks = media.inspect_media(source, candidate, dimensions=(640, 360), source=source)
     assert digest and all(c.outcome == "pass" for c in checks), checks
-    assert media.inspect_opening(source, candidate, source).outcome == "pass"
+    opening = media.inspect_opening(source, candidate, source)
+    assert opening.outcome == "pass"
+    piece, = opening.evidence["pieces"]
+    assert piece["readStartSeconds"] == piece["alignmentOffsetSeconds"] == piece["maxAlignmentSeconds"] == 0
+    assert piece["correlation"] == piece["rawCorrelation"]
 
 
 @pytest.mark.parametrize(
@@ -178,17 +188,51 @@ def test_fractional_hook_concat_frame_padding_is_aligned_without_relaxing_correl
     assert body["correlation"] >= media.OPENING_CORRELATION_MIN == 0.9
 
 
-def test_pcm_alignment_cannot_hide_a_wrong_opening_or_search_outside_one_frame():
+@pytest.mark.parametrize("movies", [60], indirect=True)
+@pytest.mark.parametrize("hook_seconds,body_start,expected", [(2.38, 5, "pass"), (2.38, 4, "fail"), (2.4, 5, "pass")])
+def test_60fps_hook_opening_uses_frame_boundary(movies, hook_seconds, body_start, expected):
+    from app.render.render_normal import build_render_normal_command
+
+    source, candidate, _transform, folder = movies
+    candidate.start, candidate.end, candidate.duration = 5, 9, 4
+    candidate.hook_scene_start, candidate.hook_scene_end = 5.2, 5.2 + hook_seconds
+    output = folder / "hook-60fps.mp4"
+    subprocess.run(build_render_normal_command(source, output, body_start, body_start + 4,
+        hook_scene_start=candidate.hook_scene_start, hook_scene_end=candidate.hook_scene_end),
+        check=True, capture_output=True, timeout=60)
+    check = media.inspect_opening(output, candidate, source)
+    assert check.outcome == expected, check
+    hook, body = check.evidence["pieces"]
+    assert hook["alignmentOffsetSeconds"] == 0
+    assert hook["correlation"] >= media.OPENING_CORRELATION_MIN
+    boundary = 143 / 60 if hook_seconds == 2.38 else 2.4
+    assert body["readStartSeconds"] == pytest.approx(boundary)
+    assert body["alignmentOffsetSeconds"] == pytest.approx(boundary - hook_seconds)
+    assert body["maxAlignmentSeconds"] == pytest.approx(1 / 60)
+    if hook_seconds == 2.4:
+        assert body["correlation"] == body["rawCorrelation"]
+    elif expected == "pass":
+        assert body["rawCorrelation"] < media.OPENING_CORRELATION_MIN <= body["correlation"]
+
+
+def test_frame_alignment_is_skipped_if_boundary_exceeds_50ms(monkeypatch):
     import numpy as np
 
-    rng = np.random.default_rng(238)
-    expected = rng.standard_normal(24000)
-    shifted = np.r_[np.zeros(240), expected]
-    assert media.aligned_correlation(shifted, expected, max_offset=160)[0] < media.OPENING_CORRELATION_MIN
-    score, offset, raw = media.aligned_correlation(shifted, expected, max_offset=320)
-    assert score > 0.99 and offset == 240 and raw < media.OPENING_CORRELATION_MIN
-    assert media.aligned_correlation(rng.standard_normal(24320), expected, max_offset=320)[0] < media.OPENING_CORRELATION_MIN
-    assert media.aligned_correlation(np.zeros(24000), np.zeros(24000)) == (1.0, 0, 1.0)
+    reads = []
+
+    def samples(path, start, duration):
+        reads.append((path, start))
+        return np.arange(8000)
+
+    monkeypatch.setattr(media, "audio_samples", samples)
+    monkeypatch.setattr(media, "probe_metadata", lambda _: VideoMetadata(None, None, None, 10, True))
+    candidate = Candidate(id="slow", type="short", start=1, end=5, duration=4, transcript_text="",
+                          hook_scene_start=2, hook_scene_end=3.01)
+    result = media.inspect_opening("output", candidate, "source")
+    body = result.evidence["pieces"][1]
+    assert body["maxAlignmentSeconds"] == 0.05
+    assert body["alignmentOffsetSeconds"] == 0
+    assert [start for path, start in reads if path == "output"] == pytest.approx([0, 1.01])
 
 
 def test_real_black_mp4_is_repaired_and_reinspected_through_the_controller(movies):

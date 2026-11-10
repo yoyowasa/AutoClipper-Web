@@ -45,6 +45,7 @@ def test_parse_ffprobe_output() -> None:
                     "height": 1080,
                     "duration": "12.300",
                     "avg_frame_rate": "30000/1001",
+                    "r_frame_rate": "30/1",
                 },
                 {"codec_type": "audio", "duration": "12.320"},
             ],
@@ -62,6 +63,7 @@ def test_parse_ffprobe_output() -> None:
         video_stream_duration=12.3,
         audio_stream_duration=12.32,
         container_duration=12.345,
+        nominal_fps=30,
     )
 
 
