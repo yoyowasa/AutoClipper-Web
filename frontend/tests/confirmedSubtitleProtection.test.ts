@@ -72,29 +72,75 @@ async function main() {
   const previousFetch = globalThis.fetch;
   const previousWindow = globalThis.window;
   const previousAnimationFrame = globalThis.requestAnimationFrame;
-  let confirmedMessage = "", requests = 0, accepted = false;
-  Object.assign(globalThis, { window: { confirm: (message: string) => { confirmedMessage = message; return accepted; } } });
+  let confirmCalls = 0, requests = 0;
+  Object.assign(globalThis, { window: { confirm: () => { confirmCalls++; return false; } } });
+  const sharedEdit = { ...segments[0], id: "edited", text: "あかねです", affectedClipIds: [short.id, short2.id] };
+  const protectedSegments = [{ ...segments[0], affectedClipIds: [normal.id] }, segments[1]];
+  const savedReview = state<SubtitleReviewDocument | null>(null);
+  const clipDrafts = state(Object.fromEntries(review.clips.map(clip => [clip.id, contentDraftForClip(clip)])));
+  const style = { fontSize: 42 };
+  for (const draft of Object.values(clipDrafts.value)) draft.subtitleStyles = [{ start: 1, end: 2, style }];
   globalThis.fetch = async (_input, init) => {
     requests++;
     assert.deepEqual(JSON.parse(String(init?.body)).segments, [{ segmentId: "shared", text: "あかねです" }]);
-    return new Response(JSON.stringify(review), { headers: { "Content-Type": "application/json" } });
+    return new Response(JSON.stringify({ ...review, clips: [normal,
+      { ...short, confirmed: true, segmentIds: [sharedEdit.id] }, { ...short2, segmentIds: [sharedEdit.id] }],
+      segments: [...protectedSegments, sharedEdit] }), { headers: { "Content-Type": "application/json" } });
   };
   Object.assign(context, {
     jobId: "test", selectedClip: short, selectedClipContentDraft: contentDraftForClip(short), selectedSegments: [segments[0]],
     drafts: clipSegmentDrafts(short, segments, drafts.value), dirtySegmentIds: clipDirtySegmentIds(short, dirty.value),
     selectedHookDurationIsValid: true, beginReviewMutation: () => 1, isCurrentReviewMutation: () => true,
-    locallyUpdatedReviewRef: { current: null }, setError: () => {}, setConfirmingClipId: () => {}, setReview: () => {},
+    locallyUpdatedReviewRef: { current: null }, setError: () => {}, setConfirmingClipId: () => {}, setReview: savedReview.set,
     setShortFramingDrafts: () => {}, setClipContentDrafts: () => {}, endReviewMutation: () => {}
   });
   try {
     await createReviewConfirmation(context).confirmSelectedClip();
-    assert.equal(requests, 0, "cancelled impact confirmation must not save");
-    assert.match(confirmedMessage, /共有ショート/);
-    assert.doesNotMatch(confirmedMessage, /確定した通常/);
-    accepted = true;
-    await createReviewConfirmation(context).confirmSelectedClip();
     assert.equal(requests, 1);
+    assert.equal(confirmCalls, 0, "shared subtitle confirmation must save without a dialog");
+    assert.deepEqual(savedReview.value?.clips[0], normal);
+    assert.deepEqual(savedReview.value?.clips[2].segmentIds, [sharedEdit.id]);
+    assert.equal(savedReview.value?.segments.find(s => s.id === "shared")?.text, segments[0].text);
+    assert.equal(savedReview.value?.segments.find(s => s.id === sharedEdit.id)?.text, "あかねです");
     assert.equal(drafts.value[segmentDraftKey(normal, "shared")], "直接の修正", "other clip's explicit draft survives");
+
+    globalThis.requestAnimationFrame = callback => { callback(0); return 0; };
+    Object.assign(context, { isEditable: true, subtitleListRef: { current: null }, segmentRowRefs: { current: {} },
+      setIsSavingStructure: () => {}, setStyledSegmentId: () => {}, setSegmentCursor: () => {},
+      setBulkCorrectionSelection: () => {}, setClipContentDrafts: clipDrafts.set });
+    const split = [{ ...sharedEdit, id: "left", text: "あかね", end: 1.5 },
+      { ...sharedEdit, id: "right", text: "です", start: 1.5 }];
+    let source = [segments[0]];
+    for (const [action, replacement] of [["split", split], ["merge", [sharedEdit]]] as const) {
+      const ids = replacement.map(segment => segment.id);
+      const inputs = source.map(segment => ({ segmentId: segment.id, before: segment.text, text: segment.text }));
+      globalThis.fetch = async (_input, init) => {
+        requests++;
+        const request = JSON.parse(String(init?.body));
+        assert.equal(request.action, action);
+        assert.equal(request.clipId, short.id);
+        assert.deepEqual(request.segments, inputs);
+        return new Response(JSON.stringify({ ...review,
+          clips: [normal, { ...short, segmentIds: ids }, { ...short2, segmentIds: ids }],
+          segments: [...protectedSegments, ...replacement]
+        }), { headers: { "Content-Type": "application/json" } });
+      };
+      Object.assign(context, { selectedSegments: source, dirtySegmentIds: new Set() });
+      assert.equal(await createSubtitleEditing(context).saveSubtitleStructure({ action, segments: inputs,
+        ...(action === "split" ? { splitOffset: 3, splitTime: 1.5 } : {}) }), true);
+      assert.equal(confirmCalls, 0, `shared subtitle ${action} must save without a dialog`);
+      assert.deepEqual(savedReview.value?.clips[0], normal);
+      assert.deepEqual(savedReview.value?.clips[2].segmentIds, ids);
+      assert.deepEqual(savedReview.value?.segments.slice(0, 2), protectedSegments);
+      for (const id of [short.id, short2.id]) {
+        assert.deepEqual(clipDrafts.value[id].subtitleStyles, replacement.map(({ start, end }) => ({ start, end, style })));
+      }
+      assert.deepEqual(clipDrafts.value[normal.id].subtitleStyles, [{ start: 1, end: 2, style }]);
+      context.review = savedReview.value;
+      source = [...replacement];
+    }
+    assert.equal(requests, 3);
+    Object.assign(context, { review, setClipContentDrafts: () => {} });
     // Structure saves unconfirm the explicitly opened clip. Its other unsaved rows must survive that transition.
     drafts.value[segmentDraftKey(normal, "normal-only")] = "残しておく下書き";
     dirty.value.add(segmentDraftKey(normal, "normal-only"));
@@ -115,6 +161,6 @@ async function main() {
   } finally {
     globalThis.fetch = previousFetch; globalThis.window = previousWindow; globalThis.requestAnimationFrame = previousAnimationFrame;
   }
-  console.log("Confirmed subtitle protection: targets, shared drafts, explicit edits, storage and apply confirmation passed");
+  console.log("Confirmed subtitle protection: dialog-free apply, split and merge, shared styles and protected drafts passed");
 }
 void main().catch(error => { console.error(error); process.exitCode = 1; });

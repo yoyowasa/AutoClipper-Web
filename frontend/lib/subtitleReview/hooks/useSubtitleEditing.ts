@@ -3,7 +3,7 @@
 import { cueStylesChanged } from "../cueStyles";
 
 import { reconcileCaptionSave } from "../captionAutosave";
-import { bulkEditableSegments, sharedSubtitleNotice, subtitleEditTargets, segmentDraftKey } from "../sharedSegments";
+import { bulkEditableSegments, subtitleEditTargets, segmentDraftKey } from "../sharedSegments";
 import { editSubtitleStructure, updateSubtitleReviewSegments } from "../../api";
 import type { SubtitleStructureRequest } from "../../types";
 import type { SubtitleBatchUpdate } from "../../subtitleBulkCorrection";
@@ -113,8 +113,6 @@ export function useSubtitleEditing(context: SubtitleReviewContext) {
     if (request.action === "insert_at_time") for (const clip of oldDocument.clips) {
       if ((oldDocument.subtitleOnlyAuto && context.selectedClip.confirmed ? clip.id === request.clipId : !clip.confirmed || clip.id === request.clipId) && clip.start < request.end! && clip.end > request.start!) affected.add(clip.id);
     }
-    const notice = sharedSubtitleNotice(oldDocument, [{ affectedClipIds: [...affected] }], request.clipId!);
-    if (request.action !== "insert_at_time" && notice && !window.confirm(`${notice}\n確定済みの他のclipは変更しません。保存しますか？`)) return false;
     const first = sourceSegments[0];
     const oldIds = new Set(oldDocument.segments.map(segment => segment.id));
     const scrollTop = subtitleListRef.current?.scrollTop ?? 0;
