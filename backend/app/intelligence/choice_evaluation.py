@@ -16,7 +16,7 @@ from app.intelligence.models import ProductionLink, SyncRun, VideoDailyStat, You
 from app.intelligence.production_catalog import read_families
 from app.intelligence.production_dimensions import MIN_GROUP_VIDEOS
 from app.intelligence.policy import statistical_expiry
-from app.production_choices import value_hash
+from app.production_choices import ProductionChoice, value_hash
 
 MAX_CHOICE_INPUT_CHARS = 40_000
 MAX_CHOICE_INPUT_GROUPS = 30
@@ -91,6 +91,23 @@ def final_choices(record, *, as_of=None):
     return [(key, selected.get(key) or observed[key]) for key in sorted(selected.keys() | observed.keys())]
 
 
+def stored_title_intent(record, selected_id):
+    """The intent stored with the candidate that became the published title; an edited or unmatched title has none."""
+    from app.intelligence.choice_policy_schema import INTENTS
+    found = next((c for c in record.titleCandidates.candidates if c.id == selected_id), None)
+    return found.intent if found and found.title == record.publicationTitle and found.intent in INTENTS else None
+
+
+def stored_title_choice(record):
+    """A record without choice history still stores which title candidate was published. Provenance stays unrecorded."""
+    selected = record.titleCandidates.selectedId
+    if not stored_title_intent(record, selected):
+        return []
+    return [(("title_hook", ""), ProductionChoice(id="record-title:" + record.recordId, kind="title_hook",
+        clipId=record.selection.candidateId, stage="observed", source="unrecorded", recordedAt=record.createdAt,
+        values={"selectedTitleId": selected}))]
+
+
 def record_corrections(record, *, as_of=None):
     """Human changes to an automatic choice, as comparable option pairs. Wording and colours stay unmapped."""
     from app.intelligence.choice_policy_evidence import option_change
@@ -157,8 +174,12 @@ def build_choice_evaluations(db, paths, config, channel_id, stamp, *, families=N
         corrections += [{**item, "video_id": video.id} for item in record_corrections(record, as_of=video.published_at)]
         if not choices:
             excluded["CHOICES_UNRECORDED"] += 1
+            choices = stored_title_choice(record)
         for (kind, role), choice in choices:
             options = choice_options(kind, role, choice.values)
+            if kind == "title_hook" and "intent" not in options:
+                intent = stored_title_intent(record, choice.values.get("selectedTitleId"))
+                options |= {"intent": intent} if intent else {}
             key = (record.characterPresetName or "未設定", record.type, kind, role, choice.source, choice.policyVersion,
                    json.dumps(options, ensure_ascii=False, sort_keys=True), choice.implementationVersion)
             id = "choice:" + hashlib.sha256(json.dumps(key, ensure_ascii=False).encode()).hexdigest()[:24]

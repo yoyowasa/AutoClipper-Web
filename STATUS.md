@@ -820,3 +820,41 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 変更: `backend/app/intelligence/production_catalog.py` の上限を `MAX_RECORD_BYTES`（8MB）にした。照合条件・手動結合・記録形式は変更なし。`docs/INTELLIGENCE_PRODUCTION_LINKS.md` に上限を記載。
 - 検証: `backend/tests/test_production_links.py` に1MB超の記録が結び付くこと、上限超過は従来どおり注意になることを追加。稼働DBのbackup()コピーと記録のコピーで照合し、結び付きが54→55（該当1件の追加のみ、解除・変更0、読込の問題0）。全件テストとCIの結果はPRに記録する。
 - 未解決: 履歴はジョブ内の再書き出しで増え続ける。8MBは当面の余裕で、履歴の持ち方の見直しは別タスク。旧記録（選択履歴なし）の評価利用と、YouTube側でハッシュタグを足したタイトルの自動結合は正本の変更が必要なため未実装。
+## 2026-11-10 PR #187（task-246）反映
+
+- 反映前: 両RQキューLLEN/WIP 0、同期・分析の実行中なし、Codex中継のrequests/processing空。主フォルダがPR branchのまま（未コミットなし）だったため main へ戻してから作業。SQLite backup() で `storage/backups/autoclipper_pre_task246_20261109T174752Z.db`（integrity_check=ok、jobs/videos/youtube_videos/video_daily_stats/sync_runs の件数一致）。
+- マージ: PR #187 を merge commit（380ae95）。CI 3件成功。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。5コンテナ running、/health 200、/intelligence・/settings 200。backend・intelligence-worker で新モジュールのimport、PROMPT_VERSION=channel_self_analysis_v5、RETENTION_LIMIT=20 を確認。中継の再起動は不要（プロンプトはbackend側で生成）。
+- 未確認: 実同期での維持率取得・元配信日の特定・週別集計を含む分析（次の日次同期 12:00 JST と月曜の定時分析で確認）。初回の維持率取得は1回20窓までで、約20日以上かかる見込み。
+
+## 2026-11-10 PR #189（task-248）反映
+
+- 背景: job_b06b1902818549cfa8922df2f11ab962 のショート1（60fps・2.38秒フック）が最終検査 OPENING_MISMATCH（本編相関0.874）で毎回不合格になり、字幕確定が完了しなかった。本編はフレーム境界143/60秒から照合すると0.9994で一致し、検査側の誤検出だった。
+- 反映前: 両RQキューLLEN/WIP 0、DBの実行中ジョブなし、同期・分析の実行中なし、Codex中継のrequests/processing空。主フォルダがtask-247のbranchだったため main へ戻した。SQLite backup() で `storage/backups/autoclipper_pre_task248_20261110T130714Z.db`（integrity_check=ok、jobs/videos/youtube_videos/video_daily_stats/sync_runs の件数一致）。
+- マージ: PR #189 を merge commit（c7dd3cb）。CI 3件成功。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。5コンテナ running、/health 200。worker・backend で新しい照合関数を確認。エラーログなし。中継の再起動は不要。
+- 未確認: 対象ジョブは自動で再検査されない。clipを1件確定し直したときの合格は未確認。
+
+## 2026-11-11 PR #190（task-249）反映
+
+- 反映前: 両RQキューLLEN/WIP 0、DBの実行中ジョブなし、同期・分析の実行中なし、中継のrequests/processing空。SQLite backup() で `storage/backups/autoclipper_pre_task249_20261110T161751Z.db`（integrity_check=ok、jobs/videos/youtube_videos/video_daily_stats/sync_runs の件数一致）。
+- マージ: PR #190 を merge commit（bcba902）。CI 3件成功。
+- 反映: `storage/codex_bridge/engine.json` に `{"engine": "claude"}` を置き、`LauncherController.ensure_codex_bridge_running()` で中継を再起動（旧pid停止、新pid起動）。状態は ready・engine=claude・model=claude-opus-5-5・effort=medium。backend・コンテナの再buildは不要（中継のみの変更）。
+- 未確認: 実ジョブでの Claude 応答（最終検査・初期選定・自己分析）。Codexへ戻す場合は engine.json を `{"engine": "codex"}` にして中継を再起動する。
+
+## 2026-11-12 PR #191（task-250）反映
+
+- 反映前: 両RQキュー・実行中ジョブ・同期／分析の実行中・中継のrequests/processingが空であることを確認。SQLite backup() で `storage/backups/autoclipper-pre-pr191-20261112-023118.db`。
+- マージ: PR #191 を merge commit（3b4195d）。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。中継の再起動は不要。
+- 未確認: 結び付きの追加（54→55）は次の同期／照合で反映される。稼働環境では未観測。
+
+## 2026-11-12 task-251：学習の基準を減らし、7日の成績で仮判定する
+
+- 目的: 字幕以外の自動化と学習の循環を早く回す。旧基準（30日待ち・両群5本・同じ尺帯／実装版／方針版・出所未記録は不使用・到達率非悪化）では、稼働データで比較できる組が1つも無かった。ユーザー承認の見直し表に合わせて正本と実装を改めた。
+- 変更（判定）: `backend/app/intelligence/choice_policy_evidence.py`、`choice_policy_engine.py`、`choice_policy_corrections.py`。群はキャラ・形式・項目・記録された値だけで分ける。30日が両群5本以上で確定、無ければ7日が両群3本以上で仮判定。中央値20%以上の改善で1項目を最大10%更新（1分析1項目・重複防止・戻した値の再採用防止は維持）。更新後の版は、その版IDが付いた動画で7日3本／30日5本から判定し、20%以上の悪化で自動巻き戻し。到達率の条件、根拠期限切れの保留、7日の警告は廃止。
+- 変更（記録の利用）: `backend/app/intelligence/choice_evaluation.py`。選択履歴の無い旧記録は、記録に残る投稿タイトル候補のintentだけを出所未記録の観測として使う（題名が一致し許可値のときのみ）。記録に無い値は推定しない。旧記録に低知名度設定は保存されていないため、冒頭点の学習には使っていない。
+- 変更（画面・文書）: `frontend/lib/choicePolicies.ts`、`frontend/components/intelligence/ChoicePolicyHistory.tsx`（仮判定／確定と両群の本数・中央値を表示、説明文を新基準に更新、旧理由は旧基準として残す）。`docs/INTELLIGENCE_CHOICE_POLICIES.md` の基準1〜5、現行・到達仕様の現在欄と残り作業3の現在欄、`docs/INTELLIGENCE_SCHEDULING_EVALUATION.md`。§3は変更なし。
+- 検証: `backend/tests/test_choice_policies.py` に仮判定3本・2本／20%未満の保留・旧記録のintent利用・編集済み題名は不使用・7日／30日悪化の巻き戻しを追加・更新。稼働DBのbackup()コピーと記録のコピーで実際の更新処理を実行し、チャンネル1（ショート）9本 中央値310 → 4本 中央値552.5、チャンネル2（ショート）7本 中央値155 → 3本 中央値1327 で、どちらも `title_hook.factual` の仮更新が1件、以後は新版の成績待ちで保留になることを確認。全件テスト・CIの結果はPRに記録する。
+- 反映時: launcher・プロンプト・返答の形は変えていないため中継の再起動は不要。DBスキーマ変更なし。
+- 未解決: 仮判定は3〜9本の少数比較で、因果効果は未確認。版IDが付くのは版を固定したautoジョブの動画だけなので、更新後の判定はその動画が7日の成績で3本そろうまで進まない。YouTube側でハッシュタグを足した題名の結び付き、形式不一致で対象外になる動画、記録の無い動画のタイトル分類は未対応。

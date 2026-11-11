@@ -56,6 +56,7 @@ def test_approved_observation_rule_versions_one_item_and_deduplicates(environmen
     head = e.db.scalar(select(ChoicePolicyHead))
     old, new = (e.db.get(ChoicePolicyVersion, id) for id in (result.from_id, result.to_id))
     assert result.action == "update" and new.previous_id == old.id == result.from_id
+    assert result.reason == "OBSERVATIONAL_CRITERIA_MET" and result.evidence["basis"] == "first30"
     assert head.current_id == new.id and new.values["weights"]["framing.blur_background"] == 1.1
     assert sum(v != old.values["weights"][k] for k, v in new.values["weights"].items()) == 1
     assert result.evidence["before"]["count"] == result.evidence["after"]["count"] == 5
@@ -64,25 +65,92 @@ def test_approved_observation_rule_versions_one_item_and_deduplicates(environmen
     assert result.evidence["before"]["observed_at"] and result.evidence["after"]["evidence_ids"]
     assert evaluate(e) == []
     waiting = evaluate(e, "analysis_next", CLOCK + timedelta(minutes=1))[0]
-    assert waiting.action == "hold" and waiting.reason == "VERSION_30_DAY_PENDING"
+    assert waiting.action == "hold" and waiting.reason == "VERSION_RESULT_PENDING"
     assert len(list(e.db.scalars(select(ChoicePolicyVersion)))) == 2
 
 
-@pytest.mark.parametrize("kwargs", [{"count": 4}, {"source": "unrecorded"}, {"target_views": 1199999},
-    {"option": "unvalidated_mode"}])
-def test_insufficient_unconfirmed_or_unrecorded_data_is_held(environment, kwargs):
+@pytest.mark.parametrize("kwargs", [{"count": 4}, {"target_views": 1199999}, {"option": "unvalidated_mode"}])
+def test_insufficient_or_unconfirmed_data_is_held(environment, kwargs):
     setup_groups(environment, **kwargs)
     result = evaluate(environment)[0]
     assert result.action == "hold" and result.reason == "INSUFFICIENT_OR_UNCONFIRMED"
     assert len(list(environment.db.scalars(select(ChoicePolicyVersion)))) == 1
 
 
-@pytest.mark.parametrize("source", ["manual", "fallback"])
-def test_manual_and_fallback_choices_are_evidence_not_exclusions(environment, source):
+@pytest.mark.parametrize("source", ["manual", "fallback", "unrecorded"])
+def test_recorded_values_are_evidence_whatever_their_provenance(environment, source):
     setup_groups(environment, source=source)
     result = evaluate(environment)[0]
     assert result.action == "update" and result.reason == "OBSERVATIONAL_CRITERIA_MET"
-    assert result.evidence["after"]["source"] == source and "mixed" not in result.evidence["after"]
+    assert result.evidence["after"]["source"] == source and result.evidence["before"]["source"] == "automatic"
+
+
+def first7(e, index, views):
+    from app.intelligence.models import VideoDailyStat
+    for row in e.db.scalars(select(VideoDailyStat).where(VideoDailyStat.video_id == f"video{index:06}", VideoDailyStat.kind == "first7")):
+        row.values = {"views": views}
+
+
+def young_groups(e, *, count=3, views=600, intents=None):
+    """Videos too young for a 30-day verdict; the second half chose another option and has other 7-day views."""
+    seed(e)
+    for index in range(1, count * 2 + 1):
+        _, r = add_video(e, index, age=10, views=None)
+        if intents:
+            from app.production_records import RecordTitleCandidate, RecordTitles
+            r.choiceHistory = []
+            r.titleCandidates = RecordTitles(selectedId="t1", candidates=[RecordTitleCandidate(
+                id="t1", title=r.publicationTitle, intent=intents[index > count])])
+        elif index > count:
+            r.choiceHistory[0].values = {"shortLayout": "blur_background"}
+        write_json_atomic(e.paths.production_record(r.recordId), r.model_dump(mode="json"))
+        if index > count:
+            first7(e, index, views)
+    e.db.commit()
+
+
+def test_three_videos_with_7_day_results_update_provisionally(environment):
+    e = environment
+    young_groups(e)
+    result = evaluate(e)[0]
+    assert result.action == "update" and result.reason == "PROVISIONAL_7_DAY_CRITERIA_MET"
+    assert result.evidence["basis"] == "first7" and result.evidence["key"] == "framing.blur_background"
+    assert (result.evidence["before_count"], result.evidence["after_count"]) == (3, 3)
+    assert (result.evidence["before_median"], result.evidence["after_median"]) == (500, 600)
+    assert result.evidence["after"]["count"] == 0 and result.evidence["after"]["median"] is None
+    assert e.db.get(ChoicePolicyVersion, result.to_id).values["weights"]["framing.blur_background"] == 1.1
+
+
+@pytest.mark.parametrize("kwargs", [{"count": 2}, {"views": 599}])
+def test_two_videos_or_a_smaller_7_day_gain_are_held(environment, kwargs):
+    young_groups(environment, **kwargs)
+    result = evaluate(environment)[0]
+    assert result.action == "hold" and result.reason == "INSUFFICIENT_OR_UNCONFIRMED"
+
+
+def test_records_without_choice_history_teach_the_stored_title_intent(environment):
+    e = environment
+    young_groups(e, intents=("engagement", "factual"))
+    payload = build_production_aggregates(e.db, e.paths, e.config, 1, CLOCK)["choice_evaluations"]
+    assert payload["excluded_reasons"] == {"CHOICES_UNRECORDED": 6}
+    assert {(g["kind"], g["source"], g["option_values"]["intent"], g["count"]) for g in payload["groups"]} == {
+        ("title_hook", "unrecorded", "engagement", 3), ("title_hook", "unrecorded", "factual", 3)}
+    result = evaluate(e)[0]
+    assert result.action == "update" and result.evidence["key"] == "title_hook.factual"
+    assert result.evidence["after"]["source"] == "unrecorded"
+
+
+def test_an_edited_or_unknown_title_has_no_stored_intent(environment):
+    from app.production_records import RecordTitleCandidate, RecordTitles
+    e = environment
+    seed(e)
+    for index, (title, intent) in enumerate([("別の題名", "factual"), (None, "unknown_intent")], 1):
+        _, r = add_video(e, index)
+        r.choiceHistory = []
+        r.titleCandidates = RecordTitles(selectedId="t1", candidates=[RecordTitleCandidate(
+            id="t1", title=title or r.publicationTitle, intent=intent)])
+        write_json_atomic(e.paths.production_record(r.recordId), r.model_dump(mode="json"))
+    assert build_production_aggregates(e.db, e.paths, e.config, 1, CLOCK)["choice_evaluations"]["groups"] == []
 
 
 def test_a_manual_choice_of_another_kind_does_not_exclude_the_video(environment):
@@ -154,16 +222,20 @@ def test_automatic_to_automatic_changes_are_not_human_corrections(environment):
     assert build_production_aggregates(e.db, e.paths, e.config, 1, CLOCK)["choice_evaluations"]["corrections"] == []
 
 
-def test_correction_version_is_rolled_back_when_new_videos_decline_and_not_adopted_again(environment):
-    from app.intelligence.choice_policy_corrections import judge_correction_version
-    def cohort(version, views):
-        return {"source": "automatic", "band": "30-60", "policy_version": version,
-                "video_views": {f"{version}{i}": v for i, v in enumerate(views)}}
+def test_version_is_judged_on_its_own_videos_and_a_rolled_back_correction_is_not_adopted_again(environment):
+    from app.intelligence.choice_policy_evidence import judge_version
+    def cohort(version, views, basis="first30"):
+        data = {f"{version}{i}": v for i, v in enumerate(views)}
+        return {"versions": dict.fromkeys(data, version), "first30_views": {}, "first7_views": {}} | {basis + "_views": data}
 
-    assert judge_correction_version([cohort("old", [100] * 5), cohort("new", [100] * 4)], "new")[0] == "pending"
-    assert judge_correction_version([cohort("old", [100] * 5), cohort("new", [81] * 5)], "new")[0] == "stable"
-    verdict, proof = judge_correction_version([cohort("old", [100] * 5), cohort("new", [80] * 5)], "new")
-    assert verdict == "rollback" and proof["before_median"] == 100 and proof["after_median"] == 80
+    assert judge_version([cohort("old", [100] * 5), cohort("new", [100] * 4)], "new")[0] == "pending"
+    assert judge_version([cohort("old", [100] * 5), cohort("new", [81] * 5)], "new")[0] == "stable"
+    verdict, proof = judge_version([cohort("old", [100] * 5), cohort("new", [80] * 5)], "new")
+    assert verdict == "rollback" and proof["before_median"] == 100 and proof["after_median"] == 80 and proof["basis"] == "first30"
+    assert judge_version([cohort("old", [100] * 3, "first7"), cohort("new", [100] * 2, "first7")], "new")[0] == "pending"
+    verdict, proof = judge_version([cohort("old", [100] * 3, "first7"), cohort("new", [81] * 3, "first7")], "new")
+    assert verdict == "stable" and proof["basis"] == "first7"
+    assert judge_version([cohort("old", [100] * 3, "first7"), cohort("new", [80] * 3, "first7")], "new")[0] == "rollback"
     e = environment
     seed(e)
     for index in range(1, 6):
@@ -204,7 +276,8 @@ def test_new_jobs_freeze_version_and_keep_manual_and_legacy_paths(environment):
             assert record.choiceHistory[0].policyVersion == "manual-v1"
 
 
-def test_30_day_regression_rolls_back_and_7_day_only_warns(environment, monkeypatch):
+@pytest.mark.parametrize("kind,views,reason", [("first7", 400, "REGRESSION_7_DAY"), ("first30", 800000, "REGRESSION_30_DAY")])
+def test_new_version_videos_keep_or_roll_back_the_version_on_7_and_30_day_results(environment, monkeypatch, kind, views, reason):
     import test_choice_evaluation as fixture
     from app.intelligence.models import VideoDailyStat
     e = environment
@@ -216,21 +289,17 @@ def test_30_day_regression_rolls_back_and_7_day_only_warns(environment, monkeypa
     for v in e.db.scalars(select(YouTubeVideo)):
         v.metadata_updated_at = future
     for index in range(11, 16):
-        v, record = add_video(e, index, views=None, policy=updated.to_id)
-        record.choiceHistory[0].implementationVersion = "choice-v1"
-        write_json_atomic(e.paths.production_record(record.recordId), record.model_dump(mode="json"))
-        v.duration_seconds = 60
-        for row in e.db.scalars(select(VideoDailyStat).where(VideoDailyStat.video_id == v.id, VideoDailyStat.kind == "first7")):
-            row.values = {"views": 100}
+        add_video(e, index, views=None, policy=updated.to_id)
     e.db.commit()
-    early = evaluate(e, "analysis_early", future)[0]
-    assert early.action == "warning" and early.reason == "EARLY_7_DAY_DECLINE"
+    steady = evaluate(e, "analysis_steady", future)[0]
+    assert steady.action == "hold" and steady.reason == "VERSION_NOT_WORSE"
+    assert steady.evidence["basis"] == "first7" and steady.evidence["after_count"] == 5
     assert e.db.get(ChoicePolicyHead, updated.policy_id).current_id == updated.to_id
-    for row in e.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == "first30", VideoDailyStat.video_id >= "video000011")):
-        row.values, row.missing_reasons = {"views": 800000}, {}
+    for row in e.db.scalars(select(VideoDailyStat).where(VideoDailyStat.kind == kind, VideoDailyStat.video_id >= "video000011")):
+        row.values, row.missing_reasons = {"views": views}, {}
     e.db.commit()
     rolled = evaluate(e, "analysis_regression", future + timedelta(minutes=1))[0]
-    assert rolled.action == "rollback" and rolled.reason == "REGRESSION_30_DAY"
+    assert rolled.action == "rollback" and rolled.reason == reason and rolled.evidence["basis"] == kind
     assert rolled.to_id == updated.from_id and rolled.from_id == updated.to_id
     assert e.db.get(ChoicePolicyHead, updated.policy_id).current_id == updated.from_id
     expire_youtube_data(e.db, e.config, clock=rolled.evidence_expires_at)
