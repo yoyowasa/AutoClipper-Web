@@ -812,3 +812,11 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 正本: AGENTS.md（Current Product and Operation／Architecture）と現行・到達仕様 §1 の中継の記述を、ユーザー承認の修正案どおり更新。切替手順は `docs/WINDOWS_LAUNCHER.md`。
 - 検証: 新規 `backend/tests/test_claude_bridge_engine.py`（18件）と既存の中継・launcherテスト、ruff 0.16.10。隔離した一時プロジェクトで実CLIの往復を確認（画像付きの最終検査、タイトル生成、同じセッションの再開）。全件テストとCIの結果はPRに記録する。
 - 未確認: 実ジョブでの初期選定（長いプロンプト・600秒枠）と週次の自己分析の Claude での品質・所要時間、サブスクリプションの利用上限に達した時の挙動（`claude_rate_limited` で失敗する想定）。
+
+## 2026-11-12 task-250 大きい制作記録が結び付けから外れる不具合の修正
+
+- 目的: 選択の評価に使える動画を失わない。制作記録が1MBを超えると `INVALID_RECORD` として読まれず、YouTube動画との結び付けと選択ごとの評価から外れていた。
+- 原因: 各記録の `choiceHistory` にジョブ全体の選択履歴が入り、実記録1件が1,018,860バイト（履歴330件）になっていた。記録自体は正常。
+- 変更: `backend/app/intelligence/production_catalog.py` の上限を `MAX_RECORD_BYTES`（8MB）にした。照合条件・手動結合・記録形式は変更なし。`docs/INTELLIGENCE_PRODUCTION_LINKS.md` に上限を記載。
+- 検証: `backend/tests/test_production_links.py` に1MB超の記録が結び付くこと、上限超過は従来どおり注意になることを追加。稼働DBのbackup()コピーと記録のコピーで照合し、結び付きが54→55（該当1件の追加のみ、解除・変更0、読込の問題0）。全件テストとCIの結果はPRに記録する。
+- 未解決: 履歴はジョブ内の再書き出しで増え続ける。8MBは当面の余裕で、履歴の持ち方の見直しは別タスク。旧記録（選択履歴なし）の評価利用と、YouTube側でハッシュタグを足したタイトルの自動結合は正本の変更が必要なため未実装。

@@ -9,6 +9,11 @@ from app.production_records import ProductionRecord
 from app.storage.paths import StoragePaths
 
 
+# A job's choice history is repeated in every clip record and passed 1 MB in real use;
+# a record dropped here silently loses its YouTube link and its place in the evaluation.
+MAX_RECORD_BYTES = 8_000_000
+
+
 def normalize_title(value: str | None) -> str:
     return " ".join(unicodedata.normalize("NFKC", value or "").split())
 
@@ -32,7 +37,7 @@ def read_families(paths: StoragePaths) -> tuple[dict[str, RecordFamily], list[di
     records, issues = {}, []
     for path in sorted(paths.production_records.glob("*.json")):
         try:
-            if path.stat().st_size > 1_000_000 or path.is_symlink():
+            if path.stat().st_size > MAX_RECORD_BYTES or path.is_symlink():
                 raise ValueError("Invalid record file")
             path.resolve().relative_to(paths.root.resolve())
             record = ProductionRecord.model_validate(json.loads(path.read_text(encoding="utf-8")))
