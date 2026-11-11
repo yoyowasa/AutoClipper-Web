@@ -2,9 +2,7 @@
 import hashlib
 import json
 from datetime import datetime
-from statistics import median
 
-from app.intelligence.choice_policy_schema import REGRESSION
 from app.intelligence.production_dimensions import MIN_GROUP_VIDEOS
 
 MIN_CORRECTION_RECORDS = MIN_GROUP_VIDEOS
@@ -35,19 +33,3 @@ def correction_candidate(items, weights, blocked):
         return key, target, chosen, signature
     return None
 
-
-def judge_correction_version(scope, current_id):
-    """30-day views of videos made under this version against those made under any other version."""
-    after, before = {}, {}
-    for cohort in scope:
-        if cohort["source"] not in ("automatic", "manual", "fallback") or cohort["band"] == "unknown":
-            continue
-        (after if cohort["policy_version"] == current_id else before).update(cohort["video_views"])
-    if len(after) < MIN_GROUP_VIDEOS or len(before) < MIN_GROUP_VIDEOS:
-        return "pending", None
-    proof = {"before_count": len(before), "after_count": len(after),
-             "before_median": median(before.values()), "after_median": median(after.values()),
-             "eligibility": "operational_observation_only"}
-    if proof["after_median"] <= proof["before_median"] * REGRESSION:
-        return "rollback", proof
-    return "stable", proof

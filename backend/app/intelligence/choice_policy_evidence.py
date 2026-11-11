@@ -1,51 +1,80 @@
-"""Equal-age, equal-band observations; eligibility is not causal confirmation."""
-from collections import defaultdict
+"""Recorded options against fixed-age results; eligibility is not causal confirmation."""
+import hashlib
+import json
 from statistics import median
-from sqlalchemy import select
-from app.intelligence.models import YouTubeVideo
-from app.intelligence.dashboard_reports import duration_band
-from app.intelligence.choice_policy_schema import FRAMING_OPTIONS, INTENTS
+from app.intelligence.choice_policy_schema import FRAMING_OPTIONS, INTENTS, REGRESSION
+from app.intelligence.production_dimensions import MIN_GROUP_VIDEOS
+
+# Provisional on first-7-day views with three videos; confirmed on first-30-day views with five.
+PROVISIONAL_MIN_VIDEOS = 3
+BASES = (("first30", MIN_GROUP_VIDEOS), ("first7", PROVISIONAL_MIN_VIDEOS))
+JUDGED = {"reached", "below_target"}
 
 
-def policy_cohorts(db, payload, channel_id):
-    videos = {v.id: v for v in db.scalars(select(YouTubeVideo).where(YouTubeVideo.channel_id == channel_id))}
-    result = []
+def policy_cohorts(payload):
+    """One cohort per character, format, item and recorded option value.
+
+    Duration band, provenance and the version a video was made under do not split a cohort;
+    they stay attached as attributes. A missing view count is left out, never counted as zero.
+    """
+    merged = {}
     for group in payload.get("groups", []):
-        by_band = defaultdict(dict)
+        key = [group[k] for k in ("character_preset_name", "format", "kind", "role")] + [
+            json.dumps(group["option_values"], ensure_ascii=False, sort_keys=True)]
+        id = "options:" + hashlib.sha256(json.dumps(key, ensure_ascii=False).encode()).hexdigest()[:24]
+        item = merged.setdefault(id, {"id": id, **{k: group[k] for k in (
+            "character_preset_name", "format", "kind", "role", "option_values")},
+            "group_ids": [], "sources": set(), "rows": {}, "versions": {}})
+        item["group_ids"].append(group["id"])
+        item["sources"].add(group["source"])
         for row in group["observations"]:
-            video = videos.get(row["video_id"])
-            if video is not None:
-                band = duration_band(video.duration_seconds, video.format)
-                by_band[band][video.id] = row
-        for band, observations in by_band.items():
-            all_rows = list(observations.values())
-            rows = [r for r in all_rows if r["evaluation"]["status"] in {"reached", "below_target"}]
-            values = [r["evaluation"]["first30"]["metrics"]["views"]["value"] for r in rows]
-            first7 = [r["evaluation"]["first7"]["metrics"]["views"]["value"] for r in all_rows
-                      if r["evaluation"]["first7"]["metrics"]["views"]["value"] is not None]
-            result.append({k: group[k] for k in ("id", "character_preset_name", "format", "kind", "role", "source",
-                                                 "policy_version", "option_values")} | {
-                "band": band, "count": len(rows), "total_count": len(all_rows),
-                "implementation_version": group.get("implementation_version") or (
-                    group["policy_version"] if not (group["policy_version"] or "").startswith("policy_") else None),
-                "median": median(values) if values else None, "video_views": {r["video_id"]: v for r, v in zip(rows, values)},
-                "rate": sum(r["evaluation"]["status"] == "reached" for r in rows) / len(rows) if rows else None,
-                "video_ids": sorted(r["video_id"] for r in rows),
-                "observed_at": max((r["evaluation"]["first30"]["observedAt"] for r in rows), default=None),
-                "evidence_ids": sorted({id for r in rows for id in r["evaluation"]["evidence_ids"]}),
-                "first7_count": len(first7), "first7_median": median(first7) if first7 else None})
-    return result
+            item["rows"][row["video_id"]] = row
+            item["versions"][row["video_id"]] = group["policy_version"]
+    result = []
+    for item in merged.values():
+        rows, sources = item.pop("rows"), item.pop("sources")
+        judged = {id: r for id, r in rows.items() if r["evaluation"]["status"] in JUDGED}
+        first30 = {id: r["evaluation"]["first30"]["metrics"]["views"]["value"] for id, r in judged.items()}
+        first7 = {id: r["evaluation"]["first7"]["metrics"]["views"]["value"] for id, r in rows.items()
+                  if r["evaluation"]["first7"]["metrics"]["views"]["value"] is not None}
+        result.append(item | {
+            "group_ids": sorted(item["group_ids"]), "source": next(iter(sources)) if len(sources) == 1 else "mixed",
+            "count": len(first30), "total_count": len(rows), "median": median(first30.values()) if first30 else None,
+            "rate": sum(r["evaluation"]["status"] == "reached" for r in judged.values()) / len(judged) if judged else None,
+            "first30_views": first30, "first7_views": first7,
+            "first7_count": len(first7), "first7_median": median(first7.values()) if first7 else None,
+            "video_ids": sorted(first30.keys() | first7.keys()),
+            "observed_at": max((r["evaluation"]["first30"]["observedAt"] for r in judged.values()), default=None),
+            "evidence_ids": sorted({id for r in judged.values() for id in r["evaluation"]["evidence_ids"]})})
+    return sorted(result, key=lambda g: g["id"])
 
 
-# Automatic, manual and fallback choices are all evidence; only an unknown applied value is not.
-USABLE_SOURCES = ("automatic", "manual", "fallback")
+def compare(before, after):
+    """Median views of two cohorts on the firmest basis both can support, or None while either is too small."""
+    for basis, minimum in BASES:
+        old, new = before[basis + "_views"], after[basis + "_views"]
+        if len(old) >= minimum and len(new) >= minimum:
+            return {"basis": basis, "before_count": len(old), "after_count": len(new),
+                    "before_median": median(old.values()), "after_median": median(new.values())}
+    return None
 
 
-def pure(cohort, minimum):
-    return (cohort["source"] in USABLE_SOURCES and cohort["band"] != "unknown"
-            and cohort["policy_version"] and cohort["implementation_version"]
-            and cohort["count"] >= minimum and cohort["median"] is not None
-            and len(cohort["evidence_ids"]) >= minimum)
+def judge_version(scope, current_id):
+    """Videos made under this version against all other videos of the same character and format."""
+    made = {id for cohort in scope for id, version in cohort["versions"].items() if version == current_id}
+    for basis, minimum in BASES:
+        views = {id: value for cohort in scope for id, value in cohort[basis + "_views"].items()}
+        after = {id: value for id, value in views.items() if id in made}
+        before = {id: value for id, value in views.items() if id not in made}
+        if len(after) < minimum or len(before) < minimum:
+            continue
+        proof = {"basis": basis, "before_count": len(before), "after_count": len(after),
+                 "before_median": median(before.values()), "after_median": median(after.values()),
+                 "eligibility": "operational_observation_only"}
+        if proof["after_median"] <= proof["before_median"] * REGRESSION:
+            return "rollback", proof
+        return "stable", proof
+    return "pending", None
 
 
 def option_change(before, after):

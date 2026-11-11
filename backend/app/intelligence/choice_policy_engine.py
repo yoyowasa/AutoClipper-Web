@@ -1,14 +1,13 @@
-"""Small bounded operational updates from 30-day observations, never generated code."""
+"""Small bounded operational updates from 7-day (provisional) and 30-day (confirmed) observations, never generated code."""
 import hashlib
 import json
 from uuid import uuid4
 from sqlalchemy import select, update
 from app.intelligence.models import Channel, ProductionAggregate, ImprovementTrial
 from app.intelligence.choice_policy_models import ChoicePolicyHead, ChoicePolicyVersion, ChoicePolicyDecision
-from app.intelligence.choice_policy_schema import ChoicePolicyValues, changed_values, next_weight, IMPROVEMENT, REGRESSION
-from app.intelligence.choice_policy_evidence import policy_cohorts, pure, option_change, USABLE_SOURCES
-from app.intelligence.choice_policy_corrections import scope_corrections, correction_candidate, judge_correction_version, SAMPLE_LIMIT
-from app.intelligence.production_dimensions import MIN_GROUP_VIDEOS
+from app.intelligence.choice_policy_schema import ChoicePolicyValues, changed_values, next_weight, IMPROVEMENT
+from app.intelligence.choice_policy_evidence import policy_cohorts, compare, judge_version, option_change, PROVISIONAL_MIN_VIDEOS
+from app.intelligence.choice_policy_corrections import scope_corrections, correction_candidate, SAMPLE_LIMIT
 from app.intelligence.evaluation_rules import GOALS
 
 
@@ -33,90 +32,68 @@ def evaluate_policy(db, head, cohorts, run, stamp, expiry, *, allow_update=True,
     scope = [g for g in cohorts if (g["character_preset_name"], g["format"]) == (head.character, head.format)]
     last_update = next((e for e in events if e.action == "update" and e.to_id == current.id), None)
     stable_proof = None
-    if current.previous_id and last_update:
-        if not last_update.evidence or last_update.evidence_expires_at <= stamp:
-            return decision(db, head, run.id, stamp, expiry, "hold", "EVIDENCE_EXPIRED")
-        if last_update.evidence.get("source") == "human_corrections":
-            verdict, proof = judge_correction_version(scope, current.id)
-            if verdict == "rollback":
-                return decision(db, head, run.id, stamp, expiry, "rollback", "REGRESSION_30_DAY", current.previous_id, proof)
-            if verdict == "pending":
-                return decision(db, head, run.id, stamp, expiry, "hold", "VERSION_30_DAY_PENDING")
-            stable_proof = proof
-            scope = [g for g in scope if g["policy_version"] == current.id]
-        reference = last_update.evidence.get("before")
-    if current.previous_id and last_update and stable_proof is None:
-        baseline = next((g for g in scope if (g["id"], g["band"]) == (reference["id"], reference["band"])), None)
-        fresh = [g for g in scope if g["policy_version"] == current.id and
-                 (g["kind"], g["role"], g["band"], g["implementation_version"]) ==
-                 (reference["kind"], reference["role"], reference["band"], reference["implementation_version"])]
-        judged = [g for g in fresh if pure(g, MIN_GROUP_VIDEOS)]
-        if baseline and pure(baseline, MIN_GROUP_VIDEOS) and judged:
-            observed = sorted(judged, key=lambda g: (-g["count"], g["id"]))[0]
-            proof = {"before": baseline, "after": observed, "eligibility": "operational_observation_only"}
-            if observed["median"] <= baseline["median"] * REGRESSION:
-                return decision(db, head, run.id, stamp, expiry, "rollback", "REGRESSION_30_DAY", current.previous_id, proof)
-            stable_proof = proof
-        early = [g for g in fresh if g["source"] in USABLE_SOURCES and g["first7_count"] >= MIN_GROUP_VIDEOS]
-        warning = bool(baseline and baseline["first7_count"] >= MIN_GROUP_VIDEOS and early and
-                       min(g["first7_median"] for g in early) < baseline["first7_median"] * REGRESSION)
-        if stable_proof is None:
-            return decision(db, head, run.id, stamp, expiry, "warning" if warning else "hold",
-                            "EARLY_7_DAY_DECLINE" if warning else "VERSION_30_DAY_PENDING",
-                            evidence={"before": baseline, "after": early[0] if early else None})
-        scope = [g for g in scope if g["policy_version"] == current.id]
+    if current.previous_id:
+        # One change at a time: the version in use is judged on its own videos before anything else moves.
+        verdict, stable_proof = judge_version(scope, current.id)
+        if verdict == "rollback":
+            reason = "REGRESSION_30_DAY" if stable_proof["basis"] == "first30" else "REGRESSION_7_DAY"
+            return decision(db, head, run.id, stamp, expiry, "rollback", reason, current.previous_id, stable_proof)
+        if verdict == "pending":
+            return decision(db, head, run.id, stamp, expiry, "hold", "VERSION_RESULT_PENDING",
+                            evidence={"minimum": PROVISIONAL_MIN_VIDEOS})
     if not allow_update:
         return decision(db, head, run.id, stamp, expiry, "hold", "UPDATE_BUDGET_LIMIT")
+    weights = ChoicePolicyValues.model_validate(current.values).weights
     candidates = []
     for before in scope:
         for after in scope:
-            if (before["band"], before["policy_version"], before["implementation_version"]) != (
-                    after["band"], after["policy_version"], after["implementation_version"]):
-                continue
-            if not pure(before, MIN_GROUP_VIDEOS) or not pure(after, MIN_GROUP_VIDEOS):
-                continue
-            if set(before["video_ids"]) & set(after["video_ids"]):
-                continue
             change = option_change(before, after)
-            if not change or not before["median"] or after["median"] < before["median"] * IMPROVEMENT or after["rate"] < before["rate"]:
+            if not change or set(before["video_ids"]) & set(after["video_ids"]):
+                continue
+            result = compare(before, after)
+            if not result or not result["before_median"] or result["after_median"] < result["before_median"] * IMPROVEMENT:
                 continue
             key, target = change
-            weights = ChoicePolicyValues.model_validate(current.values).weights
             if key not in weights:
                 continue
-            old = weights[key]
-            value = next_weight(old, target)
-            if value == old:
+            value = next_weight(weights[key], target)
+            if value == weights[key]:
                 continue
             values = changed_values(current.values, key, value)
-            signature = hashlib.sha256(json.dumps([before, after, key], sort_keys=True).encode()).hexdigest()
+            basis = result["basis"]
+            signature = hashlib.sha256(json.dumps(
+                [key, basis, before[basis + "_views"], after[basis + "_views"]], sort_keys=True).encode()).hexdigest()
             if any((e.evidence and e.evidence.get("signature") == signature) or
                    (e.action == "rollback" and db.get(ChoicePolicyVersion, e.from_id).values == values) for e in events):
                 continue
-            candidates.append((-(after["median"] / before["median"]), key, after["id"], before, after, values, signature))
+            ratio = result["after_median"] / result["before_median"]
+            candidates.append(((basis != "first30", -ratio, key, after["id"]), key, before, after, values, signature, result))
     if not candidates:
         learned = learn_from_corrections(db, head, current, last_update, events, corrections, run, stamp, expiry)
         if learned is not None:
             return learned
         reason = "INSUFFICIENT_OR_UNCONFIRMED"
         return decision(db, head, run.id, stamp, expiry, "hold", "VERSION_NOT_WORSE" if stable_proof else reason,
-                        evidence=stable_proof or {"groups": [g["id"] for g in scope], "minimum": MIN_GROUP_VIDEOS,
-                            "cohorts": sorted(scope, key=lambda g: (-g["count"], g["id"]))[:20],
+                        evidence=stable_proof or {"groups": [g["id"] for g in scope], "minimum": PROVISIONAL_MIN_VIDEOS,
+                            "cohorts": sorted(scope, key=lambda g: (-g["first7_count"], g["id"]))[:20],
                             "omitted_cohorts": max(0, len(scope) - 20)})
-    _, key, _, before, after, values, signature = min(candidates, key=lambda item: item[:3])
+    _, key, before, after, values, signature, result = min(candidates, key=lambda item: item[0])
     version = ChoicePolicyVersion(id="policy_" + uuid4().hex, policy_id=head.id, previous_id=current.id, values=values, created_at=stamp)
     db.add(version)
+    groups = set(before["group_ids"]) | set(after["group_ids"])
     hints = [ref["group_id"] for h in (run.review or {}).get("performance_hints", []) for ref in h["evidence_groups"]
-             if ref["group_id"] in {before["id"], after["id"]}]
+             if ref["group_id"] in groups]
     trials = list(db.scalars(select(ImprovementTrial.id).where(ImprovementTrial.channel_id == run.channel_id,
         ImprovementTrial.baseline_video_id.in_(before["video_ids"]), ImprovementTrial.target_video_id.in_(after["video_ids"]))))
-    return decision(db, head, run.id, stamp, expiry, "update", "OBSERVATIONAL_CRITERIA_MET", version.id,
-        {"key": key, "before": before, "after": after, "signature": signature,
+    confirmed = result["basis"] == "first30"
+    return decision(db, head, run.id, stamp, expiry, "update",
+        "OBSERVATIONAL_CRITERIA_MET" if confirmed else "PROVISIONAL_7_DAY_CRITERIA_MET", version.id,
+        {"key": key, **result, "before": before, "after": after, "signature": signature,
          "hint_groups": hints, "trial_ids": trials, "eligibility": "operational_observation_only", "causal_effect": "unconfirmed"})
 
 
 def learn_from_corrections(db, head, current, last_update, events, corrections, run, stamp, expiry):
-    """Without a 30-day comparison, the human's repeated corrections can still move one allowlisted weight."""
+    """Without a results comparison, the human's repeated corrections can still move one allowlisted weight."""
     since = last_update.created_at if last_update else None
     items = scope_corrections(corrections, head.character, head.format, since)
     weights = ChoicePolicyValues.model_validate(current.values).weights
@@ -147,7 +124,7 @@ def update_choice_policies(db, run, stamp):
         db.rollback()
         return []
     payload = aggregate.payload.get("choice_evaluations", {})
-    cohorts = policy_cohorts(db, payload, run.channel_id)
+    cohorts = policy_cohorts(payload)
     corrections = payload.get("corrections", [])
     scopes = {(g["character_preset_name"], g["format"]) for g in cohorts}
     scopes |= {(c["character_preset_name"], c["format"]) for c in corrections if c["key"]}
