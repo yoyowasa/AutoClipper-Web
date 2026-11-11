@@ -6,6 +6,7 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 import app.db as app_db
+import app.intelligence.production_catalog as catalog
 import app.intelligence.production_links as links
 import app.intelligence.sync as sync
 import app.production_records as records
@@ -80,6 +81,20 @@ def test_only_unambiguous_one_to_one_matches(client, environment, problem):
         item.availability = "unavailable_unconfirmed"
     environment.db.commit()
     assert client.post(BASE + "/reconcile").json()["linkedCount"] == 0
+
+
+def test_record_with_long_choice_history_still_links(client, environment, monkeypatch):
+    item = record(environment.paths)
+    path = environment.paths.production_record(item.recordId)
+    # Indented like the real files; whitespace keeps the model unchanged while passing the old 1 MB limit.
+    path.write_text(path.read_text(encoding="utf-8") + " " * 1_100_000, encoding="utf-8")
+    video(environment.db)
+    result = client.post(BASE + "/reconcile").json()
+    assert result["linkedCount"] == 1 and result["issues"] == []
+    monkeypatch.setattr(catalog, "MAX_RECORD_BYTES", 1_000_000)
+    result = client.post(BASE + "/reconcile").json()
+    assert result["linkedCount"] == 0
+    assert result["issues"] == [{"recordId": "exp_one", "reason": "INVALID_RECORD"}]
 
 
 @pytest.mark.parametrize("mode", ["auto", "manual", "manual_unlinked"])

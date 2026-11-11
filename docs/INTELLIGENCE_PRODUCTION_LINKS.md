@@ -7,6 +7,8 @@
 
 - `StoragePaths.production_records`にある既存のv1記録を読み、ファイル形式は変えない。
   ExportItemやJobの存在は必要ない。
+- 1ファイル8MBを超える記録・シンボリックリンクは読まず、破損として一覧に注意を出す（task-250で1MBから変更。
+  ジョブ全体の選択履歴が各記録に入り、実記録が1MBを超えて結び付けから外れていたため）。
 - previousRecordIdをたどった最初のrecordIdをファミリーIDとし、その最初のcreatedAtを公開日時の比較に使う。
   同じファミリーの最新のrevisionへrecord_idを追従させる。
 - タイトルはNFKC・前後空白の除去・連続空白の1個化だけを行う。曖昧検索や句読点の除去はしない。
