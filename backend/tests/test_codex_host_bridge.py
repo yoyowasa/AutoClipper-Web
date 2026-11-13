@@ -222,7 +222,7 @@ def test_resume_codex_command_reuses_thread_with_read_only_override(tmp_path: Pa
 
 @pytest.mark.parametrize("task", sorted(ALLOWED_REQUEST_TASKS - {"channel_self_analysis"}))
 @pytest.mark.parametrize("resume", [False, True])
-@pytest.mark.parametrize("model", [None, "gpt-6-astra"])
+@pytest.mark.parametrize("model", [None, "gpt-5.6-sol"])
 def test_all_tasks_use_sol_high_even_for_legacy_threads(
     tmp_path: Path, task: str, resume: bool, model: str | None,
 ) -> None:
@@ -236,9 +236,9 @@ def test_all_tasks_use_sol_high_even_for_legacy_threads(
         schema_path=tmp_path / "schema.json", output_path=tmp_path / "output.json",
     )
     assert command.count("--model") == 1
-    assert command[command.index("--model") + 1] == "gpt-5.6-sol"
-    assert command.count('model_reasoning_effort="high"') == 1
-    assert command[command.index('model_reasoning_effort="high"') - 1] == "-c"
+    assert command[command.index("--model") + 1] == "gpt-6.1-sol"
+    assert command.count('model_reasoning_effort="medium"') == 1
+    assert command[command.index('model_reasoning_effort="medium"') - 1] == "-c"
 
 
 def test_process_request_captures_thread_and_structured_output(tmp_path: Path) -> None:

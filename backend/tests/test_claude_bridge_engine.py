@@ -22,6 +22,7 @@ from launcher.codex_bridge import (  # noqa: E402
     atomic_write_json,
     bridge_build_fingerprint,
     bridge_paths,
+    configured_analysis_engine,
     configured_bridge_engine,
     ensure_bridge_directories,
     private_bridge_paths,
@@ -209,6 +210,41 @@ def test_engine_is_configured_by_env_then_file_and_defaults_to_codex(tmp_path: P
     assert configured_bridge_engine(project_root) == BRIDGE_ENGINE_CLAUDE
 
 
+def test_analysis_lane_engine_follows_the_bridge_engine_unless_set(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTOCLIPPER_BRIDGE_ENGINE", raising=False)
+    project_root = tmp_path / "root"
+    engine_file = bridge_paths(project_root).root / "engine.json"
+    assert configured_analysis_engine(project_root) == BRIDGE_ENGINE_CODEX
+    atomic_write_json(engine_file, {"engine": "claude"})
+    assert configured_analysis_engine(project_root) == BRIDGE_ENGINE_CLAUDE
+    atomic_write_json(engine_file, {"engine": "codex", "analysisEngine": "Claude"})
+    assert (configured_bridge_engine(project_root), configured_analysis_engine(project_root)) == ("codex", "claude")
+    atomic_write_json(engine_file, {"engine": "codex", "analysisEngine": "openai-api"})
+    assert configured_analysis_engine(project_root) == BRIDGE_ENGINE_CODEX
+
+
+def test_serve_runs_only_the_analysis_lane_on_its_engine_and_checks_both_logins(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTOCLIPPER_BRIDGE_ENGINE", raising=False)
+    atomic_write_json(bridge_paths(tmp_path).root / "engine.json", {"engine": "codex", "analysisEngine": "claude"})
+    monkeypatch.setattr(bridge, "find_codex_executable", lambda: "codex.exe")
+    monkeypatch.setattr(bridge, "codex_login_configured", lambda *_: True)
+    monkeypatch.setattr(claude_engine, "find_claude_executable", lambda: "claude.exe")
+    monkeypatch.setattr(claude_engine, "claude_login_configured", lambda *_: False)
+    seen = []
+    monkeypatch.setattr(bridge, "process_pending_requests",
+                        lambda *_, analysis_only=False, engine, **__: seen.append((analysis_only, engine)) or 0)
+    try:
+        assert serve(tmp_path, sleeper=lambda _: None, once=True) == 5
+        assert json.loads(bridge_paths(tmp_path).status.read_text("utf-8"))["errorCode"] == "claude_login_missing"
+        monkeypatch.setattr(claude_engine, "claude_login_configured", lambda *_: True)
+        assert serve(tmp_path, sleeper=lambda _: None, once=True) == 0
+        assert sorted(seen) == [(False, "codex"), (True, "claude")]
+        status = json.loads(bridge_paths(tmp_path).status.read_text("utf-8"))
+        assert (status["engine"], status["analysisEngine"], status["model"]) == ("codex", "claude", bridge.CODEX_MODEL)
+    finally:
+        bridge.ACTIVE_ENGINE = bridge.ACTIVE_ANALYSIS_ENGINE = BRIDGE_ENGINE_CODEX
+
+
 def test_serve_with_claude_reports_engine_and_missing_cli(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AUTOCLIPPER_BRIDGE_ENGINE", "claude")
     monkeypatch.setattr(claude_engine, "find_claude_executable", lambda: None)
@@ -223,7 +259,7 @@ def test_serve_with_claude_reports_engine_and_missing_cli(tmp_path: Path, monkey
         assert serve(tmp_path, sleeper=lambda _: None, once=True) == 5
         assert json.loads(bridge_paths(tmp_path).status.read_text("utf-8"))["errorCode"] == "claude_login_missing"
     finally:
-        bridge.ACTIVE_ENGINE = BRIDGE_ENGINE_CODEX
+        bridge.ACTIVE_ENGINE = bridge.ACTIVE_ANALYSIS_ENGINE = BRIDGE_ENGINE_CODEX
 
 
 def test_claude_login_requires_subscription_not_api_key(monkeypatch) -> None:
@@ -271,5 +307,10 @@ def test_launcher_restarts_bridge_running_another_engine(tmp_path: Path) -> None
     atomic_write_json(status.parent / "engine.json", {"engine": "claude"})
     assert controller.codex_bridge_ready() is False
     status.write_text(json.dumps(compatible_bridge_status(module, pid=111, engine="claude")), encoding="utf-8")
+    assert controller.codex_bridge_ready() is True
+    atomic_write_json(status.parent / "engine.json", {"engine": "claude", "analysisEngine": "codex"})
+    assert controller.codex_bridge_ready() is False
+    status.write_text(json.dumps(compatible_bridge_status(module, pid=111, engine="claude") | {"analysisEngine": "codex"}),
+                      encoding="utf-8")
     assert controller.codex_bridge_ready() is True
     assert BRIDGE_PROTOCOL_VERSION == 1

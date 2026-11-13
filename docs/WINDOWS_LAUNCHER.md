@@ -70,6 +70,7 @@ The launcher has no paid API configuration display. Log redaction for historical
 
 The bridge engine is `codex` (default, Codex CLI with ChatGPT login) or `claude` (Claude Code CLI with a Claude subscription login).
 Select it with `storage/codex_bridge/engine.json`, for example `{"engine": "claude"}`, or the `AUTOCLIPPER_BRIDGE_ENGINE` environment variable (it takes precedence).
+An optional `"analysisEngine"` in the same file picks the engine for the self-analysis lane only, for example `{"engine": "codex", "analysisEngine": "claude"}`; without it the lane uses the bridge engine. Both engines in use must be installed and logged in.
 The launcher restarts a running bridge whose engine differs from the configured one; with no launcher, stop the bridge and start `python launcher/codex_bridge.py serve --project-root <root>` again.
 
 - Claude engine: model `claude-opus-5-5`, effort `medium`, all built-in tools disabled (`--tools ""`), `--safe-mode`, no MCP. Only the structured-output tool may appear.

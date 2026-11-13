@@ -6,8 +6,8 @@ from app.intelligence.analysis_schema import analysis_response_schema
 from app.scoring.codex_title_hook_suggestions import CodexTitleHookSuggestionGenerator
 from app.storage.paths import StoragePaths
 
-ANALYSIS_MODEL = "gpt-6-astra"
-ANALYSIS_EFFORT = "high"
+ANALYSIS_MODEL = "gpt-6.1-sol"
+ANALYSIS_EFFORT = "medium"
 ANALYSIS_TIMEOUT_SECONDS = 960
 
 

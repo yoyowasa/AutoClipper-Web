@@ -8,6 +8,6 @@
     "initial_clip_topic_selection": "59ca081d816d0bcd089a25c9dea23cd196cbbd854801c49f70438b330517ebef",
     "initial_clip_selection": "47746a310aa052bedc88205c2ecd3d2129dbc584283e147fef49f1764e4a87fa"
   },
-  "model": "gpt-5.6-sol",
-  "effort": "high"
+  "model": "gpt-6.1-sol",
+  "effort": "medium"
 }

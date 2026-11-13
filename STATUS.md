@@ -858,3 +858,24 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: `backend/tests/test_choice_policies.py` に仮判定3本・2本／20%未満の保留・旧記録のintent利用・編集済み題名は不使用・7日／30日悪化の巻き戻しを追加・更新。稼働DBのbackup()コピーと記録のコピーで実際の更新処理を実行し、チャンネル1（ショート）9本 中央値310 → 4本 中央値552.5、チャンネル2（ショート）7本 中央値155 → 3本 中央値1327 で、どちらも `title_hook.factual` の仮更新が1件、以後は新版の成績待ちで保留になることを確認。全件テスト・CIの結果はPRに記録する。
 - 反映時: launcher・プロンプト・返答の形は変えていないため中継の再起動は不要。DBスキーマ変更なし。
 - 未解決: 仮判定は3〜9本の少数比較で、因果効果は未確認。版IDが付くのは版を固定したautoジョブの動画だけなので、更新後の判定はその動画が7日の成績で3本そろうまで進まない。YouTube側でハッシュタグを足した題名の結び付き、形式不一致で対象外になる動画、記録の無い動画のタイトル分類は未対応。
+
+## 2026-11-12 PR #192（task-251）反映
+
+- 反映前: 両RQキューLLEN/WIP 0、DBに実行中のジョブ・同期・分析なし、中継のrequests/processing空。SQLite backup() で `storage/backups/autoclipper-pre-pr192-20261112-030736.db`（integrity_check=ok、jobs/youtube_videos/video_daily_stats/sync_runs/choice_policy_versions/choice_policy_decisions の件数一致）。
+- マージ: PR #192 を merge commit（dbf1e30）。CI 3件成功。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。5コンテナ running、/health 200、/intelligence 200。backend・intelligence-worker で新しい判定関数のimportを確認。エラーログなし。中継の再起動は不要。
+- 未確認: 稼働環境での最初の仮更新（次の自己分析の完了時に判定される。定時は月曜 12:00 JST）。
+
+## 2026-11-14 中継の実行エンジンを Codex へ戻す
+
+- ユーザー指示。反映前: 両RQキューLLEN/WIP 0、中継のrequests/processing空、Codex CLIのログイン設定済みを確認。
+- 変更: `storage/codex_bridge/engine.json` を `{"engine": "codex"}` にし、`LauncherController.ensure_codex_bridge_running()` で中継を再起動（旧pid停止、新pid起動）。状態は ready・engine=codex・model=gpt-5.6-sol・effort=high。コード・コンテナの変更なし。
+- 未確認: 切り替え後の実ジョブでの Codex 応答。Claude へ戻す場合は engine.json を `{"engine": "claude"}` にして中継を再起動する。
+
+## 2026-11-14 task-252：Codexのモデル変更と、分析レーンだけのエンジン指定
+
+- 目的（ユーザー指示）: Codexを `gpt-6.1-sol` / `medium` にし、自己分析だけ Claude（`claude-opus-5-5` / `medium`）で動かす。
+- 変更: `launcher/codex_bridge.py` の通常・自己分析のCodexモデルを `gpt-6.1-sol`、推論を `medium` に変更（以前は `gpt-5.6-sol` / `gpt-6-astra`、`high`）。`backend/app/intelligence/analysis_bridge.py`・`models.py` の記録値と画面表記も合わせた。`storage/codex_bridge/engine.json` に任意の `analysisEngine` を追加し、自己分析レーンだけ別エンジンを選べるようにした（未指定は従来どおり全体のエンジン）。使うエンジンはすべて起動時にCLIとログインを確認し、設定と稼働中の中継が食い違えばランチャーが再起動する。`docs/WINDOWS_LAUNCHER.md`、`docs/INTELLIGENCE_SELF_ANALYSIS.md` に記載。
+- 検証: `backend/tests/test_claude_bridge_engine.py` にレーン別の設定・両方のログイン確認・レーンごとのエンジン・再起動判定を追加。全件テスト・CIの結果はPRに記録する。
+- 反映時: launcherを変えたため中継の再起動が必要。依頼・返答の形とスキーマ指紋は変更なし。
+- 未解決: 分析の記録に残るモデル名は依頼時のCodex用の値で、Claudeで実行しても `gpt-6.1-sol` と表示される（表示の修正は別タスク）。`gpt-6.1-sol` / `medium` での実ジョブの品質は未確認。
