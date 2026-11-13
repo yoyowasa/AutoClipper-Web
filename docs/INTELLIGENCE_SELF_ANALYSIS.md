@@ -156,7 +156,7 @@ python -m app.maintenance repair-youtube-video-formats --execute
 ## Codex中継と時間制限
 
 - 新しい依頼種別: `channel_self_analysis`。文字入力のみ。
-- この種別だけ `gpt-6-astra` / `high`。既存種別のモデル・推論・スキーマ指紋は維持する。
+- 当初はこの種別だけ `gpt-6-astra` / `high`。2026-11-14（task-252）から全種別 `gpt-6.1-sol` / `medium`。スキーマ指紋は維持する。
 - ホストの生成上限900秒、backendの中継待ち960秒。
   RQ上限は同期予算＋960＋60秒（同期予算の既定120秒では1140秒）。
 - 履歴を残さない一時セッションで実行し、分析専用の中継ファイルとホストの一時作業領域を片付ける。

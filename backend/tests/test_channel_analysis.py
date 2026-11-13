@@ -155,7 +155,7 @@ def test_http_enqueue_exclusive_and_success_saved(client, prepared):
     assert client.get(URL).json()["latestRun"]["status"] == "queued"
     saved = execute(prepared, id)
     assert saved.status == "success" and saved.review["id"] == id and saved.request_id == "a" * 32
-    assert saved.requested_model == "gpt-6-astra" and saved.requested_effort == "high"
+    assert saved.requested_model == "gpt-6.1-sol" and saved.requested_effort == "medium"
     assert saved.active_channel_id is None
     assert saved.expires_at == CLOCK + timedelta(days=30)
     listing = client.get(URL)
@@ -302,7 +302,7 @@ def test_origin_sync_busy_queue_failure_and_retention(client, prepared):
     prepared.db.expire_all()
     saved = prepared.db.get(AnalysisRun, id)
     assert saved.status == "expired" and saved.review is None and saved.input_snapshot is None
-    assert saved.requested_model == "gpt-6-astra"  # content-free audit remains.
+    assert saved.requested_model == "gpt-6.1-sol"  # content-free audit remains.
     app.dependency_overrides[get_enqueue_channel_analysis] = lambda: lambda *_: (_ for _ in ()).throw(RuntimeError("private"))
     response = client.post(URL, json={})
     assert response.status_code == 503 and "private" not in response.text

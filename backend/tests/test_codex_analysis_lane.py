@@ -28,7 +28,7 @@ def environment(tmp_path, monkeypatch):
 def analysis_request(environment, id="1" * 32, *, directory=None):
     payload = {"schemaVersion": 1, "task": "channel_self_analysis", "requestId": id,
         "prompt": "synthetic analysis", "responseSchema": analysis_response_schema(), "images": [],
-        "model": "gpt-6-astra", "threadScope": "channel_analysis:1",
+        "model": "gpt-6.1-sol", "threadScope": "channel_analysis:1",
         "expiresAt": (datetime.now(UTC) + timedelta(hours=1)).isoformat()}
     bridge.atomic_write_json((directory or environment.paths.requests) / f"{id}.json", payload)
     return id

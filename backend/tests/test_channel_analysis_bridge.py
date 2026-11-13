@@ -48,7 +48,7 @@ def test_analysis_uses_astra_high_900_seconds_and_cleans_private_scratch(tmp_pat
     host.ensure_bridge_directories(paths)
     id = uuid4().hex
     payload = {"schemaVersion": 1, "task": "channel_self_analysis", "requestId": id, "prompt": "synthetic private title",
-               "responseSchema": analysis_response_schema(), "images": [], "threadScope": "channel_analysis:1", "model": "gpt-6-astra",
+               "responseSchema": analysis_response_schema(), "images": [], "threadScope": "channel_analysis:1", "model": "gpt-6.1-sol",
                "expiresAt": (datetime.now(UTC) + timedelta(hours=1)).isoformat()}
     path = paths.requests / f"{id}.json"
     host.atomic_write_json(path, payload)
@@ -68,8 +68,8 @@ def test_analysis_uses_astra_high_900_seconds_and_cleans_private_scratch(tmp_pat
     response = host.process_request_file(path, project_root=root, codex_executable="codex", runner=fake)
     assert response["state"] == ("ready" if outcome == "ready" else "failed")
     command, timeout = captures[0]
-    assert command[command.index("--model") + 1] == "gpt-6-astra"
-    assert 'model_reasoning_effort="high"' in command and "--ephemeral" in command
+    assert command[command.index("--model") + 1] == "gpt-6.1-sol"
+    assert 'model_reasoning_effort="medium"' in command and "--ephemeral" in command
     assert 'history.persistence="none"' in command and timeout == 900
     private = host.private_bridge_paths(root)
     assert not (private.sessions / id).exists() and not (private.work / id).exists()
@@ -116,7 +116,7 @@ def test_real_bridge_envelope_and_parser_without_codex_execution(prepared):
     result = generator.analyze(context)
     assert result["id"] == "analysis_test" and len(requests) == 1
     envelope = json.loads(prepared.paths.analysis_bridge_files(requests[0])[0].read_text(encoding="utf-8"))
-    assert envelope["task"] == "channel_self_analysis" and envelope["model"] == "gpt-6-astra"
+    assert envelope["task"] == "channel_self_analysis" and envelope["model"] == "gpt-6.1-sol"
     assert datetime.fromisoformat(envelope["expiresAt"]).replace(tzinfo=None) == context.expires_at
     assert "<untrusted_channel_data>" in envelope["prompt"] and envelope["images"] == []
     host.validate_request(envelope, prepared.paths.root)

@@ -27,8 +27,8 @@ except ImportError:  # Executed as a script: launcher/codex_bridge.py serve
 
 
 BRIDGE_PROTOCOL_VERSION = 1
-CODEX_MODEL = "gpt-5.6-sol"
-CODEX_REASONING_EFFORT = "high"
+CODEX_MODEL = "gpt-6.1-sol"
+CODEX_REASONING_EFFORT = "medium"
 BRIDGE_DIRNAME = "codex_bridge"
 BRIDGE_ENGINE_CODEX = "codex"
 BRIDGE_ENGINE_CLAUDE = "claude"
@@ -49,7 +49,7 @@ SHORT_FRAMING_SELECT_TASK = "short_framing_select"
 FINAL_OUTPUT_REVIEW_TASK = "final_output_review"
 FINAL_OUTPUT_REVIEW_TIMEOUT_SECONDS = 120.0
 CHANNEL_SELF_ANALYSIS_TASK = "channel_self_analysis"
-CHANNEL_SELF_ANALYSIS_MODEL = "gpt-6-astra"
+CHANNEL_SELF_ANALYSIS_MODEL = "gpt-6.1-sol"
 CHANNEL_SELF_ANALYSIS_TIMEOUT_SECONDS = 900.0
 ALLOWED_REQUEST_TASKS = frozenset({
     REQUEST_TASK, THUMBNAIL_COPY_TASK, THUMBNAIL_FRAME_RANK_TASK, CHARACTER_ASSET_CLASSIFY_TASK, *INITIAL_SELECTION_TASKS,
@@ -415,14 +415,27 @@ def configured_bridge_engine(project_root: str | Path) -> str:
     return engine if engine in BRIDGE_ENGINES else BRIDGE_ENGINE_CODEX
 
 
+def configured_analysis_engine(project_root: str | Path) -> str:
+    """Engine for the self-analysis lane: "analysisEngine" in engine.json, else the bridge engine."""
+    try:
+        configured = read_json_object(
+            bridge_paths(project_root).root / BRIDGE_ENGINE_FILENAME, max_bytes=4096).get("analysisEngine")
+    except (OSError, ValueError, json.JSONDecodeError):
+        configured = None
+    engine = str(configured or "").strip().lower()
+    return engine if engine in BRIDGE_ENGINES else configured_bridge_engine(project_root)
+
+
 ACTIVE_ENGINE = BRIDGE_ENGINE_CODEX
+ACTIVE_ANALYSIS_ENGINE = BRIDGE_ENGINE_CODEX
 
 
-def engine_status_fields(engine: str) -> dict[str, str]:
+def engine_status_fields(engine: str, analysis_engine: str | None = None) -> dict[str, str]:
+    lane = {"analysisEngine": analysis_engine or engine}
     if engine == BRIDGE_ENGINE_CLAUDE:
         return {"engine": engine, "model": claude_engine.CLAUDE_MODEL,
-                "reasoningEffort": claude_engine.CLAUDE_EFFORT}
-    return {"engine": BRIDGE_ENGINE_CODEX, "model": CODEX_MODEL, "reasoningEffort": CODEX_REASONING_EFFORT}
+                "reasoningEffort": claude_engine.CLAUDE_EFFORT} | lane
+    return {"engine": BRIDGE_ENGINE_CODEX, "model": CODEX_MODEL, "reasoningEffort": CODEX_REASONING_EFFORT} | lane
 
 
 def ensure_bridge_directories(paths: BridgePaths) -> None:
@@ -1553,7 +1566,7 @@ def _write_status(paths: BridgePaths, state: str, **extra: Any) -> None:
             "bridgeBuildFingerprint": BRIDGE_BUILD_FINGERPRINT,
             "contractFingerprint": BRIDGE_CONTRACT_FINGERPRINT,
             "taskSchemaFingerprints": EXPECTED_RESPONSE_SCHEMA_SHA256,
-            **engine_status_fields(ACTIVE_ENGINE),
+            **engine_status_fields(ACTIVE_ENGINE, ACTIVE_ANALYSIS_ENGINE),
             **extra,
         },
     )
@@ -1652,10 +1665,12 @@ def serve(
         if not acquired:
             return 3
         paths.stop_request.unlink(missing_ok=True)
-        global ACTIVE_ENGINE
+        global ACTIVE_ENGINE, ACTIVE_ANALYSIS_ENGINE
         engine = configured_bridge_engine(root)
-        ACTIVE_ENGINE = engine
-        if engine == BRIDGE_ENGINE_CLAUDE:
+        analysis_engine = configured_analysis_engine(root)
+        ACTIVE_ENGINE, ACTIVE_ANALYSIS_ENGINE = engine, analysis_engine
+        # Every engine a lane uses must be installed and logged in before the bridge reports ready.
+        if BRIDGE_ENGINE_CLAUDE in (engine, analysis_engine):
             claude_executable = claude_engine.find_claude_executable()
             if not claude_executable:
                 _write_status(paths, "error", errorCode="claude_cli_missing")
@@ -1663,7 +1678,7 @@ def serve(
             if not claude_engine.claude_login_configured(claude_executable, safe_codex_environment()):
                 _write_status(paths, "error", errorCode="claude_login_missing")
                 return 5
-        else:
+        if BRIDGE_ENGINE_CODEX in (engine, analysis_engine):
             codex_executable = find_codex_executable()
             if not codex_executable:
                 _write_status(paths, "error", errorCode="codex_cli_missing")
@@ -1682,7 +1697,8 @@ def serve(
                 while not shutdown.is_set() and not paths.stop_request.exists():
                     try:
                         process_pending_requests(paths, project_root=root, runner=runner, timeout=timeout,
-                                                 analysis_only=True, status_publisher=publisher, engine=engine)
+                                                 analysis_only=True, status_publisher=publisher,
+                                                 engine=analysis_engine)
                     except Exception as exc:
                         record_bridge_error(paths, "analysis_poll", exc)
                     if once:

@@ -150,7 +150,7 @@ export function ChannelAnalysisSettings({ channelId, connected, syncActive, full
     finally { setBusy(false); }
   }
   return <section className="mt-4 space-y-3 border-t pt-3" aria-label="Codex自己分析">
-    <h4 className="font-semibold">Codex自己分析（gpt-6-astra / high）</h4>
+    <h4 className="font-semibold">Codex自己分析（gpt-6.1-sol / medium）</h4>
     <p className="text-sm">目標は通常10万・ショート100万再生、公開翌日から30暦日（米国太平洋時間）です。
       7日は途中評価。30日未到達・値の未返却は未判定です。</p>
     <label className="block text-sm">分析前の同期
