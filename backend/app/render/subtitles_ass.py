@@ -871,6 +871,51 @@ def _apply_minimum_display_duration(
     return adjusted
 
 
+# A cue must stay on screen for several frames, or it may land on no frame at all and the
+# final inspection cannot see it. Kept short so the speaker's timing barely moves.
+MIN_VISIBLE_SUBTITLE_SECONDS = 0.2
+# A neighbour lends time only while it keeps at least this much.
+MIN_LENDER_SUBTITLE_SECONDS = 0.5
+
+
+def _ensure_visible_duration(
+    events: Sequence[SubtitleEvent],
+    *,
+    candidate_duration: float,
+    layout: SubtitleLayout,
+) -> list[SubtitleEvent]:
+    """Give each very short cue enough time to appear: free gap first, then time from a neighbour."""
+    result = list(events)
+    for index, event in enumerate(result):
+        need = MIN_VISIBLE_SUBTITLE_SECONDS - (event.end - event.start)
+        if need <= 1e-9:
+            continue
+        start, end = event.start, event.end
+        after = result[index + 1].start - layout.min_gap_between_subtitles if index + 1 < len(result) else candidate_duration
+        take = min(need, max(0.0, after - end))
+        end, need = end + take, need - take
+        before = result[index - 1].end + layout.min_gap_between_subtitles if index else 0.0
+        take = min(need, max(0.0, start - before))
+        start, need = start - take, need - take
+        if need > 1e-9:
+            previous = result[index - 1] if index else None
+            following = result[index + 1] if index + 1 < len(result) else None
+            spare_previous = (previous.end - previous.start - MIN_LENDER_SUBTITLE_SECONDS
+                              if previous is not None and previous.end <= start + 0.001 else 0.0)
+            spare_following = (following.end - following.start - MIN_LENDER_SUBTITLE_SECONDS
+                               if following is not None and following.start >= end - 0.001 else 0.0)
+            if max(spare_previous, spare_following) >= need:
+                if spare_previous >= spare_following:
+                    result[index - 1] = replace(previous, end=round_milliseconds(previous.end - need))
+                    start -= need
+                else:
+                    result[index + 1] = replace(following, start=round_milliseconds(following.start + need))
+                    end += need
+        result[index] = replace(event, start=round_milliseconds(max(0.0, start)),
+                                end=round_milliseconds(min(candidate_duration, end)))
+    return result
+
+
 def subtitle_events_for_candidate(
     transcript_segments: Sequence[TranscriptSegment],
     candidate: Candidate,
@@ -896,8 +941,8 @@ def subtitle_events_for_candidate(
         layout=active_layout,
     )
     remapped = _merge_adjacent_events(adjusted, active_layout)
-    return _apply_minimum_display_duration(
-        remapped,
+    return _ensure_visible_duration(
+        _apply_minimum_display_duration(remapped, candidate_duration=candidate.duration, layout=active_layout),
         candidate_duration=candidate.duration,
         layout=active_layout,
     )

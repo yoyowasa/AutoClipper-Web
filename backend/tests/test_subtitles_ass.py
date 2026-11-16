@@ -182,6 +182,40 @@ def test_short_subtitle_events_keep_their_own_speech_ranges() -> None:
     ]
 
 
+def test_a_cue_shorter_than_a_few_frames_borrows_time_from_its_longer_neighbour() -> None:
+    # Real case: ASR made a 0.02s "うん" between two longer cues; it can land on no frame at all.
+    candidate = make_candidate("normal_1", "normal", 0.0, 10.0)
+    layout = SubtitleLayout.normal()
+    segments = [
+        TranscriptSegment(start=1.0, end=4.16, text="なんかバランスが良くない？"),
+        TranscriptSegment(start=4.16, end=4.18, text="うん"),
+        TranscriptSegment(start=4.18, end=5.74, text="バランス型"),
+    ]
+
+    events = subtitle_events_for_candidate(segments, candidate, layout)
+
+    assert [(event.start, event.end, event.text) for event in events] == [
+        (1.0, 3.98, "なんかバランスが良くない？"), (3.98, 4.18, "うん"), (4.18, 5.74, "バランス型"),
+    ]
+
+
+def test_a_short_cue_uses_a_free_gap_first_and_keeps_neighbours_that_cannot_lend() -> None:
+    candidate = make_candidate("short_1", "short", 0.0, 4.0)
+    layout = SubtitleLayout.short()
+    free = subtitle_events_for_candidate([
+        TranscriptSegment(start=1.0, end=1.05, text="え"),
+        TranscriptSegment(start=2.0, end=3.0, text="次の字幕"),
+    ], candidate, layout)
+    assert [(event.start, event.end) for event in free] == [(1.0, 1.2), (2.0, 3.0)]
+
+    tight = subtitle_events_for_candidate([
+        TranscriptSegment(start=0.0, end=0.5, text="はい"),
+        TranscriptSegment(start=0.5, end=0.52, text="え"),
+        TranscriptSegment(start=0.52, end=1.0, text="そう"),
+    ], candidate, layout)
+    assert [(event.start, event.end) for event in tight] == [(0.0, 0.5), (0.5, 0.52), (0.52, 1.0)]
+
+
 def test_build_ass_document_contains_relative_dialogue_and_short_title() -> None:
     candidate = make_candidate("short_1", "short", 10.0, 20.0, overlay_title="Top title")
     segments = [
