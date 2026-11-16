@@ -105,7 +105,9 @@ def test_private_analysis_scratch_expiry_preserves_other_tasks_and_fresh_analysi
         assert (base / fresh).exists() and (base / legacy).exists()
 
 
-def test_real_bridge_envelope_and_parser_without_codex_execution(prepared):
+def test_real_bridge_envelope_and_parser_without_codex_execution(prepared, monkeypatch):
+    # The request expires 30 days after the fixed test clock, so the host must also read that clock.
+    monkeypatch.setattr(host, "time", SimpleNamespace(time=lambda: CLOCK.replace(tzinfo=UTC).timestamp()))
     context = build_analysis_input(prepared.db, prepared.paths, prepared.config, 1, "analysis_test", CLOCK)
     requests = []
     def respond(id):
