@@ -1738,3 +1738,39 @@ def test_unknown_quality_gate_decision_fails_closed(stage: str, route: str) -> N
     assert decision.route == route
     assert decision.checks[0].reason_code == "evaluator_unavailable"
     assert decision.checks[0].evidence == {"errorType": "RuntimeError"}
+
+
+def test_auto_content_gate_accepts_the_title_chosen_by_the_frozen_choice_policy() -> None:
+    from app.intelligence.choice_policy_schema import DEFAULT_WEIGHTS
+    document = _ready_content_document()
+    document.segments[0].confidence = 0.9
+    artifact = _apply_ready_codex_evidence(document)
+    clip = document.clips[0]
+    factual = artifact.suggestions[0]
+    engagement = factual.model_copy(update={"id": "engagement", "intent": "engagement",
+                                            "publication_title": "別の投稿タイトル", "overlay_title": "別のタイトル"})
+    artifact = artifact.model_copy(update={"suggestions": [factual, engagement], "recommended_suggestion_id": "engagement"})
+    weights = {**DEFAULT_WEIGHTS, "title_hook.factual": 1.1}
+    learned = {"burnSubtitles": True, "_choicePolicies": {clip.type: {"id": "policy_test", "weights": weights}}}
+
+    apply_recommended_title_hook_suggestions(document, artifact, selected_suggestion_id="factual")
+    refresh_review_overlay_title_expectations(document, render_mode=document.render_mode)
+    evidence = {clip.id: artifact}
+    passed = evaluate_content_quality_gate(job_id="job_1", document=document, settings=learned, mode="auto",
+                                           title_hook_evidence=evidence)
+    check = _check(passed, "content.title_hook_semantics")
+    assert check.outcome == "pass"
+    assert check.evidence["clips"][clip.id]["recommendedSuggestionId"] == "engagement"
+    assert check.evidence["clips"][clip.id]["selectedSuggestionId"] == "factual"
+
+    # Without the policy the recommended title is still required.
+    unlearned = evaluate_content_quality_gate(job_id="job_1", document=document, settings={"burnSubtitles": True},
+                                              mode="auto", title_hook_evidence=evidence)
+    assert _check(unlearned, "content.title_hook_semantics").reason_code == "title_hook_evidence_inconsistent"
+
+    # A title that neither the policy nor the recommendation picks is still rejected.
+    apply_recommended_title_hook_suggestions(document, artifact)
+    refresh_review_overlay_title_expectations(document, render_mode=document.render_mode)
+    other = evaluate_content_quality_gate(job_id="job_1", document=document, settings=learned, mode="auto",
+                                          title_hook_evidence=evidence)
+    assert _check(other, "content.title_hook_semantics").reason_code == "title_hook_evidence_inconsistent"
