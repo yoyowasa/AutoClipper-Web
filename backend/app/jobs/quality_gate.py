@@ -747,7 +747,10 @@ def _automated_title_hook_check(
     *,
     human_accepted_clip_ids: set[str],
     human_evidence: Mapping[str, Any],
+    settings: Mapping[str, Any] | None = None,
 ) -> QualityGateCheck:
+    from app.intelligence.choice_policy_runtime import choose_title_suggestion
+
     missing: list[str] = []
     stale: list[str] = []
     inconsistent: list[dict[str, str]] = []
@@ -765,12 +768,10 @@ def _automated_title_hook_check(
             missing.append(clip.id)
             continue
         current_revision = _current_post_metadata_revision(document, clip)
+        # The suggestion the job's frozen choice policy picks (the recommended one without a policy).
+        chosen_id = choose_title_suggestion(artifact, settings or {}, clip.type)
         recommended = next(
-            (
-                item
-                for item in artifact.suggestions
-                if item.id == artifact.recommended_suggestion_id
-            ),
+            (item for item in artifact.suggestions if item.id == chosen_id),
             None,
         )
         if (
@@ -811,7 +812,8 @@ def _automated_title_hook_check(
             else round(clip.start + recommended.hook_scene_end, 3)
         )
         expected_values = {
-            "post_metadata_source": "codex", "recommended_title_id": recommended.id, "selected_title_id": recommended.id,
+            "post_metadata_source": "codex", "recommended_title_id": artifact.recommended_suggestion_id,
+            "selected_title_id": recommended.id,
             "title": recommended.overlay_title,
             "publication_title": ensure_publication_title_suffix(
                 recommended.publication_title, clip_type=clip.type, suffix=clip.normal_title_suffix,
@@ -828,7 +830,8 @@ def _automated_title_hook_check(
             "provider": "codex_host_bridge",
             "artifactInputHash": artifact.input_hash,
             "revisionHash": current_revision,
-            "recommendedSuggestionId": recommended.id,
+            "recommendedSuggestionId": artifact.recommended_suggestion_id,
+            "selectedSuggestionId": recommended.id,
             "evidenceSegmentIds": sorted(evidence_ids),
         }
 
@@ -1193,6 +1196,7 @@ def evaluate_content_quality_gate(
                     title_hook_evidence,
                     human_accepted_clip_ids=set() if is_subtitle_only_auto(settings) else human_accepted_clip_ids,
                     human_evidence=all_clips_evidence,
+                    settings=settings,
                 ),
                 _automated_subtitle_alignment_check(
                     document,

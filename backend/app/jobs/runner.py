@@ -4,6 +4,7 @@ from app.jobs.automatic_framing_repair import repair_automatic_short_framing, re
 from app.storage.completed_previews import prune_job_previews_after_completion
 from app.production_records import record_completed_productions
 from app.intelligence.performance_hints import attach_performance_hints, active_hint_uses
+from app.intelligence.choice_policy_runtime import choose_title_suggestion
 from app.clip_allocation import is_ai_allocation, allocate_selection, allocation_summary, candidate_pool_counts
 import json
 from app.duration_rules import duration_search_settings
@@ -1731,6 +1732,7 @@ def _generate_auto_title_hook_evidence(
                     posting_settings.get("youtubeSourceUrl") or ""
                 ),
                 youtube_posting_profile=posting_settings.get("youtubePostingProfile"),
+                selected_suggestion_id=choose_title_suggestion(artifact, posting_settings, clip.type),
             )
             artifacts[clip.id] = artifact
             if human_review:
