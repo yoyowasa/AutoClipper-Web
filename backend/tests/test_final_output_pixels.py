@@ -114,9 +114,19 @@ def test_short_cue_requires_an_observed_interior_frame_and_missing_pixels_still_
 
 def test_cue_between_native_frames_cannot_be_accepted_without_pixel_evidence(encoded):
     _source, candidate, _segments, layout, burn, folder = encoded
-    cues = [TranscriptSegment(start=0.801, end=0.819, text="Unobservable cue", preserve_segmentation=True)]
+    # Both neighbours are too short to lend time, so the cue stays between frames (task-255).
+    cues = [TranscriptSegment(start=0.40, end=0.801, text="Before", preserve_segmentation=True),
+            TranscriptSegment(start=0.801, end=0.819, text="Unobservable cue", preserve_segmentation=True),
+            TranscriptSegment(start=0.819, end=1.2, text="After", preserve_segmentation=True)]
     checks = inspect_subtitles(burn(cues=cues), candidate, cues, layout=layout, directory=folder)
     assert any(c.outcome != "pass" for c in checks)
+
+
+def test_a_lone_cue_between_native_frames_is_stretched_until_its_pixels_are_seen(encoded):
+    _source, candidate, _segments, layout, burn, folder = encoded
+    cues = [TranscriptSegment(start=0.801, end=0.819, text="Short cue", preserve_segmentation=True)]
+    checks = inspect_subtitles(burn(cues=cues), candidate, cues, layout=layout, directory=folder)
+    assert all(c.outcome == "pass" for c in checks), [c.model_dump() for c in checks]
 
 
 @pytest.mark.parametrize("fault", ["missing", "shifted", "different_text"])
