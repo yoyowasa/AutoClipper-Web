@@ -879,3 +879,19 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証: `backend/tests/test_claude_bridge_engine.py` にレーン別の設定・両方のログイン確認・レーンごとのエンジン・再起動判定を追加。全件テスト・CIの結果はPRに記録する。
 - 反映時: launcherを変えたため中継の再起動が必要。依頼・返答の形とスキーマ指紋は変更なし。
 - 未解決: 分析の記録に残るモデル名は依頼時のCodex用の値で、Claudeで実行しても `gpt-6.1-sol` と表示される（表示の修正は別タスク）。`gpt-6.1-sol` / `medium` での実ジョブの品質は未確認。
+
+## 2026-11-14 PR #193（task-252）反映
+
+- 反映前: 両RQキューLLEN/WIP 0、DBに実行中のジョブ・同期・分析なし、中継のrequests/processing空。SQLite backup() で `storage/backups/autoclipper-pre-pr193-20261114-004004.db`（integrity_check=ok、jobs/youtube_videos/video_daily_stats/sync_runs/channel_analysis_runs の件数一致）。
+- マージ: PR #193 を merge commit（a599637）。CI 3件成功。
+- 反映: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。5コンテナ running、/health 200、/settings 200。backend・intelligence-worker で分析の記録値 `gpt-6.1-sol` / `medium` を確認。エラーログなし。
+- 中継: `storage/codex_bridge/engine.json` を `{"engine": "codex", "analysisEngine": "claude"}` にし、`LauncherController.ensure_codex_bridge_running()` で再起動。状態は ready・engine=codex・analysisEngine=claude・model=gpt-6.1-sol・effort=medium。
+- 未確認: 新しいモデル・推論での実ジョブの Codex 応答と、レーン別設定での実際の自己分析（次の定時分析は月曜 12:00 JST）。
+
+## 2026-11-16 task-253：字幕の色ボタン（1クリックと範囲まとめ）
+
+- 目的（ユーザー要望）: 2人が出る切り抜きで、字幕ごとに「個別書式 → 色選択」を毎回行う手間を減らす。
+- 変更: `frontend/lib/subtitleReview/speakerColors.ts`（新規）、`frontend/components/subtitleReview/ReviewSubtitleSegments.tsx`。字幕の各行に色ボタン（最大4色）を出し、1クリックで色を変更・解除、Shift＋クリックで直前に塗った字幕からまとめて変更する。色はジョブ内で使った色と、キャラ名ごとにブラウザへ記憶した色から出す。変えるのは色だけで、サイズ・位置・収まり調整は保つ。保存は既存の `subtitleStyles` の経路で、backend・APIの変更なし。仕様は `docs/SUBTITLE_SPEAKER_COLORS.md`。
+- 検証: `frontend/tests/speakerColors.test.ts`（1クリックの変更と解除、範囲、他の個別設定の保持、色の並びと上限、記憶と壊れた値、行のボタン表示と編集ロック）。frontendの test / lint / typecheck / build 成功。backendは未変更のためローカルの全件テストは省略し、CIで確認する。
+- 未確認: 実ブラウザでのクリック操作と、色を付けた字幕の実際の書き出し。
+- 未解決: 話者の自動判定は未実装（精度検証は別タスク）。色の記憶はブラウザごとで、キャラ設定には保存していない。

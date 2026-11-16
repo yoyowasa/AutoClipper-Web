@@ -1,5 +1,8 @@
 "use client";
 
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { hasSpeakerColor, paintSubtitles, parseRememberedColors, rememberedColorsText, speakerColorKey, speakerColors,
+  subtitlesBetween, writeRememberedColors, type SpeakerColor } from "../../lib/subtitleReview/speakerColors";
 import { captionRowKey } from "../../lib/subtitleReview/captionAutosave";
 import { bulkEditableSegments, clipSegmentDrafts, sharedSubtitleNotice } from "../../lib/subtitleReview/sharedSegments";
 
@@ -11,7 +14,35 @@ import type { SubtitleReviewViewContext } from "../../lib/subtitleReview/hooks/c
 import { ReviewClipActions } from "./ReviewActions";
 import { longEditedSubtitleWarning } from "../../lib/subtitleTiming";
 
+const colorStorage = () => (typeof window === "undefined" ? undefined : window.localStorage);
+const COLORS_CHANGED = "autoclipper-speaker-colors";
+const watchColors = (notify: () => void) => {
+  window.addEventListener(COLORS_CHANGED, notify);
+  window.addEventListener("storage", notify);
+  return () => { window.removeEventListener(COLORS_CHANGED, notify); window.removeEventListener("storage", notify); };
+};
+function rememberColors(character: string, colors: SpeakerColor[]) {
+  writeRememberedColors(colorStorage(), character, colors);
+  window.dispatchEvent(new Event(COLORS_CHANGED));
+}
+
 export function ReviewSubtitleSegments({ context, showStyleControls = true }: { context: SubtitleReviewViewContext; showStyleControls?: boolean }) {
+  // Colour buttons: the last painted row anchors a Shift+click range; colours are remembered per character in this browser.
+  const colorAnchorRef = useRef<string | null>(null);
+  const character = context.review?.characterPresetName ?? "";
+  const rememberedText = useSyncExternalStore(watchColors, () => rememberedColorsText(colorStorage(), character), () => "");
+  const remembered = useMemo(() => parseRememberedColors(rememberedText), [rememberedText]);
+  const jobStyleLists = (context.review?.clips ?? []).map((clip) =>
+    context.clipContentDrafts?.[clip.id]?.subtitleStyles ?? clip.subtitleStyles ?? []);
+  const rowColors = speakerColors(jobStyleLists, remembered);
+  const rowColorKeys = rowColors.map(speakerColorKey).join(",");
+  useEffect(() => {
+    // Keep what this job uses for the character's next job.
+    if (rowColorKeys && rowColorKeys !== remembered.map(speakerColorKey).join(",")) {
+      rememberColors(character, rowColors);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rowColorKeys, character]);
   const {
     selectedClip,
     review,
@@ -71,6 +102,14 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                     <p className="text-xs font-medium text-neutral-600">
                       {selectedSegments.length}件
                     </p>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3 text-xs text-neutral-500">
+                    {showStyleControls && rowColors.length > 0 ? <>
+                      <span>色ボタン：1クリックでその字幕の色を変更。Shift＋クリックで前に塗った字幕からまとめて変更。</span>
+                      <button type="button" className="shrink-0 underline" onClick={() => {
+                        rememberColors(character, speakerColors(jobStyleLists, []));
+                      }}>使っていない色を消す</button>
+                    </> : showStyleControls ? <span>字幕の書式で色を変えると、その色のボタンが各字幕に出ます。</span> : null}
                   </div>
                 </div>
 
@@ -265,6 +304,22 @@ export function ReviewSubtitleSegments({ context, showStyleControls = true }: { 
                                 {review.subtitleOnlyAuto && selectedClip.confirmed ? "編集欄を離れると保存します" : "字幕の追加・確定でまとめて反映"}
                               </span>
                             ) : null}
+                            {showStyleControls && selectedClipContentDraft ? <span className="flex items-center gap-1" aria-label="字幕の色">
+                              {rowColors.map((color, colorIndex) => {
+                                const pressed = hasSpeakerColor(selectedClipContentDraft.subtitleStyles, segment, color);
+                                return <button type="button" key={speakerColorKey(color)} disabled={!isSubtitleEditable}
+                                  aria-label={`色${colorIndex + 1}にする`} aria-pressed={pressed}
+                                  title="クリックでこの色（もう一度で戻す）。Shift＋クリックで前に塗った字幕からここまで"
+                                  className={`h-6 w-6 rounded-full border-2 disabled:opacity-50 ${pressed ? "ring-2 ring-sky-600 ring-offset-1" : ""}`}
+                                  style={{ backgroundColor: color.primaryColor ?? "#FFFFFF", borderColor: color.outlineColor ?? "#000000" }}
+                                  onClick={(event) => {
+                                    const targets = event.shiftKey ? subtitlesBetween(selectedSegments, colorAnchorRef.current, segment.id) : [segment];
+                                    context.updateClipContentDraft(selectedClip.id, { subtitleStyles: paintSubtitles(
+                                      selectedClipContentDraft.subtitleStyles, targets, color, !event.shiftKey) });
+                                    colorAnchorRef.current = segment.id;
+                                  }} />;
+                              })}
+                            </span> : null}
                             {showStyleControls && <button type="button" disabled={!isSubtitleEditable}
                               className="border border-sky-600 px-2 py-1 text-xs text-sky-800"
                               aria-pressed={styledSegmentId === segment.id}
