@@ -242,7 +242,7 @@ def test_serve_runs_only_the_analysis_lane_on_its_engine_and_checks_both_logins(
         status = json.loads(bridge_paths(tmp_path).status.read_text("utf-8"))
         assert (status["engine"], status["analysisEngine"], status["model"]) == ("codex", "claude", bridge.CODEX_MODEL)
     finally:
-        bridge.ACTIVE_ENGINE = bridge.ACTIVE_ANALYSIS_ENGINE = BRIDGE_ENGINE_CODEX
+        bridge.ACTIVE_LANES.reset()
 
 
 def test_serve_with_claude_reports_engine_and_missing_cli(tmp_path: Path, monkeypatch) -> None:
@@ -259,7 +259,7 @@ def test_serve_with_claude_reports_engine_and_missing_cli(tmp_path: Path, monkey
         assert serve(tmp_path, sleeper=lambda _: None, once=True) == 5
         assert json.loads(bridge_paths(tmp_path).status.read_text("utf-8"))["errorCode"] == "claude_login_missing"
     finally:
-        bridge.ACTIVE_ENGINE = bridge.ACTIVE_ANALYSIS_ENGINE = BRIDGE_ENGINE_CODEX
+        bridge.ACTIVE_LANES.reset()
 
 
 def test_claude_login_requires_subscription_not_api_key(monkeypatch) -> None:
@@ -291,7 +291,8 @@ def test_build_fingerprint_covers_engine_module(tmp_path: Path) -> None:
     assert len({alone, first, bridge_build_fingerprint(module)}) == 3
 
 
-def test_launcher_restarts_bridge_running_another_engine(tmp_path: Path) -> None:
+def test_launcher_keeps_a_bridge_running_when_the_engine_is_switched(tmp_path: Path) -> None:
+    """The bridge re-reads engine.json per request, so switching must not restart it mid-request."""
     from tests.test_windows_launcher import FakeRunner, compatible_bridge_status, make_controller
     from tests.test_windows_launcher import make_project as make_launcher_project
 
@@ -304,13 +305,8 @@ def test_launcher_restarts_bridge_running_another_engine(tmp_path: Path) -> None
     status.write_text(json.dumps(compatible_bridge_status(module, pid=111, engine="codex")), encoding="utf-8")
     controller = make_controller(root, FakeRunner(), process_checker=lambda pid: pid == 111)
     assert controller.codex_bridge_ready() is True
-    atomic_write_json(status.parent / "engine.json", {"engine": "claude"})
-    assert controller.codex_bridge_ready() is False
-    status.write_text(json.dumps(compatible_bridge_status(module, pid=111, engine="claude")), encoding="utf-8")
-    assert controller.codex_bridge_ready() is True
     atomic_write_json(status.parent / "engine.json", {"engine": "claude", "analysisEngine": "codex"})
-    assert controller.codex_bridge_ready() is False
-    status.write_text(json.dumps(compatible_bridge_status(module, pid=111, engine="claude") | {"analysisEngine": "codex"}),
-                      encoding="utf-8")
     assert controller.codex_bridge_ready() is True
+    module.write_text("# newer bridge build\n", encoding="utf-8")
+    assert controller.codex_bridge_ready() is False  # a different build is still restarted
     assert BRIDGE_PROTOCOL_VERSION == 1

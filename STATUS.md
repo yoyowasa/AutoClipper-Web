@@ -924,3 +924,29 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 変更: `backend/app/render/subtitles_ass.py` の字幕作成の最後に、0.2秒未満の字幕を0.2秒まで伸ばす処理を追加。前後の空き時間を先に使い、足りなければ0.5秒以上残る隣の字幕から借りる。どちらもできない字幕は変えず、検査で従来どおり止める。字幕の文字・区切り・色は変えない。書き出しと検査の参照字幕は同じ処理を使う。文書は `docs/FINAL_OUTPUT_INSPECTION_CONTRACT_v1.md`。
 - 検証: `tests/test_subtitles_ass.py` に、実例と同じ並び（隣から借りる）・空き時間を使う・借りられない場合は変えない、のテストを追加。停止したジョブの修正前コピーで通常2の字幕を作り直し、0.2秒未満の字幕が2件（0.02秒・0.16秒）→0件になることを確認（コピー環境）。ruff成功、backend全件テスト 2608 passed / 33 skipped（ローカル）。ローカルではffmpegが無く飛ばされていた `tests/test_final_output_pixels.py` がCIで失敗（0.018秒の字幕が伸びて映るようになったため）。検査が映らない字幕を合格にしないことは、伸ばせない並び（両隣も短い）で確かめる形に直し、単独の短い字幕が伸びて検査を通るテストを追加。ffmpeg入りの使い捨てコンテナで同ファイルと字幕テスト 50 passed。
 - 未確認: 稼働環境での書き出しと検査の通過。
+
+## 2026-11-16 task-255 稼働反映（PR #196）
+- 反映前確認: 両キュー（待ち・実行中）0、中継のrequests／processing空、ジョブ・同期・分析に実行中なし。DB変更が無いためバックアップは取っていない。
+- 実施: PR #196をmerge commit `105ab76` でマージし、`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。backend・worker・intelligence-workerを作り直した。中継の再起動なし。
+- 検証（稼働環境）: `/health` 200、frontend応答あり、3コンテナで新しい字幕処理の読み込みを確認。CIはbackend 3.11／3.12・frontendとも成功。
+- 補足: job_059a… は task-254反映後、通常2の0.02秒字幕を手で消して書き出し、2026-11-16 13:38 UTCに完了。
+- 未確認: 新しい処理で作った字幕の実際の書き出しと検査の通過。
+
+## 2026-11-18 字幕の自動置換「戦闘→尖頭」を取り消し（稼働データ）
+- 内容: ユーザーの指示で、らでんの学習済み置換「戦闘→尖頭」（1本の動画で6回の修正から有効化）を、画面と同じAPI（`/api/subtitle-terms/{id}/disable`）で無効にした。ゲーム配信などで本当の「戦闘」まで置き換わるため。
+- 確認: 一覧で無効を確認。有効な置換は らでん4件・そぴあ2件。作成済みジョブの字幕は変えていない。
+
+## 2026-11-23 task-256 TOP画面でAI・モデル・深さを切り替える
+- 目的: 中継が使うAI（Codex／Claude）・モデル・思考の深さを、「通常の作業」と「自己分析」の2つの作業ごとに、TOP画面で選べるようにする。中継の再起動なしで切り替える。
+- 変更:
+  - 中継（`launcher/bridge_engine_settings.py` 新規、`launcher/codex_bridge.py`、`launcher/claude_engine.py`）は、依頼ごとに `storage/codex_bridge/engine.json` を読み直し、作業ごとのAI・モデル・深さで実行する。
+    - 選択肢は、CodexがCLI自身のモデル一覧キャッシュ（IDと深さだけを読む）、Claudeが固定の4モデル。一覧外の値は既定（gpt-6.1-sol／claude-opus-5-5、medium）に戻す。依頼本文からはモデルを指定できない（従来どおり）。
+    - 途中で切り替えたAIは、最初の依頼の前にCLIとサブスクリプションのログインを確認する。無ければ実行せず `*_login_missing` 等で失敗させる。
+    - 状態ファイルに、作業ごとの使用中の値と選択肢を出す。旧形式の `{"engine","analysisEngine"}` も読める。
+  - ランチャー（`launcher/controller.py`）は、エンジンの違いでは中継を再起動しない。処理中の依頼を止めないため。版の違いは従来どおり再起動する。新モジュールも版の指紋に含めた。
+  - backend: `GET/PUT /api/bridge-engine`（`backend/app/bridge_engine.py`、`backend/app/api/bridge_engine.py`）。保存は `write_json_atomic`、Origin確認あり、一覧外の値は422。自己分析の記録のモデル・推論に、依頼時の自己分析の設定を残すようにした（以前はClaudeで実行しても gpt-6.1-sol と記録されていた）。
+  - frontend: TOP画面（`/upload`）の左欄に「AIの設定」を追加（`frontend/components/BridgeEngineSettingsPanel.tsx`、`frontend/lib/bridgeEngine.ts`）。保存した値と中継が使っている値が違うときは「反映待ち」と表示する。
+  - 文書: `docs/WINDOWS_LAUNCHER.md`、`docs/INTELLIGENCE_SELF_ANALYSIS.md`。テストではCODEX_HOMEを隔離し、開発者のモデル一覧を読まない。
+- 検証（ローカル・隔離環境）: 新規テスト（依頼ごとの切り替え、ログイン未確認時の失敗、状態の出力、旧／新形式の読み込み、API保存・拒否、分析記録のモデル）、既存の中継・ランチャーのテストを更新。隔離したbackend（一時DB・storage・別ポート）とfrontendで、保存・一覧外の拒否と、TOP画面の表示を確認した。ヘッドレスEdgeの画面撮影で、欄を開いた表示も見た。ruff成功、backend全件テスト 2617 passed / 34 skipped、frontend test・lint・typecheck・build成功（ローカル）。
+- 反映時の注意: 中継のコードが変わるため、反映時に中継の再起動が1回必要（ランチャーが版の違いで再起動する）。現在の `engine.json`（通常Codex・分析Claude）は旧形式のまま読まれ、通常 gpt-6.1-sol／medium、分析 claude-opus-5-5／medium になり、今と同じ。
+- 未確認: 稼働環境での実際の切り替えと、切り替え後のジョブ・分析の応答。

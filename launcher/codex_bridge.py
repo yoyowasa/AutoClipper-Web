@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Any, Iterator
 
 try:
-    from . import claude_engine
+    from . import bridge_engine_settings, claude_engine
 except ImportError:  # Executed as a script: launcher/codex_bridge.py serve
+    import bridge_engine_settings  # type: ignore[no-redef]
     import claude_engine  # type: ignore[no-redef]
 
 
@@ -281,12 +282,13 @@ def bridge_build_fingerprint(module_path: str | Path | None = None) -> str:
         payload = path.read_bytes()
     except OSError:
         return ""
-    engine_module = path.with_name("claude_engine.py")
-    if engine_module.is_file():
-        try:
-            payload += b"\0" + engine_module.read_bytes()
-        except OSError:
-            return ""
+    for name in ("claude_engine.py", "bridge_engine_settings.py"):
+        engine_module = path.with_name(name)
+        if engine_module.is_file():
+            try:
+                payload += b"\0" + engine_module.read_bytes()
+            except OSError:
+                return ""
     return hashlib.sha256(payload).hexdigest()
 
 
@@ -402,40 +404,67 @@ def private_bridge_paths(project_root: str | Path) -> PrivateBridgePaths:
     )
 
 
+def configured_lane_settings(
+    project_root: str | Path, catalog: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, bridge_engine_settings.LaneSetting]:
+    """Engine, model and effort per lane: env var for the engine, else engine.json, else Codex defaults."""
+    return bridge_engine_settings.read_lane_settings(
+        bridge_paths(project_root).root / BRIDGE_ENGINE_FILENAME,
+        catalog if catalog is not None else bridge_engine_settings.engine_catalog(),
+        engine_override=os.environ.get(BRIDGE_ENGINE_ENV),
+    )
+
+
 def configured_bridge_engine(project_root: str | Path) -> str:
     """Engine chosen by env var, else storage/codex_bridge/engine.json, else Codex."""
-    configured = os.environ.get(BRIDGE_ENGINE_ENV)
-    if configured is None:
-        engine_file = bridge_paths(project_root).root / BRIDGE_ENGINE_FILENAME
-        try:
-            configured = read_json_object(engine_file, max_bytes=4096).get("engine")
-        except (OSError, ValueError, json.JSONDecodeError):
-            configured = None
-    engine = str(configured or BRIDGE_ENGINE_CODEX).strip().lower()
-    return engine if engine in BRIDGE_ENGINES else BRIDGE_ENGINE_CODEX
+    return configured_lane_settings(project_root)["normal"].engine
 
 
 def configured_analysis_engine(project_root: str | Path) -> str:
-    """Engine for the self-analysis lane: "analysisEngine" in engine.json, else the bridge engine."""
-    try:
-        configured = read_json_object(
-            bridge_paths(project_root).root / BRIDGE_ENGINE_FILENAME, max_bytes=4096).get("analysisEngine")
-    except (OSError, ValueError, json.JSONDecodeError):
-        configured = None
-    engine = str(configured or "").strip().lower()
-    return engine if engine in BRIDGE_ENGINES else configured_bridge_engine(project_root)
+    """Engine for the self-analysis lane: its own setting in engine.json, else the bridge engine."""
+    return configured_lane_settings(project_root)["analysis"].engine
 
 
-ACTIVE_ENGINE = BRIDGE_ENGINE_CODEX
-ACTIVE_ANALYSIS_ENGINE = BRIDGE_ENGINE_CODEX
+def default_lane_settings() -> dict[str, bridge_engine_settings.LaneSetting]:
+    codex = bridge_engine_settings.LaneSetting(BRIDGE_ENGINE_CODEX, CODEX_MODEL, CODEX_REASONING_EFFORT)
+    return {"normal": codex, "analysis": codex}
 
 
-def engine_status_fields(engine: str, analysis_engine: str | None = None) -> dict[str, str]:
-    lane = {"analysisEngine": analysis_engine or engine}
-    if engine == BRIDGE_ENGINE_CLAUDE:
-        return {"engine": engine, "model": claude_engine.CLAUDE_MODEL,
-                "reasoningEffort": claude_engine.CLAUDE_EFFORT} | lane
-    return {"engine": BRIDGE_ENGINE_CODEX, "model": CODEX_MODEL, "reasoningEffort": CODEX_REASONING_EFFORT} | lane
+class _LaneSettingsState:
+    """What each lane uses now. Re-read before every request; the catalog is re-read once a minute."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.lanes = default_lane_settings()
+        self.catalog: dict[str, list[dict[str, Any]]] = {}
+        self.catalog_read_at = 0.0
+
+    def refresh(self, project_root: str | Path) -> bool:
+        with self.lock:
+            if not self.catalog or time.monotonic() - self.catalog_read_at >= 60:
+                self.catalog = bridge_engine_settings.engine_catalog()
+                self.catalog_read_at = time.monotonic()
+            lanes = configured_lane_settings(project_root, self.catalog)
+            changed = lanes != self.lanes
+            self.lanes = lanes
+            return changed
+
+    def reset(self) -> None:
+        with self.lock:
+            self.lanes, self.catalog, self.catalog_read_at = default_lane_settings(), {}, 0.0
+
+
+ACTIVE_LANES = _LaneSettingsState()
+
+
+def engine_status_fields(lanes: dict[str, bridge_engine_settings.LaneSetting] | None = None,
+                         catalog: dict[str, list[dict[str, Any]]] | None = None) -> dict[str, Any]:
+    current = lanes or ACTIVE_LANES.lanes
+    fields: dict[str, Any] = current["normal"].fields() | current["analysis"].fields("analysis")
+    shown = catalog if catalog is not None else ACTIVE_LANES.catalog
+    if shown:
+        fields["engineCatalog"] = shown
+    return fields
 
 
 def ensure_bridge_directories(paths: BridgePaths) -> None:
@@ -845,6 +874,8 @@ def build_codex_command(
     session_dir: Path,
     schema_path: Path,
     output_path: Path,
+    model: str | None = None,
+    effort: str | None = None,
 ) -> list[str]:
     if request.thread_id:
         command = [
@@ -875,8 +906,9 @@ def build_codex_command(
         command.extend(["--ephemeral", "-c", 'history.persistence="none"'])
     # Apply the same policy to new requests and resumed threads, including legacy inputs.
     command.extend(
-        ["--model", CHANNEL_SELF_ANALYSIS_MODEL if request.task == CHANNEL_SELF_ANALYSIS_TASK else CODEX_MODEL,
-         "-c", f'model_reasoning_effort="{CODEX_REASONING_EFFORT}"']
+        ["--model", model or (CHANNEL_SELF_ANALYSIS_MODEL if request.task == CHANNEL_SELF_ANALYSIS_TASK
+                              else CODEX_MODEL),
+         "-c", f'model_reasoning_effort="{effort or CODEX_REASONING_EFFORT}"']
     )
     command.extend(
         [
@@ -1105,6 +1137,8 @@ def _process_request_file(
     timeout: float = DEFAULT_CODEX_TIMEOUT_SECONDS,
     engine: str = BRIDGE_ENGINE_CODEX,
     claude_executable: str | None = None,
+    model: str | None = None,
+    effort: str | None = None,
 ) -> dict[str, Any]:
     paths = bridge_paths(project_root)
     private_paths = private_bridge_paths(project_root)
@@ -1161,6 +1195,8 @@ def _process_request_file(
             executable=claude_executable or claude_engine.find_claude_executable(),
             runner=runner,
             timeout=timeout,
+            model=model or claude_engine.CLAUDE_MODEL,
+            effort=effort or claude_engine.CLAUDE_EFFORT,
         )
 
     # Do not retain the versioned Desktop CLI path across requests.
@@ -1193,6 +1229,8 @@ def _process_request_file(
         session_dir=session_dir,
         schema_path=schema_path,
         output_path=output_path,
+        model=model,
+        effort=effort,
     )
     effective_timeout = _effective_timeout(request, timeout)
     result = runner(
@@ -1299,6 +1337,8 @@ def _process_claude_request(
     executable: str | None,
     runner: CodexRunner,
     timeout: float,
+    model: str = claude_engine.CLAUDE_MODEL,
+    effort: str = claude_engine.CLAUDE_EFFORT,
 ) -> dict[str, Any]:
     if not executable:
         return _failed_response(request.request_id, "claude_cli_missing", request=request)
@@ -1324,6 +1364,8 @@ def _process_claude_request(
         schema_text=schema_text,
         resume_session_id=request.thread_id,
         ephemeral=analysis,
+        model=model,
+        effort=effort,
     )
     result = runner(command, stdin_text, session_dir, _effective_timeout(request, timeout), paths.stop_request)
     parsed = claude_engine.parse_claude_stream(result.stdout)
@@ -1366,6 +1408,7 @@ def process_request_file(
     request_path: Path, *, project_root: Path, codex_executable: str | None = None,
     runner: CodexRunner = run_codex_command, timeout: float = DEFAULT_CODEX_TIMEOUT_SECONDS,
     engine: str = BRIDGE_ENGINE_CODEX, claude_executable: str | None = None,
+    model: str | None = None, effort: str | None = None,
 ) -> dict[str, Any]:
     # Analysis contains expiring YouTube metadata. Its private scratch must not
     # survive success, malformed output, timeout, or an exception. Old tasks keep
@@ -1379,7 +1422,7 @@ def process_request_file(
     try:
         return _process_request_file(request_path, project_root=project_root, codex_executable=codex_executable,
                                      runner=runner, timeout=timeout, engine=engine,
-                                     claude_executable=claude_executable)
+                                     claude_executable=claude_executable, model=model, effort=effort)
     finally:
         if analysis:
             private = private_bridge_paths(project_root)
@@ -1448,6 +1491,11 @@ class _RequestStatusPublisher:
         self.lock = threading.RLock()
         self.active: dict[str, str | None] = {"normal": None, "analysis": None}
 
+    def refresh(self) -> None:
+        """Rewrite the status with the current requests, e.g. after the lane settings changed."""
+        with self.lock:
+            self.update("normal", self.active["normal"])
+
     def update(self, lane: str, request_id: str | None) -> None:
         with self.lock:
             self.active[lane] = request_id
@@ -1468,6 +1516,8 @@ def process_pending_requests(
     analysis_only: bool = False,
     status_publisher: _RequestStatusPublisher | None = None,
     engine: str = BRIDGE_ENGINE_CODEX,
+    lane_setting: Callable[[], bridge_engine_settings.LaneSetting] | None = None,
+    engine_ready: Callable[[str], str | None] | None = None,
 ) -> int:
     publisher = status_publisher or _RequestStatusPublisher(paths)
     processed = 0
@@ -1500,13 +1550,19 @@ def process_pending_requests(
             lane="analysis" if analysis_only else "normal",
         ):
             try:
-                response = process_request_file(
+                # The setting saved on the screen applies from the next request, without a restart.
+                setting = lane_setting() if lane_setting is not None else None
+                request_engine = setting.engine if setting else engine
+                not_ready = engine_ready(request_engine) if engine_ready is not None else None
+                response = _failed_response(request_path.stem, not_ready) if not_ready else process_request_file(
                     processing_path,
                     project_root=project_root,
                     codex_executable=codex_executable,
                     runner=runner,
                     timeout=timeout,
-                    engine=engine,
+                    engine=request_engine,
+                    model=setting.model if setting else None,
+                    effort=setting.effort if setting else None,
                 )
             except Exception as exc:
                 record_bridge_error(paths, "request", exc)
@@ -1566,7 +1622,7 @@ def _write_status(paths: BridgePaths, state: str, **extra: Any) -> None:
             "bridgeBuildFingerprint": BRIDGE_BUILD_FINGERPRINT,
             "contractFingerprint": BRIDGE_CONTRACT_FINGERPRINT,
             "taskSchemaFingerprints": EXPECTED_RESPONSE_SCHEMA_SHA256,
-            **engine_status_fields(ACTIVE_ENGINE, ACTIVE_ANALYSIS_ENGINE),
+            **engine_status_fields(),
             **extra,
         },
     )
@@ -1650,6 +1706,34 @@ def _bridge_shutdown_signals(paths: BridgePaths) -> Iterator[None]:
         signal.signal(signal.SIGTERM, previous)
 
 
+class _EngineReadiness:
+    """Install and subscription-login check for an engine switched to after start, cached for ten minutes."""
+
+    def __init__(self, checked_at_start: set[str]) -> None:
+        self.lock = threading.Lock()
+        self.ready_at = {engine: time.monotonic() for engine in checked_at_start}
+
+    def check(self, engine: str) -> str | None:
+        with self.lock:
+            if time.monotonic() - self.ready_at.get(engine, -1e9) < 600:
+                return None
+        if engine == BRIDGE_ENGINE_CLAUDE:
+            executable = claude_engine.find_claude_executable()
+            if not executable:
+                return "claude_cli_missing"
+            if not claude_engine.claude_login_configured(executable, safe_codex_environment()):
+                return "claude_login_missing"
+        else:
+            executable = find_codex_executable()
+            if not executable:
+                return "codex_cli_missing"
+            if not codex_login_configured(executable):
+                return "codex_login_missing"
+        with self.lock:
+            self.ready_at[engine] = time.monotonic()
+        return None
+
+
 def serve(
     project_root: str | Path,
     *,
@@ -1665,10 +1749,8 @@ def serve(
         if not acquired:
             return 3
         paths.stop_request.unlink(missing_ok=True)
-        global ACTIVE_ENGINE, ACTIVE_ANALYSIS_ENGINE
-        engine = configured_bridge_engine(root)
-        analysis_engine = configured_analysis_engine(root)
-        ACTIVE_ENGINE, ACTIVE_ANALYSIS_ENGINE = engine, analysis_engine
+        ACTIVE_LANES.refresh(root)
+        engine, analysis_engine = ACTIVE_LANES.lanes["normal"].engine, ACTIVE_LANES.lanes["analysis"].engine
         # Every engine a lane uses must be installed and logged in before the bridge reports ready.
         if BRIDGE_ENGINE_CLAUDE in (engine, analysis_engine):
             claude_executable = claude_engine.find_claude_executable()
@@ -1689,6 +1771,15 @@ def serve(
         recover_processing_requests(paths)
         _write_request_status(paths, request_id=None, request_state="idle")
         publisher = _RequestStatusPublisher(paths)
+        readiness = _EngineReadiness({engine, analysis_engine})
+
+        def lane_setting(lane: str) -> Callable[[], bridge_engine_settings.LaneSetting]:
+            def current() -> bridge_engine_settings.LaneSetting:
+                if ACTIVE_LANES.refresh(root):
+                    publisher.refresh()
+                return ACTIVE_LANES.lanes[lane]
+            return current
+
         shutdown = threading.Event()
         analysis_finished = threading.Event()
 
@@ -1698,7 +1789,8 @@ def serve(
                     try:
                         process_pending_requests(paths, project_root=root, runner=runner, timeout=timeout,
                                                  analysis_only=True, status_publisher=publisher,
-                                                 engine=analysis_engine)
+                                                 engine=analysis_engine, lane_setting=lane_setting("analysis"),
+                                                 engine_ready=readiness.check)
                     except Exception as exc:
                         record_bridge_error(paths, "analysis_poll", exc)
                     if once:
@@ -1717,8 +1809,11 @@ def serve(
                         if time.monotonic() - last_analysis_cleanup >= 3600 or last_analysis_cleanup == 0:
                             expire_analysis_scratch(root)
                             last_analysis_cleanup = time.monotonic()
+                        if ACTIVE_LANES.refresh(root):
+                            publisher.refresh()
                         process_pending_requests(paths, project_root=root, runner=runner, timeout=timeout,
-                                                 status_publisher=publisher, engine=engine)
+                                                 status_publisher=publisher, engine=engine,
+                                                 lane_setting=lane_setting("normal"), engine_ready=readiness.check)
                     except Exception as exc:
                         record_bridge_error(paths, "poll", exc)
                     if once or paths.stop_request.exists():

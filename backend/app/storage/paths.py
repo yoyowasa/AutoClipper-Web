@@ -34,6 +34,14 @@ class StoragePaths:
         return self.root / "subtitle_terms"
 
     @property
+    def bridge_engine_settings(self) -> Path:
+        return self.root / "codex_bridge" / "engine.json"
+
+    @property
+    def bridge_status(self) -> Path:
+        return self.root / "codex_bridge" / "status.json"
+
+    @property
     def character_assets(self) -> Path:
         return self.root / "character_assets"
 

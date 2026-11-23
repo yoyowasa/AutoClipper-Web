@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import SessionLocal
+from app.bridge_engine import saved_settings
 from app.intelligence.analysis_bridge import ANALYSIS_TIMEOUT_SECONDS, ChannelAnalysisGenerator, cleanup_analysis_files
 from app.intelligence.analysis_errors import AnalysisError, MESSAGES
 from app.intelligence.analysis_budget import compression_limitation
@@ -74,7 +75,9 @@ def run_channel_analysis(id: str, *, session_factory=SessionLocal, paths=None, c
             db.commit()
 
             def remember(request_id):
-                run.request_id = request_id
+                # Record the model and effort the bridge will read for this request (chosen on the top screen).
+                lane = saved_settings(storage).analysis
+                run.request_id, run.requested_model, run.requested_effort = request_id, lane.model, lane.effort
                 db.commit()
 
             generator = generator_factory(paths=storage, run_id=id, on_request=remember)
