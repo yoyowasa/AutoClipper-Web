@@ -112,6 +112,8 @@ def build_claude_command(
     schema_text: str,
     resume_session_id: str | None,
     ephemeral: bool,
+    model: str = CLAUDE_MODEL,
+    effort: str = CLAUDE_EFFORT,
 ) -> list[str]:
     command = [
         executable,
@@ -122,9 +124,9 @@ def build_claude_command(
         "stream-json",
         "--verbose",
         "--model",
-        CLAUDE_MODEL,
+        model,
         "--effort",
-        CLAUDE_EFFORT,
+        effort,
         "--tools",
         "",
         "--safe-mode",

@@ -15,6 +15,7 @@ def test_openapi_paths_and_methods_match_before_clip_plan_split() -> None:
     assert after == {
         **before,
         "/api/subtitle-terms": ["get"],
+        "/api/bridge-engine": ["get", "put"],
         "/api/subtitle-terms/{character_id}/disable": ["post"],
         "/api/subtitle-terms/{character_id}/enable": ["post"],
         "/api/intelligence/channels/{channel_id}/choice-policies": ["get"],

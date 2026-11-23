@@ -122,6 +122,18 @@ def execute(prepared, id, factory=FixedGenerator):
     return prepared.db.get(AnalysisRun, id)
 
 
+def test_run_records_the_analysis_lane_model_chosen_on_the_top_screen(client, prepared):
+    import json
+    prepared.paths.bridge_engine_settings.parent.mkdir(parents=True, exist_ok=True)
+    prepared.paths.bridge_engine_settings.write_text(json.dumps({"lanes": {
+        "normal": {"engine": "codex", "model": "gpt-6.1-sol", "effort": "medium"},
+        "analysis": {"engine": "claude", "model": "claude-sonnet-5-5", "effort": "high"}}}), encoding="utf-8")
+    response = client.post(URL, json={})
+    saved = execute(prepared, response.json()["id"])
+    assert saved.status == "success"
+    assert (saved.requested_model, saved.requested_effort) == ("claude-sonnet-5-5", "high")
+
+
 def test_input_native_periods_missing_ids_and_production(prepared):
     ctx = build_analysis_input(prepared.db, prepared.paths, prepared.config, 1, "analysis_test", CLOCK)
     assert set(ctx.payload["format_videos"]["shorts"]) == {VIDEO_ID}

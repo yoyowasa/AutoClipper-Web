@@ -16,13 +16,10 @@ from pathlib import Path
 
 from .codex_bridge import (
     BRIDGE_CONTRACT_FINGERPRINT,
-    BRIDGE_ENGINE_CODEX,
     BRIDGE_PROTOCOL_VERSION,
     atomic_write_json,
     bridge_build_fingerprint,
     bridge_paths,
-    configured_analysis_engine,
-    configured_bridge_engine,
     process_is_running,
 )
 
@@ -546,12 +543,8 @@ class LauncherController:
             return "codex_bridge_build_mismatch"
         if status.get("contractFingerprint") != BRIDGE_CONTRACT_FINGERPRINT:
             return "codex_bridge_contract_mismatch"
-        # A bridge started before the engine was switched must be restarted.
-        if (status.get("engine") or BRIDGE_ENGINE_CODEX) != configured_bridge_engine(self.project_root):
-            return "codex_bridge_engine_mismatch"
-        if (status.get("analysisEngine") or status.get("engine") or BRIDGE_ENGINE_CODEX) != configured_analysis_engine(
-                self.project_root):
-            return "codex_bridge_engine_mismatch"
+        # The bridge re-reads engine.json before every request, so a switched engine needs no restart;
+        # an older bridge build that read it only at start is caught by the build fingerprint above.
         return None
 
     def ensure_codex_bridge_running(

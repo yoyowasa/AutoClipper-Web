@@ -50,6 +50,8 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     environment = pytest.MonkeyPatch()
     environment.setenv("DATABASE_URL", "sqlite:///" + (storage / "autoclipper.db").as_posix())
     environment.setenv("STORAGE_ROOT", str(storage))
+    # The bridge reads the Codex model list from CODEX_HOME; never the developer's own one in tests.
+    environment.setenv("CODEX_HOME", str(storage / "codex-home"))
     session.config.add_cleanup(environment.undo)
 
     from app.config import get_settings

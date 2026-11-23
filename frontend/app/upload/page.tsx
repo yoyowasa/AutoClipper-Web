@@ -13,6 +13,7 @@ import { HeatmapFileNotice } from "../../components/HeatmapFileNotice";
 import { readHeatmapContentIssue } from "../../lib/heatmapFileStatus";
 import { UploadActionBar } from "../../components/UploadActionBar";
 import { YouTubePostingSettingsPanel } from "../../components/YouTubePostingSettingsPanel";
+import { BridgeEngineSettingsPanel } from "../../components/BridgeEngineSettingsPanel";
 import {
   cleanupExpiredStorage,
   createJob,
@@ -530,6 +531,8 @@ function UploadForm() {
                 }}
               />
             </div>
+
+            <BridgeEngineSettingsPanel />
 
             {uploadMode !== "reedit" ? (
               <YouTubePostingSettingsPanel
