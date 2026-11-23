@@ -326,6 +326,7 @@ export type ResultExportItem = {
   thumbnailSubjectSource?: "video" | "asset" | "legacy";
   thumbnailSubjectReason?: string | null;
   thumbnailFrameCandidateId?: string | null;
+  thumbnailSubjectFaceIndex?: number | null;
   thumbnailCharacterAssetId?: string | null;
   thumbnailEmotion?: import("./characterAssets").CharacterEmotion | null;
   thumbnailEmotionReason?: string | null;
@@ -336,8 +337,12 @@ export type ResultExportItem = {
 export type ThumbnailFrameCandidate = { id: string; second: number; score: number; closeAvailable: boolean; imageUrl: string };
 export type ThumbnailCandidateState = { state: "idle" | "queued" | "ready" | "failed"; candidates: ThumbnailFrameCandidate[]; reason?: string | null };
 
+export type ThumbnailPerson = { index: number; x: number; y: number; width: number; height: number; closeAvailable: boolean };
+
 export type ThumbnailSubjectSelection = {
   frameCandidateId?: string;
+  /** Person inside the saved still; 0 or absent is the automatic choice. */
+  subjectFaceIndex?: number;
   subjectSource: "video" | "asset";
   characterAssetId?: string;
   emotion?: import("./characterAssets").CharacterEmotion;

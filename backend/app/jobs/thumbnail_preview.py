@@ -45,6 +45,7 @@ class ThumbnailPreviewRequest(BaseModel):
     )
     frame_candidate_id: str | None = Field(default=None, alias="frameCandidateId", pattern=r"^frame_[0-9]{2}$")
     crop_mode: Literal["standard", "close"] = Field(default="standard", alias="cropMode")
+    subject_face_index: int | None = Field(default=None, alias="subjectFaceIndex", ge=0, le=5)
     subject_source: Literal["video", "asset"] = Field(default="video", alias="subjectSource")
     character_asset_id: str | None = Field(default=None, alias="characterAssetId", pattern=r"^asset_[0-9a-f]{32}$")
 
@@ -189,6 +190,7 @@ def render_thumbnail_preview(db, paths, export, request: ThumbnailPreviewRequest
             video_kwargs = video_candidate_kwargs(
                 read_export_metadata(export), paths.job_outputs(export.job_id), export.id,
                 candidate_id=context["candidate"]["id"] if context["candidate"] else None, mode=request.crop_mode,
+                face_index=request.subject_face_index,
             ) if context["candidate"] else {}
             video_kwargs.pop("source_frame_path", None)
             render_normal_thumbnail(

@@ -22,7 +22,7 @@ export function ResultThumbnailWorkspace({ item, busy, onRender }: {
     design: item.thumbnailDesign ?? "raden",
     subjectPlacement: item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 },
     subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" : "video",
-    frameCandidateId: item.thumbnailFrameCandidateId ?? undefined, cropMode: item.thumbnailCropMode ?? "standard", characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
+    frameCandidateId: item.thumbnailFrameCandidateId ?? undefined, subjectFaceIndex: item.thumbnailSubjectFaceIndex ?? undefined, cropMode: item.thumbnailCropMode ?? "standard", characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
   }));
 
   useEffect(() => {

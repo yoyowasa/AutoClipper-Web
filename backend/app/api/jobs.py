@@ -590,6 +590,8 @@ def _result_item(
         {"video", "asset", "legacy"} else "legacy",
         thumbnailSubjectReason=metadata.get("thumbnail_subject_reason"),
         thumbnailFrameCandidateId=metadata.get("thumbnail_frame_candidate_id"),
+        thumbnailSubjectFaceIndex=metadata.get("thumbnail_subject_face_index")
+        if isinstance(metadata.get("thumbnail_subject_face_index"), int) else None,
         thumbnailCharacterAssetId=metadata.get("thumbnail_character_asset_id"),
         thumbnailEmotion=metadata.get("thumbnail_emotion"),
         thumbnailEmotionReason=metadata.get("thumbnail_emotion_reason"),

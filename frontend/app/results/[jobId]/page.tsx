@@ -171,6 +171,7 @@ export default function ResultsPage() {
         subjectPlacement: placement ?? item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 },
         ...(selection ?? { subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" as const : "video" as const,
           frameCandidateId: item.thumbnailFrameCandidateId ?? undefined,
+          subjectFaceIndex: item.thumbnailSubjectFaceIndex ?? undefined,
           characterAssetId: item.thumbnailCharacterAssetId ?? undefined }),
         ...(design ? { design } : {}),
         ...(textStyles ? { textStyles } : {}),

@@ -950,3 +950,20 @@ AutoClipper Web の開発状態、実装履歴、修正履歴、仕様変更、�
 - 検証（ローカル・隔離環境）: 新規テスト（依頼ごとの切り替え、ログイン未確認時の失敗、状態の出力、旧／新形式の読み込み、API保存・拒否、分析記録のモデル）、既存の中継・ランチャーのテストを更新。隔離したbackend（一時DB・storage・別ポート）とfrontendで、保存・一覧外の拒否と、TOP画面の表示を確認した。ヘッドレスEdgeの画面撮影で、欄を開いた表示も見た。ruff成功、backend全件テスト 2617 passed / 34 skipped、frontend test・lint・typecheck・build成功（ローカル）。
 - 反映時の注意: 中継のコードが変わるため、反映時に中継の再起動が1回必要（ランチャーが版の違いで再起動する）。現在の `engine.json`（通常Codex・分析Claude）は旧形式のまま読まれ、通常 gpt-6.1-sol／medium、分析 claude-opus-5-5／medium になり、今と同じ。
 - 未確認: 稼働環境での実際の切り替えと、切り替え後のジョブ・分析の応答。
+
+## 2026-11-23 task-256 稼働反映（PR #197）
+- 反映前確認: 両キュー（待ち・実行中）0、中継のrequests／processing空、ジョブ・同期・分析に実行中なし。DB変更が無いためバックアップは取っていない。
+- 実施: PR #197をmerge commit `78aad69` でマージし、`docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build`。ランチャーの `ensure_codex_bridge_running` で中継を再起動した（版の違いによる再起動）。
+- 検証（稼働環境）: `/health` 200、frontend応答あり。中継は ready で、通常は Codex gpt-6.1-sol／medium、分析は Claude claude-opus-5-5／medium（反映前と同じ）。状態ファイルにCodexのモデル10種の選択肢が出ている。`GET /api/bridge-engine` で保存値と使用中の値が一致。workerとintelligence-workerで新しいコードの読み込みを確認。CIはbackend 3.11／3.12・frontendとも成功（初回はテストのimportパス不足で失敗、`10bd970` で修正）。
+- 未確認: 画面からの実際の切り替えと、切り替え後のジョブ・分析の応答。
+
+## 2026-11-24 task-257 サムネで中心にする人物を選ぶ
+- 目的: 通常動画のサムネ調整で、場面に複数の人物がいるとき、自動で選ばれた人物以外（例: ゲストが選ばれてらでんに届かない）を中心にできるようにする。左右のバーは自動の顔の周りの微調整用で、±300px（元映像では1割前後）しか動かないため。
+- 変更:
+  - backend: 保存済み候補の静止画から顔を全員分検出する（`detect_anime_faces`、従来の `detect_anime_face` は最大の顔を返すまま）。人物1は従来の自動の顔、2人目以降は左から順で、自動と同じ「半身が2倍以内の拡大で収まる」条件を通った顔だけ（最大6人）。検出結果はファイルの更新時刻をキーにメモリへ保持し、メタデータには書かない。
+  - `GET /api/exports/{id}/thumbnail/candidates/{candidate_id}/people` を追加。プレビュー・保存の依頼に `subjectFaceIndex`（0〜5、0／省略は自動）を追加。保存時に `thumbnail_subject_face_index` を記録し、結果APIは `thumbnailSubjectFaceIndex` で返す。制作記録の値にも `subjectFaceIndex` を残す。
+  - 「別場面」「Codexで選び直す」、素材への切り替え、最初のサムネ作成では自動の人物に戻す。場面にいない人物番号はプレビュー409・保存422。顔のアップの可否は選んだ人物で判定する。
+  - frontend: 人物候補の下に「中心にする人物」を追加（`frontend/components/ThumbnailPersonPicker.tsx`）。静止画の顔の枠か番号のボタンで選ぶ。人物を変えると左右・上下の位置を0に戻す（大きさは維持）。人物が1人だけの場面では表示しない。
+- 検証（ローカル）: 新規テスト（人物一覧・保存・別場面で自動へ戻る・範囲外の拒否・プレビュー・顔の並び順、frontendの表示と依頼内容）。ruff成功、backend全件テスト 2623 passed / 34 skipped、frontend test・lint・typecheck・build成功。
+- 検証（実データのコピー）: 稼働storageの候補静止画71枚をコピーして検出し、1人36枚・2人16枚・3人19枚。らでんとゲストが並ぶ場面で、自動はゲスト、人物2でらでんを中心にした半身になることを描画で確認した。
+- 未確認: 稼働環境の画面での操作と保存結果。画角の条件を通らない小さな人物（2倍を超える拡大が要る）は選択肢に出ない。

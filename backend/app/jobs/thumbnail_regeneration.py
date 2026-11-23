@@ -179,6 +179,9 @@ def run_export_thumbnail_regeneration(
                     next_frame = next((c for c in frames[index + 1:] if c in eligible), eligible[0])
                     frame_seconds = next_frame["second"]
             chosen = next((c for c in frames if abs(c["second"] - frame_seconds) < .001), None)
+            if (selected_asset or not chosen or payload.get("thumbnail_select_with_codex")
+                    or payload.get("thumbnail_advance_frame")):
+                payload["thumbnail_subject_face_index"] = None
             if chosen:
                 payload["thumbnail_frame_candidate_id"] = chosen["id"]
             else:
@@ -209,6 +212,7 @@ def run_export_thumbnail_regeneration(
             asset_info: dict[str, Any] = {}
             video_kwargs = video_candidate_kwargs(
                 payload, storage.job_outputs(export.job_id), export.id, mode=crop_mode,
+                face_index=payload.get("thumbnail_subject_face_index"),
             ) if not selected_asset else {}
             result = normal_renderer(
                 source_path,
@@ -255,6 +259,7 @@ def run_export_thumbnail_regeneration(
                         "thumbnail_template_version": "character_normal_v1" if character_style is not None else "raden_normal_v4",
                         "thumbnail_frame_seconds": round(frame_seconds, 3),
                         "thumbnail_frame_candidate_id": payload.get("thumbnail_frame_candidate_id"),
+                        "thumbnail_subject_face_index": payload.get("thumbnail_subject_face_index"),
                         "thumbnail_variant_index": variant_index,
                         "thumbnail_crop_mode": crop_mode,
                         "thumbnail_advance_frame": False,

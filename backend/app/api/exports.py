@@ -34,7 +34,8 @@ from app.jobs.thumbnail_character_assets import available_character_assets, expl
 from app.character_assets import CharacterAssetList, asset_read
 from app.character_asset_rules import CHARACTER_EMOTIONS
 from app.jobs.thumbnail_candidates import (
-    ThumbnailCandidatesState, candidate_directory, candidate_state, prepare_candidates, selected_frame,
+    ThumbnailCandidatesState, ThumbnailPeopleRead, candidate_directory, candidate_people, candidate_people_state,
+    candidate_state, prepare_candidates, selected_frame,
 )
 
 
@@ -359,7 +360,18 @@ def _queue_thumbnail_regeneration(export, metadata_path, request, db, paths, enq
     candidate = selected_frame(previous, candidate_id=request.frame_candidate_id)
     if request.frame_candidate_id and not candidate:
         raise HTTPException(422, "保存済みの人物候補にありません。")
-    if (source != "asset" and candidate and request.crop_mode == "close" and not candidate["close_available"]
+    # Another frame or a Codex choice picks its own person; a chosen person belongs to this still only.
+    face_index = (request.subject_face_index or None) if (
+        source != "asset" and candidate and request.frame_candidate_id
+        and not request.advance_frame and not request.select_with_codex) else None
+    close_available = bool(candidate and candidate["close_available"])
+    if face_index:
+        people = candidate_people(candidate, candidate_directory(paths.job_outputs(export.job_id), export.id)
+                                  / f'{candidate["id"]}.jpg')
+        if face_index >= len(people):
+            raise HTTPException(422, "選んだ人物がこの場面にいません。人物を選び直してください。")
+        close_available = people[face_index][1]
+    if (source != "asset" and candidate and request.crop_mode == "close" and not close_available
             and not request.advance_frame and not request.select_with_codex):
         raise HTTPException(422, "この候補は2倍以内の拡大で顔のアップにできません。")
     requested_id = request.character_asset_id
@@ -397,6 +409,7 @@ def _queue_thumbnail_regeneration(export, metadata_path, request, db, paths, enq
         "thumbnail_status": "generating",
         "thumbnail_frame_seconds": round(candidate["second"] if candidate and request.frame_candidate_id else request.frame_seconds, 3),
         "thumbnail_frame_candidate_id": request.frame_candidate_id,
+        "thumbnail_subject_face_index": face_index,
         "thumbnail_subject_anchor_x": round(request.subject_anchor_x, 3),
         "thumbnail_advance_frame": request.advance_frame,
         "thumbnail_select_with_codex": request.select_with_codex,
@@ -466,6 +479,17 @@ def view_thumbnail_candidate(export_id: str, candidate_id: str, db: Session = De
     if not path.is_file():
         raise HTTPException(404, "サムネ候補の画像がありません。")
     return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/{export_id}/thumbnail/candidates/{candidate_id}/people", response_model=ThumbnailPeopleRead)
+def view_thumbnail_candidate_people(export_id: str, candidate_id: str, db: Session = Depends(get_db),
+                                    paths: StoragePaths = Depends(get_storage_paths)):
+    """Faces in one saved still, for choosing who the thumbnail centers on. Detection only; nothing is saved."""
+    export = _get_export_or_404(db, export_id, paths)
+    state = candidate_people_state(read_export_metadata(export), paths.job_outputs(export.job_id), export.id, candidate_id)
+    if state is None:
+        raise HTTPException(404, "サムネ候補がありません。")
+    return state
 
 
 @router.get("/{export_id}/thumbnail/candidates", response_model=ThumbnailCandidatesState)
