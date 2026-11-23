@@ -10,6 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "backend"))
 
 import launcher.codex_bridge as bridge  # noqa: E402
 from launcher import bridge_engine_settings as lane_settings  # noqa: E402
