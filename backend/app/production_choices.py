@@ -29,6 +29,7 @@ VALUE_KEYS = frozenset({
     "shortLayout", "titleStyle", "hookStyle", "subtitleStyle", "resolvedTitleStyle", "resolvedHookStyle",
     "resolvedSubtitleStyle", "postMetadataSource", "descriptionHash", "tagsHash", "hashtagsHash", "source",
     "assetId", "emotion", "cropMode", "templateVersion", "templateDesign", "subjectPlacement", "textStyles", "frameCandidateId",
+    "subjectFaceIndex",
     "second", "closeAvailable", "scale", "offsetX", "offsetY", "selectedTitleId", "recommendedTitleId",
     "bodyDurationSeconds", "completedDurationSeconds", "characterPresetName",
     "resolvedLayout", "settingSource", "cropX", "cropY", "cropSignalSource", "cropFallbackReason",

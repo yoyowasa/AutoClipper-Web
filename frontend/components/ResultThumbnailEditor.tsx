@@ -1,15 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { prepareThumbnailCandidates, thumbnailCopyRequest } from "../lib/api";
+import { prepareThumbnailCandidates, thumbnailCandidatePeople, thumbnailCopyRequest } from "../lib/api";
 import { visibleCharacterAssetWarnings } from "../lib/characterAssets";
 import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailCopyState, ThumbnailSubjectPlacement, ThumbnailTextRegions, ThumbnailTextStyles } from "../lib/types";
 import { ThumbnailTextStyleEditor } from "./ThumbnailTextStyleEditor";
 import type { ThumbnailDraft } from "./LiveThumbnailPreview";
 import type { ThumbnailSubjectSelection } from "../lib/types";
 import { ThumbnailFramePicker } from "./ThumbnailFramePicker";
-import type { ThumbnailCandidateState } from "../lib/types";
+import type { ThumbnailCandidateState, ThumbnailPerson } from "../lib/types";
 import { ThumbnailAssetPicker } from "./ThumbnailAssetPicker";
+import { ThumbnailPersonPicker } from "./ThumbnailPersonPicker";
 
 export function ResultThumbnailEditor({ item, busy, active = true, onRender, onDraftChange, styles, setStyles, regions }: {
   item: ResultExportItem; busy?: boolean; active?: boolean;
@@ -24,7 +25,7 @@ export function ResultThumbnailEditor({ item, busy, active = true, onRender, onD
   const [subject, setSubject] = useState<ThumbnailSubjectSelection>(() => ({
     subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" : "video",
     frameCandidateId: item.thumbnailFrameCandidateId ?? undefined, characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
-    emotion: item.thumbnailEmotion ?? undefined,
+    emotion: item.thumbnailEmotion ?? undefined, subjectFaceIndex: item.thumbnailSubjectFaceIndex ?? undefined,
   }));
   const [cropMode, setCropMode] = useState<"standard" | "close">(item.thumbnailCropMode ?? "standard");
   const [frameRetry, setFrameRetry] = useState(0);
@@ -36,12 +37,25 @@ export function ResultThumbnailEditor({ item, busy, active = true, onRender, onD
     setCropMode(item.thumbnailCropMode ?? "standard");
     setSubject({ subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" : "video",
     frameCandidateId: item.thumbnailFrameCandidateId ?? undefined, characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
-      emotion: item.thumbnailEmotion ?? undefined });
+      emotion: item.thumbnailEmotion ?? undefined, subjectFaceIndex: item.thumbnailSubjectFaceIndex ?? undefined });
   }, [item.thumbnailRenderRevision, item.thumbnailSubjectSource, item.thumbnailCharacterAssetId, item.thumbnailEmotion,
-    item.thumbnailCropMode, item.thumbnailFrameCandidateId]);
+    item.thumbnailCropMode, item.thumbnailFrameCandidateId, item.thumbnailSubjectFaceIndex]);
   const [placement, setPlacement] = useState<ThumbnailSubjectPlacement>(
     () => item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 }
   );
+  const [people, setPeople] = useState<{ candidateId: string; list: ThumbnailPerson[] } | null>(null);
+  const peopleCandidateId = subject.subjectSource === "video" && frames.state === "ready" ? subject.frameCandidateId : undefined;
+  useEffect(() => {
+    if (!active || !peopleCandidateId) return;
+    let cancelled = false;
+    thumbnailCandidatePeople(item.id, peopleCandidateId)
+      .then(list => { if (!cancelled) setPeople({ candidateId: peopleCandidateId, list }); })
+      .catch(() => { if (!cancelled) setPeople({ candidateId: peopleCandidateId, list: [] }); });
+    return () => { cancelled = true; };
+  }, [active, item.id, peopleCandidateId]);
+  const stillPeople = people && people.candidateId === peopleCandidateId ? people.list : [];
+  const selectedPerson = stillPeople.find(person => person.index === (subject.subjectFaceIndex ?? 0));
+  const selectedCandidate = frames.candidates.find(c => c.id === subject.frameCandidateId);
   const [copy, setCopy] = useState<ThumbnailCopyState>({ state: "idle", suggestions: [] });
   const [requesting, setRequesting] = useState(false);
   const [error, setError] = useState("");
@@ -150,11 +164,20 @@ export function ResultThumbnailEditor({ item, busy, active = true, onRender, onD
       {frames.state === "failed" && <button type="button" disabled={locked} onClick={() => setFrameRetry(v => v + 1)}
         className="mt-2 min-h-9 border border-neutral-400 bg-white px-3 text-xs">候補の抽出を再試行</button>}
       <ThumbnailFramePicker candidates={frames.candidates} selectedId={subject.frameCandidateId} cropMode={cropMode}
+        closeAvailable={selectedPerson?.closeAvailable}
         disabled={locked || frames.state !== "ready"} onCropChange={setCropMode} onSelect={id => {
           const candidate = frames.candidates.find(c => c.id === id);
           setSubject({ subjectSource: "video", frameCandidateId: id });
           if (!candidate?.closeAvailable) setCropMode("standard");
         }} />
+      {selectedCandidate && <ThumbnailPersonPicker imageUrl={selectedCandidate.imageUrl} people={stillPeople}
+        selectedIndex={subject.subjectFaceIndex ?? 0} disabled={locked} onSelect={index => {
+          const person = stillPeople.find(p => p.index === index);
+          setSubject({ ...subject, subjectFaceIndex: index || undefined });
+          // Offsets were relative to the previous face; start the new person centered.
+          setPlacement({ ...placement, offsetX: 0, offsetY: 0 });
+          if (!person?.closeAvailable) setCropMode("standard");
+        }} />}
     </>}
     {subject.subjectSource === "asset" && subject.characterAssetId === item.thumbnailCharacterAssetId && <>
       {visibleCharacterAssetWarnings(item.thumbnailWarnings).filter(warning => warning !== "素材の解像度が足りず粗くなります")

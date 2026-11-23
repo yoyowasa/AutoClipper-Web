@@ -1,6 +1,7 @@
 """One sequential scan per normal export; all subsequent selection uses cached stills."""
 
 from dataclasses import dataclass
+from functools import lru_cache
 import json
 from pathlib import Path
 import subprocess
@@ -17,6 +18,7 @@ from app.db import SessionLocal
 from app.jobs.subtitle_review_preview import subtitle_review_document_lock
 from app.jobs.timeouts import media_timeout
 from app.models import ExportItem, Job, Video
+from app.render.anime_subject import detect_anime_faces
 from app.render.thumbnail_face import detect_thumbnail_face
 from app.render.render_thumbnail import extract_thumbnail_frame
 from app.render.video_subject_layout import video_subject_layout
@@ -32,6 +34,7 @@ NEAR_SECONDS = 3.0
 MIN_SHARPNESS = 40.0
 EMPTY_REASON = "顔が小さい、胸元が画面外、またはブレが大きく半身にできる場面がありません。"
 PERSON_FRAME = {"width": 692, "height": 720, "face_target_x": 0.68}
+MAX_PEOPLE = 6
 
 
 class ThumbnailFrameRead(BaseModel):
@@ -41,6 +44,20 @@ class ThumbnailFrameRead(BaseModel):
     score: float
     close_available: bool = Field(alias="closeAvailable")
     image_url: str = Field(alias="imageUrl")
+
+
+class ThumbnailPersonRead(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    index: int
+    x: float
+    y: float
+    width: float
+    height: float
+    close_available: bool = Field(alias="closeAvailable")
+
+
+class ThumbnailPeopleRead(BaseModel):
+    people: list[ThumbnailPersonRead]
 
 
 class ThumbnailCandidatesState(BaseModel):
@@ -223,14 +240,66 @@ def recommended_thumbnail_frame(candidates, proposed_second):
     return next((c for c in candidates if abs(c["second"] - proposed_second) < .001), candidates[0])
 
 
-def video_candidate_kwargs(payload, output_dir, export_id, *, candidate_id=None, mode="standard"):
+def _same_person(face, other) -> bool:
+    return (abs(face[0] - other[0]) < max(face[2], other[2]) / 2
+            and abs(face[1] - other[1]) < max(face[3], other[3]) / 2)
+
+
+@lru_cache(maxsize=32)
+def _people_in_still(frame_path: str, frame_mtime: int, frame_size: int, automatic: tuple[float, ...]):
+    """Index 0 is the automatically chosen face; others are left to right.
+
+    Only faces that pass the same 2x half-body gate as the automatic face are offered.
+    The stat values are cache keys, so a re-extracted still is detected again.
+    """
+    del frame_mtime, frame_size
+    with Image.open(frame_path) as frame:
+        size = frame.size
+        detected = detect_anime_faces(frame)
+    others = []
+    for face in sorted(detected, key=lambda face: face[0]):
+        if _same_person(face, automatic) or any(_same_person(face, other) for other in others):
+            continue
+        if video_subject_layout(size, face, PERSON_FRAME).fits:
+            others.append(tuple(float(value) for value in face))
+    people = [automatic, *others][:MAX_PEOPLE]
+    return tuple((face, bool(video_subject_layout(size, face, PERSON_FRAME, mode="close").fits)) for face in people)
+
+
+def candidate_people(candidate, frame_path: Path):
+    """People in one saved still as (face, close_available); detection only, nothing is written."""
+    automatic = tuple(float(value) for value in candidate["face"])
+    if not frame_path.is_file():
+        return ((automatic, bool(candidate["close_available"])),)
+    stat = frame_path.stat()
+    people = _people_in_still(str(frame_path.resolve()), stat.st_mtime_ns, stat.st_size, automatic)
+    return ((automatic, bool(candidate["close_available"])), *people[1:])
+
+
+def candidate_people_state(payload, output_dir, export_id, candidate_id):
+    candidate = selected_frame(payload, candidate_id=candidate_id)
+    if not candidate:
+        return None
+    frame_path = candidate_directory(Path(output_dir), export_id) / f'{candidate["id"]}.jpg'
+    return {"people": [{"index": index, "x": face[0], "y": face[1], "width": face[2], "height": face[3],
+                        "closeAvailable": close}
+                       for index, (face, close) in enumerate(candidate_people(candidate, frame_path))]}
+
+
+def video_candidate_kwargs(payload, output_dir, export_id, *, candidate_id=None, mode="standard", face_index=None):
     candidate = selected_frame(payload, candidate_id=candidate_id)
     if not candidate:
         return {}
-    if mode == "close" and not candidate["close_available"]:
+    frame_path = candidate_directory(Path(output_dir), export_id) / f'{candidate["id"]}.jpg'
+    face, close_available = tuple(candidate["face"]), bool(candidate["close_available"])
+    if face_index:
+        people = candidate_people(candidate, frame_path)
+        if face_index >= len(people):
+            raise ValueError("選んだ人物がこの場面にいません。人物を選び直してください。")
+        face, close_available = people[face_index]
+    if mode == "close" and not close_available:
         raise ValueError("この候補は2倍以内の拡大で顔のアップにできません。")
-    return {"source_frame_path": candidate_directory(Path(output_dir), export_id) / f'{candidate["id"]}.jpg',
-            "video_face": tuple(candidate["face"]), "video_crop_mode": mode}
+    return {"source_frame_path": frame_path, "video_face": face, "video_crop_mode": mode}
 
 
 def candidate_state(export, output_dir):

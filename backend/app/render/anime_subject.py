@@ -28,14 +28,20 @@ def _anime_cascade():
 
 def detect_anime_face(image: Image.Image) -> Face | None:
     """Pick the largest visible anime face, including one at the frame center."""
+    faces = detect_anime_faces(image)
+    return faces[0] if faces else None
+
+
+def detect_anime_faces(image: Image.Image) -> list[Face]:
+    """Every usable anime face, largest first (the first is the automatic choice)."""
     try:
         import cv2
         import numpy as np
     except ImportError:
-        return None
+        return []
     detector = _anime_cascade()
     if detector is None:
-        return None
+        return []
     source = np.asarray(image.convert("RGB"))
     height, width = source.shape[:2]
     scale = min(1.0, 960 / width)
@@ -50,7 +56,7 @@ def detect_anime_face(image: Image.Image) -> Face | None:
         for x, y, box_width, box_height in boxes
     ]
     usable = [face for face in faces if 0.08 <= face[1] <= 0.85 and face[2] >= 0.035 and face[3] >= 0.06]
-    return max(usable, key=lambda face: (face[2] * face[3], -abs(face[0] - 0.5))) if usable else None
+    return sorted(usable, key=lambda face: (face[2] * face[3], -abs(face[0] - 0.5)), reverse=True)
 
 
 def anime_matte_path() -> Path:

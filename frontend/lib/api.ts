@@ -70,7 +70,7 @@ export async function prepareThumbnailPreview(exportId: string, signal: AbortSig
 }
 
 export async function renderThumbnailPreview(exportId: string, draft: {
-  frameCandidateId?: string; cropMode?: "standard" | "close";
+  frameCandidateId?: string; subjectFaceIndex?: number; cropMode?: "standard" | "close";
   frameKey: string; text: import("./types").ThumbnailCopyText; textStyles: import("./types").ThumbnailTextStyles;
   design: import("./types").NormalThumbnailStyle["design"];
   subjectPlacement: import("./types").ThumbnailSubjectPlacement;
@@ -605,6 +605,7 @@ export async function regenerateExportThumbnail(
   exportId: string,
   request: {
     frameCandidateId?: string;
+    subjectFaceIndex?: number;
     frameSeconds: number;
     subjectAnchorX: number;
     advanceFrame?: boolean;
@@ -726,6 +727,12 @@ export async function finalizeSubtitleReview(
     }
   );
   return parseJsonResponse<SubtitleReviewFinalizeResponse>(response);
+}
+
+export async function thumbnailCandidatePeople(exportId: string, candidateId: string): Promise<import("./types").ThumbnailPerson[]> {
+  const state = await parseJsonResponse<{ people: import("./types").ThumbnailPerson[] }>(await fetch(
+    `${API_BASE_URL}/api/exports/${exportId}/thumbnail/candidates/${candidateId}/people`, { cache: "no-store" }));
+  return state.people;
 }
 
 export async function prepareThumbnailCandidates(exportId: string, force = false): Promise<import("./types").ThumbnailCandidateState> {
