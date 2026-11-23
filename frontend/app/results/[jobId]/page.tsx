@@ -172,6 +172,7 @@ export default function ResultsPage() {
         ...(selection ?? { subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" as const : "video" as const,
           frameCandidateId: item.thumbnailFrameCandidateId ?? undefined,
           subjectFaceIndex: item.thumbnailSubjectFaceIndex ?? undefined,
+          subjectPoint: item.thumbnailSubjectPoint ?? undefined,
           characterAssetId: item.thumbnailCharacterAssetId ?? undefined }),
         ...(design ? { design } : {}),
         ...(textStyles ? { textStyles } : {}),

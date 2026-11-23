@@ -235,7 +235,7 @@ def generate_export_thumbnails(
                 selected = selected_candidate["second"] if selected_candidate else proposed
                 payload.update(thumbnail_frame_seconds=round(selected, 3), thumbnail_crop_mode="standard",
                                thumbnail_frame_candidate_id=selected_candidate["id"] if selected_candidate else None,
-                               thumbnail_subject_face_index=None)
+                               thumbnail_subject_face_index=None, thumbnail_subject_point=None)
                 if frames:
                     payload["thumbnail_frame_selection_source"] = (
                         "content_proposal" if abs(selected - proposed) < .001 else "candidate_score"

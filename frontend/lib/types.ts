@@ -327,6 +327,7 @@ export type ResultExportItem = {
   thumbnailSubjectReason?: string | null;
   thumbnailFrameCandidateId?: string | null;
   thumbnailSubjectFaceIndex?: number | null;
+  thumbnailSubjectPoint?: ThumbnailSubjectPoint | null;
   thumbnailCharacterAssetId?: string | null;
   thumbnailEmotion?: import("./characterAssets").CharacterEmotion | null;
   thumbnailEmotionReason?: string | null;
@@ -339,10 +340,15 @@ export type ThumbnailCandidateState = { state: "idle" | "queued" | "ready" | "fa
 
 export type ThumbnailPerson = { index: number; x: number; y: number; width: number; height: number; closeAvailable: boolean };
 
+/** A face center tapped on the saved still, 0-1 of its width and height. */
+export type ThumbnailSubjectPoint = { x: number; y: number };
+
 export type ThumbnailSubjectSelection = {
   frameCandidateId?: string;
   /** Person inside the saved still; 0 or absent is the automatic choice. */
   subjectFaceIndex?: number;
+  /** Overrides subjectFaceIndex when set. */
+  subjectPoint?: ThumbnailSubjectPoint;
   subjectSource: "video" | "asset";
   characterAssetId?: string;
   emotion?: import("./characterAssets").CharacterEmotion;

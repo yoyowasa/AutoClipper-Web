@@ -34,6 +34,13 @@ class ThumbnailSubjectPlacement(BaseModel):
     offset_y: int = Field(default=0, ge=-250, le=250, alias="offsetY")
 
 
+class ThumbnailSubjectPoint(BaseModel):
+    """A face center tapped on the saved still (0-1 of its width/height), for faces the detector misses."""
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+
+
 class ThumbnailTextStyle(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
     font_preset: ThumbnailFontPreset = Field(default="noto_black", alias="fontPreset")

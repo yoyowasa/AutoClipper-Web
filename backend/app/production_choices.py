@@ -29,7 +29,7 @@ VALUE_KEYS = frozenset({
     "shortLayout", "titleStyle", "hookStyle", "subtitleStyle", "resolvedTitleStyle", "resolvedHookStyle",
     "resolvedSubtitleStyle", "postMetadataSource", "descriptionHash", "tagsHash", "hashtagsHash", "source",
     "assetId", "emotion", "cropMode", "templateVersion", "templateDesign", "subjectPlacement", "textStyles", "frameCandidateId",
-    "subjectFaceIndex",
+    "subjectFaceIndex", "subjectPoint",
     "second", "closeAvailable", "scale", "offsetX", "offsetY", "selectedTitleId", "recommendedTitleId",
     "bodyDurationSeconds", "completedDurationSeconds", "characterPresetName",
     "resolvedLayout", "settingSource", "cropX", "cropY", "cropSignalSource", "cropFallbackReason",
@@ -43,7 +43,7 @@ NESTED_KEYS = frozenset({
     "outerOutlineWidth", "shadow", "bold", "alignment", "marginX", "marginV", "xPercent", "yPercent", "positionMode",
     "positionOverride", "scale", "offsetX", "offsetY", "offset_x", "offset_y", "heading", "upper", "lower",
     "role", "source", "effectiveFontSize", "maxWidthPx", "fits", "overflowReason", "lineCount", "eventCount",
-    "width", "height", "y", "start", "end", "style",
+    "width", "height", "x", "y", "start", "end", "style",
 })
 
 

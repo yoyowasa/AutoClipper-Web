@@ -17,6 +17,7 @@ from app.duration_rules import (
 from app.candidates.merge_boundaries import ClipTextStyle, SubtitleStyleOverride
 from app.short_banners import BannerAssetId
 from app.thumbnail_style import (
+    ThumbnailSubjectPoint,
     NormalThumbnailStyle, ThumbnailDesign, ThumbnailSubjectPlacement, ThumbnailTextStyles,
 )
 from app.scoring.thumbnail_copy import ThumbnailCopyText
@@ -1029,6 +1030,7 @@ class ResultExportItem(BaseModel):
     thumbnail_subject_reason: str | None = Field(default=None, alias="thumbnailSubjectReason")
     thumbnail_frame_candidate_id: str | None = Field(default=None, alias="thumbnailFrameCandidateId")
     thumbnail_subject_face_index: int | None = Field(default=None, alias="thumbnailSubjectFaceIndex")
+    thumbnail_subject_point: ThumbnailSubjectPoint | None = Field(default=None, alias="thumbnailSubjectPoint")
     thumbnail_character_asset_id: str | None = Field(default=None, alias="thumbnailCharacterAssetId")
     thumbnail_emotion: Literal["joy", "anger", "sorrow", "fun"] | None = Field(default=None, alias="thumbnailEmotion")
     thumbnail_emotion_reason: str | None = Field(default=None, alias="thumbnailEmotionReason")
@@ -1041,6 +1043,7 @@ class ResultExportItem(BaseModel):
 class ThumbnailRegenerationRequest(BaseModel):
     frame_candidate_id: str | None = Field(default=None, alias="frameCandidateId", pattern=r"^frame_[0-9]{2}$")
     subject_face_index: int | None = Field(default=None, alias="subjectFaceIndex", ge=0, le=5)
+    subject_point: ThumbnailSubjectPoint | None = Field(default=None, alias="subjectPoint")
     subject_source: Literal["video", "asset"] | None = Field(default=None, alias="subjectSource")
     character_asset_id: str | None = Field(default=None, alias="characterAssetId", pattern=r"^asset_[0-9a-f]{32}$")
     emotion: Literal["joy", "anger", "sorrow", "fun"] | None = None

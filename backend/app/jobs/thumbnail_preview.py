@@ -21,6 +21,7 @@ from app.render.render_thumbnail import extract_thumbnail_frame, render_normal_t
 from app.scoring.thumbnail_copy import ThumbnailCopyText
 from app.storage.paths import get_storage_paths
 from app.thumbnail_style import (
+    ThumbnailSubjectPoint,
     ThumbnailDesign, ThumbnailSubjectPlacement, ThumbnailTextStyles, resolve_export_thumbnail_style,
 )
 from app.jobs.thumbnail_character_assets import explicit_character_asset
@@ -46,6 +47,7 @@ class ThumbnailPreviewRequest(BaseModel):
     frame_candidate_id: str | None = Field(default=None, alias="frameCandidateId", pattern=r"^frame_[0-9]{2}$")
     crop_mode: Literal["standard", "close"] = Field(default="standard", alias="cropMode")
     subject_face_index: int | None = Field(default=None, alias="subjectFaceIndex", ge=0, le=5)
+    subject_point: ThumbnailSubjectPoint | None = Field(default=None, alias="subjectPoint")
     subject_source: Literal["video", "asset"] = Field(default="video", alias="subjectSource")
     character_asset_id: str | None = Field(default=None, alias="characterAssetId", pattern=r"^asset_[0-9a-f]{32}$")
 
@@ -191,6 +193,7 @@ def render_thumbnail_preview(db, paths, export, request: ThumbnailPreviewRequest
                 read_export_metadata(export), paths.job_outputs(export.job_id), export.id,
                 candidate_id=context["candidate"]["id"] if context["candidate"] else None, mode=request.crop_mode,
                 face_index=request.subject_face_index,
+                point=request.subject_point.model_dump() if request.subject_point else None,
             ) if context["candidate"] else {}
             video_kwargs.pop("source_frame_path", None)
             render_normal_thumbnail(
