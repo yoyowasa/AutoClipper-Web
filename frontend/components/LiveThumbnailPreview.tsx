@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { prepareThumbnailPreview, renderThumbnailPreview, toBrowserApiUrl } from "../lib/api";
 import type { NormalThumbnailStyle, ResultExportItem, ThumbnailCopyText, ThumbnailSubjectPlacement, ThumbnailTextRegions, ThumbnailTextStyles } from "../lib/types";
 
-export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles; design: NormalThumbnailStyle["design"]; subjectPlacement: ThumbnailSubjectPlacement; subjectSource?: "video" | "asset"; characterAssetId?: string; frameCandidateId?: string; subjectFaceIndex?: number; cropMode?: "standard" | "close" };
+export type ThumbnailDraft = { text: ThumbnailCopyText; styles: ThumbnailTextStyles; design: NormalThumbnailStyle["design"]; subjectPlacement: ThumbnailSubjectPlacement; subjectSource?: "video" | "asset"; characterAssetId?: string; frameCandidateId?: string; subjectFaceIndex?: number; subjectPoint?: { x: number; y: number }; cropMode?: "standard" | "close" };
 
 type TextRole = keyof ThumbnailTextStyles;
 type Drag = { role: TextRole; pointerId: number; startX: number; startY: number; offsetX: number; offsetY: number; dx: number; dy: number };
@@ -66,9 +66,10 @@ export function LiveThumbnailPreview({ item, draft, active, onRegionsChange, onM
   const frameCandidateId = draft.frameCandidateId;
   const cropMode = draft.cropMode ?? "standard";
   const subjectFaceIndex = draft.subjectFaceIndex || undefined;
+  const subjectPoint = draft.subjectPoint;
   const sourceContext = JSON.stringify([item.id, item.thumbnailRenderRevision, saving, retry, subjectSource, characterAssetId, frameCandidateId]);
   const frameKey = source?.key === sourceContext ? source.frameKey : "";
-  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles, design: draft.design, subjectPlacement: draft.subjectPlacement, subjectSource, characterAssetId, frameCandidateId, subjectFaceIndex, cropMode });
+  const requestKey = JSON.stringify({ frameKey, text: draft.text, textStyles: draft.styles, design: draft.design, subjectPlacement: draft.subjectPlacement, subjectSource, characterAssetId, frameCandidateId, subjectFaceIndex, subjectPoint, cropMode });
 
   useEffect(() => { onRegionsChange(null); }, [requestKey, onRegionsChange]);
 

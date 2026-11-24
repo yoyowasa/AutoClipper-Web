@@ -286,17 +286,40 @@ def candidate_people_state(payload, output_dir, export_id, candidate_id):
                        for index, (face, close) in enumerate(candidate_people(candidate, frame_path))]}
 
 
-def video_candidate_kwargs(payload, output_dir, export_id, *, candidate_id=None, mode="standard", face_index=None):
+POINT_REJECTED = "この位置では半身が2倍以内の拡大で収まりません。顔の中心を押し直してください。"
+PERSON_MISSING = "選んだ人物がこの場面にいません。人物を選び直してください。"
+
+
+def chosen_subject(candidate, frame_path: Path, *, face_index=None, point=None):
+    """(face, close_available) for the automatic face, a detected person, or a tapped point.
+
+    A tapped point keeps the automatic face's size, so the same 2x half-body gate applies.
+    """
+    face, close_available = tuple(float(v) for v in candidate["face"]), bool(candidate["close_available"])
+    if point is not None:
+        size = (int(candidate.get("width") or 0), int(candidate.get("height") or 0))
+        if not all(size) and frame_path.is_file():
+            with Image.open(frame_path) as frame:
+                size = frame.size
+        tapped = (float(point["x"]), float(point["y"]), face[2], face[3])
+        if not all(size) or not video_subject_layout(size, tapped, PERSON_FRAME).fits:
+            raise ValueError(POINT_REJECTED)
+        return tapped, bool(video_subject_layout(size, tapped, PERSON_FRAME, mode="close").fits)
+    if face_index:
+        people = candidate_people(candidate, frame_path)
+        if face_index >= len(people):
+            raise ValueError(PERSON_MISSING)
+        face, close_available = people[face_index]
+    return face, close_available
+
+
+def video_candidate_kwargs(payload, output_dir, export_id, *, candidate_id=None, mode="standard", face_index=None,
+                           point=None):
     candidate = selected_frame(payload, candidate_id=candidate_id)
     if not candidate:
         return {}
     frame_path = candidate_directory(Path(output_dir), export_id) / f'{candidate["id"]}.jpg'
-    face, close_available = tuple(candidate["face"]), bool(candidate["close_available"])
-    if face_index:
-        people = candidate_people(candidate, frame_path)
-        if face_index >= len(people):
-            raise ValueError("選んだ人物がこの場面にいません。人物を選び直してください。")
-        face, close_available = people[face_index]
+    face, close_available = chosen_subject(candidate, frame_path, face_index=face_index, point=point)
     if mode == "close" and not close_available:
         raise ValueError("この候補は2倍以内の拡大で顔のアップにできません。")
     return {"source_frame_path": frame_path, "video_face": face, "video_crop_mode": mode}

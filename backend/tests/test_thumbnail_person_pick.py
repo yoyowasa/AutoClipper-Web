@@ -115,6 +115,11 @@ def test_preview_uses_the_chosen_person(client, monkeypatch):  # noqa: F811
         "text": {"heading": "", "upper": "人物", "lower": ""}, "textStyles": TEXT_STYLES})
     assert response.status_code == 200
     assert seen["video_face"] == LEFT
+    response = client.post(ENDPOINT + "/preview", json={
+        "frameKey": prepared["frameKey"], "frameCandidateId": "frame_00", "subjectPoint": {"x": .74, "y": .35},
+        "text": {"heading": "", "upper": "人物", "lower": ""}, "textStyles": TEXT_STYLES})
+    assert response.status_code == 200
+    assert seen["video_face"] == (.74, .35, FACE[2], FACE[3])
 
 
 def test_anime_faces_are_largest_first_and_the_single_face_api_is_unchanged(monkeypatch):
@@ -126,3 +131,44 @@ def test_anime_faces_are_largest_first_and_the_single_face_api_is_unchanged(monk
     faces = anime_subject.detect_anime_faces(image)
     assert [round(face[2] * 960) for face in faces] == [90, 60]  # the face at y=0.94 is outside the usable band
     assert anime_subject.detect_anime_face(image) == faces[0]
+
+
+def test_a_tapped_point_centers_on_it_with_the_automatic_face_size(client):  # noqa: F811
+    storage, factory, metadata, _, _ = seed_thumbnail(client)
+    seed_frames(storage, metadata)
+    queue = []
+    app.dependency_overrides[get_enqueue_thumbnail_regeneration] = lambda: lambda *args: queue.append(args)
+    assert client.post(ENDPOINT + "/regenerate", json={
+        "frameSeconds": 4, "frameCandidateId": "frame_00", "subjectFaceIndex": 1, "subjectPoint": {"x": .74, "y": .35},
+    }).status_code == 202
+    seen = run_queued(queue, storage, factory)
+    assert seen["video_face"] == (.74, .35, FACE[2], FACE[3])  # the point wins over a detected person
+    saved = json.loads(metadata.read_text(encoding="utf-8"))
+    assert saved["thumbnail_subject_point"] == {"x": .74, "y": .35} and saved["thumbnail_subject_face_index"] is None
+    item = client.get("/api/jobs/job_thumbnail_style/results").json()["normalClips"][0]
+    assert item["thumbnailSubjectPoint"] == {"x": .74, "y": .35}
+    choice = [c for c in saved["choiceHistory"] if c["kind"] == "thumbnail"][-1]
+    assert choice["values"]["subjectPoint"] == {"x": .74, "y": .35}
+
+
+def test_a_point_where_the_half_body_does_not_fit_is_rejected(client):  # noqa: F811
+    storage, _, metadata, _, _ = seed_thumbnail(client)
+    seed_frames(storage, metadata)
+    response = client.post(ENDPOINT + "/regenerate", json={
+        "frameSeconds": 4, "frameCandidateId": "frame_00", "subjectPoint": {"x": .5, "y": .02}})
+    assert response.status_code == 422 and "押し直して" in response.json()["detail"]
+    assert client.post(ENDPOINT + "/regenerate", json={
+        "frameSeconds": 4, "frameCandidateId": "frame_00", "subjectPoint": {"x": 1.5, "y": .3}}).status_code == 422
+
+
+def test_another_frame_drops_a_tapped_point(client):  # noqa: F811
+    storage, factory, metadata, _, _ = seed_thumbnail(client)
+    seed_frames(storage, metadata)
+    queue = []
+    app.dependency_overrides[get_enqueue_thumbnail_regeneration] = lambda: lambda *args: queue.append(args)
+    assert client.post(ENDPOINT + "/regenerate", json={
+        "frameSeconds": 4, "frameCandidateId": "frame_00", "subjectPoint": {"x": .74, "y": .35}, "advanceFrame": True,
+    }).status_code == 202
+    seen = run_queued(queue, storage, factory)
+    assert seen["video_face"] == FACE
+    assert json.loads(metadata.read_text(encoding="utf-8"))["thumbnail_subject_point"] is None

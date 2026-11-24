@@ -26,6 +26,7 @@ export function ResultThumbnailEditor({ item, busy, active = true, onRender, onD
     subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" : "video",
     frameCandidateId: item.thumbnailFrameCandidateId ?? undefined, characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
     emotion: item.thumbnailEmotion ?? undefined, subjectFaceIndex: item.thumbnailSubjectFaceIndex ?? undefined,
+    subjectPoint: item.thumbnailSubjectPoint ?? undefined,
   }));
   const [cropMode, setCropMode] = useState<"standard" | "close">(item.thumbnailCropMode ?? "standard");
   const [frameRetry, setFrameRetry] = useState(0);
@@ -37,9 +38,10 @@ export function ResultThumbnailEditor({ item, busy, active = true, onRender, onD
     setCropMode(item.thumbnailCropMode ?? "standard");
     setSubject({ subjectSource: item.thumbnailSubjectSource === "asset" ? "asset" : "video",
     frameCandidateId: item.thumbnailFrameCandidateId ?? undefined, characterAssetId: item.thumbnailCharacterAssetId ?? undefined,
-      emotion: item.thumbnailEmotion ?? undefined, subjectFaceIndex: item.thumbnailSubjectFaceIndex ?? undefined });
+      emotion: item.thumbnailEmotion ?? undefined, subjectFaceIndex: item.thumbnailSubjectFaceIndex ?? undefined,
+      subjectPoint: item.thumbnailSubjectPoint ?? undefined });
   }, [item.thumbnailRenderRevision, item.thumbnailSubjectSource, item.thumbnailCharacterAssetId, item.thumbnailEmotion,
-    item.thumbnailCropMode, item.thumbnailFrameCandidateId, item.thumbnailSubjectFaceIndex]);
+    item.thumbnailCropMode, item.thumbnailFrameCandidateId, item.thumbnailSubjectFaceIndex, item.thumbnailSubjectPoint]);
   const [placement, setPlacement] = useState<ThumbnailSubjectPlacement>(
     () => item.thumbnailSubjectPlacement ?? { scale: 1, offsetX: 0, offsetY: 0 }
   );
@@ -164,19 +166,23 @@ export function ResultThumbnailEditor({ item, busy, active = true, onRender, onD
       {frames.state === "failed" && <button type="button" disabled={locked} onClick={() => setFrameRetry(v => v + 1)}
         className="mt-2 min-h-9 border border-neutral-400 bg-white px-3 text-xs">候補の抽出を再試行</button>}
       <ThumbnailFramePicker candidates={frames.candidates} selectedId={subject.frameCandidateId} cropMode={cropMode}
-        closeAvailable={selectedPerson?.closeAvailable}
+        closeAvailable={subject.subjectPoint ? false : selectedPerson?.closeAvailable}
         disabled={locked || frames.state !== "ready"} onCropChange={setCropMode} onSelect={id => {
           const candidate = frames.candidates.find(c => c.id === id);
           setSubject({ subjectSource: "video", frameCandidateId: id });
           if (!candidate?.closeAvailable) setCropMode("standard");
         }} />
       {selectedCandidate && <ThumbnailPersonPicker imageUrl={selectedCandidate.imageUrl} people={stillPeople}
-        selectedIndex={subject.subjectFaceIndex ?? 0} disabled={locked} onSelect={index => {
+        selectedIndex={subject.subjectFaceIndex ?? 0} point={subject.subjectPoint} disabled={locked} onSelect={index => {
           const person = stillPeople.find(p => p.index === index);
-          setSubject({ ...subject, subjectFaceIndex: index || undefined });
+          setSubject({ ...subject, subjectFaceIndex: index || undefined, subjectPoint: undefined });
           // Offsets were relative to the previous face; start the new person centered.
           setPlacement({ ...placement, offsetX: 0, offsetY: 0 });
           if (!person?.closeAvailable) setCropMode("standard");
+        }} onPoint={point => {
+          setSubject({ ...subject, subjectFaceIndex: undefined, subjectPoint: point });
+          setPlacement({ ...placement, offsetX: 0, offsetY: 0 });
+          setCropMode("standard");
         }} />}
     </>}
     {subject.subjectSource === "asset" && subject.characterAssetId === item.thumbnailCharacterAssetId && <>

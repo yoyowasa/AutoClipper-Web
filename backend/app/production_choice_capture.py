@@ -217,7 +217,7 @@ def thumbnail_choice(payload: dict, *, clip_id: str, source="unrecorded") -> dic
         "subjectPlacement": "thumbnail_subject_placement", "textStyles": "thumbnail_text_styles",
         "thumbnailKicker": "thumbnail_kicker", "thumbnailLine1": "thumbnail_line1", "thumbnailLine2": "thumbnail_line2",
         "thumbnailFrameSeconds": "thumbnail_frame_seconds", "frameCandidateId": "thumbnail_frame_candidate_id",
-        "subjectFaceIndex": "thumbnail_subject_face_index",
+        "subjectFaceIndex": "thumbnail_subject_face_index", "subjectPoint": "thumbnail_subject_point",
     }
     chosen = payload.get("thumbnail_frame_candidate_id")
     append_choice(history, kind="thumbnail", clipId=clip_id, stage="published", source=source,

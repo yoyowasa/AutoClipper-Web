@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ThumbnailFramePicker } from "../components/ThumbnailFramePicker";
-import { ThumbnailPersonPicker } from "../components/ThumbnailPersonPicker";
+import { ThumbnailPersonPicker, tappedPoint } from "../components/ThumbnailPersonPicker";
 import { regenerateExportThumbnail, renderThumbnailPreview, thumbnailCandidatePeople } from "../lib/api";
 import type { ThumbnailPerson } from "../lib/types";
 
@@ -10,11 +10,23 @@ const people: ThumbnailPerson[] = [
   { index: 0, x: .5, y: .3, width: .15, height: .18, closeAvailable: false },
   { index: 1, x: .2, y: .32, width: .1, height: .12, closeAvailable: true },
 ];
-const picker = (selectedIndex: number, list = people) => renderToStaticMarkup(createElement(ThumbnailPersonPicker, {
-  imageUrl: "/api/exports/exp/thumbnail/candidates/frame_00/image", people: list, selectedIndex, onSelect: () => {} }));
+const picker = (selectedIndex: number, list = people, point?: { x: number; y: number }) => renderToStaticMarkup(
+  createElement(ThumbnailPersonPicker, { imageUrl: "/api/exports/exp/thumbnail/candidates/frame_00/image", people: list,
+    selectedIndex, point, onSelect: () => {}, onPoint: () => {} }));
 
-// A still with only the automatic face needs no chooser.
-assert.equal(picker(0, people.slice(0, 1)), "");
+// Even with one detected face the still can be tapped, for a profile or closed eyes the detector misses.
+const single = picker(0, people.slice(0, 1));
+assert.match(single, /aria-label="押した位置を顔の中心にする"/);
+assert.match(single, /人物1（自動）/);
+const tapped = picker(0, people, { x: .74, y: .35 });
+assert.match(tapped, /押した位置を使用中/);
+assert.match(tapped, /left:74%;top:35%/);
+assert.doesNotMatch(tapped, /aria-pressed="true"/);  // a tapped point replaces the detected people
+const rect = { left: 10, top: 20, width: 200, height: 100 };
+assert.deepEqual(tappedPoint({ clientX: 158, clientY: 55, currentTarget: { getBoundingClientRect: () => rect } } as never),
+  { x: .74, y: .35 });
+assert.deepEqual(tappedPoint({ clientX: 500, clientY: 0, currentTarget: { getBoundingClientRect: () => rect } } as never),
+  { x: 1, y: 0 });
 const html = picker(1);
 assert.match(html, /中心にする人物/);
 assert.match(html, /人物1（自動）/);
@@ -41,8 +53,10 @@ async function main() {
   try {
     assert.deepEqual(await thumbnailCandidatePeople("exp", "frame_00"), people);
     assert.ok(calls[0].url.endsWith("/api/exports/exp/thumbnail/candidates/frame_00/people"));
-    await regenerateExportThumbnail("exp", { frameSeconds: 0, subjectAnchorX: 1, frameCandidateId: "frame_00", subjectFaceIndex: 1 });
+    await regenerateExportThumbnail("exp", { frameSeconds: 0, subjectAnchorX: 1, frameCandidateId: "frame_00", subjectFaceIndex: 1,
+      subjectPoint: { x: .74, y: .35 } });
     assert.equal(JSON.parse(String(calls[1].init?.body)).subjectFaceIndex, 1);
+    assert.deepEqual(JSON.parse(String(calls[1].init?.body)).subjectPoint, { x: .74, y: .35 });
     await renderThumbnailPreview("exp", { frameKey: "k", frameCandidateId: "frame_00", subjectFaceIndex: 1,
       text: { heading: "", upper: "a", lower: "" }, textStyles: {} as never, design: "raden",
       subjectPlacement: { scale: 1, offsetX: 0, offsetY: 0 } }, new AbortController().signal);

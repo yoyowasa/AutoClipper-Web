@@ -70,7 +70,8 @@ export async function prepareThumbnailPreview(exportId: string, signal: AbortSig
 }
 
 export async function renderThumbnailPreview(exportId: string, draft: {
-  frameCandidateId?: string; subjectFaceIndex?: number; cropMode?: "standard" | "close";
+  frameCandidateId?: string; subjectFaceIndex?: number; subjectPoint?: import("./types").ThumbnailSubjectPoint;
+  cropMode?: "standard" | "close";
   frameKey: string; text: import("./types").ThumbnailCopyText; textStyles: import("./types").ThumbnailTextStyles;
   design: import("./types").NormalThumbnailStyle["design"];
   subjectPlacement: import("./types").ThumbnailSubjectPlacement;
@@ -606,6 +607,7 @@ export async function regenerateExportThumbnail(
   request: {
     frameCandidateId?: string;
     subjectFaceIndex?: number;
+    subjectPoint?: import("./types").ThumbnailSubjectPoint;
     frameSeconds: number;
     subjectAnchorX: number;
     advanceFrame?: boolean;

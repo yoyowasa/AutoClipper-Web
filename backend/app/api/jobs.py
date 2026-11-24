@@ -3,7 +3,7 @@ from app.intelligence.performance_hints import load_performance_hints
 import json
 import mimetypes
 from app.jobs.manual_workflow import is_manual_workflow
-from app.thumbnail_style import resolve_thumbnail_text_styles
+from app.thumbnail_style import ThumbnailSubjectPoint, resolve_thumbnail_text_styles
 from app.short_banners import banner_asset_path, resolve_banner_path
 import shutil
 from datetime import timedelta
@@ -397,6 +397,13 @@ def _first_value(*values: Any) -> Any:
     return None
 
 
+def _subject_point(value: Any) -> ThumbnailSubjectPoint | None:
+    try:
+        return ThumbnailSubjectPoint.model_validate(value) if isinstance(value, dict) else None
+    except ValueError:
+        return None
+
+
 def _number_or_none(value: Any) -> float | None:
     if value is None:
         return None
@@ -592,6 +599,7 @@ def _result_item(
         thumbnailFrameCandidateId=metadata.get("thumbnail_frame_candidate_id"),
         thumbnailSubjectFaceIndex=metadata.get("thumbnail_subject_face_index")
         if isinstance(metadata.get("thumbnail_subject_face_index"), int) else None,
+        thumbnailSubjectPoint=_subject_point(metadata.get("thumbnail_subject_point")),
         thumbnailCharacterAssetId=metadata.get("thumbnail_character_asset_id"),
         thumbnailEmotion=metadata.get("thumbnail_emotion"),
         thumbnailEmotionReason=metadata.get("thumbnail_emotion_reason"),
